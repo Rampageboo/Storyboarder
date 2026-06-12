@@ -1,0 +1,919 @@
+from __future__ import annotations
+
+import json
+import time
+from pathlib import Path
+from typing import Any
+
+from fastapi import FastAPI, File, HTTPException, UploadFile
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel, Field
+
+from . import live_bridge, project_manager, session_store
+from .linked_sync import sync_project
+from .system_utils import (
+    browse_blender_executable,
+    browse_folder,
+    browse_photoshop_executable,
+    browse_project_json,
+    detect_blender_paths,
+    detect_photoshop_paths,
+    validate_blender_path,
+    validate_folder_path,
+    validate_photoshop_path,
+    validate_project_json_path,
+)
+from .export_utils import (
+    export_contact_sheet,
+    export_image_sequence,
+    export_shot_list_csv,
+    export_timing_json,
+    missing_files,
+)
+from .models import Project, SHOT_STATUSES, Shot
+from .pdf_exporter import export_storyboard_pdf
+
+
+class ProjectPathRequest(BaseModel):
+    path: str | None = None
+
+
+class OpenProjectRequest(BaseModel):
+    project_json_path: str
+
+
+class ShotUpdateRequest(BaseModel):
+    title: str = ""
+    scene: str = ""
+    sequence: str = ""
+    description: str = ""
+    action_note: str = ""
+    camera_note: str = ""
+    character_note: str = ""
+    dialogue: str = ""
+    lighting_note: str = ""
+    transition_note: str = ""
+    duration_seconds: float = 3.0
+    camera_data: dict[str, Any] = Field(default_factory=dict)
+    tags: list[str] = Field(default_factory=list)
+    status: str = "Draft"
+
+
+class CommentRequest(BaseModel):
+    text: str
+
+
+class CommentResolveRequest(BaseModel):
+    resolved: bool = True
+
+
+class AnnotationSaveRequest(BaseModel):
+    annotations: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class RelinkRequest(BaseModel):
+    relative_path: str
+
+
+class CanvasRequest(BaseModel):
+    width: int = 1920
+    height: int = 1080
+    background_color: str | None = None
+
+
+class DrawingSaveRequest(BaseModel):
+    image_data: str
+
+
+class PdfExportRequest(BaseModel):
+    layout: str = "two_per_page"
+
+
+class SettingsUpdateRequest(BaseModel):
+    photoshop_path: str | None = None
+    blender_path: str | None = None
+    canvas_background_color: str | None = None
+    scene3d: dict[str, Any] | None = None
+
+
+class CanvasColorRequest(BaseModel):
+    color: str
+
+
+class AppSessionUpdateRequest(BaseModel):
+    last_project_json_path: str | None = None
+    selected_shot_id: str | None = None
+    recent_projects: list[str] | None = None
+
+
+class LiveBridgeUpdateRequest(BaseModel):
+    selected_shot_id: str | None = None
+
+
+class AddShotRequest(BaseModel):
+    after_shot_id: str | None = None
+
+
+def create_app(base_dir: Path, bridge_port: int = 8000) -> FastAPI:
+    app = FastAPI(title="Storyboard Tool")
+    app.state.base_dir = base_dir
+    app.state.project = None
+    app.state.project_disk_mtime = 0.0
+    app.state.dirty = False
+    app.state.live_selected_shot_id = ""
+    app.state.bridge_port = bridge_port
+    app.state.plugin_last_seen = 0.0
+
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=["*"],
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
+
+    web_dir = Path(__file__).parent / "web"
+    app.mount("/static", StaticFiles(directory=web_dir / "static"), name="static")
+
+    @app.get("/")
+    def index() -> FileResponse:
+        return FileResponse(web_dir / "index.html")
+
+    @app.get("/api/project")
+    def get_project() -> dict[str, Any]:
+        project = _refresh_project_from_disk(app)
+        return _project_payload(project, app.state.dirty)
+
+    @app.get("/api/app/session")
+    def get_app_session() -> dict[str, Any]:
+        return session_store.read_session(app.state.base_dir)
+
+    @app.put("/api/app/session")
+    def put_app_session(request: AppSessionUpdateRequest) -> dict[str, Any]:
+        return session_store.update_session(
+            app.state.base_dir,
+            last_project_json_path=request.last_project_json_path,
+            selected_shot_id=request.selected_shot_id,
+            recent_projects=request.recent_projects,
+        )
+
+    @app.get("/api/bridge/live")
+    def get_live_bridge() -> dict[str, Any]:
+        return _touch_live_bridge(app)
+
+    @app.put("/api/bridge/live")
+    def put_live_bridge(request: LiveBridgeUpdateRequest) -> dict[str, Any]:
+        return _touch_live_bridge(app, selected_shot_id=request.selected_shot_id)
+
+    @app.post("/api/bridge/relink")
+    def relink_bridge() -> dict[str, Any]:
+        _require_project(app)
+        _touch_live_bridge(app, selected_shot_id=app.state.live_selected_shot_id)
+        return _bridge_status_payload(app)
+
+    @app.get("/api/bridge/status")
+    def bridge_status() -> dict[str, Any]:
+        return _bridge_status_payload(app)
+
+    @app.post("/api/bridge/plugin-heartbeat")
+    def plugin_heartbeat() -> dict[str, str]:
+        app.state.plugin_last_seen = time.time()
+        return {"ok": "true"}
+
+    @app.get("/api/project/missing-files")
+    def missing_project_files() -> dict[str, Any]:
+        project = _require_project(app)
+        return {"missing_files": missing_files(project)}
+
+    @app.post("/api/project/new")
+    def new_project(request: ProjectPathRequest) -> dict[str, Any]:
+        root = Path(request.path).expanduser() if request.path else app.state.base_dir / "Storyboard_Project"
+        try:
+            _track_project(app, project_manager.create_project(root))
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        _remember_recent(app.state.project)
+        _persist_app_session(app)
+        _touch_live_bridge(app)
+        app.state.dirty = False
+        return _project_payload(app.state.project, app.state.dirty)
+
+    @app.post("/api/project/open")
+    def open_project(request: OpenProjectRequest) -> dict[str, Any]:
+        try:
+            _track_project(
+                app,
+                project_manager.open_project(Path(request.project_json_path).expanduser()),
+            )
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        _remember_recent(app.state.project)
+        _persist_app_session(app)
+        _touch_live_bridge(app)
+        app.state.dirty = False
+        return _project_payload(app.state.project, app.state.dirty)
+
+    @app.post("/api/project/save")
+    def save_project() -> dict[str, Any]:
+        project = _require_project(app)
+        try:
+            project_manager.save_project(project)
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
+        app.state.dirty = False
+        return _project_payload(project, app.state.dirty)
+
+    @app.get("/api/system/blender-candidates")
+    def blender_candidates() -> dict[str, Any]:
+        project = app.state.project
+        current = ""
+        if project is not None:
+            current = str(project.settings.get("blender_path", "") or "")
+        template_exists = project_manager.blend_template_path().is_file()
+        return {
+            "candidates": detect_blender_paths(),
+            "current": current,
+            "template_exists": template_exists,
+            "template_path": str(project_manager.blend_template_path()),
+        }
+
+    @app.post("/api/system/browse-blender")
+    def browse_blender() -> dict[str, str]:
+        initial_dir = _dialog_initial_dir(app, "blender")
+        try:
+            selected = browse_blender_executable(initial_dir)
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=f"Could not open file picker: {exc}") from exc
+        if not selected:
+            return {"path": "", "cancelled": True}
+        try:
+            validated = validate_blender_path(selected)
+        except (FileNotFoundError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {"path": validated, "cancelled": False}
+
+    @app.get("/api/system/photoshop-candidates")
+    def photoshop_candidates() -> dict[str, Any]:
+        current = ""
+        project = app.state.project
+        if project is not None:
+            current = str(project.settings.get("photoshop_path", "") or "")
+        return {"candidates": detect_photoshop_paths(), "current": current}
+
+    @app.post("/api/system/browse-folder")
+    def browse_folder_dialog() -> dict[str, Any]:
+        initial_dir = _dialog_initial_dir(app, "folder")
+        try:
+            selected = browse_folder(initial_dir)
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=f"Could not open folder picker: {exc}") from exc
+        if not selected:
+            return {"path": "", "cancelled": True}
+        try:
+            validated = validate_folder_path(selected)
+        except (FileNotFoundError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {"path": validated, "cancelled": False}
+
+    @app.post("/api/system/browse-project-json")
+    def browse_project_json_dialog() -> dict[str, Any]:
+        initial_dir = _dialog_initial_dir(app, "project-json")
+        try:
+            selected = browse_project_json(initial_dir)
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=f"Could not open file picker: {exc}") from exc
+        if not selected:
+            return {"path": "", "cancelled": True}
+        try:
+            validated = validate_project_json_path(selected)
+        except (FileNotFoundError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {"path": validated, "cancelled": False}
+
+    @app.post("/api/system/browse-photoshop")
+    def browse_photoshop() -> dict[str, str]:
+        initial_dir = _dialog_initial_dir(app, "photoshop")
+        try:
+            selected = browse_photoshop_executable(initial_dir)
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=f"Could not open file picker: {exc}") from exc
+        if not selected:
+            return {"path": "", "cancelled": True}
+        try:
+            validated = validate_photoshop_path(selected)
+        except (FileNotFoundError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {"path": validated, "cancelled": False}
+
+    @app.patch("/api/project/settings")
+    def update_settings(request: SettingsUpdateRequest) -> dict[str, Any]:
+        from .image_utils import normalize_hex_color
+
+        project = _require_project(app)
+        if request.photoshop_path is not None:
+            value = request.photoshop_path.strip()
+            if value:
+                try:
+                    value = validate_photoshop_path(value)
+                except (FileNotFoundError, ValueError) as exc:
+                    raise HTTPException(status_code=400, detail=str(exc)) from exc
+            project.settings["photoshop_path"] = value
+        if request.blender_path is not None:
+            value = request.blender_path.strip()
+            if value:
+                try:
+                    value = validate_blender_path(value)
+                except (FileNotFoundError, ValueError) as exc:
+                    raise HTTPException(status_code=400, detail=str(exc)) from exc
+            project.settings["blender_path"] = value
+        if request.canvas_background_color is not None:
+            project_manager.persist_canvas_color(project, request.canvas_background_color)
+        elif request.scene3d is not None:
+            project.settings["scene3d"] = request.scene3d
+            project_manager.save_settings(project)
+            project_manager.write_bridge_file(project)
+        else:
+            project_manager.save_settings(project)
+            project_manager.write_bridge_file(project)
+        _touch_live_bridge(app)
+        return _project_payload(project, app.state.dirty)
+
+    @app.post("/api/project/scene3d/open-blender")
+    def open_blender_scene() -> dict[str, str]:
+        project = _require_project(app)
+        try:
+            opened = project_manager.open_blender_scene(project)
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        _touch_live_bridge(app)
+        return {
+            "path": str(opened),
+            "relative_path": opened.relative_to(project.root_path).as_posix() if opened.exists() else "",
+            **_project_payload(project, app.state.dirty),
+        }
+
+    @app.post("/api/project/scene3d/import")
+    async def import_scene3d(file: UploadFile = File(...)) -> dict[str, Any]:
+        project = _require_project(app)
+        try:
+            scene_settings = project_manager.import_scene3d_stream(
+                project,
+                file.file,
+                file.filename or "scene.glb",
+            )
+        except (FileNotFoundError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        finally:
+            await file.close()
+        _touch_live_bridge(app)
+        payload = _project_payload(project, app.state.dirty)
+        return {"scene3d": scene_settings, **payload}
+
+    @app.get("/api/project/scene3d/file")
+    def get_scene3d_file() -> FileResponse:
+        project = _require_project(app)
+        try:
+            path = project_manager.get_scene3d_file_path(project)
+        except (FileNotFoundError, ValueError) as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        if path is None:
+            raise HTTPException(status_code=404, detail="No Blender scene imported.")
+        media_type = "model/gltf-binary" if path.suffix.lower() == ".glb" else "model/gltf+json"
+        return FileResponse(path, media_type=media_type, filename=path.name)
+
+    @app.get("/api/project/canvas-color")
+    def get_canvas_color() -> dict[str, str]:
+        project = _require_project(app)
+        return {"color": project_manager.get_canvas_color(project)}
+
+    @app.post("/api/project/canvas-color")
+    def set_canvas_color(request: CanvasColorRequest) -> dict[str, Any]:
+        project = _require_project(app)
+        try:
+            color = project_manager.persist_canvas_color(project, request.color)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        _touch_live_bridge(app)
+        payload = _project_payload(project, app.state.dirty)
+        return {"color": color, **payload}
+
+    @app.post("/api/shots")
+    def add_shot(request: AddShotRequest = AddShotRequest()) -> dict[str, Any]:
+        project = _require_project(app)
+        after_index = None
+        if request.after_shot_id:
+            after_index = _find_shot_index(project, request.after_shot_id)
+        shot = project_manager.add_shot(project, after_index=after_index)
+        _autosave(app)
+        return {"shot": shot.to_dict(), **_project_payload(project, app.state.dirty)}
+
+    @app.post("/api/shots/{shot_id}/duplicate")
+    def duplicate_shot(shot_id: str) -> dict[str, Any]:
+        project = _require_project(app)
+        duplicate = project_manager.duplicate_shot(project, _find_shot_index(project, shot_id))
+        _autosave(app)
+        return {"shot": duplicate.to_dict(), **_project_payload(project, app.state.dirty)}
+
+    @app.patch("/api/shots/{shot_id}")
+    def update_shot(shot_id: str, request: ShotUpdateRequest) -> dict[str, Any]:
+        project = _require_project(app)
+        shot = _find_shot(project, shot_id)
+        shot.title = request.title
+        shot.scene = request.scene
+        shot.sequence = request.sequence
+        shot.description = request.description
+        shot.action_note = request.action_note
+        shot.camera_note = request.camera_note
+        shot.character_note = request.character_note
+        shot.dialogue = request.dialogue
+        shot.lighting_note = request.lighting_note
+        shot.transition_note = request.transition_note
+        shot.duration_seconds = max(0.1, float(request.duration_seconds))
+        shot.camera_data = request.camera_data
+        shot.tags = [tag.strip() for tag in request.tags if tag.strip()]
+        shot.status = request.status if request.status in SHOT_STATUSES else "Draft"
+        _autosave(app)
+        return _project_payload(project, app.state.dirty)
+
+    @app.delete("/api/shots/{shot_id}")
+    def delete_shot(shot_id: str) -> dict[str, Any]:
+        project = _require_project(app)
+        index = _find_shot_index(project, shot_id)
+        try:
+            project_manager.delete_shot(project, index)
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        _autosave(app)
+        return _project_payload(project, app.state.dirty)
+
+    @app.post("/api/shots/{shot_id}/move-up")
+    def move_shot_up(shot_id: str) -> dict[str, Any]:
+        project = _require_project(app)
+        project_manager.move_shot_up(project, _find_shot_index(project, shot_id))
+        _autosave(app)
+        return _project_payload(project, app.state.dirty)
+
+    @app.post("/api/shots/{shot_id}/move-down")
+    def move_shot_down(shot_id: str) -> dict[str, Any]:
+        project = _require_project(app)
+        project_manager.move_shot_down(project, _find_shot_index(project, shot_id))
+        _autosave(app)
+        return _project_payload(project, app.state.dirty)
+
+    @app.post("/api/shots/{shot_id}/image")
+    async def import_image(shot_id: str, file: UploadFile = File(...)) -> dict[str, Any]:
+        project = _require_project(app)
+        shot = _find_shot(project, shot_id)
+        suffix = Path(file.filename or "").suffix
+        try:
+            project_manager.import_image_stream_for_shot(project, shot, file.file, suffix)
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        finally:
+            await file.close()
+        _autosave(app)
+        return _project_payload(project, app.state.dirty)
+
+    @app.post("/api/shots/{shot_id}/references")
+    async def add_reference_image(shot_id: str, file: UploadFile = File(...)) -> dict[str, Any]:
+        project = _require_project(app)
+        shot = _find_shot(project, shot_id)
+        suffix = Path(file.filename or "").suffix
+        try:
+            project_manager.add_reference_image_stream(project, shot, file.file, suffix)
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        finally:
+            await file.close()
+        _autosave(app)
+        return _project_payload(project, app.state.dirty)
+
+    @app.post("/api/shots/{shot_id}/source")
+    async def import_source_file(shot_id: str, file: UploadFile = File(...)) -> dict[str, Any]:
+        project = _require_project(app)
+        shot = _find_shot(project, shot_id)
+        try:
+            project_manager.import_source_file_stream(project, shot, file.file, file.filename or f"{shot_id}.psd")
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        finally:
+            await file.close()
+        _autosave(app)
+        return _project_payload(project, app.state.dirty)
+
+    @app.post("/api/shots/{shot_id}/relink-preview")
+    def relink_preview(shot_id: str, request: RelinkRequest) -> dict[str, Any]:
+        project = _require_project(app)
+        shot = _find_shot(project, shot_id)
+        try:
+            project_manager.relink_preview_image(project, shot, request.relative_path)
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        _autosave(app)
+        return _project_payload(project, app.state.dirty)
+
+    @app.post("/api/shots/{shot_id}/canvas")
+    def create_canvas(shot_id: str, request: CanvasRequest) -> dict[str, Any]:
+        project = _require_project(app)
+        shot = _find_shot(project, shot_id)
+        width = min(max(int(request.width), 320), 8192)
+        height = min(max(int(request.height), 180), 8192)
+        try:
+            project_manager.create_canvas_for_shot(
+                project,
+                shot,
+                width,
+                height,
+                background_color=request.background_color,
+            )
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        _autosave(app)
+        return _project_payload(project, app.state.dirty)
+
+    @app.post("/api/shots/{shot_id}/drawing")
+    def save_drawing(shot_id: str, request: DrawingSaveRequest) -> dict[str, Any]:
+        project = _require_project(app)
+        shot = _find_shot(project, shot_id)
+        try:
+            project_manager.save_drawing_for_shot(project, shot, request.image_data)
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        _autosave(app)
+        return _project_payload(project, app.state.dirty)
+
+    @app.post("/api/shots/{shot_id}/sync")
+    def sync_shot(shot_id: str, force: bool = False) -> dict[str, Any]:
+        project = _refresh_project_from_disk(app)
+        shot = _find_shot(project, shot_id)
+        try:
+            result = project_manager.sync_shot(project, shot, force=force)
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        if result.get("synced"):
+            _autosave(app)
+        return {"result": result, **_project_payload(project, app.state.dirty)}
+
+    @app.post("/api/project/sync")
+    def sync_all_shots(force: bool = False) -> dict[str, Any]:
+        project = _refresh_project_from_disk(app)
+        try:
+            results = sync_project(project, force=force)
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        if results:
+            _autosave(app)
+        return {"results": results, **_project_payload(project, app.state.dirty)}
+
+    @app.post("/api/shots/{shot_id}/open-source")
+    def open_source(shot_id: str) -> dict[str, str]:
+        project = _require_project(app)
+        shot = _find_shot(project, shot_id)
+        if not shot.source_file_path:
+            raise HTTPException(status_code=400, detail="No source file linked. Create a PS canvas first.")
+        try:
+            opened = project_manager.open_project_file(
+                project,
+                shot.source_file_path,
+                project.settings.get("photoshop_path", ""),
+                shot=shot,
+            )
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {"path": str(opened)}
+
+    @app.post("/api/shots/{shot_id}/open-preview")
+    def open_preview(shot_id: str) -> dict[str, str]:
+        project = _require_project(app)
+        shot = _find_shot(project, shot_id)
+        rel_path = shot.preview_image_path or shot.image_path
+        if not rel_path:
+            raise HTTPException(status_code=400, detail="No preview image linked.")
+        try:
+            opened = project_manager.open_project_file(project, rel_path, project.settings.get("photoshop_path", ""))
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {"path": str(opened)}
+
+    @app.delete("/api/shots/{shot_id}/image")
+    def remove_image(shot_id: str) -> dict[str, Any]:
+        project = _require_project(app)
+        shot = _find_shot(project, shot_id)
+        project_manager.remove_image_for_shot(shot)
+        _autosave(app)
+        return _project_payload(project, app.state.dirty)
+
+    @app.get("/api/shots/{shot_id}/image")
+    def get_image(shot_id: str) -> FileResponse:
+        project = _require_project(app)
+        shot = _find_shot(project, shot_id)
+        image_rel_path = shot.preview_image_path or shot.image_path
+        if not image_rel_path:
+            raise HTTPException(status_code=404, detail="No image for this shot.")
+        image_path = project.root_path / image_rel_path
+        if not image_path.exists():
+            raise HTTPException(status_code=404, detail="Image file is missing.")
+        return FileResponse(image_path)
+
+    @app.get("/api/shots/{shot_id}/thumbnail")
+    def get_thumbnail(shot_id: str) -> FileResponse:
+        project = _require_project(app)
+        shot = _find_shot(project, shot_id)
+        image_rel_path = shot.thumbnail_path or shot.preview_image_path or shot.image_path
+        if not image_rel_path:
+            raise HTTPException(status_code=404, detail="No thumbnail for this shot.")
+        image_path = project.root_path / image_rel_path
+        if not image_path.exists():
+            raise HTTPException(status_code=404, detail="Thumbnail file is missing.")
+        return FileResponse(image_path)
+
+    @app.get("/api/files")
+    def get_project_file(path: str) -> FileResponse:
+        project = _require_project(app)
+        file_path = (project.root_path / path).resolve()
+        root = project.root_path.resolve()
+        if root not in file_path.parents and file_path != root:
+            raise HTTPException(status_code=400, detail="File path is outside the project.")
+        if not file_path.exists() or not file_path.is_file():
+            raise HTTPException(status_code=404, detail="File is missing.")
+        return FileResponse(file_path)
+
+    @app.post("/api/shots/{shot_id}/comments")
+    def add_comment(shot_id: str, request: CommentRequest) -> dict[str, Any]:
+        project = _require_project(app)
+        shot = _find_shot(project, shot_id)
+        text = request.text.strip()
+        if not text:
+            raise HTTPException(status_code=400, detail="Comment cannot be empty.")
+        next_id = max([int(comment.get("id", 0)) for comment in shot.comments] or [0]) + 1
+        shot.comments.append({"id": next_id, "text": text, "resolved": False})
+        _autosave(app)
+        return _project_payload(project, app.state.dirty)
+
+    @app.patch("/api/shots/{shot_id}/comments/{comment_id}")
+    def resolve_comment(shot_id: str, comment_id: int, request: CommentResolveRequest) -> dict[str, Any]:
+        project = _require_project(app)
+        shot = _find_shot(project, shot_id)
+        for comment in shot.comments:
+            if int(comment.get("id", 0)) == comment_id:
+                comment["resolved"] = request.resolved
+                _autosave(app)
+                return _project_payload(project, app.state.dirty)
+        raise HTTPException(status_code=404, detail="Comment not found.")
+
+    @app.get("/api/shots/{shot_id}/annotations")
+    def get_annotations(shot_id: str) -> dict[str, Any]:
+        project = _require_project(app)
+        shot = _find_shot(project, shot_id)
+        path = _annotation_path(project, shot)
+        try:
+            annotations = json.loads(path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError as exc:
+            raise HTTPException(status_code=400, detail=f"Invalid annotation JSON: {exc}") from exc
+        if not isinstance(annotations, list):
+            raise HTTPException(status_code=400, detail="Annotation file must contain a list.")
+        return {"annotations": annotations}
+
+    @app.put("/api/shots/{shot_id}/annotations")
+    def save_annotations(shot_id: str, request: AnnotationSaveRequest) -> dict[str, Any]:
+        project = _require_project(app)
+        shot = _find_shot(project, shot_id)
+        path = _annotation_path(project, shot)
+        path.write_text(json.dumps(request.annotations, indent=2), encoding="utf-8")
+        return {"annotations": request.annotations}
+
+    @app.post("/api/export/pdf")
+    def export_pdf(request: PdfExportRequest) -> dict[str, str]:
+        project = _require_project(app)
+        output_path = project.exports_dir / "storyboard.pdf"
+        layout = request.layout if request.layout in {"one_per_page", "two_per_page", "thumbnails"} else "two_per_page"
+        try:
+            export_storyboard_pdf(project, output_path, layout=layout)
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
+        project.settings["pdf_layout"] = layout
+        project_manager.save_settings(project)
+        return {"path": str(output_path), "download_url": "/api/export/pdf"}
+
+    @app.post("/api/export/shot-list")
+    def export_shot_list() -> dict[str, str]:
+        project = _require_project(app)
+        output_path = project.exports_dir / "shot_list.csv"
+        try:
+            export_shot_list_csv(project, output_path)
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
+        return {"path": str(output_path), "download_url": "/api/export/shot-list"}
+
+    @app.get("/api/export/shot-list")
+    def download_shot_list() -> FileResponse:
+        project = _require_project(app)
+        output_path = project.exports_dir / "shot_list.csv"
+        if not output_path.exists():
+            raise HTTPException(status_code=404, detail="Export the shot list first.")
+        return FileResponse(output_path, filename="shot_list.csv", media_type="text/csv")
+
+    @app.post("/api/export/timing")
+    def export_timing() -> dict[str, str]:
+        project = _require_project(app)
+        output_path = project.exports_dir / "timing.json"
+        try:
+            export_timing_json(project, output_path)
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
+        return {"path": str(output_path), "download_url": "/api/export/timing"}
+
+    @app.get("/api/export/timing")
+    def download_timing() -> FileResponse:
+        project = _require_project(app)
+        output_path = project.exports_dir / "timing.json"
+        if not output_path.exists():
+            raise HTTPException(status_code=404, detail="Export timing data first.")
+        return FileResponse(output_path, filename="timing.json", media_type="application/json")
+
+    @app.post("/api/export/contact-sheet")
+    def export_contact() -> dict[str, str]:
+        project = _require_project(app)
+        output_path = project.exports_dir / "contact_sheet.png"
+        try:
+            export_contact_sheet(project, output_path)
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
+        return {"path": str(output_path), "download_url": "/api/export/contact-sheet"}
+
+    @app.get("/api/export/contact-sheet")
+    def download_contact() -> FileResponse:
+        project = _require_project(app)
+        output_path = project.exports_dir / "contact_sheet.png"
+        if not output_path.exists():
+            raise HTTPException(status_code=404, detail="Export the contact sheet first.")
+        return FileResponse(output_path, filename="contact_sheet.png", media_type="image/png")
+
+    @app.post("/api/export/image-sequence")
+    def export_sequence() -> dict[str, str]:
+        project = _require_project(app)
+        output_dir = project.exports_dir / "image_sequence"
+        try:
+            export_image_sequence(project, output_dir)
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
+        return {"path": str(output_dir)}
+
+    @app.get("/api/export/pdf")
+    def download_pdf() -> FileResponse:
+        project = _require_project(app)
+        output_path = project.exports_dir / "storyboard.pdf"
+        if not output_path.exists():
+            raise HTTPException(status_code=404, detail="Export the PDF first.")
+        return FileResponse(output_path, filename="storyboard.pdf", media_type="application/pdf")
+
+    return app
+
+
+def _project_payload(project: Project, dirty: bool) -> dict[str, Any]:
+    return {
+        "project_path": str(project.root_path),
+        "project_json_path": str(project.json_path),
+        "name": project.name,
+        "dirty": dirty,
+        "settings": project.settings,
+        "statuses": list(SHOT_STATUSES),
+        "shots": [shot.to_dict() for shot in project.shots],
+    }
+
+
+def _require_project(app: FastAPI) -> Project:
+    project = app.state.project
+    if project is None:
+        raise HTTPException(status_code=400, detail="No project opened.")
+    return project
+
+
+def _find_shot(project: Project, shot_id: str) -> Shot:
+    return project.shots[_find_shot_index(project, shot_id)]
+
+
+def _find_shot_index(project: Project, shot_id: str) -> int:
+    for index, shot in enumerate(project.shots):
+        if shot.shot_id == shot_id:
+            return index
+    raise HTTPException(status_code=404, detail=f"Shot not found: {shot_id}")
+
+
+def _track_project(app: FastAPI, project: Project) -> None:
+    app.state.project = project
+    app.state.project_disk_mtime = project_manager.project_disk_mtime(project)
+
+
+def _refresh_project_from_disk(app: FastAPI) -> Project:
+    project = _require_project(app)
+    if app.state.dirty:
+        return project
+    refreshed, disk_mtime, changed = project_manager.reload_project_if_changed(
+        project,
+        app.state.project_disk_mtime,
+    )
+    if changed:
+        app.state.project = refreshed
+        app.state.project_disk_mtime = disk_mtime
+        return refreshed
+    return project
+
+
+def _autosave(app: FastAPI) -> None:
+    project_manager.save_project(_require_project(app))
+    app.state.project_disk_mtime = project_manager.project_disk_mtime(_require_project(app))
+    app.state.dirty = False
+
+
+def _dialog_initial_dir(app: FastAPI, kind: str) -> str:
+    project = app.state.project
+    if project is None:
+        return str(Path.home())
+
+    if kind == "folder":
+        candidate = project.root_path.parent
+    elif kind == "project-json":
+        candidate = project.root_path
+    elif kind == "blender":
+        current = str(project.settings.get("blender_path", "") or "")
+        candidate = Path(current).parent if current else Path(r"C:\Program Files\Blender Foundation")
+    else:
+        current = str(project.settings.get("photoshop_path", "") or "")
+        candidate = Path(current).parent if current else Path(r"C:\Program Files\Adobe")
+
+    if candidate.is_dir():
+        return str(candidate.resolve())
+    return str(Path.home())
+
+
+def _remember_recent(project: Project) -> None:
+    recent = [str(project.root_path)]
+    for item in project.settings.get("recent_projects", []):
+        if item not in recent:
+            recent.append(item)
+    project.settings["recent_projects"] = recent[:10]
+    project_manager.save_settings(project)
+
+
+def _touch_live_bridge(app: FastAPI, *, selected_shot_id: str | None = None) -> dict[str, Any]:
+    if selected_shot_id is not None:
+        app.state.live_selected_shot_id = selected_shot_id
+    return live_bridge.publish(
+        app.state.base_dir,
+        app.state.project,
+        selected_shot_id=str(app.state.live_selected_shot_id or ""),
+        port=int(app.state.bridge_port),
+    )
+
+
+def _bridge_status_payload(app: FastAPI) -> dict[str, Any]:
+    live = _touch_live_bridge(app)
+    project = app.state.project
+    http_seen = float(getattr(app.state, "plugin_last_seen", 0.0) or 0.0)
+    file_seen = live_bridge.read_plugin_heartbeat_mtime()
+    last_seen = max(http_seen, file_seen)
+    age = round(time.time() - last_seen, 1) if last_seen else None
+    plugin_linked = age is not None and age <= 12.0
+    return {
+        "app_running": True,
+        "project_open": project is not None,
+        "plugin_linked": plugin_linked,
+        "plugin_last_seen_seconds_ago": age,
+        "bridge_url": live.get("bridge_url", f"http://127.0.0.1:{app.state.bridge_port}/api/bridge/live"),
+        "global_bridge_path": live.get("global_bridge_path", str(live_bridge.global_bridge_file_path())),
+        "shared_bridge_path": live.get("shared_bridge_path", str(live_bridge.shared_bridge_file_path())),
+        "plugin_heartbeat_path": live.get("plugin_heartbeat_path", str(live_bridge.plugin_heartbeat_file_path())),
+        "server_port": int(app.state.bridge_port),
+        "live": live,
+    }
+
+
+def _persist_app_session(app: FastAPI, *, selected_shot_id: str | None = None) -> None:
+    project = app.state.project
+    if project is None:
+        return
+    session_store.update_session(
+        app.state.base_dir,
+        last_project_json_path=str(project.json_path),
+        selected_shot_id=selected_shot_id,
+        recent_projects=[str(item) for item in project.settings.get("recent_projects", [])],
+    )
+
+
+def _annotation_path(project: Project, shot: Shot) -> Path:
+    if not shot.annotation_path:
+        project_manager.get_shot_dir(project, shot).mkdir(parents=True, exist_ok=True)
+        path = project_manager.get_shot_dir(project, shot) / f"{shot.shot_id}_annotations.json"
+        path.write_text("[]", encoding="utf-8")
+        shot.annotation_path = path.relative_to(project.root_path).as_posix()
+        project_manager.save_project(project)
+        return path
+    path = project.root_path / shot.annotation_path
+    if not path.exists():
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("[]", encoding="utf-8")
+    return path

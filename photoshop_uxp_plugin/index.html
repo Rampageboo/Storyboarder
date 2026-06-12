@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <link rel="stylesheet" href="style.css" />
+  </head>
+  <body>
+    <sp-body id="root">
+      <sp-heading size="S">Storyboard Bridge</sp-heading>
+      <sp-detail id="linkStatus" class="link-status">Connecting…</sp-detail>
+
+      <div id="unlinkedPanel">
+        <sp-button id="relinkNow" variant="secondary">Reconnect</sp-button>
+      </div>
+
+      <div id="linkedPanel" hidden>
+        <sp-label for="shotSelect">Shot</sp-label>
+        <select id="shotSelect" class="shot-select"></select>
+        <sp-button id="openShot" variant="secondary">Open canvas</sp-button>
+        <sp-label for="overlayCount">Overlay previous</sp-label>
+        <sp-textfield id="overlayCount" class="overlay-count" value="1" placeholder="1"></sp-textfield>
+        <sp-button id="overlayPrevious" variant="secondary">Stack refs</sp-button>
+        <sp-button id="clearOverlay" variant="secondary">Clear overlay</sp-button>
+        <sp-button id="saveAndNext" variant="cta">Save &amp; next</sp-button>
+        <sp-button id="saveAndStay" variant="primary">Save</sp-button>
+        <sp-checkbox id="autoAddShot" checked>Auto-add at end</sp-checkbox>
+      </div>
+
+      <div id="colorSection">
+        <sp-label>Canvas color</sp-label>
+        <sp-detail id="colorSwatch" class="color-swatch">#E8E8E8</sp-detail>
+        <sp-checkbox id="autoApplyColor" checked>Auto-apply color</sp-checkbox>
+        <sp-button id="applyBackground" variant="secondary">Apply canvas color</sp-button>
+      </div>
+
+      <sp-textfield id="shotId" placeholder="shot_001" value="shot_001" hidden></sp-textfield>
+      <sp-detail id="projectLabel" class="meta" hidden></sp-detail>
+      <sp-detail id="folderLabel" class="meta" hidden></sp-detail>
+
+      <details id="advancedSection" class="advanced-section">
+        <summary>Advanced</summary>
+        <sp-button id="chooseProject" variant="secondary">Choose project folder</sp-button>
+        <sp-button id="chooseFolder" variant="secondary">Choose shot folder</sp-button>
+      </details>
+
+      <sp-detail id="status" class="meta" hidden></sp-detail>
+    </sp-body>
+    <script src="panel.js"></script>
+  </body>
+</html>

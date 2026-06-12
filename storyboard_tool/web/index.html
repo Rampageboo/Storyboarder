@@ -1,0 +1,248 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Storyboard Tool</title>
+    <link rel="stylesheet" href="/static/styles.css" />
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="topbar-left">
+        <div class="menu-group">
+          <button id="newProject" title="New project">New</button>
+          <button id="openProject" title="Open project">Open</button>
+          <button id="saveProject" disabled title="Save project">Save</button>
+        </div>
+      </div>
+      <div id="boardInfo" class="board-info">No project open</div>
+      <div class="topbar-right">
+        <details class="toolbar-menu export-menu">
+          <summary>Export</summary>
+          <div class="toolbar-menu-panel export-panel">
+            <select id="pdfLayout" disabled>
+              <option value="two_per_page">PDF 2 per page</option>
+              <option value="one_per_page">PDF 1 per page</option>
+              <option value="thumbnails">PDF thumbnails</option>
+            </select>
+            <button id="exportPdf" disabled>Export PDF</button>
+            <button id="exportShotList" disabled>Shot list CSV</button>
+            <button id="exportContactSheet" disabled>Contact sheet</button>
+            <button id="exportTiming" disabled>Timing JSON</button>
+            <button id="exportImageSequence" disabled>Image sequence</button>
+          </div>
+        </details>
+        <button id="openScene3d" disabled title="3D scene editor">3D Scene</button>
+        <button id="setCanvas" disabled title="Canvas color">Canvas</button>
+        <details class="toolbar-menu ps-menu" id="psMenu">
+          <summary id="psMenuSummary" class="ps-menu-summary" title="Photoshop">Ps</summary>
+          <div class="toolbar-menu-panel ps-menu-panel">
+            <div id="psMenuStatus" class="ps-menu-status">No project open</div>
+            <button id="linkPhotoshop" type="button" disabled title="Refresh Photoshop plugin link">Ps Link</button>
+            <button id="setPhotoshop" type="button" disabled title="Photoshop path settings">Ps Setup</button>
+          </div>
+        </details>
+        <details class="toolbar-menu bl-menu" id="blMenu">
+          <summary id="blMenuSummary" class="bl-menu-summary" title="Blender">Bl</summary>
+          <div class="toolbar-menu-panel bl-menu-panel">
+            <div id="blMenuStatus" class="bl-menu-status">No project open</div>
+            <button id="openBlender" type="button" disabled title="Open project scene in Blender">Open Blender</button>
+            <button id="setBlender" type="button" disabled title="Blender path settings">Bl Setup</button>
+          </div>
+        </details>
+        <button id="refreshPreview" disabled title="Force preview sync" hidden>Refresh</button>
+      </div>
+    </header>
+
+    <main class="workspace">
+      <section class="canvas-area">
+        <div id="previewBox" class="preview-box">
+          <div id="canvasSurface" class="canvas-surface">
+            <div id="canvasBoard" class="canvas-board">
+              <span class="canvas-placeholder">No project open</span>
+            </div>
+          </div>
+          <canvas id="drawingCanvas" hidden></canvas>
+          <canvas id="annotationCanvas"></canvas>
+        </div>
+        <div id="syncStatus" class="sync-status"></div>
+        <input id="imageFile" type="file" accept=".png,.jpg,.jpeg,.tif,.tiff,image/png,image/jpeg,image/tiff" hidden />
+        <input id="referenceFile" type="file" accept=".png,.jpg,.jpeg,.tif,.tiff,image/png,image/jpeg,image/tiff" hidden />
+        <input id="sourceFile" type="file" accept=".psd,.psb,.kra,.clip,.png,.jpg,.jpeg,.tif,.tiff" hidden />
+        <input id="scene3dFile" type="file" accept=".glb,.gltf" hidden />
+      </section>
+
+      <aside class="shot-panel">
+        <div class="shot-panel-fixed">
+        <div class="shot-header">
+          <h2 id="shotLabel">Shot —</h2>
+          <span id="boardCount" class="board-count">Board — of —</span>
+        </div>
+
+        <label class="field-duration">
+          Duration
+          <div class="duration-row">
+            <input id="durationSeconds" type="number" min="0.1" step="0.1" disabled />
+            <span class="field-hint">sec</span>
+            <span id="fpsHint" class="field-hint">24 fps</span>
+          </div>
+        </label>
+
+        <label>
+          Dialogue
+          <textarea id="dialogue" rows="4" disabled placeholder="Character lines…"></textarea>
+        </label>
+        <label>
+          Action
+          <textarea id="actionNote" rows="4" disabled placeholder="Action description…"></textarea>
+        </label>
+        <label>
+          Notes
+          <textarea id="description" rows="3" disabled placeholder="Director notes…"></textarea>
+        </label>
+        </div>
+
+        <details class="advanced-panel">
+          <summary>More fields</summary>
+          <div class="advanced-fields">
+            <label>Shot ID <input id="shotId" type="text" disabled /></label>
+            <label>Title <input id="title" type="text" disabled /></label>
+            <label>Scene <input id="scene" type="text" disabled /></label>
+            <label>Sequence <input id="sequence" type="text" disabled /></label>
+            <label>Status <select id="status" disabled></select></label>
+            <label>Camera note <textarea id="cameraNote" rows="2" disabled></textarea></label>
+            <label>Character note <textarea id="characterNote" rows="2" disabled></textarea></label>
+            <label>Lighting <textarea id="lightingNote" rows="2" disabled></textarea></label>
+            <label>Transition <textarea id="transitionNote" rows="2" disabled></textarea></label>
+            <label>3D angle <input id="cameraAngle" type="text" disabled /></label>
+            <label>3D focal length <input id="cameraFocalLength" type="text" disabled /></label>
+            <label>3D location <input id="cameraLocation" type="text" disabled /></label>
+            <label>3D rotation <input id="cameraRotation" type="text" disabled /></label>
+            <label>Tags <input id="tags" type="text" placeholder="comma separated" disabled /></label>
+            <div class="file-actions">
+              <button id="importImage" disabled>Import preview</button>
+              <button id="importSource" disabled>Import PSD</button>
+              <button id="addReference" disabled>Add reference</button>
+              <button id="removeImage" disabled>Clear preview</button>
+              <button id="relinkPreview" disabled>Relink preview</button>
+              <button id="openPreview" disabled>Open preview</button>
+            </div>
+            <div id="fileStatus" class="file-status"></div>
+            <div id="referenceStrip" class="reference-strip"></div>
+            <div class="comments">
+              <div class="panel-title">Review comments</div>
+              <div id="commentList" class="comment-list"></div>
+              <div class="comment-entry">
+                <input id="commentText" type="text" placeholder="Add review note" disabled />
+                <button id="addComment" disabled>Add</button>
+              </div>
+            </div>
+          </div>
+        </details>
+      </aside>
+    </main>
+
+    <footer class="filmstrip">
+      <div class="filmstrip-toolbar">
+        <div class="filmstrip-left">
+          <span id="projectStats" class="project-stats">0 BOARDS</span>
+          <select id="statusFilter" disabled class="compact-select">
+            <option value="">All status</option>
+          </select>
+          <label class="inline-check">
+            <input id="revisionFilter" type="checkbox" disabled />
+            Needs revision
+          </label>
+        </div>
+        <div class="filmstrip-controls">
+          <button id="prevShot" disabled title="Previous board">◀</button>
+          <button id="playAnimatic" disabled title="Play">▶</button>
+          <button id="stopAnimatic" disabled title="Stop">■</button>
+          <button id="nextShot" disabled title="Next board">▶▶</button>
+          <input id="progressSlider" class="progress-slider" type="range" min="0" max="0" value="0" step="0.1" disabled />
+          <span id="timeDisplay" class="time-display">0.0s / 0.0s</span>
+        </div>
+      </div>
+      <div class="timeline-row">
+        <div id="timelineStrip" class="timeline-strip"></div>
+        <button id="addShot" class="timeline-add-shot" disabled title="Add board" type="button">+</button>
+      </div>
+    </footer>
+
+    <div id="shotContextMenu" class="context-menu" hidden>
+      <button type="button" data-shot-action="duplicate">Duplicate board</button>
+      <button type="button" data-shot-action="delete" class="btn-danger">Delete board</button>
+    </div>
+
+    <div id="toast" class="toast" hidden></div>
+
+    <div id="scene3dModal" class="modal scene3d-modal" hidden>
+      <div class="modal-backdrop" data-scene3d-close></div>
+      <div class="modal-card scene3d-card" role="dialog" aria-labelledby="scene3dTitle" aria-modal="true">
+        <div class="modal-header">
+          <h3 id="scene3dTitle">3D Scene</h3>
+          <div class="scene3d-header-actions">
+            <button type="button" id="openBlenderScene" class="btn-primary">Open Blender</button>
+            <button type="button" id="importScene3d" class="btn-primary">Import GLB</button>
+            <button type="button" id="saveScene3d" class="btn-primary">Save scene</button>
+            <button type="button" class="modal-close" data-scene3d-close title="Close">×</button>
+          </div>
+        </div>
+        <div id="scene3dRoot" class="scene3d-root"></div>
+      </div>
+    </div>
+
+    <div id="dialogModal" class="modal" hidden>
+      <div class="modal-backdrop" data-dialog-cancel></div>
+      <div class="modal-card" role="dialog" aria-labelledby="dialogTitle" aria-modal="true">
+        <div class="modal-header">
+          <h3 id="dialogTitle"></h3>
+          <button type="button" class="modal-close" data-dialog-cancel title="Close">×</button>
+        </div>
+        <div class="modal-body">
+          <p id="dialogHint" class="modal-hint" hidden></p>
+          <label id="dialogInputSection" class="modal-field" hidden>
+            <span id="dialogInputLabel">Path</span>
+            <div class="path-row">
+              <input id="dialogInput" type="text" spellcheck="false" />
+              <button type="button" id="dialogBrowseBtn" hidden>Browse…</button>
+            </div>
+          </label>
+          <div id="dialogError" class="modal-error" hidden></div>
+          <div id="dialogListSection" hidden>
+            <div id="dialogListTitle" class="modal-section-title"></div>
+            <div id="dialogList" class="dialog-list"></div>
+          </div>
+          <div id="dialogColorSection" class="canvas-color-dialog" hidden>
+            <label class="modal-field">
+              <span>Brightness</span>
+              <div class="gray-slider-row">
+                <span class="gray-slider-label">Black</span>
+                <input id="dialogColorGray" class="gray-slider" type="range" min="0" max="255" value="232" />
+                <span class="gray-slider-label">White</span>
+              </div>
+            </label>
+            <label class="modal-field">
+              <span>Hex</span>
+              <input id="dialogColorHex" type="text" spellcheck="false" placeholder="#E8E8E8" />
+            </label>
+            <div class="canvas-color-row">
+              <span class="modal-section-title">Preview</span>
+              <div id="dialogColorPreview" class="canvas-color-preview"></div>
+            </div>
+          </div>
+        </div>
+        <div id="dialogFooter" class="modal-footer"></div>
+      </div>
+    </div>
+
+    <script type="importmap">
+      {
+        "imports": {
+          "three": "/static/vendor/three/three.module.js"
+        }
+      }
+    </script>
+    <script src="/static/app.js"></script>
+  </body>
+</html>
