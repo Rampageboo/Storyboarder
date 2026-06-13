@@ -1,136 +1,3 @@
-const state = {
-  project: null,
-  selectedShotId: null,
-  saveTimer: null,
-  missingFiles: [],
-  statusFilter: "",
-  revisionOnly: false,
-  animaticTimer: null,
-  animaticStartedAt: 0,
-  animaticOffset: 0,
-  timelineCursor: 0,
-  annotations: [],
-  annotationTool: "select",
-  annotationsVisible: true,
-  drawing: null,
-  syncPollTimer: null,
-  liveBridgeTimer: null,
-  bridgeStatusTimer: null,
-  isSyncing: false,
-  scene3dEditor: null,
-};
-
-const el = {
-  newProject: document.querySelector("#newProject"),
-  openProject: document.querySelector("#openProject"),
-  saveProject: document.querySelector("#saveProject"),
-  setCanvas: document.querySelector("#setCanvas"),
-  linkPhotoshop: document.querySelector("#linkPhotoshop"),
-  psMenuSummary: document.querySelector("#psMenuSummary"),
-  psMenuStatus: document.querySelector("#psMenuStatus"),
-  setPhotoshop: document.querySelector("#setPhotoshop"),
-  openBlender: document.querySelector("#openBlender"),
-  setBlender: document.querySelector("#setBlender"),
-  blMenuSummary: document.querySelector("#blMenuSummary"),
-  blMenuStatus: document.querySelector("#blMenuStatus"),
-  openBlenderScene: document.querySelector("#openBlenderScene"),
-  pdfLayout: document.querySelector("#pdfLayout"),
-  exportPdf: document.querySelector("#exportPdf"),
-  exportShotList: document.querySelector("#exportShotList"),
-  exportContactSheet: document.querySelector("#exportContactSheet"),
-  exportTiming: document.querySelector("#exportTiming"),
-  exportImageSequence: document.querySelector("#exportImageSequence"),
-  boardInfo: document.querySelector("#boardInfo"),
-  boardCount: document.querySelector("#boardCount"),
-  projectStats: document.querySelector("#projectStats"),
-  syncStatus: document.querySelector("#syncStatus"),
-  statusFilter: document.querySelector("#statusFilter"),
-  revisionFilter: document.querySelector("#revisionFilter"),
-  addShot: document.querySelector("#addShot"),
-  shotContextMenu: document.querySelector("#shotContextMenu"),
-  prevShot: document.querySelector("#prevShot"),
-  nextShot: document.querySelector("#nextShot"),
-  previewBox: document.querySelector("#previewBox"),
-  canvasSurface: document.querySelector("#canvasSurface"),
-  canvasBoard: document.querySelector("#canvasBoard"),
-  drawingCanvas: document.querySelector("#drawingCanvas"),
-  annotationCanvas: document.querySelector("#annotationCanvas"),
-  importImage: document.querySelector("#importImage"),
-  removeImage: document.querySelector("#removeImage"),
-  addReference: document.querySelector("#addReference"),
-  importSource: document.querySelector("#importSource"),
-  relinkPreview: document.querySelector("#relinkPreview"),
-  openPreview: document.querySelector("#openPreview"),
-  refreshPreview: document.querySelector("#refreshPreview"),
-  imageFile: document.querySelector("#imageFile"),
-  referenceFile: document.querySelector("#referenceFile"),
-  sourceFile: document.querySelector("#sourceFile"),
-  fileStatus: document.querySelector("#fileStatus"),
-  referenceStrip: document.querySelector("#referenceStrip"),
-  playAnimatic: document.querySelector("#playAnimatic"),
-  stopAnimatic: document.querySelector("#stopAnimatic"),
-  timeDisplay: document.querySelector("#timeDisplay"),
-  progressSlider: document.querySelector("#progressSlider"),
-  timelineStrip: document.querySelector("#timelineStrip"),
-  dialogColorSection: document.querySelector("#dialogColorSection"),
-  dialogColorGray: document.querySelector("#dialogColorGray"),
-  dialogColorHex: document.querySelector("#dialogColorHex"),
-  dialogColorPreview: document.querySelector("#dialogColorPreview"),
-  shotLabel: document.querySelector("#shotLabel"),
-  shotId: document.querySelector("#shotId"),
-  title: document.querySelector("#title"),
-  scene: document.querySelector("#scene"),
-  sequence: document.querySelector("#sequence"),
-  status: document.querySelector("#status"),
-  description: document.querySelector("#description"),
-  actionNote: document.querySelector("#actionNote"),
-  cameraNote: document.querySelector("#cameraNote"),
-  cameraAngle: document.querySelector("#cameraAngle"),
-  cameraFocalLength: document.querySelector("#cameraFocalLength"),
-  cameraLocation: document.querySelector("#cameraLocation"),
-  cameraRotation: document.querySelector("#cameraRotation"),
-  characterNote: document.querySelector("#characterNote"),
-  dialogue: document.querySelector("#dialogue"),
-  lightingNote: document.querySelector("#lightingNote"),
-  transitionNote: document.querySelector("#transitionNote"),
-  durationSeconds: document.querySelector("#durationSeconds"),
-  tags: document.querySelector("#tags"),
-  commentList: document.querySelector("#commentList"),
-  commentText: document.querySelector("#commentText"),
-  addComment: document.querySelector("#addComment"),
-  toast: document.querySelector("#toast"),
-  dialogModal: document.querySelector("#dialogModal"),
-  dialogTitle: document.querySelector("#dialogTitle"),
-  dialogHint: document.querySelector("#dialogHint"),
-  dialogInputSection: document.querySelector("#dialogInputSection"),
-  dialogInputLabel: document.querySelector("#dialogInputLabel"),
-  dialogInput: document.querySelector("#dialogInput"),
-  dialogBrowseBtn: document.querySelector("#dialogBrowseBtn"),
-  dialogError: document.querySelector("#dialogError"),
-  dialogListSection: document.querySelector("#dialogListSection"),
-  dialogListTitle: document.querySelector("#dialogListTitle"),
-  dialogList: document.querySelector("#dialogList"),
-  dialogFooter: document.querySelector("#dialogFooter"),
-  openScene3d: document.querySelector("#openScene3d"),
-  scene3dModal: document.querySelector("#scene3dModal"),
-  scene3dRoot: document.querySelector("#scene3dRoot"),
-  saveScene3d: document.querySelector("#saveScene3d"),
-  importScene3d: document.querySelector("#importScene3d"),
-  scene3dFile: document.querySelector("#scene3dFile"),
-};
-
-const dialogState = {
-  resolve: null,
-  browse: null,
-  validate: null,
-  hasInput: false,
-  listItems: [],
-};
-
-const contextMenuState = {
-  shotId: null,
-};
-
 const inspectorFields = [
   el.title,
   el.scene,
@@ -173,33 +40,10 @@ advancedPanel?.querySelector("summary")?.addEventListener("click", (event) => {
 advancedPanel?.addEventListener("toggle", () => {
   updateShotPanelScrollMode();
   requestAnimationFrame(syncAnnotationLayout);
+  saveAppSessionSoon();
 });
 
 updateShotPanelScrollMode();
-
-el.shotContextMenu?.querySelectorAll("[data-shot-action]").forEach((button) => {
-  button.addEventListener("click", async () => {
-    const shotId = contextMenuState.shotId;
-    hideShotContextMenu();
-    if (!shotId) return;
-    if (button.dataset.shotAction === "duplicate") {
-      await duplicateShotById(shotId);
-      return;
-    }
-    if (button.dataset.shotAction === "delete") {
-      await deleteShotById(shotId);
-    }
-  });
-});
-
-document.addEventListener("click", (event) => {
-  if (el.shotContextMenu?.contains(event.target)) return;
-  hideShotContextMenu();
-});
-document.addEventListener("keydown", (event) => {
-  if (event.key === "Escape") hideShotContextMenu();
-});
-document.addEventListener("scroll", () => hideShotContextMenu(), true);
 
 document.querySelectorAll("[data-dialog-cancel]").forEach((node) => {
   node.addEventListener("click", () => closeDialog(null));
@@ -225,114 +69,68 @@ el.saveProject.addEventListener("click", async () => {
   showToast("Project saved.");
 });
 
-el.setCanvas.addEventListener("click", () => openCanvasSettingsDialog());
-el.openScene3d.addEventListener("click", () => openScene3dModal());
+function isScene3dOpen() {
+  return Boolean(el.canvasArea?.classList.contains("scene3d-active"));
+}
+
+el.openScene3d.addEventListener("click", () => {
+  if (isScene3dOpen()) {
+    closeScene3dModal();
+    return;
+  }
+  openScene3dModal();
+});
 el.saveScene3d.addEventListener("click", () => saveScene3dData());
+el.captureScene3d?.addEventListener("click", () => captureScene3dToBoard());
 el.importScene3d.addEventListener("click", () => el.scene3dFile.click());
 el.scene3dFile.addEventListener("change", () => importBlenderScene(el.scene3dFile.files?.[0]));
-document.querySelectorAll("[data-scene3d-close]").forEach((node) => {
-  node.addEventListener("click", () => closeScene3dModal());
-});
+el.closeScene3d?.addEventListener("click", () => closeScene3dModal());
 document.addEventListener("keydown", (event) => {
-  if (event.key === "Escape" && !el.scene3dModal.hidden) {
+  if (event.key === "Escape" && isScene3dOpen()) {
     closeScene3dModal();
   }
 });
 el.linkPhotoshop?.addEventListener("click", () => relinkPhotoshopBridge());
-el.setPhotoshop?.addEventListener("click", () => openPhotoshopSettingsDialog());
 el.openBlender?.addEventListener("click", () => openProjectInBlender());
-el.setBlender?.addEventListener("click", () => openBlenderSettingsDialog());
 el.openBlenderScene?.addEventListener("click", () => openProjectInBlender());
 
 el.exportPdf.addEventListener("click", async () => {
-  await flushSelectedShot();
-  const result = await api("/api/export/pdf", {
-    method: "POST",
-    body: JSON.stringify({ layout: el.pdfLayout.value || "two_per_page" }),
-  });
-  showToast(`PDF exported: ${result.path}`);
-  window.open(result.download_url, "_blank");
-});
-
-el.exportShotList.addEventListener("click", () => runDownloadExport("/api/export/shot-list"));
-el.exportContactSheet.addEventListener("click", () => runDownloadExport("/api/export/contact-sheet"));
-el.exportTiming.addEventListener("click", () => runDownloadExport("/api/export/timing"));
-el.exportImageSequence.addEventListener("click", async () => {
-  await flushSelectedShot();
-  const result = await api("/api/export/image-sequence", { method: "POST" });
-  showToast(`Image sequence exported: ${result.path}`);
-});
-
-el.addShot.addEventListener("click", () => addShot());
-
-async function addShot(afterShotId = null) {
-  await flushSelectedShot();
-  const body = afterShotId ? { after_shot_id: afterShotId } : {};
-  const result = await api("/api/shots", { method: "POST", body: JSON.stringify(body) });
-  setProject(result);
-  await selectShot(result.shot.shot_id);
-  scrollTimelineToShot(result.shot.shot_id);
-  showToast(boardAddedToast(result.shot.shot_id));
-}
-
-function formatShotId(shotId) {
-  const value = String(shotId || "");
-  if (value.length <= 12) return value;
-  return `${value.slice(0, 8)}…`;
-}
-
-function boardAddedToast(shotId) {
-  const shots = state.project?.shots || [];
-  const index = shots.findIndex((shot) => shot.shot_id === shotId);
-  const position = index >= 0 ? index + 1 : shots.length;
-  const label = formatShotId(shotId);
-  if (position !== shots.length) {
-    return `Board inserted at #${position} (${label})`;
+  try {
+    const result = await runWithProgress("Exporting PDF…", async () => {
+      await flushSelectedShot();
+      return api("/api/export/pdf", {
+        method: "POST",
+        body: JSON.stringify({ layout: el.pdfLayout.value || "two_per_page" }),
+      });
+    });
+    showToast(`PDF exported: ${result.path}`);
+    if (result.download_url) window.open(result.download_url, "_blank");
+  } catch {
+    // api() already toasts
   }
-  return `Board added: ${label}`;
-}
+});
 
-function scrollTimelineToShot(shotId, behavior = "smooth") {
-  if (!shotId || !el.timelineStrip) return;
-  requestAnimationFrame(() => {
-    const item = el.timelineStrip.querySelector(`[data-shot-id="${shotId}"]`);
-    if (!item) return;
-    item.scrollIntoView({ behavior, block: "nearest", inline: "nearest" });
-  });
-}
+el.exportShotList.addEventListener("click", () => runDownloadExport("/api/export/shot-list", "Exporting shot list…"));
+el.exportContactSheet.addEventListener("click", () => runDownloadExport("/api/export/contact-sheet", "Exporting contact sheet…"));
+el.exportTiming.addEventListener("click", () => runDownloadExport("/api/export/timing", "Exporting timing JSON…"));
+el.exportImageSequence.addEventListener("click", async () => {
+  try {
+    const result = await runWithProgress("Exporting image sequence…", async () => {
+      await flushSelectedShot();
+      return api("/api/export/image-sequence", { method: "POST" });
+    });
+    showToast(`Image sequence exported: ${result.path}`);
+  } catch {
+    // api() already toasts
+  }
+});
 
-function createTimelineInsertButton(afterShotId) {
-  const button = document.createElement("button");
-  button.type = "button";
-  button.className = "timeline-insert-shot";
-  button.title = "Insert board here";
-  button.textContent = "+";
-  button.addEventListener("click", async (event) => {
-    event.stopPropagation();
-    stopAnimatic();
-    await addShot(afterShotId);
-  });
-  return button;
-}
-
-el.prevShot.addEventListener("click", () => navigateShot(-1));
-el.nextShot.addEventListener("click", () => navigateShot(1));
 el.importImage.addEventListener("click", () => el.imageFile.click());
 el.addReference.addEventListener("click", () => el.referenceFile.click());
 el.importSource.addEventListener("click", () => el.sourceFile.click());
 el.refreshPreview.addEventListener("click", () => {
   const shot = selectedShot();
   if (shot) syncShot(shot.shot_id, true);
-});
-
-el.statusFilter.addEventListener("change", () => {
-  state.statusFilter = el.statusFilter.value;
-  renderTimeline();
-});
-
-el.revisionFilter.addEventListener("change", () => {
-  state.revisionOnly = el.revisionFilter.checked;
-  renderTimeline();
 });
 
 el.imageFile.addEventListener("change", async () => {
@@ -403,16 +201,6 @@ el.commentText.addEventListener("keydown", (event) => {
   if (event.key === "Enter") addComment();
 });
 
-el.playAnimatic.addEventListener("click", playAnimatic);
-el.stopAnimatic.addEventListener("click", stopAnimatic);
-el.progressSlider.addEventListener("input", () => {
-  state.timelineCursor = Number(el.progressSlider.value || 0);
-  stopAnimatic(false);
-  selectShotAtTime(state.timelineCursor);
-  renderTimeline();
-  syncScene3dTimeline();
-});
-
 inspectorFields.forEach((field) => {
   field.addEventListener("input", () => {
     const shot = selectedShot();
@@ -426,19 +214,14 @@ inspectorFields.forEach((field) => {
   });
 });
 
-function navigateShot(delta) {
-  const shots = state.project?.shots || [];
-  if (!shots.length) return;
-  const currentIndex = shots.findIndex((shot) => shot.shot_id === state.selectedShotId);
-  const nextIndex = Math.min(Math.max((currentIndex < 0 ? 0 : currentIndex) + delta, 0), shots.length - 1);
-  selectShot(shots[nextIndex].shot_id);
-}
-
-async function syncShot(shotId, force = false) {
-  if (!shotId || state.isSyncing) return;
+async function syncShot(shotId, force = false, { silent = false } = {}) {
+  if (!shotId) return;
+  if (state.isSyncing) return;
   state.isSyncing = true;
+  if (!silent) refreshAppStatus();
   try {
-    const result = await api(`/api/shots/${shotId}/sync?force=${force}`, { method: "POST" });
+    const result = await api(`/api/shots/${shotId}/sync?force=${force}`, { method: "POST", silent });
+    if (state.selectedShotId !== shotId) return;
     const syncResult = result.result || {};
     if (state.project && result.shots && !state.project.dirty) {
       applyProjectShotsFromServer(result);
@@ -446,19 +229,21 @@ async function syncShot(shotId, force = false) {
     if (syncResult.synced) {
       setProject(result, false);
       state.selectedShotId = shotId;
-      showSyncStatus(syncResult.message || "Synced preview from Photoshop.");
+      if (!silent) showSyncStatus(syncResult.message || "Synced preview from Photoshop.");
       renderPreview(selectedShot());
-      renderTimeline();
-    } else if (force) {
+      if (typeof patchTimelineActiveState === "function") patchTimelineActiveState(shotId);
+      else renderTimeline();
+    } else if (force && !silent) {
       showSyncStatus(syncResult.message || "No changes to sync.");
       renderTimeline();
-    } else {
+    } else if (!silent) {
       showSyncStatus("");
     }
   } catch {
-    showSyncStatus("");
+    if (!silent) showSyncStatus("");
   } finally {
     state.isSyncing = false;
+    if (!silent) refreshAppStatus();
   }
 }
 
@@ -466,6 +251,11 @@ function showSyncStatus(message) {
   if (!el.syncStatus) return;
   el.syncStatus.textContent = message || "";
   el.syncStatus.classList.toggle("synced", Boolean(message));
+  if (message) {
+    setAppStatus(message, { temporary: true, ms: 3500 });
+  } else {
+    refreshAppStatus();
+  }
 }
 
 function startSyncPolling() {
@@ -501,11 +291,17 @@ window.addEventListener("focus", async () => {
   }
 });
 
-async function runDownloadExport(url) {
-  await flushSelectedShot();
-  const result = await api(url, { method: "POST" });
-  showToast(`Exported: ${result.path}`);
-  if (result.download_url) window.open(result.download_url, "_blank");
+async function runDownloadExport(url, label = "Exporting…") {
+  try {
+    const result = await runWithProgress(label, async () => {
+      await flushSelectedShot();
+      return api(url, { method: "POST" });
+    });
+    showToast(`Exported: ${result.path}`);
+    if (result.download_url) window.open(result.download_url, "_blank");
+  } catch {
+    // api() already toasts
+  }
 }
 
 async function addComment() {
@@ -589,13 +385,21 @@ function saveAppSessionSoon() {
 }
 
 async function saveAppSession() {
-  if (!state.project?.project_json_path) return;
+  captureTimelineScroll();
+  const payload = {
+    ui_theme: getStoredUiTheme(),
+  };
+  if (state.project?.project_json_path) {
+    payload.last_project_json_path = state.project.project_json_path;
+    payload.selected_shot_id = state.selectedShotId || "";
+    payload.timeline_scroll_left = state.timelineScrollLeft;
+    payload.status_filter = state.statusFilter || "";
+    payload.revision_only = state.revisionOnly;
+    payload.advanced_panel_open = Boolean(advancedPanel?.open);
+  }
   const session = await api("/api/app/session", {
     method: "PUT",
-    body: JSON.stringify({
-      last_project_json_path: state.project.project_json_path,
-      selected_shot_id: state.selectedShotId || "",
-    }),
+    body: JSON.stringify(payload),
     silent: true,
   });
   if (Array.isArray(session.recent_projects) && session.recent_projects.length) {
@@ -691,23 +495,58 @@ async function relinkPhotoshopBridge() {
 }
 
 async function restoreLastProjectOnStartup() {
+  const withStartupTimeout = (promise, ms, label) =>
+    Promise.race([
+      promise,
+      new Promise((_, reject) => {
+        window.setTimeout(() => reject(new Error(`${label} timed out`)), ms);
+      }),
+    ]);
+
   try {
-    await whenDesktopBridgeReady();
-    const session = await api("/api/app/session", { silent: true });
+    window.setStartupProgress?.(78, "Restoring session…", "Reading saved session");
+    const session = await withStartupTimeout(
+      api("/api/app/session", { silent: true, bypassBridge: true }),
+      8000,
+      "Session"
+    );
     if (Array.isArray(session.recent_projects) && session.recent_projects.length) {
       localStorage.setItem("recent_projects", JSON.stringify(session.recent_projects));
     }
+    state.statusFilter = String(session.status_filter || "");
+    state.revisionOnly = Boolean(session.revision_only);
+    if (session.ui_theme) applyUiTheme(session.ui_theme);
+    if (advancedPanel) {
+      advancedPanel.open = Boolean(session.advanced_panel_open);
+      updateShotPanelScrollMode();
+    }
+    if (el.revisionFilter) el.revisionFilter.checked = state.revisionOnly;
     const path = String(session.last_project_json_path || "").trim();
-    if (!path) return;
-    const project = await api("/api/project/open", {
-      method: "POST",
-      body: JSON.stringify({ project_json_path: path }),
-      silent: true,
-    });
+    if (!path) {
+      render();
+      return;
+    }
+    window.setStartupProgress?.(86, "Opening project…", pathBasename(path));
+    const project = await withStartupTimeout(
+      api("/api/project/open", {
+        method: "POST",
+        body: JSON.stringify({ project_json_path: path }),
+        silent: true,
+        bypassBridge: true,
+      }),
+      30000,
+      "Project open"
+    );
+    state.timelineScrollLeft = Math.max(0, Math.round(Number(session.timeline_scroll_left) || 0));
+    state.timelineScrollPendingRestore = true;
     setProject(project);
+    clearUndoStack();
     const shotId = String(session.selected_shot_id || "").trim();
+    window.setStartupProgress?.(94, "Restoring view…", shotId ? formatShotId(shotId) : "Default board");
     if (shotId && project.shots?.some((shot) => shot.shot_id === shotId)) {
       await selectShot(shotId);
+    } else {
+      render();
     }
     showToast(`Restored ${project.name}`);
   } catch (error) {
@@ -946,6 +785,7 @@ async function openNewProjectDialog() {
       method: "POST",
       body: JSON.stringify({ path: parentPath || null }),
     }).then(setProject);
+    clearUndoStack();
     if (parentPath) localStorage.setItem("last_project_parent", parentPath);
     showToast("Project created.");
   } catch {
@@ -987,19 +827,13 @@ async function openOpenProjectDialog() {
       method: "POST",
       body: JSON.stringify({ project_json_path: projectJsonPath }),
     }).then(setProject);
+    clearUndoStack();
     rememberProjectPath(projectJsonPath);
     showToast("Project opened.");
   } catch {
     // api() already toasts
   }
 }
-
-const canvasColorState = {
-  gray: 232,
-  wired: false,
-  previewing: false,
-  savedColor: "#E8E8E8",
-};
 
 const CANVAS_COLOR_STORAGE_KEY = "storyboard_canvas_color";
 
@@ -1008,18 +842,6 @@ function canvasColor() {
   if (fromProject) return normalizeHexColor(fromProject);
   const stored = localStorage.getItem(CANVAS_COLOR_STORAGE_KEY);
   return normalizeHexColor(stored || "#E8E8E8");
-}
-
-function hasArtworkPreview(shot) {
-  return Boolean(shot?.preview_image_path || shot?.image_path);
-}
-
-function timelineThumbStyle(shot) {
-  const color = canvasColor();
-  if (!hasArtworkPreview(shot)) {
-    return `style="background-color:${color}"`;
-  }
-  return `style="background-color:${color};background-image:url('/api/shots/${shot.shot_id}/thumbnail?t=${Date.now()}')"`;
 }
 
 function applyCanvasColor(hex = canvasColor()) {
@@ -1077,6 +899,9 @@ function syncCanvasColorUi() {
   if (el.dialogColorGray) el.dialogColorGray.value = String(canvasColorState.gray);
   if (el.dialogColorHex) el.dialogColorHex.value = hex;
   if (el.dialogColorPreview) el.dialogColorPreview.style.background = hex;
+  if (el.settingsCanvasGray) el.settingsCanvasGray.value = String(canvasColorState.gray);
+  if (el.settingsCanvasHex) el.settingsCanvasHex.value = hex;
+  if (el.settingsCanvasPreview) el.settingsCanvasPreview.style.background = hex;
   if (canvasColorState.previewing) applyCanvasColor(hex);
 }
 
@@ -1341,7 +1166,7 @@ function renderBlenderMenuStatus() {
     if (el.blMenuStatus) {
       el.blMenuStatus.textContent = hasBlender ? blendPath : `${blendPath} · set Blender path`;
     }
-    el.blMenuSummary.title = hasBlender ? `Scene: ${blendPath}` : "Set Blender path in Bl Setup";
+    el.blMenuSummary.title = hasBlender ? `Scene: ${blendPath}` : "Set Blender path in Settings";
   } else {
     el.blMenuSummary.classList.add("bl-warn");
     if (el.blMenuStatus) el.blMenuStatus.textContent = "Add scene_template.blend to assets/";
@@ -1417,53 +1242,6 @@ async function openShotInPhotoshop() {
   showToast(`Opened in Photoshop: ${result.path}`);
 }
 
-async function duplicateShotById(shotId) {
-  if (!state.project) return;
-  await flushSelectedShot();
-  const result = await api(`/api/shots/${shotId}/duplicate`, { method: "POST" });
-  setProject(result);
-  await selectShot(result.shot.shot_id);
-  scrollTimelineToShot(result.shot.shot_id);
-}
-
-async function deleteShotById(shotId) {
-  const shot = state.project?.shots.find((item) => item.shot_id === shotId);
-  if (!shot) return;
-  const confirmed = await showDialog({
-    title: "Delete shot",
-    hint: `Delete ${shot.shot_id}? Shot files will remain on disk.`,
-    actions: [
-      { label: "Cancel", value: null },
-      { label: "Delete", value: "delete", primary: true, danger: true },
-    ],
-  });
-  if (confirmed !== "delete") return;
-  await api(`/api/shots/${shot.shot_id}`, { method: "DELETE" }).then(setProject);
-  showToast(`Deleted ${shot.shot_id}.`);
-}
-
-function hideShotContextMenu() {
-  if (!el.shotContextMenu) return;
-  el.shotContextMenu.hidden = true;
-  contextMenuState.shotId = null;
-}
-
-function showShotContextMenu(shotId, clientX, clientY) {
-  if (!el.shotContextMenu || !state.project) return;
-  contextMenuState.shotId = shotId;
-  el.shotContextMenu.hidden = false;
-  el.shotContextMenu.style.visibility = "hidden";
-  const menuRect = el.shotContextMenu.getBoundingClientRect();
-  const maxLeft = Math.max(8, window.innerWidth - menuRect.width - 8);
-  const maxTop = Math.max(8, window.innerHeight - menuRect.height - 8);
-  el.shotContextMenu.style.left = `${Math.min(clientX, maxLeft)}px`;
-  el.shotContextMenu.style.top = `${Math.min(clientY, maxTop)}px`;
-  el.shotContextMenu.style.visibility = "";
-  el.shotContextMenu.querySelectorAll("button").forEach((button) => {
-    button.disabled = !shotId;
-  });
-}
-
 async function openRelinkPreviewDialog() {
   const shot = selectedShot();
   if (!shot) return;
@@ -1526,13 +1304,18 @@ function applyProjectShotsFromServer(project) {
 function setProject(project, shouldRender = true) {
   if (!project) {
     state.project = null;
+    state.scene3dLoadedKey = null;
     stopLiveBridgeHeartbeat();
     stopBridgeStatusPolling();
     stopSyncPolling();
     if (shouldRender) render();
     return;
   }
+  const prevProjectPath = state.project?.project_json_path || null;
   state.project = project;
+  if (project.project_json_path !== prevProjectPath) {
+    state.scene3dLoadedKey = null;
+  }
   if (!project.shots.some((shot) => shot.shot_id === state.selectedShotId)) {
     state.selectedShotId = project.shots[0]?.shot_id || null;
   }
@@ -1549,6 +1332,7 @@ function setProject(project, shouldRender = true) {
   }
   fillStatusOptions();
   el.pdfLayout.value = project.settings?.pdf_layout || "two_per_page";
+  if (typeof restoreRefSegmentFromProject === "function") restoreRefSegmentFromProject();
   if (project.settings?.canvas_background_color) {
     rememberCanvasColor(project.settings.canvas_background_color);
   }
@@ -1558,16 +1342,71 @@ function setProject(project, shouldRender = true) {
   startLiveBridgeHeartbeat();
   startBridgeStatusPolling();
   saveAppSessionSoon();
-  if (shouldRender) render();
+  if (shouldRender) {
+    requestAnimationFrame(() => render());
+  }
+}
+
+let selectShotSeq = 0;
+let pendingShotSyncTimer = null;
+
+const annotationCache = new Map();
+
+function scheduleRenderForShotChange(seq) {
+  requestAnimationFrame(() => {
+    requestAnimationFrame(() => {
+      if (seq !== selectShotSeq) return;
+      renderForShotChange();
+      if (isScene3dOpen() && state.scene3dEditor && state.selectedShotId) {
+        const shot = state.project?.shots.find((item) => item.shot_id === state.selectedShotId);
+        const time = shot?.camera_data?.scene3d_time;
+        if (time != null && time !== "" && !Number.isNaN(Number(time))) {
+          state.scene3dEditor.setAnimationTime(Number(time));
+        }
+        state.scene3dEditor.refreshBoardPreview();
+      }
+    });
+  });
+}
+
+function renderForShotChange() {
+  const shots = state.project?.shots || [];
+  const shot = selectedShot();
+  renderBoardInfo();
+  renderInspector(shot);
+  renderPreview(shot);
+  renderReferences(shot);
+  if (typeof renderReferenceLinks === "function") renderReferenceLinks();
+  renderFileStatus(shot);
+  renderComments(shot);
+  updateTimelineMeta(shots, state.selectedShotId);
+  updateAnnotationControls();
+  drawAnnotations();
+  refreshAppStatus();
+}
+
+function scheduleBackgroundSync(shotId, seq) {
+  window.clearTimeout(pendingShotSyncTimer);
+  if (!shotId) return;
+  pendingShotSyncTimer = window.setTimeout(() => {
+    if (seq !== selectShotSeq || state.selectedShotId !== shotId) return;
+    syncShot(shotId, false, { silent: true });
+  }, 280);
 }
 
 async function selectShot(shotId, shouldRender = true) {
+  const seq = ++selectShotSeq;
   state.selectedShotId = shotId;
-  state.annotations = [];
+  if (typeof patchTimelineActiveState === "function") patchTimelineActiveState(shotId, { force: true });
+  if (shotId && annotationCache.has(shotId)) {
+    state.annotations = annotationCache.get(shotId);
+  } else {
+    state.annotations = [];
+  }
   saveAppSessionSoon();
-  if (shotId) await syncShot(shotId);
-  if (shouldRender) render();
-  loadAnnotations(shotId);
+  if (shouldRender) scheduleRenderForShotChange(seq);
+  window.setTimeout(() => loadAnnotations(shotId), 0);
+  scheduleBackgroundSync(shotId, seq);
 }
 
 function selectedShot() {
@@ -1607,12 +1446,9 @@ function render() {
   const hasProject = Boolean(state.project);
   const shot = selectedShot();
 
-  el.setCanvas.disabled = !hasProject;
   el.openScene3d.disabled = !hasProject;
   el.openBlender.disabled = !hasProject;
-  el.setBlender.disabled = !hasProject;
   el.linkPhotoshop.disabled = !hasProject;
-  el.setPhotoshop.disabled = !hasProject;
 
   [
     el.saveProject,
@@ -1630,6 +1466,7 @@ function render() {
     el.progressSlider,
     el.prevShot,
     el.nextShot,
+    el.setRefVideo,
   ].forEach((button) => {
     button.disabled = !hasProject;
   });
@@ -1653,6 +1490,7 @@ function render() {
   renderInspector(shot);
   renderPreview(shot);
   renderReferences(shot);
+  if (typeof renderReferenceLinks === "function") renderReferenceLinks();
   renderFileStatus(shot);
   renderComments(shot);
   renderTimeline();
@@ -1668,6 +1506,7 @@ function renderBoardInfo() {
     el.boardCount.textContent = "Board — of —";
     el.projectStats.textContent = "0 BOARDS";
     if (el.shotLabel) el.shotLabel.textContent = "Shot —";
+    refreshAppStatus();
     return;
   }
   const shots = project.shots;
@@ -1682,15 +1521,7 @@ function renderBoardInfo() {
   if (el.shotLabel) {
     el.shotLabel.textContent = shot ? `Shot: ${shot.title || shot.shot_id}` : "No shot selected";
   }
-}
-
-function filteredShots() {
-  const shots = state.project?.shots || [];
-  return shots.filter((shot) => {
-    if (state.statusFilter && shot.status !== state.statusFilter) return false;
-    if (state.revisionOnly && !(shot.comments || []).some((comment) => !comment.resolved)) return false;
-    return true;
-  });
+  refreshAppStatus();
 }
 
 function renderInspector(shot) {
@@ -1742,7 +1573,8 @@ function renderPreview(shot) {
   el.canvasBoard.classList.add("canvas-openable");
   const hasPreview = hasArtworkPreview(shot);
   const hasSource = Boolean(shot.source_file_path);
-  if (!hasPreview) {
+  const displayUrl = shotCanvasDisplayUrl(shot);
+  if (!hasPreview && !displayUrl) {
     if (hasSource) {
       renderCanvasPlaceholder("Click to open in Photoshop");
     } else {
@@ -1752,7 +1584,7 @@ function renderPreview(shot) {
   }
   const image = document.createElement("img");
   image.alt = shot.shot_id;
-  image.src = `/api/shots/${shot.shot_id}/image?t=${Date.now()}`;
+  image.src = displayUrl || shotPreviewUrl(shot);
   image.onerror = () => {
     el.canvasBoard.querySelectorAll("img, .canvas-placeholder").forEach((node) => node.remove());
     renderCanvasPlaceholder("Preview file missing");
@@ -1774,11 +1606,46 @@ function renderReferences(shot) {
     return;
   }
   shot.reference_image_paths.forEach((path) => {
+    const item = document.createElement("div");
+    item.className = "reference-item";
     const image = document.createElement("img");
     image.alt = "Reference";
     image.src = `/api/files?path=${encodeURIComponent(path)}&t=${Date.now()}`;
-    el.referenceStrip.appendChild(image);
+    const remove = document.createElement("button");
+    remove.type = "button";
+    remove.className = "reference-remove";
+    remove.title = "Remove reference";
+    remove.setAttribute("aria-label", "Remove reference");
+    remove.textContent = "×";
+    remove.addEventListener("click", async (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      await removeReferenceImage(shot.shot_id, path);
+    });
+    item.append(image, remove);
+    el.referenceStrip.appendChild(item);
   });
+}
+
+async function removeReferenceImage(shotId, path) {
+  const shot = state.project?.shots?.find((item) => item.shot_id === shotId);
+  if (!shot) return;
+  const previousPaths = [...(shot.reference_image_paths || [])];
+  try {
+    await api(`/api/shots/${shotId}/references`, {
+      method: "DELETE",
+      body: JSON.stringify({ path }),
+    }).then(setProject);
+    pushUndo({
+      type: "remove_reference",
+      shot_id: shotId,
+      paths: previousPaths,
+      selectedShotId: state.selectedShotId,
+    });
+    renderReferences(selectedShot());
+  } catch {
+    // api() already toasts
+  }
 }
 
 function renderFileStatus(shot) {
@@ -1841,211 +1708,29 @@ async function refreshMissingFiles() {
   }
 }
 
-function renderTimeline(activeShotId = state.selectedShotId) {
-  el.timelineStrip.innerHTML = "";
-  const shots = state.project?.shots || [];
-  const total = totalDuration(shots);
-  const current = Math.min(currentAnimaticSeconds(), total);
-  el.timeDisplay.textContent = `${current.toFixed(1)}s / ${total.toFixed(1)}s`;
-  el.progressSlider.max = total.toFixed(1);
-  el.progressSlider.value = current.toFixed(1);
-  let cursor = 0;
-  shots.forEach((shot, index) => {
-    const duration = Number(shot.duration_seconds || 3);
-    const start = cursor;
-    const end = cursor + duration;
-    cursor = end;
-
-    const filteredOut =
-      (state.statusFilter && shot.status !== state.statusFilter) ||
-      (state.revisionOnly && !(shot.comments || []).some((comment) => !comment.resolved));
-    const item = document.createElement("button");
-    item.className = `timeline-shot ${shot.shot_id === activeShotId ? "active" : ""}${
-      filteredOut ? " timeline-shot-filtered" : ""
-    }`;
-    item.draggable = true;
-    item.dataset.shotId = shot.shot_id;
-    item.dataset.index = String(index);
-    item.style.width = `${Math.max(132, duration * 58)}px`;
-    const thumbnailStyle = timelineThumbStyle(shot);
-    const dialoguePreview = shot.dialogue
-      ? `<span class="timeline-dialogue">${escapeHtml(shot.dialogue.slice(0, 40))}</span>`
-      : "";
-    item.innerHTML = `
-      <div class="timeline-thumb" ${thumbnailStyle}>${hasArtworkPreview(shot) ? "" : ""}</div>
-      <div class="timeline-meta">
-        <strong>#${index + 1} ${escapeHtml(formatShotId(shot.shot_id))} ${escapeHtml(shot.title || "")}</strong>
-        ${dialoguePreview}
-        <div class="timeline-duration-row">
-          <input class="timeline-duration" type="number" min="0.1" step="0.1" value="${duration.toFixed(1)}" aria-label="Duration seconds" />
-          <span>s</span>
-        </div>
-        <span class="timeline-range">${start.toFixed(1)}s - ${end.toFixed(1)}s</span>
-      </div>
-    `;
-    item.addEventListener("click", () => {
-      stopAnimatic();
-      selectShot(shot.shot_id);
-    });
-    item.addEventListener("contextmenu", (event) => {
-      event.preventDefault();
-      stopAnimatic();
-      selectShot(shot.shot_id);
-      showShotContextMenu(shot.shot_id, event.clientX, event.clientY);
-    });
-    item.addEventListener("dragstart", (event) => {
-      event.dataTransfer.setData("text/plain", shot.shot_id);
-      event.dataTransfer.effectAllowed = "move";
-    });
-    item.addEventListener("dragover", (event) => {
-      event.preventDefault();
-      item.classList.add("drag-over");
-    });
-    item.addEventListener("dragleave", () => {
-      item.classList.remove("drag-over");
-    });
-    item.addEventListener("drop", async (event) => {
-      event.preventDefault();
-      item.classList.remove("drag-over");
-      const draggedShotId = event.dataTransfer.getData("text/plain");
-      if (draggedShotId && draggedShotId !== shot.shot_id) {
-        await reorderShot(draggedShotId, shot.shot_id);
-      }
-    });
-    const durationInput = item.querySelector(".timeline-duration");
-    durationInput.addEventListener("click", (event) => event.stopPropagation());
-    durationInput.addEventListener("change", async (event) => {
-      event.stopPropagation();
-      const value = Math.max(0.1, Number(durationInput.value || 3));
-      shot.duration_seconds = value;
-      if (shot.shot_id === state.selectedShotId) {
-        el.durationSeconds.value = value;
-      }
-      state.project.dirty = true;
-      await saveShot(shot);
-      renderTimeline(activeShotId);
-    });
-    el.timelineStrip.appendChild(item);
-    el.timelineStrip.appendChild(createTimelineInsertButton(shot.shot_id));
-  });
-}
-
-function playAnimatic() {
-  const shots = state.project?.shots || [];
-  if (!shots.length) return;
-  state.animaticStartedAt = performance.now();
-  state.animaticOffset = Number(el.progressSlider.value || state.timelineCursor || 0);
-  window.clearInterval(state.animaticTimer);
-  state.animaticTimer = window.setInterval(tickAnimatic, 120);
-  tickAnimatic();
-}
-
-function stopAnimatic(resetProgress = true) {
-  window.clearInterval(state.animaticTimer);
-  state.animaticTimer = null;
-  if (resetProgress) {
-    state.timelineCursor = 0;
-    state.animaticOffset = 0;
-    el.progressSlider.value = "0";
-  } else {
-    state.timelineCursor = Number(el.progressSlider.value || state.timelineCursor || 0);
-  }
-  renderTimeline();
-}
-
-function tickAnimatic() {
-  const shots = state.project?.shots || [];
-  const elapsed = currentAnimaticSeconds();
-  const total = totalDuration(shots);
-  if (elapsed >= total) {
-    state.timelineCursor = 0;
-    stopAnimatic();
-    return;
-  }
-  state.timelineCursor = elapsed;
-  syncScene3dTimeline();
-  let cursor = 0;
-  for (const shot of shots) {
-    cursor += Number(shot.duration_seconds || 3);
-    if (elapsed < cursor) {
-      if (state.selectedShotId !== shot.shot_id) {
-        state.selectedShotId = shot.shot_id;
-        render();
-        loadAnnotations(shot.shot_id);
-      } else {
-        renderTimeline(shot.shot_id);
-      }
-      return;
-    }
-  }
-}
-
-function currentAnimaticSeconds() {
-  if (!state.animaticTimer) return state.timelineCursor || 0;
-  return state.animaticOffset + (performance.now() - state.animaticStartedAt) / 1000;
-}
-
-function totalDuration(shots) {
-  return shots.reduce((total, shot) => total + Number(shot.duration_seconds || 3), 0);
-}
-
-function selectShotAtTime(seconds) {
-  const shots = state.project?.shots || [];
-  let cursor = 0;
-  for (const shot of shots) {
-    cursor += Number(shot.duration_seconds || 3);
-    if (seconds <= cursor) {
-      state.selectedShotId = shot.shot_id;
-      render();
-      loadAnnotations(shot.shot_id);
-      return;
-    }
-  }
-  if (shots.length) {
-    state.selectedShotId = shots[shots.length - 1].shot_id;
-    render();
-    loadAnnotations(state.selectedShotId);
-  }
-}
-
-async function reorderShot(draggedShotId, targetShotId) {
-  const shots = state.project?.shots || [];
-  let from = shots.findIndex((shot) => shot.shot_id === draggedShotId);
-  const to = shots.findIndex((shot) => shot.shot_id === targetShotId);
-  if (from < 0 || to < 0 || from === to) return;
-  stopAnimatic();
-  while (from > to) {
-    await api(`/api/shots/${draggedShotId}/move-up`, { method: "POST" }).then(setProject);
-    from -= 1;
-  }
-  while (from < to) {
-    await api(`/api/shots/${draggedShotId}/move-down`, { method: "POST" }).then(setProject);
-    from += 1;
-  }
-  selectShot(draggedShotId);
-}
-
-function textNode(value) {
-  const span = document.createElement("span");
-  span.textContent = value;
-  return span;
-}
-
 async function loadAnnotations(shotId) {
   if (!shotId) {
     state.annotations = [];
     drawAnnotations();
     return;
   }
+  if (annotationCache.has(shotId)) {
+    state.annotations = annotationCache.get(shotId);
+    if (state.selectedShotId !== shotId) return;
+    updateAnnotationControls();
+    drawAnnotations();
+    return;
+  }
   try {
-    const result = await api(`/api/shots/${shotId}/annotations`);
-    if (state.selectedShotId === shotId) {
-      state.annotations = result.annotations || [];
-      updateAnnotationControls();
-      drawAnnotations();
-    }
+    const result = await api(`/api/shots/${shotId}/annotations`, { silent: true });
+    if (state.selectedShotId !== shotId) return;
+    state.annotations = result.annotations || [];
+    annotationCache.set(shotId, state.annotations);
+    updateAnnotationControls();
+    drawAnnotations();
   } catch {
-    state.annotations = [];
+    if (state.selectedShotId !== shotId) return;
+    if (!annotationCache.has(shotId)) state.annotations = [];
     updateAnnotationControls();
     drawAnnotations();
   }
@@ -2219,106 +1904,6 @@ if (el.previewBox && typeof ResizeObserver !== "undefined") {
   new ResizeObserver(syncAnnotationLayout).observe(el.previewBox);
 }
 
-let desktopBridgeReady = null;
-
-function whenDesktopBridgeReady() {
-  if (!window.pywebview) return Promise.resolve(null);
-  if (window.pywebview.api?.request) return Promise.resolve(window.pywebview.api);
-  if (!desktopBridgeReady) {
-    desktopBridgeReady = new Promise((resolve) => {
-      const finish = () => {
-        resolve(window.pywebview?.api?.request ? window.pywebview.api : null);
-      };
-      window.addEventListener("pywebviewready", finish, { once: true });
-      window.setTimeout(finish, 2000);
-    });
-  }
-  return desktopBridgeReady;
-}
-
-async function bridgeUpload(bridge, url, formData) {
-  const file = formData.get("file");
-  if (!file || typeof file.arrayBuffer !== "function") {
-    throw new Error("No file selected");
-  }
-  const buffer = await file.arrayBuffer();
-  const bytes = Array.from(new Uint8Array(buffer));
-  return bridge.upload_multipart(url, file.name, file.type || "application/octet-stream", bytes);
-}
-
-async function api(url, options = {}) {
-  const { silent = false, headers: customHeaders, ...fetchOptions } = options;
-  const bridge = await whenDesktopBridgeReady();
-
-  if (bridge) {
-    try {
-      const method = (fetchOptions.method || "GET").toUpperCase();
-      if (fetchOptions.body instanceof FormData) {
-        return await bridgeUpload(bridge, url, fetchOptions.body);
-      }
-      const body =
-        fetchOptions.body && typeof fetchOptions.body !== "string"
-          ? JSON.stringify(fetchOptions.body)
-          : fetchOptions.body || null;
-      return await bridge.request(method, url, body);
-    } catch (error) {
-      const message = error?.message || String(error);
-      if (!silent) showToast(message);
-      throw error instanceof Error ? error : new Error(message);
-    }
-  }
-
-  const headers = customHeaders ?? { "Content-Type": "application/json" };
-  const response = await fetch(url, { ...fetchOptions, headers });
-  if (!response.ok) {
-    let message = response.statusText;
-    try {
-      const payload = await response.json();
-      message = payload.detail || message;
-    } catch {
-      // Keep the HTTP status text when the server does not return JSON.
-    }
-    if (!silent) showToast(message);
-    throw new Error(message);
-  }
-  return response.json();
-}
-
-function showToast(message) {
-  el.toast.textContent = message;
-  el.toast.hidden = false;
-  window.clearTimeout(showToast.timer);
-  showToast.timer = window.setTimeout(() => {
-    el.toast.hidden = true;
-  }, 3500);
-}
-
-function escapeHtml(value) {
-  return String(value)
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;")
-    .replaceAll('"', "&quot;");
-}
-
-function formatCameraVec(value, asDegrees = false) {
-  if (!Array.isArray(value) || value.length < 3) return "";
-  return value
-    .slice(0, 3)
-    .map((item) => {
-      const num = Number(item) || 0;
-      return asDegrees ? num.toFixed(1) : num.toFixed(2);
-    })
-    .join(", ");
-}
-
-function parseCameraVec(text) {
-  if (!text || typeof text !== "string") return null;
-  const parts = text.split(",").map((item) => Number(item.trim()));
-  if (parts.length < 3 || parts.some((item) => Number.isNaN(item))) return null;
-  return parts.slice(0, 3);
-}
-
 function getShotCameraForScene3d() {
   const shot = selectedShot();
   if (!shot) return null;
@@ -2367,40 +1952,137 @@ function applyShotCameraFromScene3d(cameraState) {
 async function loadScene3DEditorClass() {
   if (loadScene3DEditorClass.cached) return loadScene3DEditorClass.cached;
   try {
-    const module = await import("./scene3d.js");
+    const bust = loadScene3DEditorClass._v ?? (loadScene3DEditorClass._v = String(Date.now()));
+    const module = await import(`/static/scene3d.js?v=${encodeURIComponent(bust)}`);
     loadScene3DEditorClass.cached = module.Scene3DEditor;
     return loadScene3DEditorClass.cached;
   } catch (error) {
     console.error("Failed to load 3D scene module:", error);
-    showToast("3D 模块加载失败，请重启应用。New/Open 功能不受影响。");
+    const detail = error?.message || String(error);
+    showToast(`3D 模块加载失败：${detail}`);
     throw error;
   }
 }
 
+function getBoardPreviewUrl() {
+  const shot = selectedShot();
+  if (!shot || (!shot.preview_image_path && !shot.image_path)) return "";
+  return `/api/shots/${shot.shot_id}/image?t=${Date.now()}`;
+}
+
+function getBoardLabel() {
+  const shot = selectedShot();
+  if (!shot) return "—";
+  const shots = state.project?.shots || [];
+  const index = shots.findIndex((item) => item.shot_id === shot.shot_id);
+  return `${formatShotId(shot.shot_id)} · Board ${index >= 0 ? index + 1 : "?"}`;
+}
+
+function getShotScene3dTime() {
+  const shot = selectedShot();
+  if (!shot?.camera_data) return null;
+  const value = shot.camera_data.scene3d_time;
+  return value != null && value !== "" ? Number(value) : null;
+}
+
+async function captureScene3dToBoard() {
+  const shot = selectedShot();
+  if (!shot || !state.scene3dEditor) {
+    showToast("请先打开 3D 场景并选择分镜");
+    return;
+  }
+  try {
+    const dataUrl = state.scene3dEditor.captureFrameDataUrl();
+    const blob = await (await fetch(dataUrl)).blob();
+    const form = new FormData();
+    form.append("file", blob, `${shot.shot_id}_3d_frame.png`);
+    await api(`/api/shots/${shot.shot_id}/image`, { method: "POST", body: form, headers: {} }).then(setProject);
+    const anim = state.scene3dEditor.getAnimationState();
+    shot.camera_data = {
+      ...(shot.camera_data || {}),
+      scene3d_time: anim.time,
+      scene3d_camera: anim.camera_name,
+    };
+    await saveShot(shot);
+    render();
+    state.scene3dEditor?.refreshBoardPreview();
+    showToast(`已印到分镜 ${formatShotId(shot.shot_id)} (${anim.time.toFixed(2)}s)`);
+  } catch (error) {
+    showToast(error?.message || String(error));
+  }
+}
+
+let scene3dSettingsSaveTimer = null;
+
+function scene3dSceneKey(project) {
+  const scene3d = project?.settings?.scene3d;
+  if (!scene3d) return `empty:${project?.project_json_path || ""}`;
+  return `${scene3d.source || "builtin"}:${scene3d.file_path || ""}:${project?.project_json_path || ""}`;
+}
+
+function schedulePersistScene3dSettings(scene3d) {
+  window.clearTimeout(scene3dSettingsSaveTimer);
+  scene3dSettingsSaveTimer = window.setTimeout(async () => {
+    if (!state.project) return;
+    try {
+      const project = await api("/api/project/settings", {
+        method: "PATCH",
+        body: JSON.stringify({ scene3d }),
+      });
+      setProject(project, false);
+    } catch (error) {
+      console.warn("Failed to autosave 3D settings:", error);
+    }
+  }, 120);
+}
+
 async function openScene3dModal() {
   if (!state.project) return;
-  el.scene3dModal.hidden = false;
+  el.canvasArea?.classList.add("scene3d-active");
   if (!state.scene3dEditor) {
     let Scene3DEditor;
     try {
       Scene3DEditor = await loadScene3DEditorClass();
-    } catch {
-      el.scene3dModal.hidden = true;
+      state.scene3dEditor = new Scene3DEditor(el.scene3dRoot, {
+        getShotCamera: () => getShotCameraForScene3d(),
+        getShotScene3dTime: () => getShotScene3dTime(),
+        getBoardPreviewUrl: () => getBoardPreviewUrl(),
+        getBoardLabel: () => getBoardLabel(),
+        onApplyShotCamera: (cameraState) => applyShotCameraFromScene3d(cameraState),
+        onImportBlender: () => el.scene3dFile.click(),
+        onOpenBlender: () => openProjectInBlender(),
+        onCaptureToBoard: () => captureScene3dToBoard(),
+        onMessage: (message) => showToast(message),
+        onSceneSettingsChange: (scene3d) => schedulePersistScene3dSettings(scene3d),
+      });
+    } catch (error) {
+      el.canvasArea?.classList.remove("scene3d-active");
+      state.scene3dEditor = null;
+      if (!String(error?.message || "").includes("3D 模块加载失败")) {
+        showToast(`3D 启动失败：${error?.message || error}`);
+      }
       return;
     }
-    state.scene3dEditor = new Scene3DEditor(el.scene3dRoot, {
-      getShotCamera: () => getShotCameraForScene3d(),
-      onApplyShotCamera: (cameraState) => applyShotCameraFromScene3d(cameraState),
-      onImportBlender: () => el.scene3dFile.click(),
-      onOpenBlender: () => openProjectInBlender(),
-      onMessage: (message) => showToast(message),
-      getTimelineSeconds: () => currentAnimaticSeconds(),
-      getTimelineTotal: () => totalDuration(state.project?.shots || []),
-    });
   }
-  await state.scene3dEditor.loadSceneData(state.project.settings?.scene3d || null);
-  state.scene3dEditor.setBlendFilePath(state.project.settings?.scene3d?.blend_file_path);
-  syncScene3dTimeline();
+  try {
+    const scene3dSettings = state.project.settings?.scene3d || null;
+    const nextSceneKey = scene3dSceneKey(state.project);
+    if (!state.scene3dLoadedKey || state.scene3dLoadedKey !== nextSceneKey) {
+      await state.scene3dEditor.loadSceneData(scene3dSettings);
+      state.scene3dLoadedKey = nextSceneKey;
+    } else {
+      state.scene3dEditor.applyDisplaySettings(scene3dSettings);
+    }
+    state.scene3dEditor.setBlendFilePath(state.project.settings?.scene3d?.blend_file_path);
+    const shotTime = getShotScene3dTime();
+    if (shotTime != null && !Number.isNaN(shotTime)) {
+      state.scene3dEditor.setAnimationTime(shotTime);
+    }
+    state.scene3dEditor.refreshBoardPreview();
+    requestAnimationFrame(() => state.scene3dEditor?._resize?.());
+  } catch (error) {
+    showToast(`3D 场景加载失败：${error?.message || error}`);
+  }
 }
 
 async function importBlenderScene(file) {
@@ -2408,22 +2090,31 @@ async function importBlenderScene(file) {
   const formData = new FormData();
   formData.append("file", file);
   try {
-    const bridge = await whenDesktopBridgeReady();
     let result;
-    if (bridge) {
-      result = await bridgeUpload(bridge, "/api/project/scene3d/import", formData);
-    } else {
+    if (preferHttpApi()) {
       const response = await fetch("/api/project/scene3d/import", { method: "POST", body: formData });
       if (!response.ok) {
         const payload = await response.json().catch(() => ({}));
         throw new Error(payload.detail || response.statusText);
       }
       result = await response.json();
+    } else {
+      const bridge = await whenDesktopBridgeReady();
+      if (bridge) {
+        result = await bridgeUpload(bridge, "/api/project/scene3d/import", formData);
+      } else {
+        const response = await fetch("/api/project/scene3d/import", { method: "POST", body: formData });
+        if (!response.ok) {
+          const payload = await response.json().catch(() => ({}));
+          throw new Error(payload.detail || response.statusText);
+        }
+        result = await response.json();
+      }
     }
     setProject(result, false);
     if (state.scene3dEditor) {
       await state.scene3dEditor.loadSceneData(result.scene3d || result.settings?.scene3d || null);
-      syncScene3dTimeline();
+      state.scene3dLoadedKey = scene3dSceneKey(state.project);
     }
     showToast(`已导入 Blender 场景：${file.name}`);
   } catch (error) {
@@ -2433,14 +2124,9 @@ async function importBlenderScene(file) {
   }
 }
 
-function syncScene3dTimeline() {
-  if (el.scene3dModal.hidden || !state.scene3dEditor) return;
-  const shots = state.project?.shots || [];
-  state.scene3dEditor.syncTimelineTime(currentAnimaticSeconds(), totalDuration(shots));
-}
-
 function closeScene3dModal() {
-  el.scene3dModal.hidden = true;
+  state.scene3dEditor?.pauseAnimation();
+  el.canvasArea?.classList.remove("scene3d-active");
 }
 
 async function saveScene3dData() {
@@ -2455,8 +2141,26 @@ async function saveScene3dData() {
   });
 }
 
-applyCanvasColor();
-render();
-restoreLastProjectOnStartup().catch((error) => {
-  console.warn("Startup session restore failed:", error);
-});
+try {
+  bindTimelineEvents();
+  bindAnimaticEvents();
+  bindThemeUi();
+  bindToolbarMenus();
+  bindUndoUi();
+  window.setStartupProgress?.(58, "Storyboard Tool", "Applying layout");
+  applyCanvasColor();
+  refreshAppStatus();
+  window.setStartupProgress?.(66, "Storyboard Tool", "Restoring session");
+  window.setTimeout(() => {
+    restoreLastProjectOnStartup()
+      .catch((error) => {
+        console.warn("Startup session restore failed:", error);
+      })
+      .finally(() => {
+        window.finishStartupOverlay?.("Ready");
+      });
+  }, 0);
+} catch (error) {
+  console.error("Startup init failed:", error);
+  window.failStartupOverlay?.("Startup failed");
+}

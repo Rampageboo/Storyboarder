@@ -31,6 +31,10 @@ def export_shot_list_csv(project: Project, output_path: Path) -> Path:
                 "camera_location",
                 "camera_rotation",
                 "tags",
+                "reference_image_paths",
+                "ref_video_path",
+                "ref_video_time",
+                "ref_segment_time",
             ]
         )
         for shot in project.shots:
@@ -51,6 +55,10 @@ def export_shot_list_csv(project: Project, output_path: Path) -> Path:
                     shot.camera_data.get("location", ""),
                     shot.camera_data.get("rotation", ""),
                     ", ".join(shot.tags),
+                    "; ".join(shot.reference_image_paths),
+                    shot.ref_video_path,
+                    shot.ref_video_time if shot.ref_video_path else "",
+                    shot.ref_segment_time if shot.ref_video_path else "",
                 ]
             )
     return output_path

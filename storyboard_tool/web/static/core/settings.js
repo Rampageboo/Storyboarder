@@ -1,0 +1,222 @@
+const settingsState = {
+  canvasWired: false,
+  themeSnapshot: "studio",
+  timelineNameSnapshot: true,
+};
+
+const TIMELINE_SHOW_SELECTED_NAME_KEY = "storyboard_timeline_show_selected_name";
+
+function getTimelineShowSelectedName() {
+  try {
+    return localStorage.getItem(TIMELINE_SHOW_SELECTED_NAME_KEY) !== "0";
+  } catch {
+    return true;
+  }
+}
+
+function applyTimelineUiPrefs(showSelectedName = getTimelineShowSelectedName()) {
+  document.documentElement.setAttribute(
+    "data-timeline-selected-name",
+    showSelectedName ? "1" : "0"
+  );
+}
+
+function persistTimelineShowSelectedName(showSelectedName) {
+  try {
+    localStorage.setItem(TIMELINE_SHOW_SELECTED_NAME_KEY, showSelectedName ? "1" : "0");
+  } catch {
+    // ignore storage failures
+  }
+  applyTimelineUiPrefs(showSelectedName);
+}
+
+function closeSettingsModal({ revertTheme = true, revertTimeline = true } = {}) {
+  if (!el.settingsModal) return;
+  if (revertTheme) applyUiTheme(settingsState.themeSnapshot);
+  if (revertTimeline) applyTimelineUiPrefs(settingsState.timelineNameSnapshot);
+  el.settingsModal.hidden = true;
+  teardownSettingsCanvasControls();
+}
+
+function populateSettingsFields() {
+  if (!el.settingsModal) return;
+  const photoshopPath =
+    state.project?.settings?.photoshop_path || localStorage.getItem("photoshop_path_default") || "";
+  const blenderPath =
+    state.project?.settings?.blender_path || localStorage.getItem("blender_path_default") || "";
+  if (el.settingsPhotoshopPath) el.settingsPhotoshopPath.value = photoshopPath;
+  if (el.settingsBlenderPath) el.settingsBlenderPath.value = blenderPath;
+  if (el.settingsTimelineShowSelectedName) {
+    el.settingsTimelineShowSelectedName.checked = getTimelineShowSelectedName();
+  }
+  setupSettingsCanvasControls(canvasColor());
+  renderThemePicker(el.settingsThemePicker);
+}
+
+function openSettingsModal() {
+  if (!el.settingsModal) return;
+  settingsState.themeSnapshot = getStoredUiTheme();
+  settingsState.timelineNameSnapshot = getTimelineShowSelectedName();
+  populateSettingsFields();
+  loadSettingsCandidates().catch(() => {});
+  el.settingsModal.hidden = false;
+  el.settingsPhotoshopPath?.focus();
+}
+
+async function loadSettingsCandidates() {
+  const [psResult, blResult] = await Promise.allSettled([
+    api("/api/system/photoshop-candidates", { silent: true }),
+    api("/api/system/blender-candidates", { silent: true }),
+  ]);
+  if (psResult.status === "fulfilled") {
+    renderSettingsCandidateList(el.settingsPhotoshopList, psResult.value.candidates || [], (path) => {
+      if (el.settingsPhotoshopPath) el.settingsPhotoshopPath.value = path;
+    });
+  }
+  if (blResult.status === "fulfilled") {
+    renderSettingsCandidateList(el.settingsBlenderList, blResult.value.candidates || [], (path) => {
+      if (el.settingsBlenderPath) el.settingsBlenderPath.value = path;
+    });
+  }
+}
+
+function renderSettingsCandidateList(container, paths, onPick) {
+  if (!container) return;
+  container.replaceChildren();
+  if (!paths.length) {
+    const empty = document.createElement("p");
+    empty.className = "settings-candidate-empty";
+    empty.textContent = "No installations detected.";
+    container.appendChild(empty);
+    return;
+  }
+  for (const path of paths) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "settings-candidate-item";
+    button.innerHTML = `<strong>${escapeHtml(pathBasename(path))}</strong><span>${escapeHtml(pathDirname(path))}</span>`;
+    button.addEventListener("click", () => onPick(path));
+    container.appendChild(button);
+  }
+}
+
+function syncSettingsCanvasUi() {
+  const hex = currentCanvasColorHex();
+  if (el.settingsCanvasGray) el.settingsCanvasGray.value = String(canvasColorState.gray);
+  if (el.settingsCanvasHex) el.settingsCanvasHex.value = hex;
+  if (el.settingsCanvasPreview) el.settingsCanvasPreview.style.background = hex;
+}
+
+function onSettingsCanvasGrayInput() {
+  canvasColorState.gray = Number(el.settingsCanvasGray?.value || 0);
+  syncSettingsCanvasUi();
+}
+
+function onSettingsCanvasHexInput() {
+  const value = el.settingsCanvasHex?.value.trim() || "";
+  if (!isValidHexColor(value)) return;
+  setCanvasColorFromHex(value);
+  syncSettingsCanvasUi();
+}
+
+function setupSettingsCanvasControls(initialHex) {
+  teardownSettingsCanvasControls();
+  setCanvasColorFromHex(initialHex);
+  el.settingsCanvasGray?.addEventListener("input", onSettingsCanvasGrayInput);
+  el.settingsCanvasHex?.addEventListener("input", onSettingsCanvasHexInput);
+  syncSettingsCanvasUi();
+  settingsState.canvasWired = true;
+}
+
+function teardownSettingsCanvasControls() {
+  if (!settingsState.canvasWired) return;
+  el.settingsCanvasGray?.removeEventListener("input", onSettingsCanvasGrayInput);
+  el.settingsCanvasHex?.removeEventListener("input", onSettingsCanvasHexInput);
+  settingsState.canvasWired = false;
+}
+
+async function browseSettingsPath(kind) {
+  const endpoint = kind === "blender" ? "/api/system/browse-blender" : "/api/system/browse-photoshop";
+  const result = await api(endpoint, { method: "POST" });
+  if (result.cancelled || !result.path) return;
+  if (kind === "blender" && el.settingsBlenderPath) el.settingsBlenderPath.value = result.path;
+  if (kind === "photoshop" && el.settingsPhotoshopPath) el.settingsPhotoshopPath.value = result.path;
+}
+
+async function saveSettingsFromModal() {
+  const photoshopPath = el.settingsPhotoshopPath?.value.trim() || "";
+  const blenderPath = el.settingsBlenderPath?.value.trim() || "";
+  const canvasHex = normalizeHexColor(el.settingsCanvasHex?.value.trim() || canvasColor());
+  const themeId =
+    el.settingsThemePicker?.querySelector(".theme-option.active")?.dataset.themeId || getStoredUiTheme();
+  const showSelectedName = Boolean(el.settingsTimelineShowSelectedName?.checked);
+
+  try {
+    if (state.project) {
+      await api("/api/project/settings", {
+        method: "PATCH",
+        body: JSON.stringify({
+          photoshop_path: photoshopPath,
+          blender_path: blenderPath,
+        }),
+      }).then(setProject);
+      const savedCanvas = rememberCanvasColor(canvasHex);
+      applyCanvasColor(savedCanvas);
+      const colorResult = await saveCanvasColorToServer(savedCanvas);
+      if (colorResult.settings) {
+        state.project.settings = { ...state.project.settings, ...colorResult.settings };
+      }
+      if (Array.isArray(colorResult.shots)) state.project.shots = colorResult.shots;
+      applyCanvasColor(savedCanvas);
+      renderPreview(selectedShot());
+    } else {
+      rememberCanvasColor(canvasHex);
+      applyCanvasColor(canvasHex);
+    }
+
+    if (photoshopPath) localStorage.setItem("photoshop_path_default", photoshopPath);
+    else localStorage.removeItem("photoshop_path_default");
+    if (blenderPath) localStorage.setItem("blender_path_default", blenderPath);
+    else localStorage.removeItem("blender_path_default");
+
+    applyUiTheme(themeId);
+    settingsState.themeSnapshot = themeId;
+    persistTimelineShowSelectedName(showSelectedName);
+    settingsState.timelineNameSnapshot = showSelectedName;
+    await persistUiThemePreference(themeId);
+    renderBlenderMenuStatus();
+    render();
+    publishLiveBridge().catch(() => {});
+    closeSettingsModal({ revertTheme: false });
+    showToast("Settings saved.");
+  } catch {
+    // api() already toasts
+  }
+}
+
+function bindSettingsUi() {
+  el.openSettings?.addEventListener("click", () => openSettingsModal());
+  el.settingsSave?.addEventListener("click", () => saveSettingsFromModal());
+  el.settingsCancel?.addEventListener("click", () => closeSettingsModal({ revertTheme: true }));
+  el.settingsBrowsePhotoshop?.addEventListener("click", () => browseSettingsPath("photoshop"));
+  el.settingsBrowseBlender?.addEventListener("click", () => browseSettingsPath("blender"));
+  el.settingsClearPhotoshop?.addEventListener("click", () => {
+    if (el.settingsPhotoshopPath) el.settingsPhotoshopPath.value = "";
+  });
+  el.settingsClearBlender?.addEventListener("click", () => {
+    if (el.settingsBlenderPath) el.settingsBlenderPath.value = "";
+  });
+  el.settingsTimelineShowSelectedName?.addEventListener("change", () => {
+    if (el.settingsModal?.hidden) return;
+    applyTimelineUiPrefs(Boolean(el.settingsTimelineShowSelectedName.checked));
+  });
+  document.querySelectorAll("[data-settings-close]").forEach((node) => {
+    node.addEventListener("click", () => closeSettingsModal({ revertTheme: true }));
+  });
+  el.settingsModal?.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") closeSettingsModal({ revertTheme: true });
+  });
+}
+
+bindSettingsUi();
+applyTimelineUiPrefs();

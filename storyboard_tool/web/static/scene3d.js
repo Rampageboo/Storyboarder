@@ -1,9 +1,22 @@
-import * as THREE from "./vendor/three/three.module.js";
-import { OrbitControls } from "./vendor/three/OrbitControls.js";
-import { TransformControls } from "./vendor/three/TransformControls.js";
-import { GLTFLoader } from "./vendor/three/GLTFLoader.js";
+import * as THREE from "/static/vendor/three/three.module.js";
+import { OrbitControls } from "/static/vendor/three/OrbitControls.js";
+import { TransformControls } from "/static/vendor/three/TransformControls.js";
+import { GLTFLoader } from "/static/vendor/three/GLTFLoader.js";
+import { RoomEnvironment } from "/static/vendor/three/RoomEnvironment.js";
 
-const PRIMITIVE_TYPES = new Set(["cube", "sphere", "plane", "cylinder", "cone"]);
+const VIEWPORT_OBJECT_PALETTE = [
+  0xc87a6e, 0x6eb87a, 0x6e8ec8, 0xc8b06e, 0xb06ec8, 0x6ec8b8,
+  0xc86e8a, 0x8ac86e, 0x6e6ec8, 0xc8946e, 0x6eb0c8, 0xa0c86e,
+  0xc87878, 0x78c878, 0x7878c8, 0xc8c878,
+];
+
+function hashString(value) {
+  let hash = 0;
+  for (let i = 0; i < value.length; i += 1) {
+    hash = (hash * 31 + value.charCodeAt(i)) | 0;
+  }
+  return Math.abs(hash);
+}
 
 function makeId() {
   return crypto.randomUUID().replaceAll("-", "").slice(0, 12);
@@ -117,10 +130,23 @@ export class Scene3DEditor {
     this.importedCameras = [];
     this.activeCameraId = "";
     this.followCamera = true;
-    this.syncTimeline = true;
     this.isPlaying = false;
+    this.programLightingMode = "auto";
+    this.importedLightCount = 0;
+    this.objectColorPreview = true;
+    this.previewMaterials = new Set();
+    this.wireframeMode = "off";
+    this.wireframeOverlayGeometries = new Set();
+    this.wireframeOverlayMaterials = new Set();
     this.animationTime = 0;
     this.animationDuration = 0;
+    this.animatedNodeNames = new Set();
+    this._followPos = new THREE.Vector3();
+    this._followQuat = new THREE.Quaternion();
+    this._followScale = new THREE.Vector3();
+    this._probePosA = new THREE.Vector3();
+    this._probePosB = new THREE.Vector3();
+    this._sceneSettingsSaveTimer = null;
 
     this._buildDom();
     this._initThree();
@@ -131,6 +157,12 @@ export class Scene3DEditor {
     this.rootEl.innerHTML = `
       <div class="scene3d-layout">
         <aside class="scene3d-sidebar">
+          <div class="scene3d-panel-title">当前分镜预览</div>
+          <div class="scene3d-board-preview" data-board-preview>
+            <img data-board-preview-img alt="" hidden />
+            <span class="scene3d-board-preview-empty" data-board-preview-empty>无预览 · Capture 后显示</span>
+          </div>
+          <div class="scene3d-board-label" data-board-label>—</div>
           <div class="scene3d-panel-title">Blender 场景</div>
           <div class="scene3d-blender-panel">
             <div class="scene3d-file-name" data-blend-name>scene3d/scene.blend</div>
@@ -141,9 +173,26 @@ export class Scene3DEditor {
               跟随相机视角
             </label>
             <label class="scene3d-check">
-              <input type="checkbox" data-sync-timeline checked />
-              同步分镜时间轴
+              <input type="checkbox" data-object-colors checked />
+              对象随机色（低饱和，便于区分）
             </label>
+            <label class="scene3d-field">
+              <span>线框</span>
+              <select data-wireframe-mode>
+                <option value="off">关闭</option>
+                <option value="on">标准（叠加边线）</option>
+                <option value="strong">强化（全边线 + 高亮）</option>
+              </select>
+            </label>
+            <label class="scene3d-field">
+              <span>程序补光</span>
+              <select data-program-lighting>
+                <option value="auto">自动（有灯：环境反射；无灯：全补光）</option>
+                <option value="on">始终开启（环境 + 柔光）</option>
+                <option value="off">关闭（仅 GLB 灯光）</option>
+              </select>
+            </label>
+            <div class="scene3d-light-status" data-light-status>—</div>
             <label class="scene3d-field">
               <span>相机</span>
               <select data-camera-select disabled>
@@ -183,6 +232,7 @@ export class Scene3DEditor {
             <div class="scene3d-tool-group scene3d-blender-only" hidden>
               <button type="button" data-action="play-pause">▶ 播放</button>
               <button type="button" data-action="stop-animation">■ 停止</button>
+              <button type="button" data-action="capture-board">印到当前分镜</button>
               <button type="button" data-action="free-view">自由视角</button>
             </div>
             <div class="scene3d-tool-group scene3d-builtin-only">
@@ -201,7 +251,7 @@ export class Scene3DEditor {
             <span data-time-display>0.0s / 0.0s</span>
           </div>
           <div class="scene3d-hint" data-hint>
-            从 Blender 导出 GLB（勾选 Cameras + Animation）后导入 · 开启「跟随相机」可实时查看动画镜头
+            使用 GLB 自带时间轴播放相机动画 · 不会切换底部分镜 · 「印到当前分镜」可保存当前画面为背景
           </div>
         </div>
       </div>
@@ -211,11 +261,17 @@ export class Scene3DEditor {
     this.fileNameEl = this.rootEl.querySelector("[data-blend-name]");
     this.cameraSelectEl = this.rootEl.querySelector("[data-camera-select]");
     this.followCameraEl = this.rootEl.querySelector("[data-follow-camera]");
-    this.syncTimelineEl = this.rootEl.querySelector("[data-sync-timeline]");
+    this.objectColorsEl = this.rootEl.querySelector("[data-object-colors]");
+    this.wireframeModeEl = this.rootEl.querySelector("[data-wireframe-mode]");
+    this.programLightingEl = this.rootEl.querySelector("[data-program-lighting]");
+    this.lightStatusEl = this.rootEl.querySelector("[data-light-status]");
     this.timeSliderEl = this.rootEl.querySelector("[data-time-slider]");
     this.timeDisplayEl = this.rootEl.querySelector("[data-time-display]");
-    this.hintEl = this.rootEl.querySelector("[data-hint]");
+    this.boardPreviewImg = this.rootEl.querySelector("[data-board-preview-img]");
+    this.boardPreviewEmpty = this.rootEl.querySelector("[data-board-preview-empty]");
+    this.boardLabelEl = this.rootEl.querySelector("[data-board-label]");
     this.playPauseBtn = this.rootEl.querySelector("[data-action='play-pause']");
+    this.hintEl = this.rootEl.querySelector("[data-hint]");
     this.transformInputs = {};
     this.rootEl.querySelectorAll("[data-tf]").forEach((input) => {
       this.transformInputs[input.dataset.tf] = input;
@@ -223,9 +279,15 @@ export class Scene3DEditor {
   }
 
   _initThree() {
-    this.renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false });
+    this.renderer = new THREE.WebGLRenderer({
+      antialias: true,
+      alpha: false,
+      preserveDrawingBuffer: true,
+    });
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
+    this.renderer.toneMapping = THREE.AgXToneMapping ?? THREE.ACESFilmicToneMapping;
+    this.renderer.toneMappingExposure = 1.0;
     this.renderer.shadowMap.enabled = true;
     this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     this.viewportEl.appendChild(this.renderer.domElement);
@@ -256,6 +318,18 @@ export class Scene3DEditor {
     this.defaultSun = new THREE.DirectionalLight(0xffffff, 1.1);
     this.defaultSun.position.set(6, 10, 4);
     this.scene.add(this.defaultSun);
+
+    this.pmremGenerator = new THREE.PMREMGenerator(this.renderer);
+    this.pmremGenerator.compileEquirectangularShader();
+    this.blenderEnvMap = null;
+    this.builtinBackground = new THREE.Color(0x1a1d21);
+
+    this.programAmbient = new THREE.AmbientLight(0xffffff, 0.1);
+    this.programAmbient.visible = false;
+    this.scene.add(this.programAmbient);
+    this.programHemisphere = new THREE.HemisphereLight(0xd8e4ef, 0x404048, 0.28);
+    this.programHemisphere.visible = false;
+    this.scene.add(this.programHemisphere);
 
     this.grid = new THREE.GridHelper(20, 20, 0x4a515a, 0x3a4048);
     this.scene.add(this.grid);
@@ -300,18 +374,19 @@ export class Scene3DEditor {
     this.followCameraEl.addEventListener("change", () => {
       this.setFollowCamera(this.followCameraEl.checked);
     });
-    this.syncTimelineEl.addEventListener("change", () => {
-      this.syncTimeline = this.syncTimelineEl.checked;
-      if (this.syncTimeline) {
-        this.pauseAnimation();
-        this.syncTimelineTime(this.callbacks.getTimelineSeconds?.() || 0, this.callbacks.getTimelineTotal?.() || 0);
-      }
+    this.objectColorsEl?.addEventListener("change", () => {
+      this.setObjectColorPreview(this.objectColorsEl.checked);
+    });
+    this.wireframeModeEl?.addEventListener("change", () => {
+      this.setWireframeMode(this.wireframeModeEl.value);
+    });
+    this.programLightingEl?.addEventListener("change", () => {
+      this.setProgramLightingMode(this.programLightingEl.value);
     });
     this.cameraSelectEl.addEventListener("change", () => {
       this.setActiveCamera(this.cameraSelectEl.value);
     });
     this.timeSliderEl.addEventListener("input", () => {
-      if (this.syncTimeline) return;
       this.setAnimationTime(Number(this.timeSliderEl.value || 0));
     });
   }
@@ -347,6 +422,9 @@ export class Scene3DEditor {
         break;
       case "free-view":
         this.setFollowCamera(false);
+        break;
+      case "capture-board":
+        this.callbacks.onCaptureToBoard?.();
         break;
       default:
         break;
@@ -392,8 +470,25 @@ export class Scene3DEditor {
     });
   }
 
+  _scheduleSceneSettingsSave() {
+    if (!this.callbacks.onSceneSettingsChange) return;
+    window.clearTimeout(this._sceneSettingsSaveTimer);
+    this._sceneSettingsSaveTimer = window.setTimeout(() => {
+      this.callbacks.onSceneSettingsChange(this.exportSceneData());
+    }, 350);
+  }
+
+  applyDisplaySettings(meta = {}) {
+    if (!meta || typeof meta !== "object") return;
+    this.setFollowCamera(meta.follow_camera !== false, { persist: false });
+    this.setProgramLightingMode(meta.program_lighting || "auto", { persist: false, notify: false });
+    this.setObjectColorPreview(meta.object_color_preview !== false, { persist: false, notify: false });
+    this.setWireframeMode(meta.wireframe_mode || "off", { persist: false, notify: false });
+  }
+
   async loadSceneData(settings) {
     this.sceneMeta = settings && typeof settings === "object" ? { ...settings } : {};
+    this.setWireframeMode(this.sceneMeta.wireframe_mode || "off", { persist: false, notify: false });
     if (this.sceneMeta.source === "blender" && this.sceneMeta.file_path) {
       await this.loadBlenderFromProject(this.sceneMeta);
       return;
@@ -409,28 +504,486 @@ export class Scene3DEditor {
     this.selectObject(this.sceneData.objects?.[0]?.id || null);
     this._renderOutliner();
     this._updateFileName();
+    this._applyWireframeMode();
+  }
+
+  _normalizeWireframeMode(mode) {
+    return mode === "on" || mode === "strong" ? mode : "off";
+  }
+
+  setWireframeMode(mode, { persist = true, notify = false } = {}) {
+    this.wireframeMode = this._normalizeWireframeMode(mode);
+    if (this.wireframeModeEl) this.wireframeModeEl.value = this.wireframeMode;
+    if (persist) {
+      this.sceneMeta = { ...(this.sceneMeta || {}), wireframe_mode: this.wireframeMode };
+    }
+    this._applyWireframeMode();
+    if (persist) this._scheduleSceneSettingsSave();
+    if (notify) {
+      const labels = { off: "关闭", on: "标准", strong: "强化" };
+      this.callbacks.onMessage?.(`线框：${labels[this.wireframeMode]}`);
+    }
+  }
+
+  _getWireframeRoots() {
+    const roots = [];
+    if (this.blenderRoot) roots.push(this.blenderRoot);
+    for (const mesh of this.objects.values()) roots.push(mesh);
+    return roots;
+  }
+
+  _clearWireframeOverlays() {
+    for (const root of this._getWireframeRoots()) {
+      root.traverse((node) => {
+        const line = node.userData?.scene3dWireframeLine;
+        if (!line) return;
+        node.remove(line);
+        delete node.userData.scene3dWireframeLine;
+      });
+    }
+    for (const geometry of this.wireframeOverlayGeometries) geometry.dispose();
+    for (const material of this.wireframeOverlayMaterials) material.dispose();
+    this.wireframeOverlayGeometries.clear();
+    this.wireframeOverlayMaterials.clear();
+  }
+
+  _restoreWireframeFillOpacity(root) {
+    root?.traverse((node) => {
+      if (!node.isMesh || node.userData.scene3dWireframeFillOpacity == null) return;
+      const materials = Array.isArray(node.material) ? node.material : [node.material];
+      for (const mat of materials) {
+        if (!mat) continue;
+        mat.opacity = node.userData.scene3dWireframeFillOpacity;
+        mat.transparent = node.userData.scene3dWireframeFillTransparent;
+        mat.needsUpdate = true;
+      }
+      delete node.userData.scene3dWireframeFillOpacity;
+      delete node.userData.scene3dWireframeFillTransparent;
+    });
+  }
+
+  _applyWireframeMode() {
+    for (const root of this._getWireframeRoots()) {
+      this._restoreWireframeFillOpacity(root);
+    }
+    this._clearWireframeOverlays();
+    if (this.wireframeMode === "off") return;
+
+    const strong = this.wireframeMode === "strong";
+    const threshold = strong ? 1 : 35;
+    const lineMaterial = new THREE.LineBasicMaterial({
+      color: strong ? 0xffffff : 0x151515,
+      transparent: !strong,
+      opacity: strong ? 1 : 0.72,
+      depthTest: true,
+      depthWrite: false,
+    });
+    this.wireframeOverlayMaterials.add(lineMaterial);
+
+    for (const root of this._getWireframeRoots()) {
+      root.traverse((node) => {
+        if (!node.isMesh || !node.geometry || node.userData.scene3dWireframeLine) return;
+        const edges = new THREE.EdgesGeometry(node.geometry, threshold);
+        const lines = new THREE.LineSegments(edges, lineMaterial);
+        lines.renderOrder = strong ? 2 : 1;
+        lines.frustumCulled = false;
+        node.add(lines);
+        node.userData.scene3dWireframeLine = lines;
+        this.wireframeOverlayGeometries.add(edges);
+
+        if (strong && node.material) {
+          const materials = Array.isArray(node.material) ? node.material : [node.material];
+          for (const mat of materials) {
+            if (!mat || node.userData.scene3dWireframeFillOpacity != null) continue;
+            node.userData.scene3dWireframeFillOpacity = mat.opacity ?? 1;
+            node.userData.scene3dWireframeFillTransparent = Boolean(mat.transparent);
+            mat.transparent = true;
+            mat.opacity = Math.min(mat.opacity ?? 1, 0.42);
+            mat.needsUpdate = true;
+          }
+        }
+      });
+    }
   }
 
   async loadBlenderFromProject(meta) {
     this.setMode("blender");
     this.sceneMeta = { ...meta };
     this.followCamera = meta.follow_camera !== false;
-    this.syncTimeline = meta.sync_timeline !== false;
     this.followCameraEl.checked = this.followCamera;
-    this.syncTimelineEl.checked = this.syncTimeline;
+    this.programLightingMode = meta.program_lighting === "on" || meta.program_lighting === "off" ? meta.program_lighting : "auto";
+    if (this.programLightingEl) this.programLightingEl.value = this.programLightingMode;
+    this.objectColorPreview = meta.object_color_preview !== false;
+    if (this.objectColorsEl) this.objectColorsEl.checked = this.objectColorPreview;
+    this.setWireframeMode(meta.wireframe_mode || "off", { persist: false, notify: false });
     const url = `/api/project/scene3d/file?t=${Date.now()}`;
     await this._loadBlenderUrl(url, meta.file_name || meta.file_path);
     if (meta.camera_name) {
-      const match = this.importedCameras.find((item) => item.name === meta.camera_name);
-      if (match) this.setActiveCamera(match.id, false);
+      this.setActiveCamera(this._pickBestCameraId(meta.camera_name), false);
     } else if (this.importedCameras.length) {
-      this.setActiveCamera(this.importedCameras[0].id, false);
+      this.setActiveCamera(this._pickBestCameraId(""), false);
     }
-    const startTime = Number(meta.animation_time);
+    const shotTime = this.callbacks.getShotScene3dTime?.();
+    const startTime =
+      shotTime != null && !Number.isNaN(Number(shotTime))
+        ? Number(shotTime)
+        : Number(meta.animation_time);
     if (!Number.isNaN(startTime) && startTime >= 0) {
       this.setAnimationTime(startTime);
     }
     this._updateFileName();
+    this._updateAnimationHint();
+  }
+
+  _trackNodeName(trackName) {
+    const dot = String(trackName || "").lastIndexOf(".");
+    return dot > 0 ? trackName.slice(0, dot) : trackName;
+  }
+
+  _collectAnimatedNodeNames(animations) {
+    const names = new Set();
+    for (const clip of animations || []) {
+      for (const track of clip.tracks || []) {
+        const nodeName = this._trackNodeName(track.name);
+        if (nodeName) names.add(nodeName);
+      }
+    }
+    return names;
+  }
+
+  _collectSceneCameras(root) {
+    const cameras = [];
+    root.traverse((node) => {
+      if (!node.isCamera) return;
+      cameras.push({
+        id: node.uuid,
+        name: node.name || `Camera ${cameras.length + 1}`,
+        object3d: node,
+      });
+    });
+    return cameras;
+  }
+
+  _scoreCameraForAnimation(item) {
+    let score = 0;
+    let node = item.object3d;
+    while (node) {
+      if (node.name && this.animatedNodeNames.has(node.name)) score += 10;
+      node = node.parent;
+    }
+    return score;
+  }
+
+  _pickBestCameraId(preferredName) {
+    if (!this.importedCameras.length) return "";
+    if (preferredName) {
+      const match = this.importedCameras.find((item) => item.name === preferredName);
+      if (match) return match.id;
+    }
+    let best = this.importedCameras[0];
+    let bestScore = this._scoreCameraForAnimation(best);
+    for (const item of this.importedCameras.slice(1)) {
+      const score = this._scoreCameraForAnimation(item);
+      if (score > bestScore) {
+        best = item;
+        bestScore = score;
+      }
+    }
+    return best.id;
+  }
+
+  _computeClipDuration(clips) {
+    let duration = 0;
+    for (const clip of clips || []) {
+      duration = Math.max(duration, Number(clip.duration) || 0);
+      for (const track of clip.tracks || []) {
+        const times = track.times;
+        if (times?.length) duration = Math.max(duration, times[times.length - 1]);
+      }
+    }
+    return duration;
+  }
+
+  _selectAnimationClips(animations) {
+    return animations || [];
+  }
+
+  _cameraMovesOverTime(object3d) {
+    if (!this.mixer || !object3d || this.animationDuration <= 0) return false;
+    const saved = this.animationTime;
+    this._syncMixerTime(0);
+    object3d.getWorldPosition(this._probePosA);
+    const probeTime = Math.min(Math.max(this.animationDuration * 0.25, 0.1), this.animationDuration);
+    this._syncMixerTime(probeTime);
+    object3d.getWorldPosition(this._probePosB);
+    this._syncMixerTime(saved);
+    return this._probePosA.distanceToSquared(this._probePosB) > 1e-10;
+  }
+
+  _resolveViewNode(item) {
+    if (this._cameraMovesOverTime(item.object3d)) return item.object3d;
+    let node = item.object3d.parent;
+    while (node && node !== this.blenderRoot) {
+      if (node.name && this.animatedNodeNames.has(node.name) && this._cameraMovesOverTime(node)) {
+        return item.object3d;
+      }
+      node = node.parent;
+    }
+    return item.object3d;
+  }
+
+  _updateAnimationHint() {
+    if (!this.hintEl) return;
+    const duration = this.animationDuration || 0;
+    const active = this.importedCameras.find((item) => item.id === this.activeCameraId);
+    const moves = active?.object3d ? this._cameraMovesOverTime(active.object3d) : false;
+    if (!duration) {
+      this.hintEl.textContent =
+        "未检测到 GLB 动画。Blender 导出请勾选 Animation，Animation mode 建议选 Scene，并勾选 Bake All Objects Animations。";
+      return;
+    }
+    if (!active) {
+      this.hintEl.textContent = `动画 ${formatTime(duration)} · 请在左侧选择相机`;
+      return;
+    }
+    if (!moves) {
+      this.hintEl.textContent =
+        `动画 ${formatTime(duration)} · 当前相机「${active.name}」未随时间变化。请换其他相机，或在 Blender 给该相机（或其父级）打关键帧后重新导出。`;
+      return;
+    }
+    this.hintEl.textContent =
+      "拖动时间条或点 ▶ 播放 · 跟随相机视角 · 「印到当前分镜」保存当前画面";
+  }
+
+  _countImportedLights(root) {
+    let count = 0;
+    root?.traverse((node) => {
+      if (node.isLight) count += 1;
+    });
+    return count;
+  }
+
+  _shouldUseProgramIbl() {
+    if (this.mode !== "blender") return false;
+    if (this.programLightingMode === "off") return false;
+    return true;
+  }
+
+  _shouldUseProgramFill() {
+    if (this.mode !== "blender") return false;
+    if (this.programLightingMode === "off") return false;
+    if (this.programLightingMode === "on") return this.importedLightCount === 0;
+    return this.importedLightCount === 0;
+  }
+
+  _shouldUseProgramWeakFill() {
+    if (this.mode !== "blender") return false;
+    if (this.programLightingMode === "off") return false;
+    if (this.objectColorPreview) return false;
+    if (this.programLightingMode === "on") return this.importedLightCount > 0;
+    return this.importedLightCount > 0;
+  }
+
+  _getEnvMapIntensity() {
+    if (!this._shouldUseProgramIbl()) return 0;
+    if (this.importedLightCount > 0) return 0.35;
+    return 1.0;
+  }
+
+  _calibrateImportedLights(root) {
+    root?.traverse((node) => {
+      if (!node.isLight || typeof node.intensity !== "number") return;
+      if (node.isDirectionalLight) {
+        node.intensity = Math.min(node.intensity * Math.PI * 0.35, 4);
+      } else if (node.isPointLight || node.isSpotLight) {
+        if (node.intensity > 0 && node.intensity < 800) {
+          node.intensity = Math.min(node.intensity * 1.5, 600);
+        }
+      }
+    });
+  }
+
+  _setImportedLightsVisible(visible) {
+    this.blenderRoot?.traverse((node) => {
+      if (node.isLight) node.visible = visible;
+    });
+  }
+
+  _programLightingReason() {
+    if (this.programLightingMode === "on") return "手动：环境 + 柔光";
+    if (this.programLightingMode === "off") return "手动：仅 GLB 灯光";
+    if (this.importedLightCount > 0) return `自动：GLB ${this.importedLightCount} 盏灯 + 弱环境反射`;
+    return "自动：GLB 无灯，全程序补光";
+  }
+
+  setProgramLightingMode(mode, { persist = true, notify = true } = {}) {
+    const next = mode === "on" || mode === "off" ? mode : "auto";
+    this.programLightingMode = next;
+    if (this.programLightingEl) this.programLightingEl.value = next;
+    if (persist) {
+      this.sceneMeta = { ...(this.sceneMeta || {}), program_lighting: next };
+    }
+    this._applyProgramLighting();
+    if (this.blenderRoot) this._prepareImportedMaterials(this.blenderRoot);
+    if (this.objectColorPreview) this._applyObjectColorPreview(true);
+    if (persist) this._scheduleSceneSettingsSave();
+    if (notify) {
+      this.callbacks.onMessage?.(`灯光设置：${this._programLightingReason()}`);
+    }
+  }
+
+  _updateLightStatusUi() {
+    if (!this.lightStatusEl) return;
+    if (this.mode !== "blender") {
+      this.lightStatusEl.textContent = "—";
+      return;
+    }
+    const exported =
+      this.importedLightCount > 0
+        ? `GLB 已导出 ${this.importedLightCount} 盏灯`
+        : "GLB 未导出灯光（导出时请勾选 Punctual Lights）";
+    const ibl = this._shouldUseProgramIbl() && !this.objectColorPreview ? "环境反射：开" : "环境反射：关";
+    const fill = this._shouldUseProgramFill()
+      ? "柔光补光：开"
+      : this._shouldUseProgramWeakFill()
+        ? "柔光补光：弱"
+        : "柔光补光：关";
+    const colors = this.objectColorPreview ? "对象色：开（不受灯光影响）" : "对象色：关";
+    this.lightStatusEl.textContent = `${exported} · ${this._programLightingModeLabel()} · ${ibl} · ${fill} · ${colors}`;
+  }
+
+  _ensureBlenderEnvMap() {
+    if (this.blenderEnvMap) return this.blenderEnvMap;
+    const room = new RoomEnvironment();
+    this.blenderEnvMap = this.pmremGenerator.fromScene(room, 0.04).texture;
+    room.dispose();
+    return this.blenderEnvMap;
+  }
+
+  _applyProgramLighting() {
+    if (this.mode !== "blender") return;
+    const useIbl = this._shouldUseProgramIbl() && !this.objectColorPreview;
+    const useFill = this._shouldUseProgramFill();
+    const useWeakFill = this._shouldUseProgramWeakFill();
+    if (useIbl) {
+      this.scene.environment = this._ensureBlenderEnvMap();
+      this.scene.background = new THREE.Color(0x303030);
+    } else if (this.objectColorPreview) {
+      this.scene.environment = null;
+      this.scene.background = new THREE.Color(0x3a3a3a);
+    } else {
+      this.scene.environment = null;
+      this.scene.background = this.builtinBackground.clone();
+    }
+    this.programAmbient.intensity = useFill ? 0.1 : 0.22;
+    this.programAmbient.visible = useFill || useWeakFill;
+    this.programHemisphere.visible = useFill;
+    this._setImportedLightsVisible(!this.objectColorPreview);
+    this._updateLightStatusUi();
+  }
+
+  _generateBlenderObjectColor(seed) {
+    const index = hashString(String(seed)) % VIEWPORT_OBJECT_PALETTE.length;
+    return new THREE.Color(VIEWPORT_OBJECT_PALETTE[index]);
+  }
+
+  _collectObjectColorKeys(root) {
+    const keys = new Set();
+    root?.traverse((node) => {
+      if (node.isMesh) keys.add(this._objectColorKey(node));
+    });
+    return [...keys].sort();
+  }
+
+  _objectColorKey(mesh) {
+    let node = mesh;
+    while (node.parent && node.parent !== this.blenderRoot) {
+      if (node.name) return node.name;
+      node = node.parent;
+    }
+    return mesh.name || mesh.uuid;
+  }
+
+  _cacheImportedMaterials(root) {
+    root?.traverse((node) => {
+      if (!node.isMesh || node.userData.scene3dOriginalMaterial !== undefined) return;
+      node.userData.scene3dOriginalMaterial = node.material;
+    });
+  }
+
+  _restoreImportedMaterials(root) {
+    root?.traverse((node) => {
+      if (!node.isMesh || node.userData.scene3dOriginalMaterial === undefined) return;
+      node.material = node.userData.scene3dOriginalMaterial;
+    });
+  }
+
+  _disposePreviewMaterials() {
+    for (const material of this.previewMaterials) {
+      material.dispose();
+    }
+    this.previewMaterials.clear();
+  }
+
+  setObjectColorPreview(enabled, { persist = true, notify = false } = {}) {
+    this.objectColorPreview = Boolean(enabled);
+    if (this.objectColorsEl) this.objectColorsEl.checked = this.objectColorPreview;
+    if (persist) {
+      this.sceneMeta = { ...(this.sceneMeta || {}), object_color_preview: this.objectColorPreview };
+    }
+    this._applyProgramLighting();
+    this._applyObjectColorPreview(this.objectColorPreview);
+    if (!this.objectColorPreview && this.blenderRoot) {
+      this._prepareImportedMaterials(this.blenderRoot);
+    }
+    this._applyWireframeMode();
+    if (persist) this._scheduleSceneSettingsSave();
+    if (notify) {
+      this.callbacks.onMessage?.(
+        this.objectColorPreview
+          ? "已启用对象随机色（不受灯光影响，便于区分）"
+          : "已恢复 GLB 原始材质",
+      );
+    }
+  }
+
+  _applyObjectColorPreview(enabled) {
+    if (!this.blenderRoot) return;
+    if (!enabled) {
+      this._restoreImportedMaterials(this.blenderRoot);
+      this._disposePreviewMaterials();
+      return;
+    }
+
+    this._cacheImportedMaterials(this.blenderRoot);
+    this._disposePreviewMaterials();
+    const colorByKey = new Map();
+    for (const key of this._collectObjectColorKeys(this.blenderRoot)) {
+      colorByKey.set(key, this._generateBlenderObjectColor(key));
+    }
+    this.blenderRoot.traverse((node) => {
+      if (!node.isMesh) return;
+      const key = this._objectColorKey(node);
+      const previewMat = new THREE.MeshBasicMaterial({
+        color: colorByKey.get(key) || this._generateBlenderObjectColor(key),
+      });
+      this.previewMaterials.add(previewMat);
+      node.material = previewMat;
+    });
+  }
+
+  _prepareImportedMaterials(root) {
+    if (this.objectColorPreview) return;
+    const envIntensity = this._getEnvMapIntensity();
+    root?.traverse((node) => {
+      if (!node.isMesh) return;
+      const materials = Array.isArray(node.material) ? node.material : [node.material];
+      for (const mat of materials) {
+        if (!mat?.isMeshStandardMaterial) continue;
+        mat.envMapIntensity = envIntensity;
+        mat.needsUpdate = true;
+      }
+    });
   }
 
   async _loadBlenderUrl(url, label) {
@@ -440,51 +993,72 @@ export class Scene3DEditor {
     const gltf = await loader.loadAsync(url);
     this.blenderRoot = gltf.scene;
     this.scene.add(this.blenderRoot);
-
-    this.importedCameras = [];
-    gltf.scene.updateMatrixWorld(true);
-    gltf.scene.traverse((node) => {
-      if (node.isCamera) {
-        this.importedCameras.push({
-          id: node.uuid,
-          name: node.name || `Camera ${this.importedCameras.length + 1}`,
-          camera: node,
-        });
-      }
-    });
-    if (Array.isArray(gltf.cameras)) {
-      gltf.cameras.forEach((camera, index) => {
-        if (this.importedCameras.some((item) => item.camera === camera)) return;
-        this.importedCameras.push({
-          id: camera.uuid,
-          name: camera.name || `Camera ${index + 1}`,
-          camera,
-        });
-      });
+    this.importedLightCount = this._countImportedLights(gltf.scene);
+    this._calibrateImportedLights(this.blenderRoot);
+    this._applyProgramLighting();
+    this._prepareImportedMaterials(this.blenderRoot);
+    this._cacheImportedMaterials(this.blenderRoot);
+    this._applyObjectColorPreview(this.objectColorPreview);
+    if (this.objectColorPreview) {
+      this._applyProgramLighting();
     }
+    this._applyWireframeMode();
 
+    this.importedCameras = this._collectSceneCameras(gltf.scene);
+    this.animatedNodeNames = this._collectAnimatedNodeNames(gltf.animations);
+
+    const clipsToPlay = this._selectAnimationClips(gltf.animations || []);
     this.mixer = new THREE.AnimationMixer(gltf.scene);
     this.mixerActions = [];
-    for (const clip of gltf.animations || []) {
+    for (const clip of clipsToPlay) {
       const action = this.mixer.clipAction(clip);
       action.play();
-      action.paused = true;
       this.mixerActions.push(action);
     }
-    this.animationDuration = Math.max(0, ...(gltf.animations || []).map((clip) => clip.duration));
-    if (!this.animationDuration) this.animationDuration = 0;
+    this.animationDuration = this._computeClipDuration(clipsToPlay.length ? clipsToPlay : gltf.animations);
     this.animationTime = 0;
     this.isPlaying = false;
+    this._syncMixerTime(0);
     this._populateCameraSelect();
     this._renderOutliner();
     this._updateTimelineUi();
-    this._frameImportedScene();
+    if (!this.followCamera || !this.importedCameras.length) {
+      this._frameImportedScene();
+    }
     this.sceneMeta.file_name = label || this.sceneMeta.file_name;
+    if (this.importedCameras.length) {
+      const bestId = this._pickBestCameraId("");
+      const best = this.importedCameras.find((item) => item.id === bestId);
+      if (best) best.viewNode = this._resolveViewNode(best);
+      this.setActiveCamera(bestId, false);
+    }
     this.setFollowCamera(this.followCamera);
+    this._updateAnimationHint();
     if (this.importedCameras.length === 0) {
       this.callbacks.onMessage?.("场景已加载，但未找到相机。请在 Blender 导出时勾选 Cameras。");
     } else if (!(gltf.animations || []).length) {
       this.callbacks.onMessage?.("场景已加载，但未找到动画。请在 Blender 导出时勾选 Animation。");
+    } else if (this.animationDuration <= 0) {
+      this.callbacks.onMessage?.("已找到动画轨道，但时长为 0。请检查 Blender 时间轴范围与关键帧。");
+    } else if (this.programLightingMode === "auto") {
+      if (this.importedLightCount > 0) {
+        this.callbacks.onMessage?.(
+          `检测到 GLB 含 ${this.importedLightCount} 盏灯，已校准强度并启用弱环境反射（模拟 Blender World）。`,
+        );
+      } else {
+        this.callbacks.onMessage?.("GLB 无导出灯光，已自动开启全程序补光。");
+      }
+    }
+  }
+
+  _programLightingModeLabel() {
+    switch (this.programLightingMode) {
+      case "on":
+        return "始终开启";
+      case "off":
+        return "关闭";
+      default:
+        return "自动";
     }
   }
 
@@ -530,6 +1104,7 @@ export class Scene3DEditor {
     if (!match) return;
     this.activeCameraId = cameraId;
     this.cameraSelectEl.value = cameraId;
+    match.viewNode = this._resolveViewNode(match);
     this._renderOutliner();
     if (showMessage) {
       this.callbacks.onMessage?.(`已切换相机：${match.name}`);
@@ -537,14 +1112,19 @@ export class Scene3DEditor {
     if (this.followCamera) {
       this._applyFollowCamera();
     }
+    this._updateAnimationHint();
   }
 
-  setFollowCamera(enabled) {
+  setFollowCamera(enabled, { persist = true } = {}) {
     this.followCamera = Boolean(enabled);
     this.followCameraEl.checked = this.followCamera;
     this.orbit.enabled = !this.followCamera;
     if (this.followCamera) {
       this._applyFollowCamera();
+    }
+    if (persist) {
+      this.sceneMeta = { ...(this.sceneMeta || {}), follow_camera: this.followCamera };
+      this._scheduleSceneSettingsSave();
     }
   }
 
@@ -563,8 +1143,15 @@ export class Scene3DEditor {
     this.defaultAmbient.visible = mode === "builtin";
     this.defaultSun.visible = mode === "builtin";
     if (mode === "blender") {
+      this._applyProgramLighting();
       this.transform.detach();
       this.selectObject(null);
+    } else {
+      this.scene.environment = null;
+      this.scene.background = this.builtinBackground.clone();
+      this.programAmbient.visible = false;
+      this.programHemisphere.visible = false;
+      this._updateLightStatusUi();
     }
   }
 
@@ -576,8 +1163,11 @@ export class Scene3DEditor {
         source: "blender",
         camera_name: active?.name || this.sceneMeta.camera_name || "",
         follow_camera: this.followCamera,
-        sync_timeline: this.syncTimeline,
         animation_time: this.animationTime,
+        program_lighting: this.programLightingMode,
+        imported_light_count: this.importedLightCount,
+        object_color_preview: this.objectColorPreview,
+        wireframe_mode: this.wireframeMode,
       };
     }
     const objects = [];
@@ -592,7 +1182,7 @@ export class Scene3DEditor {
         color: `#${mesh.material.color.getHexString()}`,
       });
     }
-    return { source: "builtin", objects };
+    return { source: "builtin", objects, wireframe_mode: this.wireframeMode, object_color_preview: this.objectColorPreview };
   }
 
   clearBlenderScene() {
@@ -603,16 +1193,29 @@ export class Scene3DEditor {
     this.mixerActions = [];
     this.importedCameras = [];
     this.activeCameraId = "";
+    this.importedLightCount = 0;
     this.animationDuration = 0;
     this.animationTime = 0;
     this.isPlaying = false;
+    this._clearWireframeOverlays();
     if (this.blenderRoot) {
+      this._restoreImportedMaterials(this.blenderRoot);
+      this._disposePreviewMaterials();
       this.scene.remove(this.blenderRoot);
       this.blenderRoot.traverse((node) => {
         if (node.geometry) node.geometry.dispose();
-        if (node.material) {
-          if (Array.isArray(node.material)) node.material.forEach((item) => item.dispose());
-          else node.material.dispose();
+        const original = node.userData?.scene3dOriginalMaterial;
+        const materials = original
+          ? Array.isArray(original)
+            ? original
+            : [original]
+          : node.material
+            ? Array.isArray(node.material)
+              ? node.material
+              : [node.material]
+            : [];
+        for (const item of materials) {
+          item?.dispose?.();
         }
       });
       this.blenderRoot = null;
@@ -642,18 +1245,20 @@ export class Scene3DEditor {
   addObject(type) {
     const labels = { cube: "Cube", sphere: "Sphere", plane: "Plane", cylinder: "Cylinder", cone: "Cone" };
     const id = makeId();
+    const name = `${labels[type] || "Object"} ${this.objects.size + 1}`;
     const spec = {
       id,
-      name: `${labels[type] || "Object"} ${this.objects.size + 1}`,
+      name,
       type,
       position: [0, type === "plane" ? 0 : 0.5, 0],
       rotation: type === "plane" ? [-Math.PI / 2, 0, 0] : [0, 0, 0],
       scale: type === "plane" ? [4, 4, 1] : [1, 1, 1],
-      color: type === "plane" ? "#3a4048" : "#3d8bfd",
+      color: `#${this._generateBlenderObjectColor(name).getHexString()}`,
     };
     this._addMeshFromSpec(spec);
     this.selectObject(id);
     this._renderOutliner();
+    this._applyWireframeMode();
   }
 
   selectObject(id) {
@@ -807,6 +1412,21 @@ export class Scene3DEditor {
     }
   }
 
+  refreshBoardPreview() {
+    const url = this.callbacks.getBoardPreviewUrl?.() || "";
+    const label = this.callbacks.getBoardLabel?.() || "—";
+    if (this.boardLabelEl) this.boardLabelEl.textContent = label;
+    if (!this.boardPreviewImg || !this.boardPreviewEmpty) return;
+    if (url) {
+      this.boardPreviewImg.src = url;
+      this.boardPreviewImg.hidden = false;
+      this.boardPreviewEmpty.hidden = true;
+    } else {
+      this.boardPreviewImg.hidden = true;
+      this.boardPreviewEmpty.hidden = false;
+    }
+  }
+
   _updateFileName() {
     const blendPath = this.sceneMeta.blend_file_path || "scene3d/scene.blend";
     const glbName = this.sceneMeta.file_name || this.sceneMeta.file_path || "";
@@ -822,12 +1442,18 @@ export class Scene3DEditor {
     this._updateFileName();
   }
 
+  _syncMixerTime(seconds) {
+    if (!this.mixer || !this.mixerActions.length) return;
+    const time = Math.max(0, Number(seconds) || 0);
+    this.mixer.setTime(time);
+    this.animationTime = time;
+    this.blenderRoot?.updateMatrixWorld(true);
+  }
+
   setAnimationTime(seconds) {
     const duration = this.animationDuration || 0;
-    this.animationTime = duration > 0 ? Math.min(Math.max(0, seconds), duration) : Math.max(0, seconds);
-    if (this.mixer) {
-      this.mixer.setTime(this.animationTime);
-    }
+    const clamped = duration > 0 ? Math.min(Math.max(0, seconds), duration) : Math.max(0, seconds);
+    this._syncMixerTime(clamped);
     this._updateTimelineUi();
     if (this.followCamera) {
       this._applyFollowCamera();
@@ -835,8 +1461,8 @@ export class Scene3DEditor {
   }
 
   toggleAnimationPlayback() {
-    if (this.syncTimeline) {
-      this.callbacks.onMessage?.("已开启分镜同步，请使用底部时间轴播放");
+    if (this.mode !== "blender" || !this.mixer) {
+      this.callbacks.onMessage?.("请先导入带相机动画的 GLB");
       return;
     }
     this.isPlaying = !this.isPlaying;
@@ -854,12 +1480,20 @@ export class Scene3DEditor {
     this._updatePlayButton();
   }
 
-  syncTimelineTime(storyboardSeconds, storyboardTotal) {
-    if (!this.syncTimeline || this.mode !== "blender" || !this.mixer) return;
-    const total = Math.max(storyboardTotal || 0, 0.001);
-    const duration = this.animationDuration || total;
-    const mapped = (Math.max(0, storyboardSeconds) / total) * duration;
-    this.setAnimationTime(mapped);
+  captureFrameDataUrl() {
+    if (this.followCamera && this.mode === "blender") {
+      this._applyFollowCamera();
+    }
+    this.renderer.render(this.scene, this.camera);
+    return this.renderer.domElement.toDataURL("image/png");
+  }
+
+  getAnimationState() {
+    return {
+      time: this.animationTime,
+      duration: this.animationDuration,
+      camera_name: this.importedCameras.find((item) => item.id === this.activeCameraId)?.name || "",
+    };
   }
 
   _updatePlayButton() {
@@ -871,22 +1505,23 @@ export class Scene3DEditor {
     const duration = this.animationDuration || 0;
     this.timeSliderEl.max = duration.toFixed(2);
     this.timeSliderEl.value = this.animationTime.toFixed(2);
-    this.timeSliderEl.disabled = this.syncTimeline || duration <= 0;
+    this.timeSliderEl.disabled = duration <= 0;
     this.timeDisplayEl.textContent = `${formatTime(this.animationTime)} / ${formatTime(duration)}`;
   }
 
   _applyFollowCamera() {
     const active = this.importedCameras.find((item) => item.id === this.activeCameraId);
-    if (!active) return;
-    active.camera.updateWorldMatrix(true, false);
-    const source = active.camera;
-    this.camera.position.setFromMatrixPosition(source.matrixWorld);
-    const rotation = new THREE.Matrix4().extractRotation(source.matrixWorld);
-    this.camera.quaternion.setFromRotationMatrix(rotation);
-    if (source.isPerspectiveCamera) {
-      this.camera.fov = source.fov;
-      this.camera.near = Math.max(0.001, source.near);
-      this.camera.far = Math.max(this.camera.near + 1, source.far);
+    if (!active?.object3d) return;
+    const source = active.viewNode || active.object3d;
+    source.updateWorldMatrix(true, false);
+    source.matrixWorld.decompose(this._followPos, this._followQuat, this._followScale);
+    this.camera.position.copy(this._followPos);
+    this.camera.quaternion.copy(this._followQuat);
+    const proj = active.object3d.isCamera ? active.object3d : null;
+    if (proj?.isPerspectiveCamera) {
+      this.camera.fov = proj.fov;
+      this.camera.near = Math.max(0.001, proj.near);
+      this.camera.far = Math.max(this.camera.near + 1, proj.far);
       this.camera.updateProjectionMatrix();
     }
     this.orbit.enabled = false;
@@ -904,14 +1539,16 @@ export class Scene3DEditor {
   _animate() {
     this.animationId = requestAnimationFrame(() => this._animate());
     const delta = this.clock.getDelta();
-    if (this.mode === "blender" && this.mixer && this.isPlaying && !this.syncTimeline) {
-      this.animationTime += delta;
+    if (this.mode === "blender" && this.mixer && this.isPlaying) {
+      this.mixer.update(delta);
+      this.animationTime = this.mixer.time;
       if (this.animationDuration > 0 && this.animationTime >= this.animationDuration) {
         this.animationTime = this.animationDuration;
         this.isPlaying = false;
+        this._syncMixerTime(this.animationTime);
         this._updatePlayButton();
       }
-      this.mixer.setTime(this.animationTime);
+      this.blenderRoot?.updateMatrixWorld(true);
       this._updateTimelineUi();
     }
     if (this.followCamera && this.mode === "blender") {
@@ -929,6 +1566,11 @@ export class Scene3DEditor {
     this.clearObjects();
     this.transform.dispose();
     this.orbit.dispose();
+    this.blenderEnvMap?.dispose();
+    this.blenderEnvMap = null;
+    this.pmremGenerator?.dispose();
+    this.pmremGenerator = null;
+    this._clearWireframeOverlays();
     this.renderer.dispose();
     if (this.renderer.domElement.parentNode) {
       this.renderer.domElement.parentNode.removeChild(this.renderer.domElement);

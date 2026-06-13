@@ -22,6 +22,11 @@ def default_session() -> dict[str, Any]:
         "last_project_json_path": "",
         "selected_shot_id": "",
         "recent_projects": [],
+        "timeline_scroll_left": 0,
+        "status_filter": "",
+        "revision_only": False,
+        "advanced_panel_open": False,
+        "ui_theme": "",
     }
 
 
@@ -40,6 +45,12 @@ def read_session(base_dir: Path) -> dict[str, Any]:
     session["version"] = SESSION_VERSION
     if not isinstance(session.get("recent_projects"), list):
         session["recent_projects"] = []
+    scroll = session.get("timeline_scroll_left")
+    session["timeline_scroll_left"] = max(0, int(scroll)) if isinstance(scroll, (int, float)) else 0
+    session["status_filter"] = str(session.get("status_filter") or "")
+    session["revision_only"] = bool(session.get("revision_only"))
+    session["advanced_panel_open"] = bool(session.get("advanced_panel_open"))
+    session["ui_theme"] = str(session.get("ui_theme") or "")
     return session
 
 
@@ -63,6 +74,11 @@ def update_session(
     last_project_json_path: str | None = None,
     selected_shot_id: str | None = None,
     recent_projects: list[str] | None = None,
+    timeline_scroll_left: int | None = None,
+    status_filter: str | None = None,
+    revision_only: bool | None = None,
+    advanced_panel_open: bool | None = None,
+    ui_theme: str | None = None,
 ) -> dict[str, Any]:
     session = read_session(base_dir)
     if last_project_json_path is not None:
@@ -77,5 +93,15 @@ def update_session(
         session["selected_shot_id"] = selected_shot_id
     if recent_projects is not None:
         session["recent_projects"] = recent_projects[:10]
+    if timeline_scroll_left is not None:
+        session["timeline_scroll_left"] = max(0, int(timeline_scroll_left))
+    if status_filter is not None:
+        session["status_filter"] = status_filter
+    if revision_only is not None:
+        session["revision_only"] = bool(revision_only)
+    if advanced_panel_open is not None:
+        session["advanced_panel_open"] = bool(advanced_panel_open)
+    if ui_theme is not None:
+        session["ui_theme"] = ui_theme
     write_session(base_dir, session)
     return session

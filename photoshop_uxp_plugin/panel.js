@@ -11,6 +11,7 @@ const SB_POLL_MS = 1500;
 const BRIDGE_CACHE_FILE = "storyboard_bridge_cache.json";
 const BRIDGE_STALE_MS = 8000;
 const OVERLAY_LAYER_PREFIX = "SB ref:";
+const SB_BG_LAYER_NAME = "SB bg";
 const OVERLAY_OPACITY = 45;
 const SHOT_CSV_COLUMNS = [
   "order",
@@ -938,6 +939,123 @@ async function placeFileEntryAsLayer(entry) {
   return app.activeDocument.activeLayers[0];
 }
 
+function layerPixelSize(layer) {
+  const bounds = layer?.bounds;
+  if (!bounds) {
+    return { width: 0, height: 0, left: 0, top: 0 };
+  }
+  return {
+    width: bounds.right - bounds.left,
+    height: bounds.bottom - bounds.top,
+    left: bounds.left,
+    top: bounds.top,
+  };
+}
+
+async function fitLayerToDocumentInModal(layer) {
+  const doc = app.activeDocument;
+  if (!doc || !layer) {
+    return;
+  }
+  doc.activeLayers = [layer];
+  const docWidth = doc.width;
+  const docHeight = doc.height;
+  const initial = layerPixelSize(layer);
+  if (initial.width <= 0 || initial.height <= 0) {
+    return;
+  }
+  const scale = Math.min(docWidth / initial.width, docHeight / initial.height) * 100;
+  if (Math.abs(scale - 100) > 0.01) {
+    await layer.scale(scale, scale, photoshop.constants.AnchorPosition.TOPLEFT);
+  }
+  const fitted = layerPixelSize(layer);
+  const dx = (docWidth - fitted.width) / 2 - fitted.left;
+  const dy = (docHeight - fitted.height) / 2 - fitted.top;
+  if (Math.abs(dx) > 0.01 || Math.abs(dy) > 0.01) {
+    await layer.translate(dx, dy);
+  }
+}
+
+async function resolveBoardBackgroundEntry(shotId) {
+  const folder = await getShotFolderEntry(shotId);
+  const candidates = [`${shotId}_background.png`];
+  const shot = (projectData?.shots || []).find((item) => item.shot_id === shotId);
+  const previewRel = shot?.preview_image_path || shot?.image_path || "";
+  if (previewRel) {
+    const previewName = previewRel.split("/").pop();
+    if (previewName && !candidates.includes(previewName)) {
+      candidates.push(previewName);
+    }
+  }
+  for (const name of candidates) {
+    try {
+      return await folder.getEntry(name);
+    } catch {
+      // Try the next candidate.
+    }
+  }
+  return null;
+}
+
+function findBoardBackgroundLayer(doc) {
+  for (const layer of doc.layers || []) {
+    if (String(layer.name || "") === SB_BG_LAYER_NAME) {
+      return layer;
+    }
+  }
+  return null;
+}
+
+async function removeBoardBackgroundLayerInModal(doc) {
+  const layers = (doc.layers || []).filter((layer) => String(layer.name || "") === SB_BG_LAYER_NAME);
+  if (layers.length) {
+    await deleteLayersInModal(layers);
+  }
+}
+
+async function setLayerVisibilityInModal(layer, visible) {
+  if (!layer) {
+    return;
+  }
+  app.activeDocument.activeLayers = [layer];
+  await photoshop.action.batchPlay(
+    [
+      {
+        _obj: "set",
+        _target: [{ _ref: "layer", _enum: "ordinal", _value: "targetEnum" }],
+        to: {
+          _obj: "layer",
+          visible: visible,
+        },
+      },
+    ],
+    { synchronousExecution: true },
+  );
+}
+
+async function importBoardBackgroundInModal(shotId) {
+  const entry = await resolveBoardBackgroundEntry(shotId);
+  if (!entry) {
+    return false;
+  }
+  const doc = app.activeDocument;
+  if (!doc) {
+    throw new Error("No active Photoshop document.");
+  }
+
+  await removeBoardBackgroundLayerInModal(doc);
+  const placedLayer = await placeFileEntryAsLayer(entry);
+  if (placedLayer) {
+    await fitLayerToDocumentInModal(placedLayer);
+  }
+  await renameActiveLayer(SB_BG_LAYER_NAME);
+  const canvasLayer = findBackgroundLayer(doc);
+  if (placedLayer) {
+    await moveLayerBelowReference(placedLayer, canvasLayer);
+  }
+  return true;
+}
+
 async function moveLayerBelowReference(layer, referenceLayer) {
   const constants = photoshop.constants;
   if (referenceLayer) {
@@ -1056,9 +1174,22 @@ async function savePsdInModal(folder, shotId) {
 }
 
 async function exportPreviewInModal(folder, shotId) {
-  const file = await folder.createFile(`${shotId}_preview.png`, { overwrite: true });
-  await app.activeDocument.saveAs.png(file, {}, true);
-  return file;
+  const doc = app.activeDocument;
+  const bgLayer = doc ? findBoardBackgroundLayer(doc) : null;
+  const hiddenLayers = [];
+  if (bgLayer?.visible) {
+    await setLayerVisibilityInModal(bgLayer, false);
+    hiddenLayers.push(bgLayer);
+  }
+  try {
+    const file = await folder.createFile(`${shotId}_preview.png`, { overwrite: true });
+    await app.activeDocument.saveAs.png(file, {}, true);
+    return file;
+  } finally {
+    for (const layer of hiddenLayers) {
+      await setLayerVisibilityInModal(layer, true);
+    }
+  }
 }
 
 async function createCanvasDocumentInModal(shotId) {
@@ -1188,8 +1319,11 @@ async function saveAndGoNext() {
     if (!nextPsdEntry) {
       canvasColor = nextColor;
       await applyCanvasBackgroundInModal();
+      await importBoardBackgroundInModal(nextShotId);
       await saveActiveDocumentToFolder(nextFolder, nextShotId);
       createdNewNext = true;
+    } else {
+      await importBoardBackgroundInModal(nextShotId);
     }
 
     await finishShotSwitch(previousDoc, app.activeDocument || nextDoc);
@@ -1256,8 +1390,11 @@ async function switchToShot(shotId) {
     if (!psdEntry) {
       canvasColor = nextColor;
       await applyCanvasBackgroundInModal();
+      await importBoardBackgroundInModal(shotId);
       await saveActiveDocumentToFolder(folder, shotId);
       createdNew = true;
+    } else {
+      await importBoardBackgroundInModal(shotId);
     }
     await finishShotSwitch(previousDoc, app.activeDocument || nextDoc);
   });
@@ -1291,6 +1428,7 @@ async function createCanvasForShot(shotId) {
   await runModal(`Create ${shotId}`, async () => {
     await createCanvasDocumentInModal(shotId);
     await applyCanvasBackgroundInModal();
+    await importBoardBackgroundInModal(shotId);
     await saveActiveDocumentToFolder(folder, shotId);
     createdNew = true;
   });

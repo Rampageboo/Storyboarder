@@ -4,9 +4,45 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Storyboard Tool</title>
+    <link rel="icon" href="/static/favicon.svg" type="image/svg+xml" />
+    <link rel="icon" href="/static/favicon.ico" sizes="any" />
+    <link rel="apple-touch-icon" href="/static/favicon.png" />
+    <script>
+      (function () {
+        var themes = ["studio", "cinema", "paper", "slate", "noir"];
+        try {
+          var stored = localStorage.getItem("storyboard_ui_theme") || "studio";
+          if (themes.indexOf(stored) >= 0) document.documentElement.setAttribute("data-theme", stored);
+        } catch (e) {
+          document.documentElement.setAttribute("data-theme", "studio");
+        }
+      })();
+    </script>
+    <link rel="stylesheet" href="/static/themes.css" />
+    <link rel="stylesheet" href="/static/reference_media.css" />
     <link rel="stylesheet" href="/static/styles.css" />
   </head>
   <body>
+    <div id="startupOverlay" class="startup-overlay" role="status" aria-live="polite">
+      <div class="startup-frame">
+        <div class="startup-perf startup-perf-top" aria-hidden="true"></div>
+        <div class="startup-center">
+          <h1 class="startup-brand">
+            <span class="startup-brand-main">Storyboard</span>
+            <span class="startup-brand-sub">Tool</span>
+          </h1>
+          <p id="startupStage" class="startup-stage">Preparing workspace…</p>
+        </div>
+        <div class="startup-progress-block">
+          <progress id="startupProgress" value="0" max="100"></progress>
+          <div class="startup-progress-row">
+            <span id="startupDetail">Loading shell</span>
+            <span id="startupPercent">0%</span>
+          </div>
+        </div>
+        <div class="startup-perf startup-perf-bottom" aria-hidden="true"></div>
+      </div>
+    </div>
     <header class="topbar">
       <div class="topbar-left">
         <div class="menu-group">
@@ -15,7 +51,10 @@
           <button id="saveProject" disabled title="Save project">Save</button>
         </div>
       </div>
-      <div id="boardInfo" class="board-info">No project open</div>
+      <div class="topbar-center">
+        <div id="boardInfo" class="board-info">No project open</div>
+        <div id="appStatus" class="app-status">Open or create a project to begin.</div>
+      </div>
       <div class="topbar-right">
         <details class="toolbar-menu export-menu">
           <summary>Export</summary>
@@ -33,13 +72,13 @@
           </div>
         </details>
         <button id="openScene3d" disabled title="3D scene editor">3D Scene</button>
-        <button id="setCanvas" disabled title="Canvas color">Canvas</button>
+        <button id="undoAction" disabled title="Undo (Ctrl+Z)">Undo</button>
+        <button id="openSettings" title="Settings">Settings</button>
         <details class="toolbar-menu ps-menu" id="psMenu">
           <summary id="psMenuSummary" class="ps-menu-summary" title="Photoshop">Ps</summary>
           <div class="toolbar-menu-panel ps-menu-panel">
             <div id="psMenuStatus" class="ps-menu-status">No project open</div>
             <button id="linkPhotoshop" type="button" disabled title="Refresh Photoshop plugin link">Ps Link</button>
-            <button id="setPhotoshop" type="button" disabled title="Photoshop path settings">Ps Setup</button>
           </div>
         </details>
         <details class="toolbar-menu bl-menu" id="blMenu">
@@ -47,14 +86,24 @@
           <div class="toolbar-menu-panel bl-menu-panel">
             <div id="blMenuStatus" class="bl-menu-status">No project open</div>
             <button id="openBlender" type="button" disabled title="Open project scene in Blender">Open Blender</button>
-            <button id="setBlender" type="button" disabled title="Blender path settings">Bl Setup</button>
           </div>
         </details>
         <button id="refreshPreview" disabled title="Force preview sync" hidden>Refresh</button>
       </div>
+      <div class="topbar-progress" id="topbarProgress" hidden><div id="topbarProgressFill"></div></div>
     </header>
 
     <main class="workspace">
+      <aside class="reference-panel" id="referencePanel">
+        <div id="referenceLinkList" class="reference-media-host"></div>
+        <input
+          id="projectReferenceFile"
+          type="file"
+          accept="image/*,video/*,.glb,.gltf,.png,.jpg,.jpeg,.tif,.tiff,.webp,.mp4,.mov,.webm,.mkv,.avi,.m4v"
+          hidden
+        />
+      </aside>
+
       <section class="canvas-area">
         <div id="previewBox" class="preview-box">
           <div id="canvasSurface" class="canvas-surface">
@@ -65,6 +114,19 @@
           <canvas id="drawingCanvas" hidden></canvas>
           <canvas id="annotationCanvas"></canvas>
         </div>
+        <div id="scene3dPanel" class="scene3d-panel">
+          <div class="scene3d-panel-header">
+            <h3>3D Scene</h3>
+            <div class="scene3d-header-actions">
+              <button type="button" id="openBlenderScene" class="btn-primary">Open Blender</button>
+              <button type="button" id="importScene3d" class="btn-primary">Import GLB</button>
+              <button type="button" id="captureScene3d" class="btn-primary">Capture to board</button>
+              <button type="button" id="saveScene3d" class="btn-primary">Save scene</button>
+              <button type="button" id="closeScene3d" class="modal-close" title="Close 3D">×</button>
+            </div>
+          </div>
+          <div id="scene3dRoot" class="scene3d-root"></div>
+        </div>
         <div id="syncStatus" class="sync-status"></div>
         <input id="imageFile" type="file" accept=".png,.jpg,.jpeg,.tif,.tiff,image/png,image/jpeg,image/tiff" hidden />
         <input id="referenceFile" type="file" accept=".png,.jpg,.jpeg,.tif,.tiff,image/png,image/jpeg,image/tiff" hidden />
@@ -73,6 +135,7 @@
       </section>
 
       <aside class="shot-panel">
+        <div class="shot-panel-scroll">
         <div class="shot-panel-fixed">
         <div class="shot-header">
           <h2 id="shotLabel">Shot —</h2>
@@ -90,15 +153,15 @@
 
         <label>
           Dialogue
-          <textarea id="dialogue" rows="4" disabled placeholder="Character lines…"></textarea>
+          <textarea id="dialogue" rows="6" disabled placeholder="Character lines…"></textarea>
         </label>
         <label>
           Action
-          <textarea id="actionNote" rows="4" disabled placeholder="Action description…"></textarea>
+          <textarea id="actionNote" rows="6" disabled placeholder="Action description…"></textarea>
         </label>
         <label>
           Notes
-          <textarea id="description" rows="3" disabled placeholder="Director notes…"></textarea>
+          <textarea id="description" rows="4" disabled placeholder="Director notes…"></textarea>
         </label>
         </div>
 
@@ -110,10 +173,10 @@
             <label>Scene <input id="scene" type="text" disabled /></label>
             <label>Sequence <input id="sequence" type="text" disabled /></label>
             <label>Status <select id="status" disabled></select></label>
-            <label>Camera note <textarea id="cameraNote" rows="2" disabled></textarea></label>
-            <label>Character note <textarea id="characterNote" rows="2" disabled></textarea></label>
-            <label>Lighting <textarea id="lightingNote" rows="2" disabled></textarea></label>
-            <label>Transition <textarea id="transitionNote" rows="2" disabled></textarea></label>
+            <label>Camera note <textarea id="cameraNote" rows="3" disabled></textarea></label>
+            <label>Character note <textarea id="characterNote" rows="3" disabled></textarea></label>
+            <label>Lighting <textarea id="lightingNote" rows="3" disabled></textarea></label>
+            <label>Transition <textarea id="transitionNote" rows="3" disabled></textarea></label>
             <label>3D angle <input id="cameraAngle" type="text" disabled /></label>
             <label>3D focal length <input id="cameraFocalLength" type="text" disabled /></label>
             <label>3D location <input id="cameraLocation" type="text" disabled /></label>
@@ -139,10 +202,20 @@
             </div>
           </div>
         </details>
+        </div>
       </aside>
     </main>
 
     <footer class="filmstrip">
+      <div class="timeline-row">
+        <div id="timelineStrip" class="timeline-strip"></div>
+        <button id="addShot" class="timeline-add-shot" disabled title="Add board" type="button">+</button>
+      </div>
+      <div class="filmstrip-progress-row">
+        <span id="timeCurrent" class="time-current">0.0s</span>
+        <input id="progressSlider" class="progress-slider" type="range" min="0" max="0" value="0" step="0.1" disabled />
+        <span id="timeTotal" class="time-total">0.0s</span>
+      </div>
       <div class="filmstrip-toolbar">
         <div class="filmstrip-left">
           <span id="projectStats" class="project-stats">0 BOARDS</span>
@@ -153,19 +226,16 @@
             <input id="revisionFilter" type="checkbox" disabled />
             Needs revision
           </label>
+          <span id="filmstripHint" class="filmstrip-hint" aria-live="polite"></span>
+          <span id="refSegmentSummary" class="ref-segment-summary"></span>
+          <button id="setRefVideo" type="button" class="filmstrip-ref-btn" disabled title="Import reference image or video">Import ref</button>
         </div>
-        <div class="filmstrip-controls">
+        <div class="filmstrip-transport">
           <button id="prevShot" disabled title="Previous board">◀</button>
           <button id="playAnimatic" disabled title="Play">▶</button>
           <button id="stopAnimatic" disabled title="Stop">■</button>
           <button id="nextShot" disabled title="Next board">▶▶</button>
-          <input id="progressSlider" class="progress-slider" type="range" min="0" max="0" value="0" step="0.1" disabled />
-          <span id="timeDisplay" class="time-display">0.0s / 0.0s</span>
         </div>
-      </div>
-      <div class="timeline-row">
-        <div id="timelineStrip" class="timeline-strip"></div>
-        <button id="addShot" class="timeline-add-shot" disabled title="Add board" type="button">+</button>
       </div>
     </footer>
 
@@ -176,19 +246,109 @@
 
     <div id="toast" class="toast" hidden></div>
 
-    <div id="scene3dModal" class="modal scene3d-modal" hidden>
-      <div class="modal-backdrop" data-scene3d-close></div>
-      <div class="modal-card scene3d-card" role="dialog" aria-labelledby="scene3dTitle" aria-modal="true">
+    <div id="refSegmentModal" class="modal ref-segment-modal" hidden>
+      <div class="modal-backdrop" data-ref-segment-close></div>
+      <div class="modal-card ref-segment-card" role="dialog" aria-labelledby="refSegmentTitle" aria-modal="true">
         <div class="modal-header">
-          <h3 id="scene3dTitle">3D Scene</h3>
-          <div class="scene3d-header-actions">
-            <button type="button" id="openBlenderScene" class="btn-primary">Open Blender</button>
-            <button type="button" id="importScene3d" class="btn-primary">Import GLB</button>
-            <button type="button" id="saveScene3d" class="btn-primary">Save scene</button>
-            <button type="button" class="modal-close" data-scene3d-close title="Close">×</button>
+          <h3 id="refSegmentTitle">Reference segment</h3>
+          <button type="button" class="modal-close" data-ref-segment-close title="Close">×</button>
+        </div>
+        <div class="modal-body ref-segment-body">
+          <div class="ref-segment-layout">
+            <aside id="refSegmentRefsPanel" class="ref-segment-refs"></aside>
+            <div class="ref-segment-main">
+              <p class="ref-segment-section-label">Segment preview</p>
+              <p id="refSegmentMeta" class="ref-segment-meta"></p>
+              <div class="ref-segment-player">
+                <video id="refSegmentVideo" playsinline></video>
+                <canvas id="refSegmentFreeze" class="ref-segment-freeze" hidden></canvas>
+                <img id="refSegmentImage" class="ref-segment-image" alt="" hidden />
+                <div id="refSegmentSceneRoot" class="ref-segment-scene-root" hidden></div>
+              </div>
+              <div class="ref-segment-controls">
+                <button type="button" id="refSegmentPlay">Play</button>
+                <button type="button" id="refSegmentStop">Stop</button>
+                <button type="button" id="refSegmentApply" class="btn-primary">Apply to boards</button>
+                <span id="refSegmentTime" class="ref-segment-time"></span>
+              </div>
+            </div>
           </div>
         </div>
-        <div id="scene3dRoot" class="scene3d-root"></div>
+      </div>
+    </div>
+
+    <div id="dropOverlay" class="drop-overlay" hidden>
+      <div class="drop-overlay-inner">
+        <strong>Drop to import</strong>
+        <span>Images onto the canvas · project.json to open</span>
+      </div>
+    </div>
+
+    <div id="settingsModal" class="modal settings-modal" hidden>
+      <div class="modal-backdrop" data-settings-close></div>
+      <div class="modal-card settings-card" role="dialog" aria-labelledby="settingsTitle" aria-modal="true">
+        <div class="modal-header">
+          <h3 id="settingsTitle">Settings</h3>
+          <button type="button" class="modal-close" data-settings-close title="Close">×</button>
+        </div>
+        <div class="modal-body settings-body">
+          <section class="settings-section">
+            <h4 class="settings-section-title">Integrations</h4>
+            <label class="modal-field">
+              <span>Photoshop executable</span>
+              <div class="path-row">
+                <input id="settingsPhotoshopPath" type="text" spellcheck="false" placeholder="Leave empty for system default" />
+                <button type="button" id="settingsBrowsePhotoshop">Browse…</button>
+                <button type="button" id="settingsClearPhotoshop" title="Use system default">Clear</button>
+              </div>
+            </label>
+            <div id="settingsPhotoshopList" class="settings-candidate-list"></div>
+            <label class="modal-field">
+              <span>Blender executable</span>
+              <div class="path-row">
+                <input id="settingsBlenderPath" type="text" spellcheck="false" placeholder="Leave empty to auto-detect" />
+                <button type="button" id="settingsBrowseBlender">Browse…</button>
+                <button type="button" id="settingsClearBlender" title="Auto-detect">Clear</button>
+              </div>
+            </label>
+            <div id="settingsBlenderList" class="settings-candidate-list"></div>
+          </section>
+          <section class="settings-section">
+            <h4 class="settings-section-title">Appearance</h4>
+            <label class="modal-field">
+              <span>Canvas brightness</span>
+              <div class="gray-slider-row">
+                <span class="gray-slider-label">Black</span>
+                <input id="settingsCanvasGray" class="gray-slider" type="range" min="0" max="255" value="232" />
+                <span class="gray-slider-label">White</span>
+              </div>
+            </label>
+            <label class="modal-field">
+              <span>Canvas hex</span>
+              <input id="settingsCanvasHex" type="text" spellcheck="false" placeholder="#E8E8E8" />
+            </label>
+            <div class="canvas-color-row">
+              <span class="modal-section-title">Preview</span>
+              <div id="settingsCanvasPreview" class="canvas-color-preview"></div>
+            </div>
+            <div class="settings-theme-block">
+              <div class="modal-section-title">Interface style</div>
+              <div id="settingsThemePicker" class="theme-picker" role="group" aria-label="Interface style"></div>
+            </div>
+          </section>
+          <section class="settings-section">
+            <h4 class="settings-section-title">Filmstrip</h4>
+            <label class="modal-field inline-check settings-check">
+              <input id="settingsTimelineShowSelectedName" type="checkbox" />
+              Show title on selected board
+            </label>
+          </section>
+        </div>
+        <div class="modal-footer">
+          <span class="modal-spacer"></span>
+          <button type="button" id="settingsCancel">Cancel</button>
+          <button type="button" id="settingsSave" class="btn-primary">Save</button>
+        </div>
       </div>
     </div>
 
@@ -236,6 +396,14 @@
       </div>
     </div>
 
+    <div id="refVideoOverlay" class="ref-video-overlay" hidden>
+      <div class="ref-video-overlay-backdrop" data-ref-video-close></div>
+      <div class="ref-video-overlay-frame">
+        <button type="button" id="refVideoOverlayClose" class="ref-video-overlay-close" data-ref-video-close title="Close">×</button>
+        <iframe id="refVideoFrame" class="ref-video-overlay-iframe" title="Reference video segment"></iframe>
+      </div>
+    </div>
+
     <script type="importmap">
       {
         "imports": {
@@ -243,6 +411,7 @@
         }
       }
     </script>
-    <script src="/static/app.js"></script>
+    <script src="/static/main.js"></script>
+    <script type="module" src="/static/reference_model_preview.js"></script>
   </body>
 </html>

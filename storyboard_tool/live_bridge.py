@@ -14,6 +14,7 @@ LIVE_BRIDGE_VERSION = 1
 LIVE_BRIDGE_FILENAME = "storyboard_live_bridge.json"
 PLUGIN_HEARTBEAT_FILENAME = "storyboard_plugin_heartbeat.json"
 DEFAULT_PORT = 8000
+_BRIDGE_WRITE_WARNED_PATHS: set[str] = set()
 
 
 def _now_iso() -> str:
@@ -60,7 +61,10 @@ def read_plugin_heartbeat_mtime() -> float:
             return parsed.timestamp()
     except (OSError, ValueError, json.JSONDecodeError):
         pass
-    return path.stat().st_mtime
+    try:
+        return path.stat().st_mtime
+    except OSError:
+        return 0.0
 
 
 def build_payload(
@@ -105,20 +109,25 @@ def build_payload(
 
 def write_payload_files(base_dir: Path, project: Project | None, payload: dict[str, Any]) -> None:
     text = json.dumps(payload, indent=2)
-    sessions_dir = base_dir / "Sessions"
-    sessions_dir.mkdir(parents=True, exist_ok=True)
-    (sessions_dir / LIVE_BRIDGE_FILENAME).write_text(text, encoding="utf-8")
-
-    global_dir = global_bridge_dir()
-    global_dir.mkdir(parents=True, exist_ok=True)
-    global_bridge_file_path().write_text(text, encoding="utf-8")
-
-    shared_dir = shared_bridge_dir()
-    shared_dir.mkdir(parents=True, exist_ok=True)
-    shared_bridge_file_path().write_text(text, encoding="utf-8")
+    _try_write_bridge_file(base_dir / "Sessions" / LIVE_BRIDGE_FILENAME, text)
+    _try_write_bridge_file(global_bridge_file_path(), text)
+    _try_write_bridge_file(shared_bridge_file_path(), text)
 
     if project is not None:
-        (project.root_path / LIVE_BRIDGE_FILENAME).write_text(text, encoding="utf-8")
+        _try_write_bridge_file(project.root_path / LIVE_BRIDGE_FILENAME, text)
+
+
+def _try_write_bridge_file(path: Path, text: str) -> bool:
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text, encoding="utf-8")
+        return True
+    except OSError as exc:
+        key = str(path)
+        if key not in _BRIDGE_WRITE_WARNED_PATHS:
+            _BRIDGE_WRITE_WARNED_PATHS.add(key)
+            print(f"[storyboard] bridge file write skipped: {path} ({exc})", file=sys.stderr)
+        return False
 
 
 def publish(
@@ -154,6 +163,11 @@ def is_storyboard_server(host: str, port: int, timeout: float = 1.5) -> bool:
 def resolve_server_port(host: str = "127.0.0.1", preferred: int = DEFAULT_PORT) -> int:
     """Pick a free port, skipping stale listeners that are not this app."""
     import socket
+
+    if preferred <= 0:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+            sock.bind((host, 0))
+            return int(sock.getsockname()[1])
 
     for port in range(preferred, preferred + 50):
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:

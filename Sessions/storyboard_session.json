@@ -1,9 +1,15 @@
 {
   "version": 1,
-  "last_project_json_path": "D:\\Storyboarder\\Storyboard_Project\\project.json",
-  "selected_shot_id": "2efb0d0e57e24e2cbc46015c61861376",
+  "last_project_json_path": "D:\\Honour Project\\Storyboard_Project\\project.json",
+  "selected_shot_id": "851cb84095b141a2be3ed2706194bf77",
   "recent_projects": [
-    "D:\\Storyboarder\\Storyboard_Project\\project.json",
+    "D:\\Honour Project\\Storyboard_Project\\project.json",
+    "D:\\Honour Project\\Storyboard_Project",
     "D:\\Storyboarder\\Storyboard_Project"
-  ]
+  ],
+  "timeline_scroll_left": 0,
+  "status_filter": "",
+  "revision_only": false,
+  "advanced_panel_open": true,
+  "ui_theme": "cinema"
 }

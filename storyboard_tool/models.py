@@ -33,6 +33,9 @@ class Shot:
     source_sync_mtime: float = 0.0
     annotation_path: str = ""
     reference_image_paths: list[str] = field(default_factory=list)
+    ref_video_path: str = ""
+    ref_video_time: float = 0.0
+    ref_segment_time: float = 0.0
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "Shot":
@@ -65,6 +68,9 @@ class Shot:
             source_sync_mtime=float(data.get("source_sync_mtime", 0.0) or 0.0),
             annotation_path=str(data.get("annotation_path", "")),
             reference_image_paths=_string_list(data.get("reference_image_paths", [])),
+            ref_video_path=str(data.get("ref_video_path", "")),
+            ref_video_time=float(data.get("ref_video_time", 0.0) or 0.0),
+            ref_segment_time=float(data.get("ref_segment_time", 0.0) or 0.0),
         )
 
     def to_dict(self) -> dict[str, Any]:

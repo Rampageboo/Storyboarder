@@ -35,6 +35,9 @@ SHOT_CSV_COLUMNS = [
     "tags",
     "comments",
     "reference_image_paths",
+    "ref_video_path",
+    "ref_video_time",
+    "ref_segment_time",
 ]
 
 _JSON_COLUMNS = {"camera_data", "tags", "comments", "reference_image_paths"}
@@ -108,6 +111,9 @@ def _shot_from_csv_row(row: dict[str, Any]) -> Shot:
         "tags": _read_json_cell(row.get("tags"), []),
         "comments": _read_json_cell(row.get("comments"), []),
         "reference_image_paths": _read_json_cell(row.get("reference_image_paths"), []),
+        "ref_video_path": row.get("ref_video_path", ""),
+        "ref_video_time": row.get("ref_video_time", 0.0),
+        "ref_segment_time": row.get("ref_segment_time", 0.0),
     }
     return Shot.from_dict(payload)
 

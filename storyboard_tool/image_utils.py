@@ -34,6 +34,33 @@ def hex_to_rgb(value: str, default: str = DEFAULT_CANVAS_COLOR) -> tuple[int, in
 SUPPORTED_IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".tif", ".tiff", ".webp"}
 PSD_EXTENSIONS = {".psd", ".psb"}
 THUMBNAIL_SIZE = (420, 260)
+SB_BG_LAYER_NAME = "SB bg"
+
+
+def board_background_filename(shot_id: str) -> str:
+    return f"{shot_id}_background.png"
+
+
+def preview_export_layer_filter(layer) -> bool:
+    name = str(getattr(layer, "name", "") or "")
+    return name != SB_BG_LAYER_NAME
+
+
+def fit_image_to_canvas(image: Image.Image, width: int, height: int) -> Image.Image:
+    """Scale uniformly to fit inside the canvas, centered (matches in-app object-fit: contain)."""
+    source = image.convert("RGBA")
+    src_w, src_h = source.size
+    if src_w <= 0 or src_h <= 0:
+        return Image.new("RGBA", (width, height), (0, 0, 0, 0))
+    scale = min(width / src_w, height / src_h)
+    fitted_w = max(1, round(src_w * scale))
+    fitted_h = max(1, round(src_h * scale))
+    resized = source.resize((fitted_w, fitted_h), Image.Resampling.LANCZOS)
+    canvas = Image.new("RGBA", (width, height), (0, 0, 0, 0))
+    offset_x = (width - fitted_w) // 2
+    offset_y = (height - fitted_h) // 2
+    canvas.paste(resized, (offset_x, offset_y), resized)
+    return canvas
 
 
 def is_psd_path(path: Path) -> bool:
@@ -46,11 +73,32 @@ def export_psd_composite_to_png(psd_path: Path, destination_path: Path) -> Path:
     destination_path.parent.mkdir(parents=True, exist_ok=True)
     destination_path = destination_path.with_suffix(".png")
     psd = PSDImage.open(psd_path)
-    image = psd.composite()
+    image = psd.composite(layer_filter=preview_export_layer_filter)
     if image.mode not in ("RGB", "RGBA"):
         image = image.convert("RGBA")
     image.save(destination_path, "PNG")
     return destination_path
+
+
+def ensure_psd_board_background_layer(psd_path: Path, background_path: Path) -> bool:
+    """Insert or refresh the board reference image as the bottom art layer."""
+    from psd_tools import PSDImage
+
+    if not psd_path.is_file() or not background_path.is_file():
+        return False
+
+    psd = PSDImage.open(psd_path)
+    for layer in list(psd.descendants()):
+        if str(getattr(layer, "name", "") or "") == SB_BG_LAYER_NAME:
+            psd.remove(layer)
+
+    with Image.open(background_path) as image:
+        fitted = fit_image_to_canvas(image, psd.width, psd.height)
+        layer = psd.create_pixel_layer(fitted, name=SB_BG_LAYER_NAME)
+        psd.insert(0, layer)
+
+    psd.save(psd_path)
+    return True
 
 
 def is_solid_color_image(path: Path, sample_points: int = 12) -> bool:

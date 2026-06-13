@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import json
+import sys
 import time
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 
@@ -33,7 +35,7 @@ from .export_utils import (
     missing_files,
 )
 from .models import Project, SHOT_STATUSES, Shot
-from .pdf_exporter import export_storyboard_pdf
+from .backend_service import ApiCallRequest, dispatch_api_call
 
 
 class ProjectPathRequest(BaseModel):
@@ -77,6 +79,14 @@ class RelinkRequest(BaseModel):
     relative_path: str
 
 
+class RemoveReferenceRequest(BaseModel):
+    path: str
+
+
+class SetReferencePathsRequest(BaseModel):
+    paths: list[str] = Field(default_factory=list)
+
+
 class CanvasRequest(BaseModel):
     width: int = 1920
     height: int = 1080
@@ -96,6 +106,19 @@ class SettingsUpdateRequest(BaseModel):
     blender_path: str | None = None
     canvas_background_color: str | None = None
     scene3d: dict[str, Any] | None = None
+    reference_video_path: str | None = None
+    reference_model_path: str | None = None
+    reference_image_path: str | None = None
+    reference_segment_mode: str | None = None
+    reference_links: list[dict[str, Any]] | None = None
+    ref_segment: dict[str, Any] | None = None
+    ref_segments: list[dict[str, Any]] | None = None
+    active_ref_segment_id: str | None = None
+    ref_segment_video: dict[str, Any] | None = None
+
+
+class SetActiveReferenceVideoRequest(BaseModel):
+    path: str
 
 
 class CanvasColorRequest(BaseModel):
@@ -106,6 +129,31 @@ class AppSessionUpdateRequest(BaseModel):
     last_project_json_path: str | None = None
     selected_shot_id: str | None = None
     recent_projects: list[str] | None = None
+    timeline_scroll_left: int | None = None
+    status_filter: str | None = None
+    revision_only: bool | None = None
+    advanced_panel_open: bool | None = None
+    ui_theme: str | None = None
+
+
+class RestoreShotRequest(BaseModel):
+    shot: dict[str, Any]
+    index: int = 0
+
+
+class ReorderShotsRequest(BaseModel):
+    shot_ids: list[str]
+
+
+class ImportImagePathRequest(BaseModel):
+    source_path: str
+
+
+class ApplyRefSegmentRequest(BaseModel):
+    anchor_shot_id: str
+    end_shot_id: str
+    segment_id: str | None = None
+    camera_name: str | None = None
 
 
 class LiveBridgeUpdateRequest(BaseModel):
@@ -117,7 +165,12 @@ class AddShotRequest(BaseModel):
 
 
 def create_app(base_dir: Path, bridge_port: int = 8000) -> FastAPI:
-    app = FastAPI(title="Storyboard Tool")
+    @asynccontextmanager
+    async def lifespan(app: FastAPI):
+        yield
+        _shutdown_reference_cleanup(app)
+
+    app = FastAPI(title="Storyboard Tool", lifespan=lifespan)
     app.state.base_dir = base_dir
     app.state.project = None
     app.state.project_disk_mtime = 0.0
@@ -140,10 +193,26 @@ def create_app(base_dir: Path, bridge_port: int = 8000) -> FastAPI:
     def index() -> FileResponse:
         return FileResponse(web_dir / "index.html")
 
+    @app.get("/ref-segment")
+    def ref_segment_window() -> FileResponse:
+        return FileResponse(web_dir / "ref_segment.html")
+
+    @app.get("/ref-scene3d")
+    def ref_scene3d_window() -> FileResponse:
+        return FileResponse(web_dir / "ref_segment.html")
+
+    @app.get("/ref-video")
+    def ref_video_window() -> FileResponse:
+        return FileResponse(web_dir / "ref_segment.html")
+
     @app.get("/api/project")
     def get_project() -> dict[str, Any]:
         project = _refresh_project_from_disk(app)
         return _project_payload(project, app.state.dirty)
+
+    @app.post("/api")
+    def api_dispatch(request: ApiCallRequest) -> dict[str, Any]:
+        return dispatch_api_call(app, request.method, request.args)
 
     @app.get("/api/app/session")
     def get_app_session() -> dict[str, Any]:
@@ -156,6 +225,11 @@ def create_app(base_dir: Path, bridge_port: int = 8000) -> FastAPI:
             last_project_json_path=request.last_project_json_path,
             selected_shot_id=request.selected_shot_id,
             recent_projects=request.recent_projects,
+            timeline_scroll_left=request.timeline_scroll_left,
+            status_filter=request.status_filter,
+            revision_only=request.revision_only,
+            advanced_panel_open=request.advanced_panel_open,
+            ui_theme=request.ui_theme,
         )
 
     @app.get("/api/bridge/live")
@@ -327,6 +401,55 @@ def create_app(base_dir: Path, bridge_port: int = 8000) -> FastAPI:
                 except (FileNotFoundError, ValueError) as exc:
                     raise HTTPException(status_code=400, detail=str(exc)) from exc
             project.settings["blender_path"] = value
+        if request.reference_video_path is not None:
+            value = request.reference_video_path.strip()
+            if value:
+                project_manager.set_active_reference_video(project, value)
+            else:
+                project_manager.clear_active_reference_video(project)
+        if request.reference_model_path is not None:
+            value = request.reference_model_path.strip()
+            if value:
+                project_manager.set_active_reference_model(project, value)
+            else:
+                project.settings["reference_model_path"] = ""
+                if str(project.settings.get("reference_segment_mode") or "") == "model":
+                    project.settings["reference_segment_mode"] = "video"
+                project_manager.save_settings(project)
+        if request.reference_image_path is not None:
+            value = request.reference_image_path.strip()
+            if value:
+                project_manager.set_active_reference_image(project, value)
+            else:
+                project.settings["reference_image_path"] = ""
+                if str(project.settings.get("reference_segment_mode") or "") == "image":
+                    project.settings["reference_segment_mode"] = "video"
+                project_manager.save_settings(project)
+        if request.reference_segment_mode is not None:
+            mode = str(request.reference_segment_mode or "").strip().lower()
+            if mode in {"video", "model", "image"}:
+                project.settings["reference_segment_mode"] = mode
+                project_manager.save_settings(project)
+        if request.reference_links is not None:
+            project.settings["reference_links"] = project_manager.normalize_reference_links(request.reference_links)
+        if request.ref_segment is not None:
+            project.settings["ref_segment"] = request.ref_segment if isinstance(request.ref_segment, dict) else {}
+        if request.ref_segments is not None:
+            project.settings["ref_segments"] = request.ref_segments if isinstance(request.ref_segments, list) else []
+            project_manager.sync_ref_segment_settings(project)
+        if request.active_ref_segment_id is not None:
+            project.settings["active_ref_segment_id"] = str(request.active_ref_segment_id or "").strip()
+            project_manager.sync_ref_segment_settings(project)
+        if request.ref_segment_video is not None:
+            segment = request.ref_segment_video
+            project.settings["ref_segment_video"] = segment if isinstance(segment, dict) else {}
+            seg_id = str(segment.get("segment_id", "") or project.settings.get("active_ref_segment_id", "") or "").strip()
+            if seg_id and isinstance(segment, dict) and "start" in segment:
+                project_manager.update_ref_segment_video_start(
+                    project,
+                    seg_id,
+                    float(segment.get("start", 0.0) or 0.0),
+                )
         if request.canvas_background_color is not None:
             project_manager.persist_canvas_color(project, request.canvas_background_color)
         elif request.scene3d is not None:
@@ -338,6 +461,106 @@ def create_app(base_dir: Path, bridge_port: int = 8000) -> FastAPI:
             project_manager.write_bridge_file(project)
         _touch_live_bridge(app)
         return _project_payload(project, app.state.dirty)
+
+    @app.post("/api/project/references")
+    async def upload_project_reference(file: UploadFile = File(...)) -> dict[str, Any]:
+        project = _require_project(app)
+        try:
+            entry = project_manager.import_project_reference_stream(
+                project,
+                file.file,
+                file.filename or "reference",
+            )
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        finally:
+            await file.close()
+        _autosave(app)
+        return {"reference": entry, **_project_payload(project, app.state.dirty)}
+
+    @app.delete("/api/project/references/{ref_id}")
+    def delete_project_reference(ref_id: str) -> dict[str, Any]:
+        project = _require_project(app)
+        try:
+            project_manager.remove_project_reference(project, ref_id)
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        _autosave(app)
+        return _project_payload(project, app.state.dirty)
+
+    @app.post("/api/project/reference-video")
+    async def upload_reference_video(file: UploadFile = File(...)) -> dict[str, Any]:
+        project = _require_project(app)
+        try:
+            project_manager.import_reference_video_stream(project, file.file, file.filename or "reference.mp4")
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        finally:
+            await file.close()
+        _autosave(app)
+        return _project_payload(project, app.state.dirty)
+
+    @app.post("/api/project/ref-segment/apply-3d")
+    def apply_ref_segment_3d(request: ApplyRefSegmentRequest) -> dict[str, Any]:
+        project = _require_project(app)
+        anchor = _find_shot_index(project, request.anchor_shot_id)
+        end = _find_shot_index(project, request.end_shot_id)
+        try:
+            result = project_manager.apply_ref_segment_3d_to_boards(
+                project,
+                anchor,
+                end,
+                request.segment_id or None,
+                camera_name=str(request.camera_name or ""),
+            )
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        _autosave(app)
+        return {**result, **_project_payload(project, app.state.dirty)}
+
+    @app.post("/api/project/ref-segment/apply-image")
+    def apply_ref_segment_image(request: ApplyRefSegmentRequest) -> dict[str, Any]:
+        project = _require_project(app)
+        anchor = _find_shot_index(project, request.anchor_shot_id)
+        end = _find_shot_index(project, request.end_shot_id)
+        try:
+            result = project_manager.apply_ref_segment_image_to_boards(
+                project,
+                anchor,
+                end,
+                request.segment_id or None,
+            )
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        _autosave(app)
+        return {**result, **_project_payload(project, app.state.dirty)}
+
+    @app.post("/api/project/ref-segment/apply")
+    def apply_ref_segment(request: ApplyRefSegmentRequest) -> dict[str, Any]:
+        project = _require_project(app)
+        anchor = _find_shot_index(project, request.anchor_shot_id)
+        end = _find_shot_index(project, request.end_shot_id)
+        try:
+            result = project_manager.apply_ref_segment_to_boards(
+                project,
+                anchor,
+                end,
+                request.segment_id,
+            )
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        _autosave(app)
+        return {**result, **_project_payload(project, app.state.dirty)}
+
+    @app.delete("/api/project/ref-segments/{segment_id}")
+    def delete_ref_segment(segment_id: str) -> dict[str, Any]:
+        project = _require_project(app)
+        try:
+            result = project_manager.delete_ref_segment(project, segment_id)
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        _autosave(app)
+        return {**result, **_project_payload(project, app.state.dirty)}
 
     @app.post("/api/project/scene3d/open-blender")
     def open_blender_scene() -> dict[str, str]:
@@ -449,6 +672,38 @@ def create_app(base_dir: Path, bridge_port: int = 8000) -> FastAPI:
         _autosave(app)
         return _project_payload(project, app.state.dirty)
 
+    @app.post("/api/shots/restore")
+    def restore_shot(request: RestoreShotRequest) -> dict[str, Any]:
+        project = _require_project(app)
+        try:
+            project_manager.restore_shot(project, request.shot, request.index)
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        _autosave(app)
+        return _project_payload(project, app.state.dirty)
+
+    @app.post("/api/shots/reorder")
+    def reorder_shots(request: ReorderShotsRequest) -> dict[str, Any]:
+        project = _require_project(app)
+        try:
+            project_manager.reorder_shots(project, request.shot_ids)
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        _autosave(app)
+        return _project_payload(project, app.state.dirty)
+
+    @app.post("/api/shots/{shot_id}/import-image-path")
+    def import_image_path(shot_id: str, request: ImportImagePathRequest) -> dict[str, Any]:
+        project = _require_project(app)
+        shot = _find_shot(project, shot_id)
+        source_path = Path(request.source_path).expanduser()
+        try:
+            project_manager.import_image_for_shot(project, shot, source_path)
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        _autosave(app)
+        return _project_payload(project, app.state.dirty)
+
     @app.post("/api/shots/{shot_id}/move-up")
     def move_shot_up(shot_id: str) -> dict[str, Any]:
         project = _require_project(app)
@@ -488,6 +743,25 @@ def create_app(base_dir: Path, bridge_port: int = 8000) -> FastAPI:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         finally:
             await file.close()
+        _autosave(app)
+        return _project_payload(project, app.state.dirty)
+
+    @app.delete("/api/shots/{shot_id}/references")
+    def remove_reference_image(shot_id: str, request: RemoveReferenceRequest) -> dict[str, Any]:
+        project = _require_project(app)
+        shot = _find_shot(project, shot_id)
+        try:
+            project_manager.remove_reference_image(project, shot, request.path)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        _autosave(app)
+        return _project_payload(project, app.state.dirty)
+
+    @app.put("/api/shots/{shot_id}/references")
+    def set_reference_image_paths(shot_id: str, request: SetReferencePathsRequest) -> dict[str, Any]:
+        project = _require_project(app)
+        shot = _find_shot(project, shot_id)
+        project_manager.set_reference_image_paths(project, shot, request.paths)
         _autosave(app)
         return _project_payload(project, app.state.dirty)
 
@@ -602,7 +876,7 @@ def create_app(base_dir: Path, bridge_port: int = 8000) -> FastAPI:
     def remove_image(shot_id: str) -> dict[str, Any]:
         project = _require_project(app)
         shot = _find_shot(project, shot_id)
-        project_manager.remove_image_for_shot(shot)
+        project_manager.remove_image_for_shot(project, shot)
         _autosave(app)
         return _project_payload(project, app.state.dirty)
 
@@ -629,6 +903,15 @@ def create_app(base_dir: Path, bridge_port: int = 8000) -> FastAPI:
         if not image_path.exists():
             raise HTTPException(status_code=404, detail="Thumbnail file is missing.")
         return FileResponse(image_path)
+
+    @app.get("/api/shots/{shot_id}/board-background")
+    def get_board_background(shot_id: str) -> FileResponse:
+        project = _require_project(app)
+        shot = _find_shot(project, shot_id)
+        background_path = project_manager.get_shot_board_background_path(project, shot)
+        if background_path is None or not background_path.is_file():
+            raise HTTPException(status_code=404, detail="No board background for this shot.")
+        return FileResponse(background_path)
 
     @app.get("/api/files")
     def get_project_file(path: str) -> FileResponse:
@@ -691,7 +974,7 @@ def create_app(base_dir: Path, bridge_port: int = 8000) -> FastAPI:
         output_path = project.exports_dir / "storyboard.pdf"
         layout = request.layout if request.layout in {"one_per_page", "two_per_page", "thumbnails"} else "two_per_page"
         try:
-            export_storyboard_pdf(project, output_path, layout=layout)
+            _export_storyboard_pdf(project, output_path, layout=layout)
         except Exception as exc:
             raise HTTPException(status_code=500, detail=str(exc)) from exc
         project.settings["pdf_layout"] = layout
@@ -785,6 +1068,12 @@ def _project_payload(project: Project, dirty: bool) -> dict[str, Any]:
     }
 
 
+def _export_storyboard_pdf(project: Project, output_path: Path, *, layout: str) -> None:
+    from .pdf_exporter import export_storyboard_pdf
+
+    export_storyboard_pdf(project, output_path, layout=layout)
+
+
 def _require_project(app: FastAPI) -> Project:
     project = app.state.project
     if project is None:
@@ -824,9 +1113,21 @@ def _refresh_project_from_disk(app: FastAPI) -> Project:
 
 
 def _autosave(app: FastAPI) -> None:
-    project_manager.save_project(_require_project(app))
-    app.state.project_disk_mtime = project_manager.project_disk_mtime(_require_project(app))
+    project = _require_project(app)
+    project_manager.save_project(project)
+    app.state.project_disk_mtime = project_manager.project_disk_mtime(project)
     app.state.dirty = False
+
+
+def _shutdown_reference_cleanup(app: FastAPI) -> None:
+    try:
+        project_manager.shutdown_reference_cleanup(
+            app.state.project,
+            save_if_dirty=bool(getattr(app.state, "dirty", False)),
+            dirty=bool(getattr(app.state, "dirty", False)),
+        )
+    except Exception as exc:
+        print(f"Reference cleanup failed: {exc}", file=sys.stderr)
 
 
 def _dialog_initial_dir(app: FastAPI, kind: str) -> str:
