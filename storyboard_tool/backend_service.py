@@ -74,11 +74,23 @@ class StoryboardBackendService:
             ui_theme=data.get("ui_theme"),
         )
 
-    def method_new_project(self, path: str | None = None) -> dict[str, Any]:
+    def method_new_project(
+        self,
+        path: str | None = None,
+        canvas_width: int | None = None,
+        canvas_height: int | None = None,
+    ) -> dict[str, Any]:
         api = _api()
         root = Path(path).expanduser() if path else self.app.state.base_dir / "Storyboard_Project"
         try:
-            api._track_project(self.app, project_manager.create_project(root))
+            api._track_project(
+                self.app,
+                project_manager.create_project(
+                    root,
+                    canvas_width=canvas_width if canvas_width is not None else 1920,
+                    canvas_height=canvas_height if canvas_height is not None else 1080,
+                ),
+            )
         except Exception as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         api._remember_recent(self.app.state.project)
@@ -377,21 +389,30 @@ class StoryboardBackendService:
         api = _api()
         project = api._require_project(self.app)
         output_path = project.exports_dir / "shot_list.csv"
-        export_shot_list_csv(project, output_path)
+        try:
+            export_shot_list_csv(project, output_path)
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
         return {"path": str(output_path), "download_url": "/api/export/shot-list"}
 
     def method_export_timing(self) -> dict[str, str]:
         api = _api()
         project = api._require_project(self.app)
         output_path = project.exports_dir / "timing.json"
-        export_timing_json(project, output_path)
+        try:
+            export_timing_json(project, output_path)
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
         return {"path": str(output_path), "download_url": "/api/export/timing"}
 
     def method_export_contact_sheet(self) -> dict[str, str]:
         api = _api()
         project = api._require_project(self.app)
         output_path = project.exports_dir / "contact_sheet.png"
-        export_contact_sheet(project, output_path)
+        try:
+            export_contact_sheet(project, output_path)
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
         return {"path": str(output_path), "download_url": "/api/export/contact-sheet"}
 
     def method_export_image_sequence(self) -> dict[str, str]:
@@ -409,13 +430,21 @@ class StoryboardBackendService:
         project = api._require_project(self.app)
         data = payload if isinstance(payload, dict) else {}
         if "photoshop_path" in data:
-            project.settings["photoshop_path"] = str(data.get("photoshop_path") or "")
+            value = str(data.get("photoshop_path") or "").strip()
+            if value:
+                try:
+                    value = validate_photoshop_path(value)
+                except (FileNotFoundError, ValueError) as exc:
+                    raise HTTPException(status_code=400, detail=str(exc)) from exc
+            project.settings["photoshop_path"] = value
         if "blender_path" in data:
-            project.settings["blender_path"] = str(data.get("blender_path") or "")
-        if "canvas_background_color" in data and data["canvas_background_color"]:
-            project.settings["canvas_background_color"] = str(data["canvas_background_color"])
-        if "scene3d" in data and isinstance(data["scene3d"], dict):
-            project.settings["scene3d"] = data["scene3d"]
+            value = str(data.get("blender_path") or "").strip()
+            if value:
+                try:
+                    value = validate_blender_path(value)
+                except (FileNotFoundError, ValueError) as exc:
+                    raise HTTPException(status_code=400, detail=str(exc)) from exc
+            project.settings["blender_path"] = value
         if "reference_video_path" in data:
             value = str(data.get("reference_video_path") or "").strip()
             if value:
@@ -430,6 +459,7 @@ class StoryboardBackendService:
                 project.settings["reference_model_path"] = ""
                 if str(project.settings.get("reference_segment_mode") or "") == "model":
                     project.settings["reference_segment_mode"] = "video"
+                project_manager.save_settings(project)
         if "reference_image_path" in data:
             value = str(data.get("reference_image_path") or "").strip()
             if value:
@@ -438,10 +468,12 @@ class StoryboardBackendService:
                 project.settings["reference_image_path"] = ""
                 if str(project.settings.get("reference_segment_mode") or "") == "image":
                     project.settings["reference_segment_mode"] = "video"
+                project_manager.save_settings(project)
         if "reference_segment_mode" in data:
             mode = str(data.get("reference_segment_mode") or "").strip().lower()
             if mode in {"video", "model", "image"}:
                 project.settings["reference_segment_mode"] = mode
+                project_manager.save_settings(project)
         if "reference_links" in data:
             project.settings["reference_links"] = project_manager.normalize_reference_links(data.get("reference_links"))
         if "ref_segment" in data:
@@ -464,7 +496,23 @@ class StoryboardBackendService:
                     seg_id,
                     float(segment.get("start", 0.0) or 0.0),
                 )
-        project_manager.save_settings(project)
+        if "canvas_width" in data and "canvas_height" in data:
+            project_manager.persist_canvas_size(
+                project,
+                data.get("canvas_width"),
+                data.get("canvas_height"),
+                apply_to_blank_shots=bool(data.get("apply_canvas_size_to_blank_shots")),
+            )
+            self.app.state.dirty = True
+        if "canvas_background_color" in data:
+            project_manager.persist_canvas_color(project, str(data["canvas_background_color"]))
+        elif "scene3d" in data:
+            project.settings["scene3d"] = data["scene3d"]
+            project_manager.save_settings(project)
+            project_manager.write_bridge_file(project)
+        else:
+            project_manager.save_settings(project)
+            project_manager.write_bridge_file(project)
         api._touch_live_bridge(self.app)
         return api._project_payload(project, self.app.state.dirty)
 
@@ -521,7 +569,10 @@ class StoryboardBackendService:
         rel_path = shot.preview_image_path or shot.image_path
         if not rel_path:
             raise HTTPException(status_code=400, detail="No preview image linked.")
-        opened = project_manager.open_project_file(project, rel_path, project.settings.get("photoshop_path", ""))
+        try:
+            opened = project_manager.open_project_file(project, rel_path, project.settings.get("photoshop_path", ""))
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
         return {"path": str(opened)}
 
     def method_open_source(self, shot_id: str) -> dict[str, str]:
@@ -530,12 +581,15 @@ class StoryboardBackendService:
         shot = api._find_shot(project, shot_id)
         if not shot.source_file_path:
             raise HTTPException(status_code=400, detail="No source file linked. Create a PS canvas first.")
-        opened = project_manager.open_project_file(
-            project,
-            shot.source_file_path,
-            project.settings.get("photoshop_path", ""),
-            shot=shot,
-        )
+        try:
+            opened = project_manager.open_project_file(
+                project,
+                shot.source_file_path,
+                project.settings.get("photoshop_path", ""),
+                shot=shot,
+            )
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
         return {"path": str(opened)}
 
     def _browse(self, kind: str, picker, validator) -> dict[str, Any]:

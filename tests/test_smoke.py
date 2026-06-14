@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import contextlib
 import io
+import json
 import re
 import socket
 import sys
@@ -19,6 +20,8 @@ with warnings.catch_warnings():
 from storyboard_tool.bridge import DesktopBridge
 from storyboard_tool import desktop, live_bridge, project_manager
 from storyboard_tool import api as api_module
+from storyboard_tool import backend_service as backend_service_module
+from storyboard_tool import backups as backups_module
 from storyboard_tool import video_utils
 from storyboard_tool.models import Project, Shot
 
@@ -44,14 +47,14 @@ class StoryboardSmokeTests(unittest.TestCase):
     @unittest.skipIf(find_spec("multipart") is None, "python-multipart is not installed")
     def test_rest_pdf_export_route_reaches_exporter(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            original_export = api_module._export_storyboard_pdf
+            original_export = backend_service_module._export_storyboard_pdf
 
             def fake_export(_project, output_path, *, layout):
                 self.assertEqual(layout, "two_per_page")
                 output_path.parent.mkdir(parents=True, exist_ok=True)
                 output_path.write_bytes(b"%PDF-1.4\n")
 
-            api_module._export_storyboard_pdf = fake_export
+            backend_service_module._export_storyboard_pdf = fake_export
             app = api_module.create_app(Path(tmp))
             client = TestClient(app, raise_server_exceptions=False)
             try:
@@ -66,7 +69,7 @@ class StoryboardSmokeTests(unittest.TestCase):
                 self.assertTrue(payload["path"].endswith("storyboard.pdf"))
                 self.assertEqual(payload["download_url"], "/api/export/pdf")
             finally:
-                api_module._export_storyboard_pdf = original_export
+                backend_service_module._export_storyboard_pdf = original_export
 
     def test_shutdown_reference_cleanup_removes_unreferenced_reference_files(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -289,6 +292,281 @@ class StoryboardSmokeTests(unittest.TestCase):
                     sys.modules["cv2"] = original_cv2
 
             self.assertEqual(released, [True])
+
+    def test_project_canvas_size_create_and_update(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            app = api_module.create_app(Path(tmp))
+            client = TestClient(app, raise_server_exceptions=False)
+            with contextlib.redirect_stderr(io.StringIO()):
+                created = client.post(
+                    "/api/project/new",
+                    json={"path": tmp, "canvas_width": 1600, "canvas_height": 900},
+                )
+            self.assertEqual(created.status_code, 200)
+            payload = created.json()
+            self.assertEqual(payload["settings"]["canvas_width"], 1600)
+            self.assertEqual(payload["settings"]["canvas_height"], 900)
+
+            with contextlib.redirect_stderr(io.StringIO()):
+                updated = client.patch(
+                    "/api/project/settings",
+                    json={
+                        "canvas_width": 1080,
+                        "canvas_height": 1080,
+                        "apply_canvas_size_to_blank_shots": False,
+                    },
+                )
+            self.assertEqual(updated.status_code, 200)
+            settings = updated.json()["settings"]
+            self.assertEqual(settings["canvas_width"], 1080)
+            self.assertEqual(settings["canvas_height"], 1080)
+
+
+    def test_open_blender_scene_returns_project_payload(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            app = api_module.create_app(Path(tmp))
+            client = TestClient(app, raise_server_exceptions=False)
+            with contextlib.redirect_stderr(io.StringIO()):
+                created = client.post("/api/project/new", json={"path": tmp})
+            self.assertEqual(created.status_code, 200)
+
+            original_open = project_manager.open_blender_scene
+
+            def fake_open_blender_scene(project):
+                blend = project.root_path / "scene3d" / "scene.blend"
+                blend.parent.mkdir(parents=True, exist_ok=True)
+                blend.write_text("fake", encoding="utf-8")
+                return blend
+
+            project_manager.open_blender_scene = fake_open_blender_scene
+            try:
+                with contextlib.redirect_stderr(io.StringIO()):
+                    response = client.post("/api/project/scene3d/open-blender")
+            finally:
+                project_manager.open_blender_scene = original_open
+
+            self.assertEqual(response.status_code, 200)
+            payload = response.json()
+            self.assertIn("path", payload)
+            self.assertIn("relative_path", payload)
+            self.assertIn("shots", payload)
+            self.assertIsInstance(payload["dirty"], bool)
+            self.assertIsInstance(payload["settings"], dict)
+
+    def test_backend_dispatch_persists_canvas_size(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            app = api_module.create_app(Path(tmp))
+            client = TestClient(app, raise_server_exceptions=False)
+            with contextlib.redirect_stderr(io.StringIO()):
+                created = client.post("/api/project/new", json={"path": tmp, "canvas_width": 1920, "canvas_height": 1080})
+            self.assertEqual(created.status_code, 200)
+
+            with contextlib.redirect_stderr(io.StringIO()):
+                updated = client.post(
+                    "/api",
+                    json={
+                        "method": "update_settings",
+                        "args": [
+                            {
+                                "photoshop_path": "",
+                                "blender_path": "",
+                                "canvas_width": 1600,
+                                "canvas_height": 900,
+                                "apply_canvas_size_to_blank_shots": False,
+                            }
+                        ],
+                    },
+                )
+            self.assertEqual(updated.status_code, 200)
+            payload = updated.json()["result"]
+            self.assertEqual(payload["settings"]["canvas_width"], 1600)
+            self.assertEqual(payload["settings"]["canvas_height"], 900)
+
+
+    def test_update_settings_rest_and_dispatch_share_backend_logic(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            app = api_module.create_app(Path(tmp))
+            client = TestClient(app, raise_server_exceptions=False)
+            with contextlib.redirect_stderr(io.StringIO()):
+                created = client.post("/api/project/new", json={"path": tmp})
+            self.assertEqual(created.status_code, 200)
+            settings_json = Path(tmp) / "Storyboard_Project" / "settings.json"
+
+            def read_saved_mode() -> str:
+                return json.loads(settings_json.read_text(encoding="utf-8")).get("reference_segment_mode", "")
+
+            def assert_cleared_model_mode() -> None:
+                self.assertEqual(read_saved_mode(), "video")
+
+            with contextlib.redirect_stderr(io.StringIO()):
+                client.patch("/api/project/settings", json={"reference_segment_mode": "model"})
+                rest = client.patch("/api/project/settings", json={"reference_model_path": ""})
+            self.assertEqual(rest.status_code, 200, rest.text)
+            self.assertEqual(rest.json()["settings"]["reference_segment_mode"], "video")
+            assert_cleared_model_mode()
+
+            with contextlib.redirect_stderr(io.StringIO()):
+                client.patch("/api/project/settings", json={"reference_segment_mode": "model"})
+                dispatch = client.post(
+                    "/api",
+                    json={"method": "update_settings", "args": [{"reference_model_path": ""}]},
+                )
+            self.assertEqual(dispatch.status_code, 200, dispatch.text)
+            dispatch_payload = dispatch.json()
+            self.assertTrue(dispatch_payload["ok"], dispatch_payload.get("error"))
+            self.assertEqual(
+                dispatch_payload["result"]["settings"]["reference_segment_mode"],
+                "video",
+            )
+            assert_cleared_model_mode()
+
+    def test_project_lifecycle_rest_and_dispatch_share_backend_logic(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            app = api_module.create_app(Path(tmp))
+            client = TestClient(app, raise_server_exceptions=False)
+            project_root = Path(tmp) / "Storyboard_Project"
+
+            with contextlib.redirect_stderr(io.StringIO()):
+                rest_created = client.post(
+                    "/api/project/new",
+                    json={"path": tmp, "canvas_width": 1280, "canvas_height": 720},
+                )
+            self.assertEqual(rest_created.status_code, 200)
+            rest_payload = rest_created.json()
+            self.assertEqual(rest_payload["settings"]["canvas_width"], 1280)
+            self.assertTrue(project_root.exists())
+
+            with contextlib.redirect_stderr(io.StringIO()):
+                rest_saved = client.post("/api/project/save")
+            self.assertEqual(rest_saved.status_code, 200)
+            self.assertFalse(rest_saved.json()["dirty"])
+
+            with contextlib.redirect_stderr(io.StringIO()):
+                dispatch_created = client.post(
+                    "/api",
+                    json={
+                        "method": "new_project",
+                        "args": [str(Path(tmp) / "Dispatch_Project"), 1600, 900],
+                    },
+                )
+            self.assertEqual(dispatch_created.status_code, 200)
+            dispatch_payload = dispatch_created.json()
+            self.assertTrue(dispatch_payload["ok"], dispatch_payload.get("error"))
+            self.assertEqual(dispatch_payload["result"]["settings"]["canvas_width"], 1600)
+
+            project_json = Path(tmp) / "Dispatch_Project" / "Storyboard_Project" / "project.json"
+            with contextlib.redirect_stderr(io.StringIO()):
+                dispatch_opened = client.post(
+                    "/api",
+                    json={"method": "open_project", "args": [str(project_json)]},
+                )
+            self.assertEqual(dispatch_opened.status_code, 200)
+            opened_payload = dispatch_opened.json()
+            self.assertTrue(opened_payload["ok"], opened_payload.get("error"))
+            self.assertEqual(opened_payload["result"]["settings"]["canvas_width"], 1600)
+
+    def test_comment_rest_and_dispatch_share_backend_logic(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            app = api_module.create_app(Path(tmp))
+            client = TestClient(app, raise_server_exceptions=False)
+            with contextlib.redirect_stderr(io.StringIO()):
+                created = client.post("/api/project/new", json={"path": tmp})
+                shot_created = client.post("/api/shots", json={})
+            self.assertEqual(created.status_code, 200)
+            self.assertEqual(shot_created.status_code, 200)
+            shot_id = shot_created.json()["shot"]["shot_id"]
+
+            with contextlib.redirect_stderr(io.StringIO()):
+                rest_comment = client.post(
+                    f"/api/shots/{shot_id}/comments",
+                    json={"text": "Needs wider framing"},
+                )
+            self.assertEqual(rest_comment.status_code, 200)
+            rest_comments = rest_comment.json()["shots"][0]["comments"]
+            self.assertEqual(len(rest_comments), 1)
+            comment_id = rest_comments[0]["id"]
+
+            with contextlib.redirect_stderr(io.StringIO()):
+                rest_resolved = client.patch(
+                    f"/api/shots/{shot_id}/comments/{comment_id}",
+                    json={"resolved": True},
+                )
+            self.assertEqual(rest_resolved.status_code, 200)
+            self.assertTrue(rest_resolved.json()["shots"][0]["comments"][0]["resolved"])
+
+            with contextlib.redirect_stderr(io.StringIO()):
+                dispatch_comment = client.post(
+                    "/api",
+                    json={"method": "add_comment", "args": [shot_id, "Check continuity"]},
+                )
+            self.assertEqual(dispatch_comment.status_code, 200)
+            dispatch_payload = dispatch_comment.json()
+            self.assertTrue(dispatch_payload["ok"], dispatch_payload.get("error"))
+            dispatch_comments = dispatch_payload["result"]["shots"][0]["comments"]
+            self.assertEqual(len(dispatch_comments), 2)
+            second_id = max(item["id"] for item in dispatch_comments)
+
+            with contextlib.redirect_stderr(io.StringIO()):
+                dispatch_resolved = client.post(
+                    "/api",
+                    json={"method": "resolve_comment", "args": [shot_id, second_id, False]},
+                )
+            self.assertEqual(dispatch_resolved.status_code, 200)
+            resolved_payload = dispatch_resolved.json()
+            self.assertTrue(resolved_payload["ok"], resolved_payload.get("error"))
+            resolved_comment = next(
+                item for item in resolved_payload["result"]["shots"][0]["comments"] if item["id"] == second_id
+            )
+            self.assertFalse(resolved_comment["resolved"])
+
+    def test_backup_retention_prunes_oldest_sets(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "Storyboard_Project"
+            root.mkdir(parents=True)
+            (root / "backups").mkdir()
+            project = Project(root_path=root, settings=project_manager.DEFAULT_SETTINGS.copy())
+            project.json_path.write_text("{}", encoding="utf-8")
+            backups_dir = project.backups_dir
+            for index in range(55):
+                stamp = f"20260101_{index:06d}"
+                (backups_dir / f"project_{stamp}.json").write_text("{}", encoding="utf-8")
+                (backups_dir / f"shots_{stamp}.csv").write_text("id\n", encoding="utf-8")
+
+            backups_module._prune_old_backups(project, keep=50)
+
+            remaining = backups_module._backup_stamps(backups_dir)
+            self.assertEqual(len(remaining), 50)
+            self.assertEqual(remaining[0], "20260101_000054")
+            self.assertEqual(remaining[-1], "20260101_000005")
+            self.assertFalse((backups_dir / "project_20260101_000004.json").exists())
+
+    def test_update_settings_rejects_invalid_photoshop_path(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            app = api_module.create_app(Path(tmp))
+            client = TestClient(app, raise_server_exceptions=False)
+            with contextlib.redirect_stderr(io.StringIO()):
+                created = client.post("/api/project/new", json={"path": tmp})
+            self.assertEqual(created.status_code, 200)
+
+            with contextlib.redirect_stderr(io.StringIO()):
+                rest = client.patch(
+                    "/api/project/settings",
+                    json={"photoshop_path": str(Path(tmp) / "missing-photoshop.exe")},
+                )
+            self.assertEqual(rest.status_code, 400)
+
+            with contextlib.redirect_stderr(io.StringIO()):
+                dispatch = client.post(
+                    "/api",
+                    json={
+                        "method": "update_settings",
+                        "args": [{"photoshop_path": str(Path(tmp) / "missing-photoshop.exe")}],
+                    },
+                )
+            self.assertEqual(dispatch.status_code, 200)
+            dispatch_payload = dispatch.json()
+            self.assertFalse(dispatch_payload["ok"])
+            self.assertIn("missing-photoshop.exe", dispatch_payload["error"])
 
 
 if __name__ == "__main__":
