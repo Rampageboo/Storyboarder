@@ -15,7 +15,7 @@
 | P3 | `apply_ref_segment_*` 三函数重复 | `reference_segments.py` | 中 | ◑ 部分修复 |
 | P4 | 备份无上限/无清理,可能无限增长 | `backups.py` | 中 | ✅ 已修复 |
 | P5 | 宽泛异常处理(裸 `except` / `except: pass`) | 多个后端文件 | 中 | ◑ 部分修复 |
-| P6 | 版本控制卫生:`__pycache__`、`Sessions/*.json` 被跟踪 | 仓库根、`.gitignore` | 低 | ◑ 部分修复 |
+| P6 | 版本控制卫生:`__pycache__`、`Sessions/*.json` 被跟踪 | 仓库根、`.gitignore` | 低 | ✅ 已修复 |
 | P7 | `app.js` 过大(约 2000 行),职责混杂 | `web/static/app.js` | 中 | ◑ 部分修复 |
 | P8 | 批注逻辑分散在 `app.js` 多处 | `web/static/app.js` | 低 | ✅ 已修复 |
 | P9 | 前端隐式全局命名空间依赖(`globalThis`) | 全部 `web/static/*.js` | 中 | ⏳ 待修复 |
@@ -85,10 +85,10 @@
 
 **遗留**:其余容错点需逐处评估后再收窄。
 
-### P6 — 版本控制卫生 ◑
+### P6 — 版本控制卫生 ✅
 **问题**:`storyboard_tool/__pycache__/*.pyc`、`Sessions/*.json` 等运行期产物曾被 git 跟踪。
 
-**已做**:`.gitignore` 已覆盖 `__pycache__/`、`Sessions/`;已执行 `git rm --cached` 从索引移除 22 个文件(本地文件保留)。变更暂存于工作区,**待用户确认后提交**。
+**已做**:`.gitignore` 已覆盖 `__pycache__/`、`Sessions/`;已执行 `git rm --cached` 从索引移除 22 个文件(本地文件保留),并提交 commit `c73b785`。
 
 ---
 
@@ -144,8 +144,7 @@
 
 ## 4. 下一轮优先级建议
 
-1. **P6 提交仓库卫生变更**:将已暂存的 `git rm --cached` 清理提交入库。
-2. **P2 继续 API 去重**:为文件上传类端点补充 `method_*`(multipart 需单独设计),或抽取共享 helper。
-3. **P7 继续拆分 `app.js`**:画布颜色 / Scene3D / 时间线事件 / 设置 UI。
+1. **P2 继续 API 去重**:为文件上传类端点补充 `method_*`(multipart 需单独设计),或抽取共享 helper。
+2. **P7 继续拆分 `app.js`**:画布颜色 / Scene3D / 时间线事件 / 设置 UI。
 4. **P3 参考片段函数合并**:在行为测试保护下进一步合并三函数骨架。
 5. **P9 ES module 迁移**:分阶段、配合浏览器端验证手段推进。
