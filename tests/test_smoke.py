@@ -255,10 +255,18 @@ class StoryboardSmokeTests(unittest.TestCase):
         self.assertIn('src="/static/app/bootstrap_module.js"', index_html)
         self.assertIn('"@app/dialogs"', index_html)
         self.assertIn("__bootstrapModuleReady", bootstrap_js)
-        self.assertIn("MODULE_GATE_SCRIPTS", main_js)
+        self.assertIn("__bootstrapModuleReady", main_js)
+        self.assertNotIn('"core/state.js"', main_js)
+        self.assertNotIn('"core/utils.js"', main_js)
+        self.assertNotIn('"core/dom.js"', main_js)
+        self.assertNotIn('"core/bootstrap.js"', main_js)
         self.assertNotIn('"dialogs.js"', main_js)
         self.assertNotIn('"canvas_color.js"', main_js)
         self.assertNotIn('"scene3d_app.js"', main_js)
+
+    def test_requirements_dev_lists_playwright(self) -> None:
+        text = Path("requirements-dev.txt").read_text(encoding="utf-8")
+        self.assertIn("playwright", text.lower())
 
     def test_core_api_serializes_object_body_on_all_fetch_paths(self) -> None:
         api_js = Path("storyboard_tool/web/static/core/api.js").read_text(encoding="utf-8")

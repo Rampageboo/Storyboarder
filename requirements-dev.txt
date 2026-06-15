@@ -1,0 +1,2 @@
+# Development and browser smoke tests (not required at runtime).
+playwright>=1.40
