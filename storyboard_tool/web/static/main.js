@@ -1,13 +1,10 @@
 const APP_SCRIPTS = [
-  "core/state.js",
-  "core/dom.js",
-  "core/bootstrap.js",
-  "core/utils.js",
   "core/canvas_size.js",
   "core/theme.js",
   "core/toolbar_menus.js",
   "core/dispatch.js",
   "core/api.js",
+  "exports_ui.js",
   "core/status.js",
   "core/undo.js",
   "ref_segment.js",
@@ -79,9 +76,11 @@ setStartupProgress(8, "Storyboard Tool", "Booting interface");
 
 const APP_BUILD = String(Date.now());
 
-const MODULE_GATE_SCRIPTS = new Set(["core/canvas_size.js", "app.js"]);
-
 function loadAppScripts(index = 0) {
+  if (!window.__bootstrapModuleReady) {
+    window.setTimeout(() => loadAppScripts(index), 10);
+    return;
+  }
   if (index >= APP_SCRIPTS.length) {
     window.setStartupProgress(55, "Storyboard Tool", "Modules loaded");
     window.setTimeout(() => {
@@ -89,10 +88,6 @@ function loadAppScripts(index = 0) {
         failStartupOverlay("Initialization timed out");
       }
     }, 35000);
-    return;
-  }
-  if (MODULE_GATE_SCRIPTS.has(APP_SCRIPTS[index]) && !window.__bootstrapModuleReady) {
-    window.setTimeout(() => loadAppScripts(index), 10);
     return;
   }
   const script = document.createElement("script");

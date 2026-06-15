@@ -1,4 +1,4 @@
-function buildEl() {
+export function buildEl() {
   return {
     newProject: document.querySelector("#newProject"),
     openProject: document.querySelector("#openProject"),

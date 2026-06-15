@@ -1,4 +1,4 @@
-const state = {
+export const state = {
   project: null,
   selectedShotId: null,
   saveTimer: null,
@@ -27,7 +27,7 @@ const state = {
   },
 };
 
-const dialogState = {
+export const dialogState = {
   resolve: null,
   browse: null,
   validate: null,
@@ -35,11 +35,11 @@ const dialogState = {
   listItems: [],
 };
 
-const contextMenuState = {
+export const contextMenuState = {
   shotId: null,
 };
 
-const canvasColorState = {
+export const canvasColorState = {
   gray: 232,
   wired: false,
 };
