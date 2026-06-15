@@ -17,6 +17,7 @@ const APP_SCRIPTS = [
   "timeline.js",
   "virtual_timeline.js",
   "animatic.js",
+  "sync_polling.js",
   "annotations.js",
   "app.js",
   "core/settings.js",
