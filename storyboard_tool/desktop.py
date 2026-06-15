@@ -27,6 +27,7 @@ def _configure_windows_taskbar_identity() -> None:
 
         ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(APP_USER_MODEL_ID)
     except Exception:
+        # intentional: optional Windows shell API
         pass
 
 
@@ -41,6 +42,7 @@ def wait_for_server(host: str, port: int, timeout: float = 15.0) -> None:
                 if response.status == 200:
                     return
         except Exception:
+            # intentional: poll until the local server accepts connections
             pass
         time.sleep(0.1)
     raise RuntimeError(f"Storyboard Tool server did not start on http://{host}:{port}")

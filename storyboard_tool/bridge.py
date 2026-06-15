@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import json
+import logging
 from typing import Any
 
 from starlette.testclient import TestClient
+
+logger = logging.getLogger(__name__)
 
 
 class DesktopBridge:
@@ -22,7 +25,7 @@ class DesktopBridge:
             raw_args = json.loads(args_json or "[]")
             if not isinstance(raw_args, list):
                 raise ValueError("Args must be a JSON array.")
-        except Exception as exc:
+        except (json.JSONDecodeError, ValueError) as exc:
             raise RuntimeError(str(exc)) from exc
         response = self._client.post("/api", json={"method": method, "args": raw_args})
         payload = self._parse(response)
@@ -66,7 +69,8 @@ class DesktopBridge:
                     self._ref_video_window.load_url(url)
                 self._ref_video_window.show()
                 return True
-            except Exception:
+            except (RuntimeError, AttributeError) as exc:
+                logger.warning("Ref video window reuse failed: %s", exc)
                 self._ref_video_window = None
         try:
             self._ref_video_window = webview.create_window(
@@ -79,7 +83,8 @@ class DesktopBridge:
                 js_api=self,
             )
             return True
-        except Exception:
+        except (RuntimeError, AttributeError) as exc:
+            logger.warning("Ref video window create failed: %s", exc)
             self._ref_video_window = None
             return False
 
@@ -94,7 +99,7 @@ class DesktopBridge:
                 detail = payload.get("detail")
                 if detail is not None:
                     message = detail if isinstance(detail, str) else json.dumps(detail)
-            except Exception:
+            except (json.JSONDecodeError, ValueError):
                 if response.text:
                     message = response.text
             raise RuntimeError(message)
@@ -102,5 +107,5 @@ class DesktopBridge:
             return {}
         try:
             return response.json()
-        except Exception:
+        except json.JSONDecodeError:
             return {"text": response.text}

@@ -26,6 +26,7 @@ def get_video_duration(path: Path) -> float:
         if fps > 0 and frames > 0:
             return frames / fps
     except ImportError:
+        # intentional: fall back to ffmpeg when opencv is not installed
         pass
     duration = _probe_duration_ffmpeg(path)
     if duration > 0:
@@ -49,6 +50,7 @@ def extract_video_frame_to_png(source: Path, seconds: float, destination: Path) 
         image.save(destination, "PNG")
         return destination
     except ImportError:
+        # intentional: fall back to ffmpeg when opencv is not installed
         pass
     if _extract_frame_ffmpeg(source, target_seconds, destination):
         return destination

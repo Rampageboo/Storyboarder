@@ -156,7 +156,7 @@ def is_storyboard_server(host: str, port: int, timeout: float = 1.5) -> bool:
             return bool(payload.get("app_running"))
     except urllib.error.HTTPError as exc:
         return exc.code != 404
-    except Exception:
+    except (urllib.error.URLError, OSError, json.JSONDecodeError, ValueError):
         return False
 
 
