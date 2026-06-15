@@ -4,12 +4,12 @@
 // (see APP_SCRIPTS in main.js). Exports globals used by canvas_size.js,
 // canvas_color.js, annotations.js, and app.js.
 
-function rememberProjectPath(projectJsonPath) {
+export function rememberProjectPath(projectJsonPath) {
   const recent = [projectJsonPath, ...getRecentProjects().filter((item) => item !== projectJsonPath)].slice(0, 10);
   localStorage.setItem("recent_projects", JSON.stringify(recent));
 }
 
-function setDialogError(message) {
+export function setDialogError(message) {
   if (!message) {
     el.dialogError.hidden = true;
     el.dialogError.textContent = "";
@@ -44,16 +44,16 @@ function highlightDialogList(path) {
   });
 }
 
-function setDialogSections({ input = false, list = false, color = false, canvasSize = false } = {}) {
+export function setDialogSections({ input = false, list = false, color = false, canvasSize = false } = {}) {
   el.dialogInputSection.hidden = !input;
   el.dialogListSection.hidden = !list;
   el.dialogColorSection.hidden = !color;
   el.dialogCanvasSizeSection.hidden = !canvasSize;
-  if (!color) teardownCanvasColorControls();
-  if (!canvasSize) teardownCanvasSizeInputs("dialog");
+  if (!color) globalThis.teardownCanvasColorControls?.();
+  if (!canvasSize) globalThis.teardownCanvasSizeInputs?.("dialog");
 }
 
-function closeDialog(result) {
+export function closeDialog(result) {
   el.dialogModal.hidden = true;
   setDialogSections();
   setDialogError("");
@@ -66,7 +66,7 @@ function closeDialog(result) {
   dialogState.listItems = [];
 }
 
-function showDialog(config) {
+export function showDialog(config) {
   return new Promise((resolve) => {
     dialogState.resolve = resolve;
     dialogState.browse = config.browse || null;
@@ -160,7 +160,7 @@ function showDialog(config) {
   });
 }
 
-async function browseFromDialog() {
+export async function browseFromDialog() {
   const browseMap = {
     folder: "/api/system/browse-folder",
     "project-json": "/api/system/browse-project-json",
@@ -188,7 +188,7 @@ async function browseFromDialog() {
   }
 }
 
-async function confirmUnsaved() {
+export async function confirmUnsaved() {
   if (!state.project?.dirty) return true;
   const choice = await showDialog({
     title: "Unsaved changes",
@@ -207,7 +207,7 @@ async function confirmUnsaved() {
   return true;
 }
 
-async function openNewProjectDialog() {
+export async function openNewProjectDialog() {
   if (!(await confirmUnsaved())) return;
   const result = await showNewProjectSetupDialog();
   if (result === null) return;
@@ -228,7 +228,7 @@ async function openNewProjectDialog() {
   }
 }
 
-async function openOpenProjectDialog() {
+export async function openOpenProjectDialog() {
   if (!(await confirmUnsaved())) return;
   const recent = getRecentProjects();
   const projectJsonPath = await showDialog({

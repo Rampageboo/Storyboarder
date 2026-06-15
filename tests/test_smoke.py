@@ -247,6 +247,19 @@ class StoryboardSmokeTests(unittest.TestCase):
         self.assertIn("--startup-accent: #ff6b5a", styles)
         self.assertNotIn('if (!startupUi.hidden) finishStartupOverlay("Ready");', main_js)
 
+    def test_es_module_bootstrap_loads_migrated_leaf_scripts(self) -> None:
+        index_html = Path("storyboard_tool/web/index.html").read_text(encoding="utf-8")
+        main_js = Path("storyboard_tool/web/static/main.js").read_text(encoding="utf-8")
+        bootstrap_js = Path("storyboard_tool/web/static/app/bootstrap_module.js").read_text(encoding="utf-8")
+
+        self.assertIn('src="/static/app/bootstrap_module.js"', index_html)
+        self.assertIn('"@app/dialogs"', index_html)
+        self.assertIn("__bootstrapModuleReady", bootstrap_js)
+        self.assertIn("MODULE_GATE_SCRIPTS", main_js)
+        self.assertNotIn('"dialogs.js"', main_js)
+        self.assertNotIn('"canvas_color.js"', main_js)
+        self.assertNotIn('"scene3d_app.js"', main_js)
+
     def test_core_api_serializes_object_body_on_all_fetch_paths(self) -> None:
         api_js = Path("storyboard_tool/web/static/core/api.js").read_text(encoding="utf-8")
 

@@ -4,7 +4,7 @@
 // Dynamically imports scene3d.js; relies on app.js globals at call time for
 // setProject, saveShot, openProjectInBlender, etc.
 
-function isScene3dOpen() {
+export function isScene3dOpen() {
   return Boolean(el.canvasArea?.classList.contains("scene3d-active"));
 }
 
@@ -89,7 +89,7 @@ function getShotScene3dTime() {
   return value != null && value !== "" ? Number(value) : null;
 }
 
-async function captureScene3dToBoard() {
+export async function captureScene3dToBoard() {
   const shot = selectedShot();
   if (!shot || !state.scene3dEditor) {
     showToast("请先打开 3D 场景并选择分镜");
@@ -140,7 +140,7 @@ function schedulePersistScene3dSettings(scene3d) {
   }, 120);
 }
 
-async function openScene3dModal() {
+export async function openScene3dModal() {
   if (!state.project) return;
   el.canvasArea?.classList.add("scene3d-active");
   if (!state.scene3dEditor) {
@@ -189,7 +189,7 @@ async function openScene3dModal() {
   }
 }
 
-async function refreshScene3dFile() {
+export async function refreshScene3dFile() {
   if (!state.scene3dEditor) {
     showToast("请先打开 3D Scene");
     return;
@@ -197,7 +197,7 @@ async function refreshScene3dFile() {
   await state.scene3dEditor.reloadBlenderScene();
 }
 
-async function importBlenderScene(file) {
+export async function importBlenderScene(file) {
   if (!file || !state.project) return;
   const formData = new FormData();
   formData.append("file", file);
@@ -236,12 +236,12 @@ async function importBlenderScene(file) {
   }
 }
 
-function closeScene3dModal() {
+export function closeScene3dModal() {
   state.scene3dEditor?.pauseAnimation();
   el.canvasArea?.classList.remove("scene3d-active");
 }
 
-async function saveScene3dData() {
+export async function saveScene3dData() {
   if (!state.project || !state.scene3dEditor) return;
   const scene3d = state.scene3dEditor.exportSceneData();
   await api("/api/project/settings", {

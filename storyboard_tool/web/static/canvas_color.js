@@ -1,19 +1,20 @@
 // Canvas background color: normalization, dialog, and per-shot canvas creation.
 //
-// Loaded AFTER core/canvas_size.js and BEFORE core/theme.js (see APP_SCRIPTS in main.js).
-// Relies on dialogs.js (setDialogSections, closeDialog, setDialogError) and canvas_size.js
-// (getProjectCanvasSize, canvasSizeLabel, applyCanvasAspectRatio).
+// ES module loaded via app/bootstrap_module.js before classic APP_SCRIPTS reach
+// core/canvas_size.js. Imports dialog helpers; bridged to globalThis for classic scripts.
+
+import { closeDialog, setDialogError, setDialogSections } from "./dialogs.js";
 
 const CANVAS_COLOR_STORAGE_KEY = "storyboard_canvas_color";
 
-function canvasColor() {
+export function canvasColor() {
   const fromProject = state.project?.settings?.canvas_background_color;
   if (fromProject) return normalizeHexColor(fromProject);
   const stored = localStorage.getItem(CANVAS_COLOR_STORAGE_KEY);
   return normalizeHexColor(stored || "#E8E8E8");
 }
 
-function applyCanvasColor(hex = canvasColor()) {
+export function applyCanvasColor(hex = canvasColor()) {
   const color = normalizeHexColor(hex);
   document.documentElement.style.setProperty("--canvas-color", color);
   if (el.canvasBoard) {
@@ -21,11 +22,11 @@ function applyCanvasColor(hex = canvasColor()) {
   }
 }
 
-function isValidHexColor(value) {
+export function isValidHexColor(value) {
   return /^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/.test(String(value || "").trim());
 }
 
-function normalizeHexColor(value, fallback = "#E8E8E8") {
+export function normalizeHexColor(value, fallback = "#E8E8E8") {
   const candidate = String(value || "").trim();
   if (!isValidHexColor(candidate)) return fallback;
   if (candidate.length === 4) {
@@ -95,7 +96,7 @@ function onCanvasHexInput() {
   setCanvasColorFromHex(value);
 }
 
-function setupCanvasColorControls(initialHex) {
+export function setupCanvasColorControls(initialHex) {
   teardownCanvasColorControls();
   setCanvasColorFromHex(initialHex);
   el.dialogColorGray.addEventListener("input", onCanvasGrayInput);
@@ -103,14 +104,14 @@ function setupCanvasColorControls(initialHex) {
   canvasColorState.wired = true;
 }
 
-function teardownCanvasColorControls() {
+export function teardownCanvasColorControls() {
   if (!canvasColorState.wired) return;
   el.dialogColorGray.removeEventListener("input", onCanvasGrayInput);
   el.dialogColorHex.removeEventListener("input", onCanvasHexInput);
   canvasColorState.wired = false;
 }
 
-async function createCanvasForShot(shotId) {
+export async function createCanvasForShot(shotId) {
   const backgroundColor = canvasColor();
   const size = getProjectCanvasSize();
   const project = await api(`/api/shots/${shotId}/canvas`, {
@@ -187,7 +188,7 @@ function openCanvasColorDialog() {
   });
 }
 
-function rememberCanvasColor(hex) {
+export function rememberCanvasColor(hex) {
   const normalized = normalizeHexColor(hex);
   localStorage.setItem(CANVAS_COLOR_STORAGE_KEY, normalized);
   if (state.project) {
@@ -204,7 +205,7 @@ async function saveCanvasColorToServer(normalized) {
   });
 }
 
-async function openCanvasSettingsDialog() {
+export async function openCanvasSettingsDialog() {
   if (!state.project) return;
   const selectedColor = await openCanvasColorDialog();
   if (selectedColor === null) return;
