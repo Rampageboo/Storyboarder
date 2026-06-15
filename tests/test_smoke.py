@@ -75,8 +75,26 @@ class StoryboardSmokeTests(unittest.TestCase):
                 payload = response.json()
                 self.assertTrue(payload["path"].endswith("storyboard.pdf"))
                 self.assertEqual(payload["download_url"], "/api/export/pdf")
+
+                with contextlib.redirect_stderr(io.StringIO()):
+                    download = client.get("/api/export/pdf")
+                self.assertEqual(download.status_code, 200)
+                self.assertIn("application/pdf", download.headers.get("content-type", ""))
+                self.assertEqual(download.content, b"%PDF-1.4\n")
             finally:
                 backend_service_module._export_storyboard_pdf = original_export
+
+    def test_export_download_returns_404_before_export(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            app = api_module.create_app(Path(tmp))
+            client = TestClient(app, raise_server_exceptions=False)
+            with contextlib.redirect_stderr(io.StringIO()):
+                created = client.post("/api/project/new", json={"path": tmp})
+            self.assertEqual(created.status_code, 200)
+
+            with contextlib.redirect_stderr(io.StringIO()):
+                response = client.get("/api/export/shot-list")
+            self.assertEqual(response.status_code, 404)
 
     def test_shutdown_reference_cleanup_removes_unreferenced_reference_files(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

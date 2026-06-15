@@ -167,6 +167,15 @@ def create_app(base_dir: Path, bridge_port: int = 8000) -> FastAPI:
     def _svc() -> StoryboardBackendService:
         return StoryboardBackendService(app)
 
+    def _file_response_from_meta(meta: dict[str, str]) -> FileResponse:
+        path = Path(meta["path"])
+        kwargs: dict[str, str] = {}
+        if meta.get("media_type"):
+            kwargs["media_type"] = meta["media_type"]
+        if meta.get("filename"):
+            kwargs["filename"] = meta["filename"]
+        return FileResponse(path, **kwargs)
+
     app.add_middleware(
         CORSMiddleware,
         allow_origins=["*"],
@@ -341,15 +350,7 @@ def create_app(base_dir: Path, bridge_port: int = 8000) -> FastAPI:
 
     @app.get("/api/project/scene3d/file")
     def get_scene3d_file() -> FileResponse:
-        project = _require_project(app)
-        try:
-            path = project_manager.get_scene3d_file_path(project)
-        except (FileNotFoundError, ValueError) as exc:
-            raise HTTPException(status_code=404, detail=str(exc)) from exc
-        if path is None:
-            raise HTTPException(status_code=404, detail="No Blender scene imported.")
-        media_type = "model/gltf-binary" if path.suffix.lower() == ".glb" else "model/gltf+json"
-        return FileResponse(path, media_type=media_type, filename=path.name)
+        return _file_response_from_meta(_svc().method_get_scene3d_file())
 
     @app.get("/api/project/canvas-color")
     def get_canvas_color() -> dict[str, str]:
@@ -466,47 +467,19 @@ def create_app(base_dir: Path, bridge_port: int = 8000) -> FastAPI:
 
     @app.get("/api/shots/{shot_id}/image")
     def get_image(shot_id: str) -> FileResponse:
-        project = _require_project(app)
-        shot = _find_shot(project, shot_id)
-        image_rel_path = shot.preview_image_path or shot.image_path
-        if not image_rel_path:
-            raise HTTPException(status_code=404, detail="No image for this shot.")
-        image_path = project.root_path / image_rel_path
-        if not image_path.exists():
-            raise HTTPException(status_code=404, detail="Image file is missing.")
-        return FileResponse(image_path)
+        return _file_response_from_meta(_svc().method_get_shot_image(shot_id))
 
     @app.get("/api/shots/{shot_id}/thumbnail")
     def get_thumbnail(shot_id: str) -> FileResponse:
-        project = _require_project(app)
-        shot = _find_shot(project, shot_id)
-        image_rel_path = shot.thumbnail_path or shot.preview_image_path or shot.image_path
-        if not image_rel_path:
-            raise HTTPException(status_code=404, detail="No thumbnail for this shot.")
-        image_path = project.root_path / image_rel_path
-        if not image_path.exists():
-            raise HTTPException(status_code=404, detail="Thumbnail file is missing.")
-        return FileResponse(image_path)
+        return _file_response_from_meta(_svc().method_get_shot_thumbnail(shot_id))
 
     @app.get("/api/shots/{shot_id}/board-background")
     def get_board_background(shot_id: str) -> FileResponse:
-        project = _require_project(app)
-        shot = _find_shot(project, shot_id)
-        background_path = project_manager.get_shot_board_background_path(project, shot)
-        if background_path is None or not background_path.is_file():
-            raise HTTPException(status_code=404, detail="No board background for this shot.")
-        return FileResponse(background_path)
+        return _file_response_from_meta(_svc().method_get_shot_board_background(shot_id))
 
     @app.get("/api/files")
     def get_project_file(path: str) -> FileResponse:
-        project = _require_project(app)
-        file_path = (project.root_path / path).resolve()
-        root = project.root_path.resolve()
-        if root not in file_path.parents and file_path != root:
-            raise HTTPException(status_code=400, detail="File path is outside the project.")
-        if not file_path.exists() or not file_path.is_file():
-            raise HTTPException(status_code=404, detail="File is missing.")
-        return FileResponse(file_path)
+        return _file_response_from_meta(_svc().method_get_project_file(path))
 
     @app.post("/api/shots/{shot_id}/comments")
     def add_comment(shot_id: str, request: CommentRequest) -> dict[str, Any]:
@@ -534,11 +507,7 @@ def create_app(base_dir: Path, bridge_port: int = 8000) -> FastAPI:
 
     @app.get("/api/export/shot-list")
     def download_shot_list() -> FileResponse:
-        project = _require_project(app)
-        output_path = project.exports_dir / "shot_list.csv"
-        if not output_path.exists():
-            raise HTTPException(status_code=404, detail="Export the shot list first.")
-        return FileResponse(output_path, filename="shot_list.csv", media_type="text/csv")
+        return _file_response_from_meta(_svc().method_download_shot_list())
 
     @app.post("/api/export/timing")
     def export_timing() -> dict[str, str]:
@@ -546,11 +515,7 @@ def create_app(base_dir: Path, bridge_port: int = 8000) -> FastAPI:
 
     @app.get("/api/export/timing")
     def download_timing() -> FileResponse:
-        project = _require_project(app)
-        output_path = project.exports_dir / "timing.json"
-        if not output_path.exists():
-            raise HTTPException(status_code=404, detail="Export timing data first.")
-        return FileResponse(output_path, filename="timing.json", media_type="application/json")
+        return _file_response_from_meta(_svc().method_download_timing())
 
     @app.post("/api/export/contact-sheet")
     def export_contact() -> dict[str, str]:
@@ -558,11 +523,7 @@ def create_app(base_dir: Path, bridge_port: int = 8000) -> FastAPI:
 
     @app.get("/api/export/contact-sheet")
     def download_contact() -> FileResponse:
-        project = _require_project(app)
-        output_path = project.exports_dir / "contact_sheet.png"
-        if not output_path.exists():
-            raise HTTPException(status_code=404, detail="Export the contact sheet first.")
-        return FileResponse(output_path, filename="contact_sheet.png", media_type="image/png")
+        return _file_response_from_meta(_svc().method_download_contact_sheet())
 
     @app.post("/api/export/image-sequence")
     def export_sequence() -> dict[str, str]:
@@ -570,11 +531,7 @@ def create_app(base_dir: Path, bridge_port: int = 8000) -> FastAPI:
 
     @app.get("/api/export/pdf")
     def download_pdf() -> FileResponse:
-        project = _require_project(app)
-        output_path = project.exports_dir / "storyboard.pdf"
-        if not output_path.exists():
-            raise HTTPException(status_code=404, detail="Export the PDF first.")
-        return FileResponse(output_path, filename="storyboard.pdf", media_type="application/pdf")
+        return _file_response_from_meta(_svc().method_download_pdf())
 
     return app
 

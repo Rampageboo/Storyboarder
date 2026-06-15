@@ -717,6 +717,110 @@ class StoryboardBackendService:
             api._autosave(self.app)
         return {"results": results, **api._project_payload(project, self.app.state.dirty)}
 
+    def method_get_scene3d_file(self) -> dict[str, str]:
+        api = _api()
+        project = api._require_project(self.app)
+        try:
+            path = project_manager.get_scene3d_file_path(project)
+        except (FileNotFoundError, ValueError) as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        if path is None:
+            raise HTTPException(status_code=404, detail="No Blender scene imported.")
+        media_type = "model/gltf-binary" if path.suffix.lower() == ".glb" else "model/gltf+json"
+        return {"path": str(path), "media_type": media_type, "filename": path.name}
+
+    def method_get_shot_image(self, shot_id: str) -> dict[str, str]:
+        api = _api()
+        project = api._require_project(self.app)
+        shot = api._find_shot(project, shot_id)
+        image_rel_path = shot.preview_image_path or shot.image_path
+        if not image_rel_path:
+            raise HTTPException(status_code=404, detail="No image for this shot.")
+        image_path = project.root_path / image_rel_path
+        if not image_path.exists():
+            raise HTTPException(status_code=404, detail="Image file is missing.")
+        return {"path": str(image_path), "media_type": "", "filename": image_path.name}
+
+    def method_get_shot_thumbnail(self, shot_id: str) -> dict[str, str]:
+        api = _api()
+        project = api._require_project(self.app)
+        shot = api._find_shot(project, shot_id)
+        image_rel_path = shot.thumbnail_path or shot.preview_image_path or shot.image_path
+        if not image_rel_path:
+            raise HTTPException(status_code=404, detail="No thumbnail for this shot.")
+        image_path = project.root_path / image_rel_path
+        if not image_path.exists():
+            raise HTTPException(status_code=404, detail="Thumbnail file is missing.")
+        return {"path": str(image_path), "media_type": "", "filename": image_path.name}
+
+    def method_get_shot_board_background(self, shot_id: str) -> dict[str, str]:
+        api = _api()
+        project = api._require_project(self.app)
+        shot = api._find_shot(project, shot_id)
+        background_path = project_manager.get_shot_board_background_path(project, shot)
+        if background_path is None or not background_path.is_file():
+            raise HTTPException(status_code=404, detail="No board background for this shot.")
+        return {"path": str(background_path), "media_type": "", "filename": background_path.name}
+
+    def method_get_project_file(self, path: str) -> dict[str, str]:
+        api = _api()
+        project = api._require_project(self.app)
+        file_path = (project.root_path / path).resolve()
+        root = project.root_path.resolve()
+        if root not in file_path.parents and file_path != root:
+            raise HTTPException(status_code=400, detail="File path is outside the project.")
+        if not file_path.exists() or not file_path.is_file():
+            raise HTTPException(status_code=404, detail="File is missing.")
+        return {"path": str(file_path), "media_type": "", "filename": file_path.name}
+
+    def method_download_shot_list(self) -> dict[str, str]:
+        api = _api()
+        project = api._require_project(self.app)
+        output_path = project.exports_dir / "shot_list.csv"
+        if not output_path.exists():
+            raise HTTPException(status_code=404, detail="Export the shot list first.")
+        return {
+            "path": str(output_path),
+            "media_type": "text/csv",
+            "filename": "shot_list.csv",
+        }
+
+    def method_download_timing(self) -> dict[str, str]:
+        api = _api()
+        project = api._require_project(self.app)
+        output_path = project.exports_dir / "timing.json"
+        if not output_path.exists():
+            raise HTTPException(status_code=404, detail="Export timing data first.")
+        return {
+            "path": str(output_path),
+            "media_type": "application/json",
+            "filename": "timing.json",
+        }
+
+    def method_download_contact_sheet(self) -> dict[str, str]:
+        api = _api()
+        project = api._require_project(self.app)
+        output_path = project.exports_dir / "contact_sheet.png"
+        if not output_path.exists():
+            raise HTTPException(status_code=404, detail="Export the contact sheet first.")
+        return {
+            "path": str(output_path),
+            "media_type": "image/png",
+            "filename": "contact_sheet.png",
+        }
+
+    def method_download_pdf(self) -> dict[str, str]:
+        api = _api()
+        project = api._require_project(self.app)
+        output_path = project.exports_dir / "storyboard.pdf"
+        if not output_path.exists():
+            raise HTTPException(status_code=404, detail="Export the PDF first.")
+        return {
+            "path": str(output_path),
+            "media_type": "application/pdf",
+            "filename": "storyboard.pdf",
+        }
+
     def method_upload_project_reference(self, filename: str, data: list[int] | bytes | bytearray) -> dict[str, Any]:
         api = _api()
         project = api._require_project(self.app)
