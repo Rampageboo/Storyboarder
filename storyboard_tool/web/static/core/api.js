@@ -1,7 +1,9 @@
+import { resolveDispatchRoute, apiDispatch } from "./dispatch.js";
+
 let desktopBridgeReady = null;
 let desktopBridgeReadyResolved = false;
 
-function whenDesktopBridgeReady() {
+export function whenDesktopBridgeReady() {
   if (!window.pywebview) return Promise.resolve(null);
   if (window.pywebview.api?.request || window.pywebview.api?.apiCall || window.pywebview.api?.api_call) {
     return Promise.resolve(window.pywebview.api);
@@ -21,11 +23,11 @@ function whenDesktopBridgeReady() {
   return desktopBridgeReady;
 }
 
-function preferHttpApi() {
+export function preferHttpApi() {
   return window.location.protocol === "http:" || window.location.protocol === "https:";
 }
 
-async function fetchApiJson(url, options = {}) {
+export async function fetchApiJson(url, options = {}) {
   const { silent = false, headers: customHeaders, ...fetchOptions } = options;
   const headers = { ...(customHeaders || {}) };
   if (!(fetchOptions.body instanceof FormData) && !headers["Content-Type"]) {
@@ -53,7 +55,7 @@ async function fetchApiJson(url, options = {}) {
   return response.json();
 }
 
-async function bridgeUpload(bridge, url, formData) {
+export async function bridgeUpload(bridge, url, formData) {
   const file = formData.get("file");
   if (!file || typeof file.arrayBuffer !== "function") {
     throw new Error("No file selected");
@@ -67,7 +69,7 @@ async function bridgeUpload(bridge, url, formData) {
   return upload.call(bridge, url, file.name, file.type || "application/octet-stream", bytes);
 }
 
-async function api(url, options = {}) {
+export async function api(url, options = {}) {
   const { silent = false, headers: customHeaders, bypassBridge, ...fetchOptions } = options;
   const useHttp = bypassBridge !== undefined ? bypassBridge : preferHttpApi();
   const httpMethod = (fetchOptions.method || "GET").toUpperCase();
@@ -140,7 +142,9 @@ async function api(url, options = {}) {
   return response.json();
 }
 
-function showToast(message) {
+export function showToast(message) {
+  const el = globalThis.el;
+  if (!el?.toast) return;
   el.toast.textContent = message;
   el.toast.hidden = false;
   window.clearTimeout(showToast.timer);

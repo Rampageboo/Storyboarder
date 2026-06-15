@@ -13,7 +13,7 @@ const API_DISPATCH_PATTERNS = [
     dispatch: "new_project",
     args: (_, body) => {
       const data = parseJsonBody(body);
-      return [data.path ?? null];
+      return [data.path ?? null, data.canvas_width ?? null, data.canvas_height ?? null];
     },
   },
   {
@@ -254,7 +254,9 @@ const API_DISPATCH_PATTERNS = [
   },
 ];
 
-function parseJsonBody(body) {
+export { API_DISPATCH_PATTERNS };
+
+export function parseJsonBody(body) {
   if (!body) return {};
   if (typeof body === "object") return body;
   try {
@@ -264,7 +266,7 @@ function parseJsonBody(body) {
   }
 }
 
-function resolveDispatchRoute(httpMethod, url, body) {
+export function resolveDispatchRoute(httpMethod, url, body) {
   const path = url.split("?")[0];
   for (const entry of API_DISPATCH_PATTERNS) {
     if (entry.method !== httpMethod) continue;
@@ -275,29 +277,29 @@ function resolveDispatchRoute(httpMethod, url, body) {
   return null;
 }
 
-async function apiDispatch(dispatchMethod, args, { silent = false, bypassBridge = false } = {}) {
-  if (bypassBridge || preferHttpApi()) {
-    const payload = await fetchApiJson("/api", {
+export async function apiDispatch(dispatchMethod, args, { silent = false, bypassBridge = false } = {}) {
+  if (bypassBridge || globalThis.preferHttpApi()) {
+    const payload = await globalThis.fetchApiJson("/api", {
       method: "POST",
       silent,
       body: JSON.stringify({ method: dispatchMethod, args }),
     });
     if (payload.ok === false) {
       const message = payload.error || "API call failed";
-      if (!silent) showToast(message);
+      if (!silent) globalThis.showToast?.(message);
       throw new Error(message);
     }
     return payload.result;
   }
 
-  const bridge = await whenDesktopBridgeReady();
+  const bridge = await globalThis.whenDesktopBridgeReady();
   const bridgeApiCall = bridge?.apiCall || bridge?.api_call;
   if (bridgeApiCall) {
     try {
       return await bridgeApiCall.call(bridge, dispatchMethod, JSON.stringify(args));
     } catch (error) {
       const message = error?.message || String(error);
-      if (!silent) showToast(message);
+      if (!silent) globalThis.showToast?.(message);
       throw error instanceof Error ? error : new Error(message);
     }
   }
@@ -315,7 +317,7 @@ async function apiDispatch(dispatchMethod, args, { silent = false, bypassBridge 
   }
   if (!response.ok || payload.ok === false) {
     const message = payload.error || response.statusText || "API call failed";
-    if (!silent) showToast(message);
+    if (!silent) globalThis.showToast?.(message);
     throw new Error(message);
   }
   return payload.result;

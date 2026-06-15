@@ -2,8 +2,6 @@ const APP_SCRIPTS = [
   "core/canvas_size.js",
   "core/theme.js",
   "core/toolbar_menus.js",
-  "core/dispatch.js",
-  "core/api.js",
   "exports_ui.js",
   "core/status.js",
   "core/undo.js",

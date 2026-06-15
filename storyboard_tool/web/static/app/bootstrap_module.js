@@ -9,6 +9,10 @@ import { buildEl } from "../core/dom.js";
 const el = buildEl();
 Object.assign(globalThis, utils, { state, dialogState, contextMenuState, canvasColorState, el });
 
+import * as dispatch from "../core/dispatch.js";
+import * as api from "../core/api.js";
+Object.assign(globalThis, dispatch, api);
+
 const [dialogs, canvasColor, scene3dApp] = await Promise.all([
   import("../dialogs.js"),
   import("../canvas_color.js"),
