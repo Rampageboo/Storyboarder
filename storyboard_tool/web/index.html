@@ -120,6 +120,7 @@
             <div class="scene3d-header-actions">
               <button type="button" id="openBlenderScene" class="btn-primary">Open Blender</button>
               <button type="button" id="importScene3d" class="btn-primary">Import GLB</button>
+              <button type="button" id="reloadScene3d" class="btn-primary" title="从项目重新加载 GLB（F5）">Reload GLB</button>
               <button type="button" id="captureScene3d" class="btn-primary">Capture to board</button>
               <button type="button" id="saveScene3d" class="btn-primary">Save scene</button>
               <button type="button" id="closeScene3d" class="modal-close" title="Close 3D">×</button>
@@ -314,7 +315,26 @@
             <div id="settingsBlenderList" class="settings-candidate-list"></div>
           </section>
           <section class="settings-section">
-            <h4 class="settings-section-title">Appearance</h4>
+            <h4 class="settings-section-title">Canvas</h4>
+            <div class="modal-field">
+              <span>Canvas size</span>
+              <div id="settingsCanvasPresets" class="canvas-size-presets" role="group" aria-label="Canvas size presets"></div>
+            </div>
+            <div class="canvas-size-fields">
+              <label class="modal-field compact-field">
+                <span>Width (px)</span>
+                <input id="settingsCanvasWidth" type="number" min="320" max="8192" step="1" />
+              </label>
+              <label class="modal-field compact-field">
+                <span>Height (px)</span>
+                <input id="settingsCanvasHeight" type="number" min="180" max="8192" step="1" />
+              </label>
+            </div>
+            <label class="modal-field inline-check settings-check">
+              <input id="settingsApplyCanvasSize" type="checkbox" />
+              Apply new size to blank boards
+            </label>
+            <p class="settings-hint">Boards with artwork keep their current files. New boards use the updated size.</p>
             <label class="modal-field">
               <span>Canvas brightness</span>
               <div class="gray-slider-row">
@@ -372,6 +392,20 @@
           <div id="dialogListSection" hidden>
             <div id="dialogListTitle" class="modal-section-title"></div>
             <div id="dialogList" class="dialog-list"></div>
+          </div>
+          <div id="dialogCanvasSizeSection" class="canvas-size-dialog" hidden>
+            <div class="modal-section-title">Canvas size</div>
+            <div id="dialogCanvasPresets" class="canvas-size-presets" role="group" aria-label="Canvas size presets"></div>
+            <div class="canvas-size-fields">
+              <label class="modal-field compact-field">
+                <span>Width (px)</span>
+                <input id="dialogCanvasWidth" type="number" min="320" max="8192" step="1" value="1920" />
+              </label>
+              <label class="modal-field compact-field">
+                <span>Height (px)</span>
+                <input id="dialogCanvasHeight" type="number" min="180" max="8192" step="1" value="1080" />
+              </label>
+            </div>
           </div>
           <div id="dialogColorSection" class="canvas-color-dialog" hidden>
             <label class="modal-field">

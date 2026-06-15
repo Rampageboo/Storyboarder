@@ -1,9 +1,10 @@
 const settingsState = {
   canvasWired: false,
+  canvasSizeWired: false,
+  canvasSizeSnapshot: { width: 1920, height: 1080 },
   themeSnapshot: "studio",
   timelineNameSnapshot: true,
 };
-
 const TIMELINE_SHOW_SELECTED_NAME_KEY = "storyboard_timeline_show_selected_name";
 
 function getTimelineShowSelectedName() {
@@ -49,10 +50,20 @@ function populateSettingsFields() {
   if (el.settingsTimelineShowSelectedName) {
     el.settingsTimelineShowSelectedName.checked = getTimelineShowSelectedName();
   }
+  const canvasSize = getProjectCanvasSize();
+  settingsState.canvasSizeSnapshot = { ...canvasSize };
+  setupSettingsCanvasSizeControls(canvasSize);
+  if (el.settingsApplyCanvasSize) el.settingsApplyCanvasSize.checked = false;
+  const hasProject = Boolean(state.project);
+  [el.settingsCanvasWidth, el.settingsCanvasHeight, el.settingsApplyCanvasSize].forEach((node) => {
+    if (node) node.disabled = !hasProject;
+  });
+  el.settingsCanvasPresets?.querySelectorAll("button").forEach((button) => {
+    button.disabled = !hasProject;
+  });
   setupSettingsCanvasControls(canvasColor());
   renderThemePicker(el.settingsThemePicker);
 }
-
 function openSettingsModal() {
   if (!el.settingsModal) return;
   settingsState.themeSnapshot = getStoredUiTheme();
@@ -147,20 +158,36 @@ async function saveSettingsFromModal() {
   const photoshopPath = el.settingsPhotoshopPath?.value.trim() || "";
   const blenderPath = el.settingsBlenderPath?.value.trim() || "";
   const canvasHex = normalizeHexColor(el.settingsCanvasHex?.value.trim() || canvasColor());
+  const canvasSize = readCanvasSizeFields(el.settingsCanvasWidth, el.settingsCanvasHeight);
+  const sizeError = validateCanvasSizeFields(el.settingsCanvasWidth, el.settingsCanvasHeight);
+  if (sizeError) {
+    showToast(sizeError);
+    return;
+  }
+  const sizeChanged =
+    canvasSize.width !== settingsState.canvasSizeSnapshot.width ||
+    canvasSize.height !== settingsState.canvasSizeSnapshot.height;
+  const applyCanvasSize = Boolean(el.settingsApplyCanvasSize?.checked);
   const themeId =
     el.settingsThemePicker?.querySelector(".theme-option.active")?.dataset.themeId || getStoredUiTheme();
   const showSelectedName = Boolean(el.settingsTimelineShowSelectedName?.checked);
 
-  try {
+    try {
     if (state.project) {
-      await api("/api/project/settings", {
+      const settingsBody = {
+        photoshop_path: photoshopPath,
+        blender_path: blenderPath,
+        canvas_width: canvasSize.width,
+        canvas_height: canvasSize.height,
+      };
+      if (sizeChanged) {
+        settingsBody.apply_canvas_size_to_blank_shots = applyCanvasSize;
+      }
+      const projectResult = await api("/api/project/settings", {
         method: "PATCH",
-        body: JSON.stringify({
-          photoshop_path: photoshopPath,
-          blender_path: blenderPath,
-        }),
-      }).then(setProject);
-      const savedCanvas = rememberCanvasColor(canvasHex);
+        body: JSON.stringify(settingsBody),
+      });
+      setProject(projectResult, false);      const savedCanvas = rememberCanvasColor(canvasHex);
       applyCanvasColor(savedCanvas);
       const colorResult = await saveCanvasColorToServer(savedCanvas);
       if (colorResult.settings) {
@@ -168,6 +195,7 @@ async function saveSettingsFromModal() {
       }
       if (Array.isArray(colorResult.shots)) state.project.shots = colorResult.shots;
       applyCanvasColor(savedCanvas);
+      applyCanvasAspectRatio(getProjectCanvasSize());
       renderPreview(selectedShot());
     } else {
       rememberCanvasColor(canvasHex);
@@ -181,14 +209,17 @@ async function saveSettingsFromModal() {
 
     applyUiTheme(themeId);
     settingsState.themeSnapshot = themeId;
-    persistTimelineShowSelectedName(showSelectedName);
-    settingsState.timelineNameSnapshot = showSelectedName;
+    settingsState.canvasSizeSnapshot = { ...getProjectCanvasSize() };
+    persistTimelineShowSelectedName(showSelectedName);    settingsState.timelineNameSnapshot = showSelectedName;
     await persistUiThemePreference(themeId);
     renderBlenderMenuStatus();
     render();
     publishLiveBridge().catch(() => {});
     closeSettingsModal({ revertTheme: false });
-    showToast("Settings saved.");
+    const toastParts = ["Settings saved"];
+    if (sizeChanged) toastParts.push(`canvas ${canvasSizeLabel(canvasSize)}`);
+    if (sizeChanged && applyCanvasSize) toastParts.push("blank boards updated");
+    showToast(`${toastParts.join(" · ")}.`);
   } catch {
     // api() already toasts
   }

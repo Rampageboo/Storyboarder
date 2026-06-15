@@ -83,6 +83,7 @@ el.openScene3d.addEventListener("click", () => {
 el.saveScene3d.addEventListener("click", () => saveScene3dData());
 el.captureScene3d?.addEventListener("click", () => captureScene3dToBoard());
 el.importScene3d.addEventListener("click", () => el.scene3dFile.click());
+el.reloadScene3d?.addEventListener("click", () => refreshScene3dFile());
 el.scene3dFile.addEventListener("change", () => importBlenderScene(el.scene3dFile.files?.[0]));
 el.closeScene3d?.addEventListener("click", () => closeScene3dModal());
 document.addEventListener("keydown", (event) => {
@@ -602,11 +603,13 @@ function highlightDialogList(path) {
   });
 }
 
-function setDialogSections({ input = false, list = false, color = false } = {}) {
+function setDialogSections({ input = false, list = false, color = false, canvasSize = false } = {}) {
   el.dialogInputSection.hidden = !input;
   el.dialogListSection.hidden = !list;
   el.dialogColorSection.hidden = !color;
+  el.dialogCanvasSizeSection.hidden = !canvasSize;
   if (!color) teardownCanvasColorControls();
+  if (!canvasSize) teardownCanvasSizeInputs("dialog");
 }
 
 function closeDialog(result) {
@@ -765,29 +768,20 @@ async function confirmUnsaved() {
 
 async function openNewProjectDialog() {
   if (!(await confirmUnsaved())) return;
-  const parentPath = await showDialog({
-    title: "New project",
-    hint: "Choose a parent folder. A Storyboard_Project folder will be created inside it. Leave empty to use the current working directory.",
-    input: {
-      label: "Parent folder",
-      value: localStorage.getItem("last_project_parent") || "",
-      placeholder: "Empty = ./Storyboard_Project",
-    },
-    browse: "folder",
-    actions: [
-      { label: "Cancel", value: null },
-      { label: "Create", value: "create", primary: true },
-    ],
-  });
-  if (parentPath === null) return;
+  const result = await showNewProjectSetupDialog();
+  if (result === null) return;
   try {
     await api("/api/project/new", {
       method: "POST",
-      body: JSON.stringify({ path: parentPath || null }),
+      body: JSON.stringify({
+        path: result.path || null,
+        canvas_width: result.canvas_width,
+        canvas_height: result.canvas_height,
+      }),
     }).then(setProject);
     clearUndoStack();
-    if (parentPath) localStorage.setItem("last_project_parent", parentPath);
-    showToast("Project created.");
+    if (result.path) localStorage.setItem("last_project_parent", result.path);
+    showToast(`Project created · ${canvasSizeLabel(result)}`);
   } catch {
     // api() already toasts
   }
@@ -943,11 +937,12 @@ function teardownCanvasColorControls() {
 
 async function createCanvasForShot(shotId) {
   const backgroundColor = canvasColor();
+  const size = getProjectCanvasSize();
   const project = await api(`/api/shots/${shotId}/canvas`, {
     method: "POST",
     body: JSON.stringify({
-      width: 1920,
-      height: 1080,
+      width: size.width,
+      height: size.height,
       background_color: backgroundColor,
     }),
   });
@@ -955,8 +950,9 @@ async function createCanvasForShot(shotId) {
   setProject(project, false);
   state.selectedShotId = shotId;
   applyCanvasColor();
+  applyCanvasAspectRatio();
   render();
-  showToast(`Canvas created (${backgroundColor}). Click preview to open in Photoshop.`);
+  showToast(`Canvas created (${canvasSizeLabel(size)}, ${backgroundColor}). Click preview to open in Photoshop.`);
 }
 
 function finishCanvasColorPreview(savedColor) {
@@ -1307,6 +1303,7 @@ function setProject(project, shouldRender = true) {
   if (project.settings?.canvas_background_color) {
     rememberCanvasColor(project.settings.canvas_background_color);
   }
+  applyCanvasAspectRatio(getProjectCanvasSize(project));
   applyCanvasColor();
   refreshMissingFiles();
   startSyncPolling();
@@ -1856,6 +1853,14 @@ async function openScene3dModal() {
   } catch (error) {
     showToast(`3D 场景加载失败：${error?.message || error}`);
   }
+}
+
+async function refreshScene3dFile() {
+  if (!state.scene3dEditor) {
+    showToast("请先打开 3D Scene");
+    return;
+  }
+  await state.scene3dEditor.reloadBlenderScene();
 }
 
 async function importBlenderScene(file) {

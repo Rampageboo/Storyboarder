@@ -3,6 +3,7 @@ const APP_SCRIPTS = [
   "core/dom.js",
   "core/bootstrap.js",
   "core/utils.js",
+  "core/canvas_size.js",
   "core/theme.js",
   "core/toolbar_menus.js",
   "core/dispatch.js",

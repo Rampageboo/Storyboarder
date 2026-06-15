@@ -377,8 +377,8 @@ select:disabled {
 
 .canvas-surface {
   position: relative;
-  aspect-ratio: 16 / 9;
-  width: min(100cqw, calc(100cqh * 16 / 9));
+  aspect-ratio: var(--canvas-aspect-w, 16) / var(--canvas-aspect-h, 9);
+  width: min(100cqw, calc(100cqh * var(--canvas-aspect-w, 16) / var(--canvas-aspect-h, 9)));
   height: auto;
   max-width: 100cqw;
   max-height: 100cqh;
@@ -857,7 +857,8 @@ textarea {
   display: flex;
   flex-direction: column;
   flex: 0 0 auto;
-  min-width: 120px;
+  min-width: 0;
+  width: 100%;
   position: relative;
   padding: 0;
   border: 2px solid var(--border);
@@ -1373,8 +1374,11 @@ textarea {
 
 .timeline-thumb {
   position: relative;
-  flex: 0 0 62px;
-  height: 62px;
+  flex: 0 0 auto;
+  width: 100%;
+  aspect-ratio: var(--canvas-aspect-w, 16) / var(--canvas-aspect-h, 9);
+  max-height: 96px;
+  min-height: 34px;
   background-color: var(--canvas-color, #e8e8e8);
   background-size: cover;
   background-position: center;
@@ -2160,6 +2164,66 @@ body.scene3d-active #openScene3d {
 .theme-picker {
   display: grid;
   gap: 6px;
+}
+
+.canvas-size-presets {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.canvas-size-preset {
+  display: grid;
+  gap: 2px;
+  min-height: 52px;
+  padding: 8px 10px;
+  text-align: left;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border);
+  background: var(--bg-input);
+}
+
+.canvas-size-preset:hover:not(:disabled):not(.active) {
+  border-color: var(--border-light);
+  background: var(--bg-hover);
+}
+
+.canvas-size-preset.active {
+  border-color: var(--accent);
+  box-shadow: inset 0 0 0 1px var(--accent);
+  background: var(--accent-soft);
+}
+
+.canvas-size-preset strong {
+  font-size: 12px;
+}
+
+.canvas-size-preset span {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.canvas-size-fields {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.compact-field input[type="number"] {
+  width: 100%;
+}
+
+.canvas-size-dialog {
+  display: grid;
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.settings-hint {
+  margin: -2px 0 10px;
+  font-size: 11px;
+  line-height: 1.45;
+  color: var(--text-muted);
 }
 
 .theme-option {
