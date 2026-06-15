@@ -1,3 +1,7 @@
+// Sole frontend entry: init globals, sequential classic script chain, startup overlay.
+
+import "./init_globals.js";
+
 const APP_SCRIPTS = [
   "core/canvas_size.js",
   "core/theme.js",
@@ -20,6 +24,8 @@ const APP_SCRIPTS = [
   "core/hints.js",
   "core/drop.js",
 ];
+
+const APP_BUILD = String(Date.now());
 
 const startupUi = {
   overlay: document.getElementById("startupOverlay"),
@@ -67,40 +73,34 @@ function failStartupOverlay(detail = "Startup failed") {
   }
 }
 
-window.setStartupProgress = setStartupProgress;
-window.finishStartupOverlay = finishStartupOverlay;
-window.failStartupOverlay = failStartupOverlay;
+Object.assign(globalThis, { setStartupProgress, finishStartupOverlay, failStartupOverlay });
+
+function loadClassicScript(src) {
+  return new Promise((resolve, reject) => {
+    const script = document.createElement("script");
+    script.src = `/static/${src}?v=${APP_BUILD}`;
+    script.onload = () => resolve();
+    script.onerror = () => reject(new Error(`Could not load ${src}`));
+    document.body.appendChild(script);
+  });
+}
 
 setStartupProgress(8, "Storyboard Tool", "Booting interface");
 
-const APP_BUILD = String(Date.now());
-
-function loadAppScripts(index = 0) {
-  if (!window.__bootstrapModuleReady) {
-    window.setTimeout(() => loadAppScripts(index), 10);
-    return;
-  }
-  if (index >= APP_SCRIPTS.length) {
-    window.setStartupProgress(55, "Storyboard Tool", "Modules loaded");
-    window.setTimeout(() => {
-      if (!startupUi.hidden && !startupUi.failed) {
-        failStartupOverlay("Initialization timed out");
-      }
-    }, 35000);
-    return;
-  }
-  const script = document.createElement("script");
-  script.src = `/static/${APP_SCRIPTS[index]}?v=${APP_BUILD}`;
-  script.onload = () => {
+try {
+  for (let index = 0; index < APP_SCRIPTS.length; index += 1) {
+    const src = APP_SCRIPTS[index];
+    await loadClassicScript(src);
     const progress = 10 + Math.round(((index + 1) / APP_SCRIPTS.length) * 42);
-    setStartupProgress(progress, "Loading modules", APP_SCRIPTS[index]);
-    loadAppScripts(index + 1);
-  };
-  script.onerror = () => {
-    console.error(`Failed to load ${APP_SCRIPTS[index]}`);
-    failStartupOverlay(`Could not load ${APP_SCRIPTS[index]}`);
-  };
-  document.body.appendChild(script);
+    setStartupProgress(progress, "Loading modules", src);
+  }
+  setStartupProgress(55, "Storyboard Tool", "Modules loaded");
+  window.setTimeout(() => {
+    if (!startupUi.hidden && !startupUi.failed) {
+      failStartupOverlay("Initialization timed out");
+    }
+  }, 35000);
+} catch (error) {
+  console.error(error);
+  failStartupOverlay(error.message || "Startup failed");
 }
-
-loadAppScripts();

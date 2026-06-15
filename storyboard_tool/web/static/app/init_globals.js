@@ -1,6 +1,5 @@
-// ES module bootstrap: Layer2 core (utils/state/dom) plus migrated leaf modules.
-// Bridges exports to globalThis for classic APP_SCRIPTS. main.js waits on
-// __bootstrapModuleReady before loading any classic script.
+// Bootstrap globals before the static APP import chain (see main_module.js).
+// Uses top-level await so dialogs/canvas_color/scene3d_app load after el exists.
 
 import * as utils from "../core/utils.js";
 import { state, dialogState, contextMenuState, canvasColorState } from "../core/state.js";
@@ -20,4 +19,3 @@ const [dialogs, canvasColor, scene3dApp] = await Promise.all([
 ]);
 
 Object.assign(globalThis, dialogs, canvasColor, scene3dApp);
-globalThis.__bootstrapModuleReady = true;

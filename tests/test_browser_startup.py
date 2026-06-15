@@ -64,14 +64,14 @@ class BrowserStartupTests(unittest.TestCase):
 
                 ready = page.evaluate(
                     """() => ({
-                      bootstrap: window.__bootstrapModuleReady === true,
+                      setProject: typeof setProject,
                       drawAnnotations: typeof drawAnnotations,
                       applyCanvasColor: typeof applyCanvasColor,
                       openScene3dModal: typeof openScene3dModal,
                       showDialog: typeof showDialog,
                     })"""
                 )
-                self.assertTrue(ready["bootstrap"], ready)
+                self.assertEqual(ready["setProject"], "function", ready)
                 for name in ("drawAnnotations", "applyCanvasColor", "openScene3dModal", "showDialog"):
                     self.assertEqual(ready[name], "function", f"{name} should be a global function")
 
