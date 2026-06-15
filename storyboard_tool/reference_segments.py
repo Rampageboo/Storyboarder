@@ -498,6 +498,69 @@ def import_reference_video_stream(
     return project.root_path / entry["path"]
 
 
+def _validate_segment_reference(
+    project: Project,
+    seg: dict[str, Any],
+    expected_type: str,
+) -> tuple[str, Path]:
+    bind_messages = {
+        "video": "Bind a reference video to this segment first.",
+        "model": "Bind a reference GLB to this segment first.",
+        "image": "Bind a reference image to this segment first.",
+    }
+    outside_messages = {
+        "video": "Reference video path is outside the project.",
+        "model": "Reference model path is outside the project.",
+        "image": "Reference image path is outside the project.",
+    }
+    missing_messages = {
+        "video": "Reference video not found",
+        "model": "Reference model not found",
+        "image": "Reference image not found",
+    }
+    rel_path, ref_type = resolve_segment_reference(project, seg)
+    if ref_type != expected_type or not rel_path:
+        raise ValueError(bind_messages[expected_type])
+    file_path = (project.root_path / rel_path).resolve()
+    root = project.root_path.resolve()
+    if root not in file_path.parents and file_path != root:
+        raise ValueError(outside_messages[expected_type])
+    if not file_path.is_file():
+        raise FileNotFoundError(f"{missing_messages[expected_type]}: {rel_path}")
+    return rel_path, file_path
+
+
+def _persist_ref_segment_apply(
+    project: Project,
+    *,
+    seg: dict[str, Any],
+    segment_id: str | None,
+    min_index: int,
+    max_index: int,
+    apply_meta: dict[str, Any],
+    segment_patch: dict[str, Any] | None = None,
+) -> None:
+    shots = project.shots
+    project.settings["ref_segment_apply"] = apply_meta
+    project.settings["ref_segment"] = {
+        "anchor_shot_id": shots[min_index].shot_id,
+        "end_shot_id": shots[max_index].shot_id,
+    }
+    segments = normalize_ref_segments(project.settings)
+    seg_id = str(seg.get("id", segment_id or "") or "").strip()
+    if seg_id and segment_patch:
+        for segment in segments:
+            if segment["id"] == seg_id:
+                segment.update(segment_patch)
+                break
+    project.settings["ref_segments"] = segments
+    if seg_id:
+        project.settings["active_ref_segment_id"] = seg_id
+    sync_ref_segment_settings(project)
+    pm.save_settings(project)
+    save_shots_csv(project.root_path, project.shots)
+
+
 def apply_ref_segment_to_boards(
     project: Project,
     anchor_index: int,
@@ -512,15 +575,7 @@ def apply_ref_segment_to_boards(
     min_index, max_index = _segment_board_range(shots, anchor_index, end_index)
 
     video_seg = find_ref_segment(project, segment_id) or {}
-    video_rel, ref_type = resolve_segment_reference(project, video_seg)
-    if ref_type != "video" or not video_rel:
-        raise ValueError("Bind a reference video to this segment first.")
-    video_path = (project.root_path / video_rel).resolve()
-    root = project.root_path.resolve()
-    if root not in video_path.parents and video_path != root:
-        raise ValueError("Reference video path is outside the project.")
-    if not video_path.is_file():
-        raise FileNotFoundError(f"Reference video not found: {video_rel}")
+    video_rel, video_path = _validate_segment_reference(project, video_seg, "video")
 
     video_duration = get_video_duration(video_path)
     video_mtime = video_path.stat().st_mtime
@@ -581,33 +636,25 @@ def apply_ref_segment_to_boards(
         )
         segment_offset += max(0.1, float(shot.duration_seconds or 3))
 
-    project.settings["ref_segment_apply"] = {
-        "segment_id": video_seg.get("id", segment_id or ""),
-        "anchor_shot_id": shots[min_index].shot_id,
-        "end_shot_id": shots[max_index].shot_id,
-        "reference_video_path": video_rel,
-        "video_mtime": video_mtime,
-        "video_start": round(video_start, 3),
-        "storyboard_duration": round(storyboard_duration, 3),
-        "fit_mode": fit_mode,
-        "applied_at": datetime.now(timezone.utc).isoformat(),
-    }
-    project.settings["ref_segment"] = {
-        "anchor_shot_id": shots[min_index].shot_id,
-        "end_shot_id": shots[max_index].shot_id,
-    }
-    segments = normalize_ref_segments(project.settings)
-    seg_id = str(video_seg.get("id", segment_id or "") or "").strip()
-    for segment in segments:
-        if seg_id and segment["id"] == seg_id:
-            segment["video_start"] = round(video_start, 3)
-            break
-    project.settings["ref_segments"] = segments
-    if seg_id:
-        project.settings["active_ref_segment_id"] = seg_id
-    sync_ref_segment_settings(project)
-    pm.save_settings(project)
-    save_shots_csv(project.root_path, project.shots)
+    _persist_ref_segment_apply(
+        project,
+        seg=video_seg,
+        segment_id=segment_id,
+        min_index=min_index,
+        max_index=max_index,
+        apply_meta={
+            "segment_id": video_seg.get("id", segment_id or ""),
+            "anchor_shot_id": shots[min_index].shot_id,
+            "end_shot_id": shots[max_index].shot_id,
+            "reference_video_path": video_rel,
+            "video_mtime": video_mtime,
+            "video_start": round(video_start, 3),
+            "storyboard_duration": round(storyboard_duration, 3),
+            "fit_mode": fit_mode,
+            "applied_at": datetime.now(timezone.utc).isoformat(),
+        },
+        segment_patch={"video_start": round(video_start, 3)},
+    )
     return {
         "board_count": len(applied),
         "segment_duration": round(segment_offset, 3),
@@ -630,15 +677,7 @@ def apply_ref_segment_3d_to_boards(
     min_index, max_index = _segment_board_range(shots, anchor_index, end_index)
 
     model_seg = find_ref_segment(project, segment_id) or {}
-    model_rel, ref_type = resolve_segment_reference(project, model_seg)
-    if ref_type != "model" or not model_rel:
-        raise ValueError("Bind a reference GLB to this segment first.")
-    model_path = (project.root_path / model_rel).resolve()
-    root = project.root_path.resolve()
-    if root not in model_path.parents and model_path != root:
-        raise ValueError("Reference model path is outside the project.")
-    if not model_path.is_file():
-        raise FileNotFoundError(f"Reference model not found: {model_rel}")
+    model_rel, model_path = _validate_segment_reference(project, model_seg, "model")
 
     model_mtime = model_path.stat().st_mtime
     segment_offset = 0.0
@@ -696,35 +735,26 @@ def apply_ref_segment_3d_to_boards(
             composed = pm._apply_reference_frame_to_shot(project, shot, preview_path, fit_mode)
             shot.source_sync_mtime = composed.stat().st_mtime
 
-    project.settings["ref_segment_apply"] = {
-        "segment_id": model_seg.get("id", segment_id or ""),
-        "anchor_shot_id": shots[min_index].shot_id,
-        "end_shot_id": shots[max_index].shot_id,
-        "source_type": "model",
-        "reference_model_path": model_rel,
-        "model_mtime": model_mtime,
-        "video_start": round(anim_start, 3),
-        "storyboard_duration": round(storyboard_duration, 3),
-        "fit_mode": fit_mode,
-        "applied_at": datetime.now(timezone.utc).isoformat(),
-    }
-    project.settings["ref_segment"] = {
-        "anchor_shot_id": shots[min_index].shot_id,
-        "end_shot_id": shots[max_index].shot_id,
-    }
-    segments = normalize_ref_segments(project.settings)
-    seg_id = str(model_seg.get("id", segment_id or "") or "").strip()
-    for segment in segments:
-        if seg_id and segment["id"] == seg_id:
-            segment["video_start"] = round(anim_start, 3)
-            segment["source_type"] = "model"
-            break
-    project.settings["ref_segments"] = segments
-    if seg_id:
-        project.settings["active_ref_segment_id"] = seg_id
-    sync_ref_segment_settings(project)
-    pm.save_settings(project)
-    save_shots_csv(project.root_path, project.shots)
+    _persist_ref_segment_apply(
+        project,
+        seg=model_seg,
+        segment_id=segment_id,
+        min_index=min_index,
+        max_index=max_index,
+        apply_meta={
+            "segment_id": model_seg.get("id", segment_id or ""),
+            "anchor_shot_id": shots[min_index].shot_id,
+            "end_shot_id": shots[max_index].shot_id,
+            "source_type": "model",
+            "reference_model_path": model_rel,
+            "model_mtime": model_mtime,
+            "video_start": round(anim_start, 3),
+            "storyboard_duration": round(storyboard_duration, 3),
+            "fit_mode": fit_mode,
+            "applied_at": datetime.now(timezone.utc).isoformat(),
+        },
+        segment_patch={"video_start": round(anim_start, 3), "source_type": "model"},
+    )
     return {
         "board_count": len(applied),
         "segment_duration": round(segment_offset, 3),
@@ -744,15 +774,7 @@ def apply_ref_segment_image_to_boards(
     min_index, max_index = _segment_board_range(shots, anchor_index, end_index)
 
     image_seg = find_ref_segment(project, segment_id) or {}
-    image_rel, ref_type = resolve_segment_reference(project, image_seg)
-    if ref_type != "image" or not image_rel:
-        raise ValueError("Bind a reference image to this segment first.")
-    image_path = (project.root_path / image_rel).resolve()
-    root = project.root_path.resolve()
-    if root not in image_path.parents and image_path != root:
-        raise ValueError("Reference image path is outside the project.")
-    if not image_path.is_file():
-        raise FileNotFoundError(f"Reference image not found: {image_rel}")
+    image_rel, image_path = _validate_segment_reference(project, image_seg, "image")
 
     image_mtime = image_path.stat().st_mtime
     segment_offset = 0.0
@@ -777,34 +799,25 @@ def apply_ref_segment_image_to_boards(
         )
         segment_offset += max(0.1, float(shot.duration_seconds or 3))
 
-    project.settings["ref_segment_apply"] = {
-        "segment_id": image_seg.get("id", segment_id or ""),
-        "anchor_shot_id": shots[min_index].shot_id,
-        "end_shot_id": shots[max_index].shot_id,
-        "source_type": "image",
-        "reference_image_path": image_rel,
-        "image_mtime": image_mtime,
-        "storyboard_duration": round(storyboard_duration, 3),
-        "fit_mode": fit_mode,
-        "applied_at": datetime.now(timezone.utc).isoformat(),
-    }
-    project.settings["ref_segment"] = {
-        "anchor_shot_id": shots[min_index].shot_id,
-        "end_shot_id": shots[max_index].shot_id,
-    }
-    segments = normalize_ref_segments(project.settings)
-    seg_id = str(image_seg.get("id", segment_id or "") or "").strip()
-    for segment in segments:
-        if seg_id and segment["id"] == seg_id:
-            segment["video_start"] = 0.0
-            segment["source_type"] = "image"
-            break
-    project.settings["ref_segments"] = segments
-    if seg_id:
-        project.settings["active_ref_segment_id"] = seg_id
-    sync_ref_segment_settings(project)
-    pm.save_settings(project)
-    save_shots_csv(project.root_path, project.shots)
+    _persist_ref_segment_apply(
+        project,
+        seg=image_seg,
+        segment_id=segment_id,
+        min_index=min_index,
+        max_index=max_index,
+        apply_meta={
+            "segment_id": image_seg.get("id", segment_id or ""),
+            "anchor_shot_id": shots[min_index].shot_id,
+            "end_shot_id": shots[max_index].shot_id,
+            "source_type": "image",
+            "reference_image_path": image_rel,
+            "image_mtime": image_mtime,
+            "storyboard_duration": round(storyboard_duration, 3),
+            "fit_mode": fit_mode,
+            "applied_at": datetime.now(timezone.utc).isoformat(),
+        },
+        segment_patch={"video_start": 0.0, "source_type": "image"},
+    )
     return {
         "board_count": len(applied),
         "segment_duration": round(segment_offset, 3),
