@@ -1,8 +1,9 @@
 from __future__ import annotations
 
+import io
 import json
 from pathlib import Path
-from typing import Any
+from typing import Any, BinaryIO
 
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
@@ -34,6 +35,18 @@ from .system_utils import (
 class ApiCallRequest(BaseModel):
     method: str
     args: list[Any] = Field(default_factory=list)
+
+
+def _normalize_upload_bytes(data: list[int] | bytes | bytearray) -> bytes:
+    if isinstance(data, (bytes, bytearray)):
+        return bytes(data)
+    if isinstance(data, list):
+        return bytes(int(value) & 0xFF for value in data)
+    raise HTTPException(status_code=400, detail="Upload payload must be bytes.")
+
+
+def _upload_stream(data: list[int] | bytes | bytearray) -> BinaryIO:
+    return io.BytesIO(_normalize_upload_bytes(data))
 
 
 class StoryboardBackendService:
@@ -591,6 +604,218 @@ class StoryboardBackendService:
         except Exception as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return {"path": str(opened)}
+
+    def method_delete_project_reference(self, ref_id: str) -> dict[str, Any]:
+        api = _api()
+        project = api._require_project(self.app)
+        try:
+            project_manager.remove_project_reference(project, ref_id)
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        api._autosave(self.app)
+        return api._project_payload(project, self.app.state.dirty)
+
+    def method_open_blender_scene(self) -> dict[str, Any]:
+        api = _api()
+        project = api._require_project(self.app)
+        try:
+            opened = project_manager.open_blender_scene(project)
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        api._touch_live_bridge(self.app)
+        return {
+            "path": str(opened),
+            "relative_path": opened.relative_to(project.root_path).as_posix() if opened.exists() else "",
+            **api._project_payload(project, self.app.state.dirty),
+        }
+
+    def method_get_canvas_color(self) -> dict[str, str]:
+        api = _api()
+        project = api._require_project(self.app)
+        return {"color": project_manager.get_canvas_color(project)}
+
+    def method_set_canvas_color(self, color: str) -> dict[str, Any]:
+        api = _api()
+        project = api._require_project(self.app)
+        try:
+            normalized = project_manager.persist_canvas_color(project, color)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        api._touch_live_bridge(self.app)
+        return {"color": normalized, **api._project_payload(project, self.app.state.dirty)}
+
+    def method_remove_shot_reference_image(self, shot_id: str, path: str) -> dict[str, Any]:
+        api = _api()
+        project = api._require_project(self.app)
+        shot = api._find_shot(project, shot_id)
+        try:
+            project_manager.remove_reference_image(project, shot, path)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        api._autosave(self.app)
+        return api._project_payload(project, self.app.state.dirty)
+
+    def method_set_shot_reference_image_paths(self, shot_id: str, paths: list[str]) -> dict[str, Any]:
+        api = _api()
+        project = api._require_project(self.app)
+        shot = api._find_shot(project, shot_id)
+        project_manager.set_reference_image_paths(
+            project,
+            shot,
+            paths if isinstance(paths, list) else [],
+        )
+        api._autosave(self.app)
+        return api._project_payload(project, self.app.state.dirty)
+
+    def method_create_shot_canvas(
+        self,
+        shot_id: str,
+        width: int | None = None,
+        height: int | None = None,
+        background_color: str | None = None,
+    ) -> dict[str, Any]:
+        api = _api()
+        project = api._require_project(self.app)
+        shot = api._find_shot(project, shot_id)
+        default_w, default_h = project_manager.get_canvas_size(project)
+        canvas_width, canvas_height = project_manager.normalize_canvas_size(
+            width if width is not None else default_w,
+            height if height is not None else default_h,
+        )
+        try:
+            project_manager.create_canvas_for_shot(
+                project,
+                shot,
+                canvas_width,
+                canvas_height,
+                background_color=background_color,
+            )
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        api._autosave(self.app)
+        return api._project_payload(project, self.app.state.dirty)
+
+    def method_save_shot_drawing(self, shot_id: str, image_data: str) -> dict[str, Any]:
+        api = _api()
+        project = api._require_project(self.app)
+        shot = api._find_shot(project, shot_id)
+        try:
+            project_manager.save_drawing_for_shot(project, shot, str(image_data or ""))
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        api._autosave(self.app)
+        return api._project_payload(project, self.app.state.dirty)
+
+    def method_sync_all_shots(self, force: bool = False) -> dict[str, Any]:
+        api = _api()
+        project = api._refresh_project_from_disk(self.app)
+        try:
+            results = sync_project(project, force=bool(force))
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        if results:
+            api._autosave(self.app)
+        return {"results": results, **api._project_payload(project, self.app.state.dirty)}
+
+    def method_upload_project_reference(self, filename: str, data: list[int] | bytes | bytearray) -> dict[str, Any]:
+        api = _api()
+        project = api._require_project(self.app)
+        try:
+            entry = project_manager.import_project_reference_stream(
+                project,
+                _upload_stream(data),
+                str(filename or "reference"),
+            )
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        api._autosave(self.app)
+        return {"reference": entry, **api._project_payload(project, self.app.state.dirty)}
+
+    def method_upload_reference_video(self, filename: str, data: list[int] | bytes | bytearray) -> dict[str, Any]:
+        api = _api()
+        project = api._require_project(self.app)
+        try:
+            project_manager.import_reference_video_stream(
+                project,
+                _upload_stream(data),
+                str(filename or "reference.mp4"),
+            )
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        api._autosave(self.app)
+        return api._project_payload(project, self.app.state.dirty)
+
+    def method_import_scene3d(self, filename: str, data: list[int] | bytes | bytearray) -> dict[str, Any]:
+        api = _api()
+        project = api._require_project(self.app)
+        try:
+            scene_settings = project_manager.import_scene3d_stream(
+                project,
+                _upload_stream(data),
+                str(filename or "scene.glb"),
+            )
+        except (FileNotFoundError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        api._touch_live_bridge(self.app)
+        payload = api._project_payload(project, self.app.state.dirty)
+        return {"scene3d": scene_settings, **payload}
+
+    def method_import_shot_image(
+        self,
+        shot_id: str,
+        filename: str,
+        data: list[int] | bytes | bytearray,
+    ) -> dict[str, Any]:
+        api = _api()
+        project = api._require_project(self.app)
+        shot = api._find_shot(project, shot_id)
+        suffix = Path(str(filename or "")).suffix
+        try:
+            project_manager.import_image_stream_for_shot(project, shot, _upload_stream(data), suffix)
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        api._autosave(self.app)
+        return api._project_payload(project, self.app.state.dirty)
+
+    def method_add_shot_reference_image(
+        self,
+        shot_id: str,
+        filename: str,
+        data: list[int] | bytes | bytearray,
+    ) -> dict[str, Any]:
+        api = _api()
+        project = api._require_project(self.app)
+        shot = api._find_shot(project, shot_id)
+        suffix = Path(str(filename or "")).suffix
+        try:
+            project_manager.add_reference_image_stream(project, shot, _upload_stream(data), suffix)
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        api._autosave(self.app)
+        return api._project_payload(project, self.app.state.dirty)
+
+    def method_import_shot_source(
+        self,
+        shot_id: str,
+        filename: str,
+        data: list[int] | bytes | bytearray,
+    ) -> dict[str, Any]:
+        api = _api()
+        project = api._require_project(self.app)
+        shot = api._find_shot(project, shot_id)
+        try:
+            project_manager.import_source_file_stream(
+                project,
+                shot,
+                _upload_stream(data),
+                str(filename or f"{shot_id}.psd"),
+            )
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        api._autosave(self.app)
+        return api._project_payload(project, self.app.state.dirty)
 
     def _browse(self, kind: str, picker, validator) -> dict[str, Any]:
         api = _api()

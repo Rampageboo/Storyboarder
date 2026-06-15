@@ -25,6 +25,13 @@ from storyboard_tool import backups as backups_module
 from storyboard_tool import video_utils
 from storyboard_tool.models import Project, Shot
 
+# 1x1 PNG for multipart upload smoke tests.
+MINI_PNG = bytes.fromhex(
+    "89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c489"
+    "0000000a49444154789c6300010000050001"
+    "0d0a2db40000000049454e44ae426082"
+)
+
 
 class StoryboardSmokeTests(unittest.TestCase):
     def setUp(self) -> None:
@@ -539,6 +546,108 @@ class StoryboardSmokeTests(unittest.TestCase):
             self.assertEqual(remaining[0], "20260101_000054")
             self.assertEqual(remaining[-1], "20260101_000005")
             self.assertFalse((backups_dir / "project_20260101_000004.json").exists())
+
+    @unittest.skipIf(find_spec("multipart") is None, "python-multipart is not installed")
+    def test_upload_project_reference_rest_and_dispatch_share_backend_logic(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            app = api_module.create_app(Path(tmp))
+            client = TestClient(app, raise_server_exceptions=False)
+            with contextlib.redirect_stderr(io.StringIO()):
+                created = client.post("/api/project/new", json={"path": tmp})
+            self.assertEqual(created.status_code, 200)
+
+            with contextlib.redirect_stderr(io.StringIO()):
+                rest = client.post(
+                    "/api/project/references",
+                    files={"file": ("ref.png", MINI_PNG, "image/png")},
+                )
+            self.assertEqual(rest.status_code, 200, rest.text)
+            rest_links = rest.json()["settings"]["reference_links"]
+            self.assertEqual(len(rest_links), 1)
+            self.assertEqual(rest_links[0]["type"], "image")
+
+            with contextlib.redirect_stderr(io.StringIO()):
+                dispatch = client.post(
+                    "/api",
+                    json={
+                        "method": "upload_project_reference",
+                        "args": ["ref2.png", list(MINI_PNG)],
+                    },
+                )
+            self.assertEqual(dispatch.status_code, 200, dispatch.text)
+            dispatch_payload = dispatch.json()
+            self.assertTrue(dispatch_payload["ok"], dispatch_payload.get("error"))
+            dispatch_links = dispatch_payload["result"]["settings"]["reference_links"]
+            self.assertEqual(len(dispatch_links), 2)
+
+    @unittest.skipIf(find_spec("multipart") is None, "python-multipart is not installed")
+    def test_import_shot_image_rest_and_dispatch_share_backend_logic(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            app = api_module.create_app(Path(tmp))
+            client = TestClient(app, raise_server_exceptions=False)
+            with contextlib.redirect_stderr(io.StringIO()):
+                created = client.post("/api/project/new", json={"path": tmp})
+                shot_created = client.post("/api/shots", json={})
+            self.assertEqual(created.status_code, 200)
+            self.assertEqual(shot_created.status_code, 200)
+            shot_id = shot_created.json()["shot"]["shot_id"]
+
+            with contextlib.redirect_stderr(io.StringIO()):
+                rest = client.post(
+                    f"/api/shots/{shot_id}/image",
+                    files={"file": ("board.png", MINI_PNG, "image/png")},
+                )
+            self.assertEqual(rest.status_code, 200, rest.text)
+            rest_shot = rest.json()["shots"][0]
+            self.assertTrue(rest_shot.get("preview_image_path") or rest_shot.get("image_path"))
+
+            with contextlib.redirect_stderr(io.StringIO()):
+                dispatch = client.post(
+                    "/api",
+                    json={
+                        "method": "import_shot_image",
+                        "args": [shot_id, "board2.png", list(MINI_PNG)],
+                    },
+                )
+            self.assertEqual(dispatch.status_code, 200, dispatch.text)
+            dispatch_payload = dispatch.json()
+            self.assertTrue(dispatch_payload["ok"], dispatch_payload.get("error"))
+
+    def test_canvas_color_rest_and_dispatch_share_backend_logic(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            app = api_module.create_app(Path(tmp))
+            client = TestClient(app, raise_server_exceptions=False)
+            with contextlib.redirect_stderr(io.StringIO()):
+                created = client.post("/api/project/new", json={"path": tmp})
+            self.assertEqual(created.status_code, 200)
+
+            with contextlib.redirect_stderr(io.StringIO()):
+                rest_get = client.get("/api/project/canvas-color")
+            self.assertEqual(rest_get.status_code, 200)
+            self.assertEqual(rest_get.json()["color"], "#E8E8E8")
+
+            with contextlib.redirect_stderr(io.StringIO()):
+                rest_set = client.post("/api/project/canvas-color", json={"color": "#112233"})
+            self.assertEqual(rest_set.status_code, 200)
+            self.assertEqual(rest_set.json()["color"], "#112233")
+            self.assertEqual(rest_set.json()["settings"]["canvas_background_color"], "#112233")
+
+            with contextlib.redirect_stderr(io.StringIO()):
+                dispatch_get = client.post("/api", json={"method": "get_canvas_color", "args": []})
+            self.assertEqual(dispatch_get.status_code, 200)
+            dispatch_get_payload = dispatch_get.json()
+            self.assertTrue(dispatch_get_payload["ok"], dispatch_get_payload.get("error"))
+            self.assertEqual(dispatch_get_payload["result"]["color"], "#112233")
+
+            with contextlib.redirect_stderr(io.StringIO()):
+                dispatch_set = client.post(
+                    "/api",
+                    json={"method": "set_canvas_color", "args": ["#AABBCC"]},
+                )
+            self.assertEqual(dispatch_set.status_code, 200)
+            dispatch_set_payload = dispatch_set.json()
+            self.assertTrue(dispatch_set_payload["ok"], dispatch_set_payload.get("error"))
+            self.assertEqual(dispatch_set_payload["result"]["color"], "#AABBCC")
 
     def test_update_settings_rejects_invalid_photoshop_path(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

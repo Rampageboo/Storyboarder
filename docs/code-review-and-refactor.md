@@ -44,23 +44,39 @@
 ### P2 — API 层逻辑重复 ◑
 **问题**:`api.py`(REST 路由)与 `backend_service.py`(桌面 dispatch 的 `method_*`)实现了两套高度相似的业务逻辑,改一处容易漏改另一处。
 
-**已做**:`api.py` 中绝大多数有对应 `method_*` 的路由已改为薄适配层,通过 `_svc().method_*()` 委托给 `backend_service.py` 作为**唯一业务实现**。已委托的端点包括:
+**已做**:`api.py` 中绝大多数有对应 `method_*` 的路由已改为薄适配层,通过 `_svc().method_*()` 委托给 `backend_service.py` 作为**唯一业务实现**。
 
-- 项目生命周期:`get_project`、`new_project`、`open_project`、`save_project`、`update_settings`、`get_missing_files`
-- Session / Bridge:`get_session`、`update_session`、`bridge_status`、`bridge_relink`、`touch_live_bridge`
-- 系统对话框:`browse_*`、`photoshop_candidates`、`blender_candidates`
-- 分镜 CRUD 与排序:`add_shot`、`duplicate_shot`、`update_shot`、`delete_shot`、`restore_shot`、`reorder_shots`、`move_up`/`move_down`、`import_image_path`、`sync_shot`、`relink_preview`、`remove_shot_image`、`open_source`、`open_preview`
-- 参考片段:`apply_ref_segment*`、`delete_ref_segment`
-- 评论与批注:`add_comment`、`resolve_comment`、`get_annotations`、`save_annotations`
-- 导出:`export_pdf`、`export_shot_list`、`export_timing`、`export_contact_sheet`、`export_image_sequence`
+**Multipart 上传**(P2 收尾):REST 路由读取 `UploadFile` 字节后委托给 `method_*`;dispatch 路径接受 `(filename, bytes|list[int])`,与桌面 `upload_multipart` 的字节数组格式一致。共享 helper:`_normalize_upload_bytes` / `_upload_stream`。
 
-**遗留**(仍保留在 `api.py`,因涉及文件上传/下载或尚无 `method_*`):
+| `method_*` | REST 路由 |
+|------------|-----------|
+| `upload_project_reference` | `POST /api/project/references` |
+| `upload_reference_video` | `POST /api/project/reference-video` |
+| `import_scene3d` | `POST /api/project/scene3d/import` |
+| `import_shot_image` | `POST /api/shots/{id}/image` |
+| `add_shot_reference_image` | `POST /api/shots/{id}/references` |
+| `import_shot_source` | `POST /api/shots/{id}/source` |
 
-- 文件上传:references、reference-video、shot image/references/source、scene3d import、drawing
-- 文件下载:export GET 路由、shot image/thumbnail/board-background、`/api/files`
-- 画布/Scene3D:`canvas-color`、`scene3d/open-blender`、`scene3d/file`
-- 项目级 sync:`POST /api/project/sync`
+**JSON 端点**(P2 第二轮):以下也已委托:
+
+| `method_*` | REST 路由 |
+|------------|-----------|
+| `delete_project_reference` | `DELETE /api/project/references/{id}` |
+| `open_blender_scene` | `POST /api/project/scene3d/open-blender` |
+| `get_canvas_color` / `set_canvas_color` | `GET/POST /api/project/canvas-color` |
+| `remove_shot_reference_image` | `DELETE /api/shots/{id}/references` |
+| `set_shot_reference_image_paths` | `PUT /api/shots/{id}/references` |
+| `create_shot_canvas` | `POST /api/shots/{id}/canvas` |
+| `save_shot_drawing` | `POST /api/shots/{id}/drawing` |
+| `sync_all_shots` | `POST /api/project/sync` |
+
+**遗留**(仍保留在 `api.py`,因返回 `FileResponse` 或纯静态):
+
+- 文件下载:export GET 路由、shot image/thumbnail/board-background、`/api/files`、`/api/project/scene3d/file`
+- 插件心跳:`POST /api/bridge/plugin-heartbeat`(单行状态写入)
 - 静态页面路由:`/`、`/ref-*`
+
+> 桌面端 FormData 上传仍走 `bridge.upload_multipart` → REST(设计如此);`dispatch.js` 尚未为 multipart 注册映射(可选后续)。
 
 ### P3 — 参考片段应用函数重复 ◑
 **问题**:`apply_ref_segment_to_boards` / `apply_ref_segment_3d_to_boards` / `apply_ref_segment_image_to_boards` 三者有相同的区间与时长校验骨架。
@@ -135,7 +151,7 @@
 
 ## 3. 已运行的检查
 
-- 后端:Python 编译检查;`python -m unittest tests.test_smoke` → **24/24 OK**;项目存取往返自测;消费方导入验证;lint 无错误。
+- 后端:Python 编译检查;`python -m unittest tests.test_smoke` → **27/27 OK**;项目存取往返自测;消费方导入验证;lint 无错误。
 - 前端:`node --check`(`annotations.js`/`app.js`/`main.js` 语法通过);`app.js` 无残留重复定义;同一套冒烟测试覆盖 `main.js`/`app.js`/`core/api.js` 的字符串断言;lint 无错误。
 
 > 说明:当前缺少浏览器端自动化测试,前端行为一致性主要靠经典脚本作用域模型 + 加载顺序的静态推理保证。
@@ -144,7 +160,7 @@
 
 ## 4. 下一轮优先级建议
 
-1. **P2 继续 API 去重**:为文件上传类端点补充 `method_*`(multipart 需单独设计),或抽取共享 helper。
+1. **P2 收尾 FileResponse 适配**(可选):为下载端点增加 `method_*` 返回路径/媒体类型,或保持 REST 层直出文件。
 2. **P7 继续拆分 `app.js`**:画布颜色 / Scene3D / 时间线事件 / 设置 UI。
-4. **P3 参考片段函数合并**:在行为测试保护下进一步合并三函数骨架。
-5. **P9 ES module 迁移**:分阶段、配合浏览器端验证手段推进。
+3. **P3 参考片段函数合并**:在行为测试保护下进一步合并三函数骨架。
+4. **P9 ES module 迁移**:分阶段、配合浏览器端验证手段推进。

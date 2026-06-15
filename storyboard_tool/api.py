@@ -14,7 +14,6 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from . import live_bridge, project_manager, session_store
-from .linked_sync import sync_project
 from .models import Project, SHOT_STATUSES, Shot
 from .backend_service import ApiCallRequest, StoryboardBackendService, dispatch_api_call
 
@@ -281,41 +280,23 @@ def create_app(base_dir: Path, bridge_port: int = 8000) -> FastAPI:
 
     @app.post("/api/project/references")
     async def upload_project_reference(file: UploadFile = File(...)) -> dict[str, Any]:
-        project = _require_project(app)
         try:
-            entry = project_manager.import_project_reference_stream(
-                project,
-                file.file,
-                file.filename or "reference",
-            )
-        except Exception as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
+            data = await file.read()
         finally:
             await file.close()
-        _autosave(app)
-        return {"reference": entry, **_project_payload(project, app.state.dirty)}
+        return _svc().method_upload_project_reference(file.filename or "reference", data)
 
     @app.delete("/api/project/references/{ref_id}")
     def delete_project_reference(ref_id: str) -> dict[str, Any]:
-        project = _require_project(app)
-        try:
-            project_manager.remove_project_reference(project, ref_id)
-        except Exception as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-        _autosave(app)
-        return _project_payload(project, app.state.dirty)
+        return _svc().method_delete_project_reference(ref_id)
 
     @app.post("/api/project/reference-video")
     async def upload_reference_video(file: UploadFile = File(...)) -> dict[str, Any]:
-        project = _require_project(app)
         try:
-            project_manager.import_reference_video_stream(project, file.file, file.filename or "reference.mp4")
-        except Exception as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
+            data = await file.read()
         finally:
             await file.close()
-        _autosave(app)
-        return _project_payload(project, app.state.dirty)
+        return _svc().method_upload_reference_video(file.filename or "reference.mp4", data)
 
     @app.post("/api/project/ref-segment/apply-3d")
     def apply_ref_segment_3d(request: ApplyRefSegmentRequest) -> dict[str, Any]:
@@ -348,36 +329,15 @@ def create_app(base_dir: Path, bridge_port: int = 8000) -> FastAPI:
 
     @app.post("/api/project/scene3d/open-blender")
     def open_blender_scene() -> dict[str, Any]:
-        project = _require_project(app)
-        try:
-            opened = project_manager.open_blender_scene(project)
-        except Exception as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-        _touch_live_bridge(app)
-        return {
-            "path": str(opened),
-            "relative_path": opened.relative_to(project.root_path).as_posix() if opened.exists() else "",
-            **_project_payload(project, app.state.dirty),
-        }
+        return _svc().method_open_blender_scene()
 
     @app.post("/api/project/scene3d/import")
     async def import_scene3d(file: UploadFile = File(...)) -> dict[str, Any]:
-        project = _require_project(app)
         try:
-            scene_settings = project_manager.import_scene3d_stream(
-                project,
-                file.file,
-                file.filename or "scene.glb",
-            )
-        except (FileNotFoundError, ValueError) as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-        except Exception as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
+            data = await file.read()
         finally:
             await file.close()
-        _touch_live_bridge(app)
-        payload = _project_payload(project, app.state.dirty)
-        return {"scene3d": scene_settings, **payload}
+        return _svc().method_import_scene3d(file.filename or "scene.glb", data)
 
     @app.get("/api/project/scene3d/file")
     def get_scene3d_file() -> FileResponse:
@@ -393,19 +353,11 @@ def create_app(base_dir: Path, bridge_port: int = 8000) -> FastAPI:
 
     @app.get("/api/project/canvas-color")
     def get_canvas_color() -> dict[str, str]:
-        project = _require_project(app)
-        return {"color": project_manager.get_canvas_color(project)}
+        return _svc().method_get_canvas_color()
 
     @app.post("/api/project/canvas-color")
     def set_canvas_color(request: CanvasColorRequest) -> dict[str, Any]:
-        project = _require_project(app)
-        try:
-            color = project_manager.persist_canvas_color(project, request.color)
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-        _touch_live_bridge(app)
-        payload = _project_payload(project, app.state.dirty)
-        return {"color": color, **payload}
+        return _svc().method_set_canvas_color(request.color)
 
     @app.post("/api/shots")
     def add_shot(request: AddShotRequest = AddShotRequest()) -> dict[str, Any]:
@@ -445,63 +397,35 @@ def create_app(base_dir: Path, bridge_port: int = 8000) -> FastAPI:
 
     @app.post("/api/shots/{shot_id}/image")
     async def import_image(shot_id: str, file: UploadFile = File(...)) -> dict[str, Any]:
-        project = _require_project(app)
-        shot = _find_shot(project, shot_id)
-        suffix = Path(file.filename or "").suffix
         try:
-            project_manager.import_image_stream_for_shot(project, shot, file.file, suffix)
-        except Exception as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
+            data = await file.read()
         finally:
             await file.close()
-        _autosave(app)
-        return _project_payload(project, app.state.dirty)
+        return _svc().method_import_shot_image(shot_id, file.filename or "", data)
 
     @app.post("/api/shots/{shot_id}/references")
     async def add_reference_image(shot_id: str, file: UploadFile = File(...)) -> dict[str, Any]:
-        project = _require_project(app)
-        shot = _find_shot(project, shot_id)
-        suffix = Path(file.filename or "").suffix
         try:
-            project_manager.add_reference_image_stream(project, shot, file.file, suffix)
-        except Exception as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
+            data = await file.read()
         finally:
             await file.close()
-        _autosave(app)
-        return _project_payload(project, app.state.dirty)
+        return _svc().method_add_shot_reference_image(shot_id, file.filename or "", data)
 
     @app.delete("/api/shots/{shot_id}/references")
     def remove_reference_image(shot_id: str, request: RemoveReferenceRequest) -> dict[str, Any]:
-        project = _require_project(app)
-        shot = _find_shot(project, shot_id)
-        try:
-            project_manager.remove_reference_image(project, shot, request.path)
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-        _autosave(app)
-        return _project_payload(project, app.state.dirty)
+        return _svc().method_remove_shot_reference_image(shot_id, request.path)
 
     @app.put("/api/shots/{shot_id}/references")
     def set_reference_image_paths(shot_id: str, request: SetReferencePathsRequest) -> dict[str, Any]:
-        project = _require_project(app)
-        shot = _find_shot(project, shot_id)
-        project_manager.set_reference_image_paths(project, shot, request.paths)
-        _autosave(app)
-        return _project_payload(project, app.state.dirty)
+        return _svc().method_set_shot_reference_image_paths(shot_id, request.paths)
 
     @app.post("/api/shots/{shot_id}/source")
     async def import_source_file(shot_id: str, file: UploadFile = File(...)) -> dict[str, Any]:
-        project = _require_project(app)
-        shot = _find_shot(project, shot_id)
         try:
-            project_manager.import_source_file_stream(project, shot, file.file, file.filename or f"{shot_id}.psd")
-        except Exception as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
+            data = await file.read()
         finally:
             await file.close()
-        _autosave(app)
-        return _project_payload(project, app.state.dirty)
+        return _svc().method_import_shot_source(shot_id, file.filename or f"{shot_id}.psd", data)
 
     @app.post("/api/shots/{shot_id}/relink-preview")
     def relink_preview(shot_id: str, request: RelinkRequest) -> dict[str, Any]:
@@ -509,36 +433,16 @@ def create_app(base_dir: Path, bridge_port: int = 8000) -> FastAPI:
 
     @app.post("/api/shots/{shot_id}/canvas")
     def create_canvas(shot_id: str, request: CanvasRequest) -> dict[str, Any]:
-        project = _require_project(app)
-        shot = _find_shot(project, shot_id)
-        default_w, default_h = project_manager.get_canvas_size(project)
-        width, height = project_manager.normalize_canvas_size(
-            request.width if request.width is not None else default_w,
-            request.height if request.height is not None else default_h,
+        return _svc().method_create_shot_canvas(
+            shot_id,
+            request.width,
+            request.height,
+            request.background_color,
         )
-        try:
-            project_manager.create_canvas_for_shot(
-                project,
-                shot,
-                width,
-                height,
-                background_color=request.background_color,
-            )
-        except Exception as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-        _autosave(app)
-        return _project_payload(project, app.state.dirty)
 
     @app.post("/api/shots/{shot_id}/drawing")
     def save_drawing(shot_id: str, request: DrawingSaveRequest) -> dict[str, Any]:
-        project = _require_project(app)
-        shot = _find_shot(project, shot_id)
-        try:
-            project_manager.save_drawing_for_shot(project, shot, request.image_data)
-        except Exception as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-        _autosave(app)
-        return _project_payload(project, app.state.dirty)
+        return _svc().method_save_shot_drawing(shot_id, request.image_data)
 
     @app.post("/api/shots/{shot_id}/sync")
     def sync_shot(shot_id: str, force: bool = False) -> dict[str, Any]:
@@ -546,14 +450,7 @@ def create_app(base_dir: Path, bridge_port: int = 8000) -> FastAPI:
 
     @app.post("/api/project/sync")
     def sync_all_shots(force: bool = False) -> dict[str, Any]:
-        project = _refresh_project_from_disk(app)
-        try:
-            results = sync_project(project, force=force)
-        except Exception as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-        if results:
-            _autosave(app)
-        return {"results": results, **_project_payload(project, app.state.dirty)}
+        return _svc().method_sync_all_shots(force)
 
     @app.post("/api/shots/{shot_id}/open-source")
     def open_source(shot_id: str) -> dict[str, str]:
