@@ -11,7 +11,7 @@
 | # | 问题 | 影响文件 | 风险 | 状态 |
 |---|------|----------|------|------|
 | P1 | `project_manager.py` 是"God object"(约 1649 行) | `storyboard_tool/project_manager.py` | 高 | ✅ 已修复 |
-| P2 | API 层逻辑重复(REST 与内部 dispatch 两套) | `api.py` / `backend_service.py` | 高 | ◑ 部分修复 |
+| P2 | API 层逻辑重复(REST 与内部 dispatch 两套) | `api.py` / `backend_service.py` | 高 | ◑ JSON/multipart 已委托;FileResponse 可选 |
 | P3 | `apply_ref_segment_*` 三函数重复 | `reference_segments.py` | 中 | ◑ 部分修复 |
 | P4 | 备份无上限/无清理,可能无限增长 | `backups.py` | 中 | ✅ 已修复 |
 | P5 | 宽泛异常处理(裸 `except` / `except: pass`) | 多个后端文件 | 中 | ◑ 部分修复 |
