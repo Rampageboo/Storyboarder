@@ -1,0 +1,139 @@
+.refs {
+  flex-shrink: 0;
+  border-top: 1px solid var(--color-border);
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-height: 240px;
+  overflow: auto;
+}
+
+.refs-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.refs-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--color-muted);
+}
+
+.refs-header button {
+  padding: 6px 8px;
+  border-radius: 8px;
+  border: 1px solid var(--color-border);
+  background: #fff;
+  font-size: 11px;
+}
+
+.refs-empty {
+  font-size: 12px;
+  color: var(--color-muted);
+}
+
+.refs-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(84px, 1fr));
+  gap: 8px;
+}
+
+.refs-item {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+
+.refs-thumb {
+  padding: 0;
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  overflow: hidden;
+  background: #e8e8e8;
+  aspect-ratio: 1 / 1;
+  cursor: pointer;
+}
+
+.refs-thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.refs-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 4px;
+}
+
+.refs-name {
+  font-size: 10px;
+  color: var(--color-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.refs-remove {
+  flex-shrink: 0;
+  width: 18px;
+  height: 18px;
+  line-height: 1;
+  border-radius: 4px;
+  border: 1px solid var(--color-border);
+  background: #fff;
+  color: var(--color-danger);
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.refs-lightbox {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  background: rgba(0, 0, 0, 0.78);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 24px;
+}
+
+.refs-lightbox img {
+  max-width: 90vw;
+  max-height: 80vh;
+  object-fit: contain;
+  border-radius: 4px;
+  box-shadow: 0 8px 40px rgba(0, 0, 0, 0.5);
+}
+
+.refs-lightbox-path {
+  color: #fff;
+  font-size: 12px;
+  font-family: var(--font-mono);
+  max-width: 90vw;
+  word-break: break-all;
+  text-align: center;
+}
+
+.refs-lightbox-close {
+  position: absolute;
+  top: 16px;
+  right: 20px;
+  width: 36px;
+  height: 36px;
+  border-radius: 999px;
+  border: none;
+  background: rgba(255, 255, 255, 0.18);
+  color: #fff;
+  font-size: 22px;
+  line-height: 1;
+  cursor: pointer;
+}

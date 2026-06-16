@@ -1,28 +1,18 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import {
-  getAnnotations,
-  getBridgeStatus,
-  openBlenderScene,
-  recoverShotSource,
-  relinkPreview,
-  saveAnnotations,
-  uploadShotReference,
-  uploadShotSource,
-} from '../api'
+import { getBridgeStatus, openBlenderScene, recoverShotSource, relinkPreview, uploadShotSource } from '../api'
 import { useProject } from '../state/ProjectContext'
+import { AnnotationList } from './AnnotationList'
 import './AdvancedPanel.css'
 
 export function AdvancedPanel() {
   const { project, selectedShotId, setProject, flushDirtyShots, projectActionBusy, reportError } = useProject()
   const [open, setOpen] = useState(false)
-  const [annotationsJson, setAnnotationsJson] = useState('')
   const [bridgeJson, setBridgeJson] = useState('')
   const [scene3dJson, setScene3dJson] = useState('')
   const [busy, setBusy] = useState(false)
   const [sourceNote, setSourceNote] = useState('')
   const [relinkPath, setRelinkPath] = useState('')
   const sourceInputRef = useRef<HTMLInputElement | null>(null)
-  const referenceInputRef = useRef<HTMLInputElement | null>(null)
 
   const shot = useMemo(() => {
     if (!project || !selectedShotId) return null
@@ -38,46 +28,11 @@ export function AdvancedPanel() {
   }, [project?.settings])
 
   useEffect(() => {
-    setAnnotationsJson('')
     setSourceNote('')
     const current = project?.shots.find((s) => s.shot_id === selectedShotId)
     setRelinkPath(current?.preview_image_path || current?.image_path || '')
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedShotId])
-
-  const loadAnnotations = useCallback(async () => {
-    if (!selectedShotId) return
-    setBusy(true)
-    try {
-      const payload = await getAnnotations(selectedShotId)
-      setAnnotationsJson(JSON.stringify(payload, null, 2))
-    } finally {
-      setBusy(false)
-    }
-  }, [selectedShotId])
-
-  const persistAnnotations = useCallback(async () => {
-    if (!selectedShotId) return
-    let parsed: unknown
-    try {
-      parsed = annotationsJson ? JSON.parse(annotationsJson) : {}
-    } catch {
-      window.alert('Invalid annotations JSON.')
-      return
-    }
-    const annotations = (parsed as { annotations?: unknown }).annotations
-    if (!Array.isArray(annotations)) {
-      window.alert('JSON must include annotations: []')
-      return
-    }
-    setBusy(true)
-    try {
-      const saved = await saveAnnotations(selectedShotId, { annotations: annotations as Record<string, unknown>[] })
-      setAnnotationsJson(JSON.stringify(saved, null, 2))
-    } finally {
-      setBusy(false)
-    }
-  }, [selectedShotId, annotationsJson])
 
   const refreshBridge = useCallback(async () => {
     setBusy(true)
@@ -105,32 +60,14 @@ export function AdvancedPanel() {
       setBusy(true)
       try {
         await flushDirtyShots()
-        const payload = await uploadShotSource(selectedShotId, file)
-        setProject(payload)
+        setProject(await uploadShotSource(selectedShotId, file))
       } catch (error) {
         reportError(error)
       } finally {
         setBusy(false)
       }
     },
-    [selectedShotId, setProject, flushDirtyShots],
-  )
-
-  const uploadReference = useCallback(
-    async (file?: File) => {
-      if (!selectedShotId || !file) return
-      setBusy(true)
-      try {
-        await flushDirtyShots()
-        const payload = await uploadShotReference(selectedShotId, file)
-        setProject(payload)
-      } catch (error) {
-        reportError(error)
-      } finally {
-        setBusy(false)
-      }
-    },
-    [selectedShotId, setProject, flushDirtyShots],
+    [selectedShotId, setProject, flushDirtyShots, reportError],
   )
 
   const recoverSource = useCallback(async () => {
@@ -157,8 +94,7 @@ export function AdvancedPanel() {
     setBusy(true)
     try {
       await flushDirtyShots()
-      const payload = await relinkPreview(selectedShotId, { relative_path: relative })
-      setProject(payload)
+      setProject(await relinkPreview(selectedShotId, { relative_path: relative }))
       setSourceNote('Preview relinked.')
     } catch (error) {
       reportError(error)
@@ -184,9 +120,6 @@ export function AdvancedPanel() {
               <button type="button" onClick={() => sourceInputRef.current?.click()} disabled={!hasShot || disabled}>
                 Upload PSD/source
               </button>
-              <button type="button" onClick={() => referenceInputRef.current?.click()} disabled={!hasShot || disabled}>
-                Add reference
-              </button>
             </div>
             <input
               ref={sourceInputRef}
@@ -199,18 +132,12 @@ export function AdvancedPanel() {
                 e.target.value = ''
               }}
             />
-            <input
-              ref={referenceInputRef}
-              type="file"
-              accept="image/*"
-              hidden
-              onChange={(e) => {
-                const file = e.target.files?.[0]
-                void uploadReference(file ?? undefined)
-                e.target.value = ''
-              }}
-            />
           </div>
+
+          <details className="advanced-details">
+            <summary>Annotations</summary>
+            <AnnotationList shotId={selectedShotId} />
+          </details>
 
           <details className="advanced-details">
             <summary>Photoshop source repair</summary>
@@ -241,25 +168,6 @@ export function AdvancedPanel() {
               </button>
             </div>
             {sourceNote ? <div className="advanced-muted">{sourceNote}</div> : null}
-          </details>
-
-          <details className="advanced-details">
-            <summary>Annotations JSON</summary>
-            <div className="advanced-actions">
-              <button type="button" onClick={() => void loadAnnotations()} disabled={!hasShot || disabled}>
-                Load
-              </button>
-              <button type="button" onClick={() => void persistAnnotations()} disabled={!hasShot || disabled}>
-                Save
-              </button>
-            </div>
-            <textarea
-              className="advanced-textarea"
-              rows={6}
-              value={annotationsJson}
-              onChange={(e) => setAnnotationsJson(e.target.value)}
-              placeholder={hasShot ? 'Load annotations from server' : 'Select a shot first'}
-            />
           </details>
 
           <details className="advanced-details">

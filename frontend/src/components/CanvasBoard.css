@@ -60,14 +60,9 @@
 }
 
 .canvas-note {
-  flex-shrink: 0;
-  padding: 6px 12px;
+  margin-top: 4px;
   font-size: 11px;
-  color: var(--color-muted);
-  border-bottom: 1px solid var(--color-border);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  color: var(--color-text);
 }
 
 .canvas-body {
@@ -131,10 +126,38 @@
   color: var(--color-muted);
 }
 
-.canvas-footer {
+.canvas-status {
   flex-shrink: 0;
   padding: 8px 12px;
   border-top: 1px solid var(--color-border);
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.canvas-status-chips {
+  display: flex;
+  gap: 6px;
+}
+
+.canvas-chip {
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--color-border);
+}
+
+.canvas-chip.ok {
+  background: rgba(40, 167, 69, 0.12);
+  border-color: rgba(40, 167, 69, 0.4);
+}
+
+.canvas-chip.missing {
+  background: rgba(0, 0, 0, 0.04);
+  color: var(--color-muted);
+}
+
+.canvas-status-path {
   font-size: 11px;
   color: var(--color-muted);
   white-space: nowrap;

@@ -188,6 +188,11 @@ export function shotBoardBackgroundUrl(shotId: string): string {
   return `/api/shots/${encodeURIComponent(shotId)}/board-background`
 }
 
+/** URL that serves any project-relative file (e.g. a shot reference image) via GET /api/files. */
+export function projectFileUrl(path: string): string {
+  return `/api/files?path=${encodeURIComponent(path)}`
+}
+
 export function addComment(shotId: string, body: CommentRequest): Promise<ProjectPayload> {
   return requestJson<ProjectPayload>(`/api/shots/${encodeURIComponent(shotId)}/comments`, {
     method: 'POST',

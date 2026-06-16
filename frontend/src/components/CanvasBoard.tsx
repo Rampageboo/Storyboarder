@@ -7,6 +7,7 @@ import {
   shotImageUrl,
   syncShot,
   uploadShotImage,
+  uploadShotSource,
 } from '../api'
 import { useProject } from '../state/ProjectContext'
 import './CanvasBoard.css'
@@ -19,16 +20,19 @@ export function CanvasBoard() {
   const [loadFailed, setLoadFailed] = useState(false)
   const [busy, setBusy] = useState(false)
   const [note, setNote] = useState('')
-  const fileInputRef = useRef<HTMLInputElement | null>(null)
+  const imageInputRef = useRef<HTMLInputElement | null>(null)
+  const sourceInputRef = useRef<HTMLInputElement | null>(null)
 
   const shot = useMemo(() => {
     if (!project || !selectedShotId) return null
     return project.shots.find((s) => s.shot_id === selectedShotId) || null
   }, [project, selectedShotId])
 
+  const sourcePath = shot?.source_file_path || ''
+  const previewPath = shot?.preview_image_path || shot?.image_path || ''
+  const hasSource = !!sourcePath
+  const hasPreview = !!previewPath
   const hasImage = !!shot?.image_path && !loadFailed
-  const hasSource = !!shot?.source_file_path
-  const hasPreview = !!(shot?.preview_image_path || shot?.image_path)
 
   const imgSrc = useMemo(() => {
     if (!shot || !shot.image_path) return ''
@@ -36,28 +40,25 @@ export function CanvasBoard() {
     return `${shotImageUrl(shot.shot_id)}?v=${encodeURIComponent(String(v))}`
   }, [shot, bust])
 
-  // Clear the failed-load flag whenever the preview identity changes — a new shot, or the preview
-  // being replaced by sync/upload/recover/relink elsewhere — so the fresh image gets a chance to load.
+  // Clear the failed-load flag when the preview identity changes (new shot, or preview replaced by
+  // sync/upload/recover/relink elsewhere) so the fresh image gets a chance to load.
   useEffect(() => {
     setLoadFailed(false)
   }, [selectedShotId, shot?.image_path, shot?.preview_disk_mtime])
 
-  // Action notes are per-shot; drop them when the selection changes.
+  // Action notes are per-shot.
   useEffect(() => {
     setNote('')
   }, [selectedShotId])
 
   const disabled = busy || projectActionBusy
 
-  const handleUpload = async (file: File | undefined) => {
-    if (!shot || !file) return
+  // Wrap a state-replacing action: flush dirty edits first, then apply the returned payload.
+  const runReplacing = async (fn: () => Promise<void>) => {
     setBusy(true)
     try {
       await flushDirtyShots()
-      const payload = await uploadShotImage(shot.shot_id, file)
-      setProject(payload)
-      setLoadFailed(false)
-      setBust((x) => x + 1)
+      await fn()
     } catch (error) {
       reportError(error)
     } finally {
@@ -65,96 +66,86 @@ export function CanvasBoard() {
     }
   }
 
-  const handleDelete = async () => {
+  const handleUploadImage = (file: File | undefined) => {
+    if (!shot || !file) return
+    const shotId = shot.shot_id
+    void runReplacing(async () => {
+      setProject(await uploadShotImage(shotId, file))
+      setLoadFailed(false)
+      setBust((x) => x + 1)
+      setNote('Image uploaded.')
+    })
+  }
+
+  const handleUploadSource = (file: File | undefined) => {
+    if (!shot || !file) return
+    const shotId = shot.shot_id
+    void runReplacing(async () => {
+      setProject(await uploadShotSource(shotId, file))
+      setNote('Source PSD uploaded.')
+    })
+  }
+
+  const handleDelete = () => {
     if (!shot) return
     if (!window.confirm('Delete the preview image for this shot?')) return
-    setBusy(true)
-    try {
-      await flushDirtyShots()
-      const payload = await removeShotImage(shot.shot_id)
-      setProject(payload)
+    const shotId = shot.shot_id
+    void runReplacing(async () => {
+      setProject(await removeShotImage(shotId))
       setLoadFailed(false)
       setBust((x) => x + 1)
-    } catch (error) {
-      reportError(error)
-    } finally {
-      setBusy(false)
-    }
+      setNote('Preview image deleted.')
+    })
   }
 
-  // --- Photoshop / source-preview workflow -------------------------------------------
-
-  // Open the shot's source in Photoshop. Mirrors the legacy flow: if no source is linked yet,
-  // create a blank canvas first so there is something to open.
-  const handleOpenInPhotoshop = async () => {
+  const handleCreateCanvas = () => {
     if (!shot) return
     const shotId = shot.shot_id
-    setBusy(true)
-    try {
-      await flushDirtyShots()
-      if (!shot.source_file_path) {
-        setProject(await createShotCanvas(shotId, {}))
-      }
+    void runReplacing(async () => {
+      setProject(await createShotCanvas(shotId, {}))
+      setLoadFailed(false)
+      setBust((x) => x + 1)
+      setNote('Blank canvas created — source PSD is now linked.')
+    })
+  }
+
+  // Open the shot's source in Photoshop. If no source is linked yet, create a blank canvas first.
+  const handleOpenInPhotoshop = () => {
+    if (!shot) return
+    const shotId = shot.shot_id
+    const needsCanvas = !shot.source_file_path
+    void runReplacing(async () => {
+      if (needsCanvas) setProject(await createShotCanvas(shotId, {}))
       const result = await openShotSource(shotId)
       setNote(
         result.switched === 'true'
           ? 'Switched to the tab already open in Photoshop.'
           : `Opened in Photoshop: ${result.path ?? ''}`,
       )
-    } catch (error) {
-      reportError(error)
-    } finally {
-      setBusy(false)
-    }
+    })
   }
 
-  // Pull the latest preview from the linked source (replaces project state → flush first).
-  const handleSync = async () => {
+  const handleSync = () => {
     if (!shot) return
-    setBusy(true)
-    try {
-      await flushDirtyShots()
-      const payload = await syncShot(shot.shot_id)
+    const shotId = shot.shot_id
+    void runReplacing(async () => {
+      const payload = await syncShot(shotId)
       setProject(payload)
       setLoadFailed(false)
       setBust((x) => x + 1)
       const result = (payload as unknown as { result?: SyncResult }).result
       setNote(result?.message || (result?.synced ? 'Synced preview from Photoshop.' : 'No changes to sync.'))
-    } catch (error) {
-      reportError(error)
-    } finally {
-      setBusy(false)
-    }
+    })
   }
 
-  const handleOpenPreview = async () => {
+  const handleOpenPreview = () => {
     if (!shot) return
+    const shotId = shot.shot_id
     setBusy(true)
-    try {
-      const result = await openShotPreview(shot.shot_id)
-      setNote(`Opened: ${result.path ?? ''}`)
-    } catch (error) {
-      reportError(error)
-    } finally {
-      setBusy(false)
-    }
-  }
-
-  const handleCreateCanvas = async () => {
-    if (!shot) return
-    setBusy(true)
-    try {
-      await flushDirtyShots()
-      const payload = await createShotCanvas(shot.shot_id, {})
-      setProject(payload)
-      setLoadFailed(false)
-      setBust((x) => x + 1)
-      setNote('Blank canvas created.')
-    } catch (error) {
-      reportError(error)
-    } finally {
-      setBusy(false)
-    }
+    openShotPreview(shotId)
+      .then((result) => setNote(`Opened: ${result.path ?? ''}`))
+      .catch((error) => reportError(error))
+      .finally(() => setBusy(false))
   }
 
   if (!project) {
@@ -182,10 +173,10 @@ export function CanvasBoard() {
           <div className="canvas-subtitle">{shot.title || shot.shot_id}</div>
         </div>
         <div className="canvas-actions">
-          <button type="button" className="primary" onClick={() => fileInputRef.current?.click()} disabled={disabled}>
+          <button type="button" className="primary" onClick={() => imageInputRef.current?.click()} disabled={disabled}>
             {busy ? 'Working…' : 'Upload image'}
           </button>
-          <button type="button" onClick={() => void handleDelete()} disabled={disabled || !shot.image_path}>
+          <button type="button" onClick={() => handleDelete()} disabled={disabled || !shot.image_path}>
             Delete image
           </button>
           <button
@@ -202,13 +193,22 @@ export function CanvasBoard() {
           </button>
         </div>
         <input
-          ref={fileInputRef}
+          ref={imageInputRef}
           type="file"
           accept="image/*"
           hidden
           onChange={(e) => {
-            const file = e.target.files?.[0]
-            void handleUpload(file ?? undefined)
+            handleUploadImage(e.target.files?.[0] ?? undefined)
+            e.target.value = ''
+          }}
+        />
+        <input
+          ref={sourceInputRef}
+          type="file"
+          accept=".psd,image/*"
+          hidden
+          onChange={(e) => {
+            handleUploadSource(e.target.files?.[0] ?? undefined)
             e.target.value = ''
           }}
         />
@@ -217,7 +217,8 @@ export function CanvasBoard() {
       <div className="canvas-actions canvas-actions-ps">
         <button
           type="button"
-          onClick={() => void handleOpenInPhotoshop()}
+          className="primary"
+          onClick={() => handleOpenInPhotoshop()}
           disabled={disabled}
           title="Open the shot's source in Photoshop (creates a blank canvas if none exists)"
         >
@@ -225,22 +226,21 @@ export function CanvasBoard() {
         </button>
         <button
           type="button"
-          onClick={() => void handleSync()}
+          onClick={() => handleSync()}
           disabled={disabled || !hasSource}
           title="Sync the preview from the linked source file"
         >
-          Sync
+          Sync from Photoshop
         </button>
         <button
           type="button"
-          onClick={() => void handleOpenPreview()}
+          onClick={() => handleOpenPreview()}
           disabled={disabled || !hasPreview}
           title="Open the preview image externally"
         >
           Open preview
         </button>
       </div>
-      {note ? <div className="canvas-note">{note}</div> : null}
 
       <div className="canvas-body">
         {hasImage ? (
@@ -251,25 +251,59 @@ export function CanvasBoard() {
             onError={() => setLoadFailed(true)}
             onLoad={() => setLoadFailed(false)}
           />
+        ) : !hasSource && !hasPreview ? (
+          <div className="canvas-placeholder">
+            <p>Start drawing this shot</p>
+            <p className="canvas-empty-hint">Create a blank PSD canvas, upload an image, or upload an existing PSD.</p>
+            <div className="canvas-actions">
+              <button type="button" className="primary" onClick={() => handleCreateCanvas()} disabled={disabled}>
+                Create blank canvas
+              </button>
+              <button type="button" onClick={() => imageInputRef.current?.click()} disabled={disabled}>
+                Upload image
+              </button>
+              <button type="button" onClick={() => sourceInputRef.current?.click()} disabled={disabled}>
+                Upload source PSD
+              </button>
+            </div>
+          </div>
         ) : (
           <div className="canvas-placeholder">
             <p>No preview image</p>
+            {hasSource ? (
+              <p className="canvas-empty-hint">Open in Photoshop and draw, then Sync to generate a preview.</p>
+            ) : null}
             <div className="canvas-actions">
-              <button type="button" className="primary" onClick={() => fileInputRef.current?.click()} disabled={disabled}>
+              <button type="button" className="primary" onClick={() => imageInputRef.current?.click()} disabled={disabled}>
                 Upload image
               </button>
-              {!hasSource ? (
-                <button type="button" onClick={() => void handleCreateCanvas()} disabled={disabled}>
-                  Create blank canvas
+              {hasSource ? (
+                <button type="button" onClick={() => handleSync()} disabled={disabled}>
+                  Sync from Photoshop
                 </button>
               ) : null}
             </div>
           </div>
         )}
       </div>
-      {shot.source_file_path ? (
-        <div className="canvas-footer">Source: {shot.source_file_path.split(/[/\\]/).pop()}</div>
-      ) : null}
+
+      <div className="canvas-status">
+        <div className="canvas-status-chips">
+          <span className={`canvas-chip ${hasSource ? 'ok' : 'missing'}`}>Source: {hasSource ? 'linked' : 'missing'}</span>
+          <span className={`canvas-chip ${hasPreview ? 'ok' : 'missing'}`}>Preview: {hasPreview ? 'linked' : 'missing'}</span>
+        </div>
+        {sourcePath ? (
+          <div className="canvas-status-path" title={sourcePath}>
+            Source: {sourcePath}
+          </div>
+        ) : null}
+        {previewPath ? (
+          <div className="canvas-status-path" title={previewPath}>
+            Preview: {previewPath}
+          </div>
+        ) : null}
+        {note ? <div className="canvas-note">{note}</div> : null}
+      </div>
     </div>
   )
 }

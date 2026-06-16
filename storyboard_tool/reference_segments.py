@@ -14,7 +14,7 @@ from .image_utils import (
     normalize_reference_fit_mode,
 )
 from .models import Project, Shot
-from .shot_store import save_shots_csv
+from .shot_store import save_shots
 
 REFERENCE_IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".tif", ".tiff", ".webp"}
 REFERENCE_VIDEO_EXTENSIONS = {".mp4", ".mov", ".webm", ".mkv", ".avi", ".m4v"}
@@ -630,7 +630,7 @@ def _persist_ref_segment_apply(
         project.settings["active_ref_segment_id"] = seg_id
     sync_ref_segment_settings(project)
     pm.save_settings(project)
-    save_shots_csv(project.root_path, project.shots)
+    save_shots(project.root_path, project.shots)
 
 
 def apply_ref_segment_to_boards(
@@ -952,5 +952,5 @@ def delete_ref_segment(project: Project, segment_id: str) -> dict[str, Any]:
 
     sync_ref_segment_settings(project)
     pm.save_settings(project)
-    save_shots_csv(project.root_path, project.shots)
+    save_shots(project.root_path, project.shots)
     return {"deleted_segment_id": seg_id, "cleared_boards": cleared}

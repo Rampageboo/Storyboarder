@@ -1,0 +1,111 @@
+.overview {
+  flex-shrink: 0;
+  border-top: 1px solid var(--color-border);
+  background: var(--color-surface);
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.overview.is-open {
+  max-height: 42%;
+}
+
+.overview-toggle {
+  flex-shrink: 0;
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 12px;
+  border: none;
+  background: transparent;
+  font-weight: 600;
+  font-size: 12px;
+  color: var(--color-muted);
+  cursor: pointer;
+}
+
+.overview-toggle:hover {
+  background: rgba(0, 0, 0, 0.03);
+}
+
+.overview-toggle-icon {
+  font-size: 11px;
+}
+
+.overview-grid {
+  min-height: 0;
+  overflow: auto;
+  padding: 0 12px 12px;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+  gap: 10px;
+}
+
+.overview-card {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 6px;
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  background: #fff;
+  text-align: left;
+  cursor: pointer;
+}
+
+.overview-card.is-selected {
+  border-color: var(--color-accent);
+  box-shadow: 0 0 0 2px var(--color-accent);
+}
+
+.overview-thumb {
+  position: relative;
+  aspect-ratio: 16 / 9;
+  border-radius: 4px;
+  overflow: hidden;
+  background: #e8e8e8;
+}
+
+.overview-thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.overview-thumb-empty {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--color-muted);
+}
+
+.overview-card-index {
+  position: absolute;
+  top: 3px;
+  left: 4px;
+  font-size: 10px;
+  padding: 1px 5px;
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.55);
+  color: #fff;
+}
+
+.overview-card-title {
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.overview-card-meta {
+  display: flex;
+  justify-content: space-between;
+  font-size: 10px;
+  color: var(--color-muted);
+}

@@ -19,7 +19,17 @@ from .image_utils import (
 )
 from .linked_sync import linked_mtime, sync_shot_from_linked_files
 from .models import Project, Shot
-from .shot_store import load_shots_csv, new_shot_id, save_shots_csv, shots_csv_mtime, shots_csv_path
+from .shot_store import (
+    load_shots_csv,
+    load_shots_json,
+    new_shot_id,
+    save_shots,
+    save_shots_json,
+    shots_csv_mtime,
+    shots_csv_path,
+    shots_json_mtime,
+    shots_json_path,
+)
 
 
 PROJECT_JSON_VERSION = 3
@@ -70,9 +80,14 @@ def create_project(
 
 
 def project_disk_mtime(project: Project) -> float:
-    json_mtime = project.json_path.stat().st_mtime if project.json_path.is_file() else 0.0
-    csv_mtime = shots_csv_mtime(project.root_path)
-    return max(json_mtime, csv_mtime)
+    # Canonical inputs: project.json (manifest), settings.json, shots.json.
+    manifest_mtime = project.json_path.stat().st_mtime if project.json_path.is_file() else 0.0
+    settings_mtime = project.settings_path.stat().st_mtime if project.settings_path.is_file() else 0.0
+    shots_mtime = shots_json_mtime(project.root_path)
+    # shots.csv only matters for legacy projects that have not migrated to shots.json yet.
+    if shots_mtime <= 0.0:
+        shots_mtime = shots_csv_mtime(project.root_path)
+    return max(manifest_mtime, settings_mtime, shots_mtime)
 
 
 def reload_project_if_changed(project: Project, loaded_mtime: float) -> tuple[Project, float, bool]:
@@ -98,20 +113,32 @@ def open_project(project_json_path: Path) -> Project:
     project.settings = _load_settings(project)
     sync_ref_segment_settings(project)
 
+    # Load shots by priority: canonical shots.json first, then the legacy shots.csv,
+    # then any inline shots embedded in an old project.json, then empty. Migration only
+    # ever WRITES the new canonical shots.json — it never deletes the legacy sources.
+    json_path = shots_json_path(project.root_path)
     csv_path = shots_csv_path(project.root_path)
-    if csv_path.is_file():
+    needs_json_migration = False
+    if json_path.is_file():
+        project.shots = load_shots_json(json_path)
+    elif csv_path.is_file():
         project.shots = load_shots_csv(csv_path)
+        needs_json_migration = True
     else:
         shots_data = payload.get("shots")
         if isinstance(shots_data, list):
             project.shots = [Shot.from_dict(item) for item in shots_data if isinstance(item, dict)]
+            needs_json_migration = True
         else:
             project.shots = []
 
     for shot in project.shots:
         _ensure_shot_files(project, shot)
 
-    migrated = _migrate_project_storage(project, payload)
+    # Non-destructive migration: write only the canonical shots.json. The legacy
+    # shots.csv and any inline project.json shots are left intact until the next save.
+    if needs_json_migration:
+        save_shots_json(project.root_path, project.shots)
     save_settings(project)
     color = get_canvas_color(project)
     write_canvas_color_files(project, color)
@@ -124,9 +151,11 @@ def save_project(project: Project) -> None:
     _ensure_project_dirs(project.root_path)
     if project.settings.get("backup_on_save", True):
         _write_backup(project)
+    # project.json is a lightweight manifest (version only); shots live in shots.json.
     payload = {"version": PROJECT_JSON_VERSION}
     project.json_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
-    save_shots_csv(project.root_path, project.shots)
+    # Canonical shots.json + regenerated readable shots.csv compatibility snapshot.
+    save_shots(project.root_path, project.shots)
     save_settings(project)
 
 
@@ -576,17 +605,6 @@ def _load_settings(project: Project) -> dict:
     settings["reference_links"] = normalize_reference_links(settings.get("reference_links"))
     ensure_reference_library(settings)
     return settings
-
-
-def _migrate_project_storage(project: Project, payload: dict) -> bool:
-    version = int(payload.get("version", 1) or 1)
-    has_inline_shots = isinstance(payload.get("shots"), list)
-    csv_path = shots_csv_path(project.root_path)
-    needs_csv = not csv_path.is_file() or has_inline_shots or version < PROJECT_JSON_VERSION
-    if not needs_csv:
-        return False
-    save_project(project)
-    return True
 
 
 # ---------------------------------------------------------------------------

@@ -3,6 +3,8 @@ import { Topbar } from './components/Topbar'
 import { ShotInspector } from './components/ShotInspector'
 import { Timeline } from './components/Timeline'
 import { CanvasBoard } from './components/CanvasBoard'
+import { BoardOverview } from './components/BoardOverview'
+import { ReferencePanel } from './components/ReferencePanel'
 import { AdvancedPanel } from './components/AdvancedPanel'
 import { ProjectProvider, useProject } from './state/ProjectContext'
 import { LiveBridgeProvider } from './state/LiveBridgeContext'
@@ -75,9 +77,11 @@ function AppInner() {
           <>
             <main className="main-center">
               <CanvasBoard />
+              <BoardOverview />
             </main>
             <aside className="main-right">
               <ShotInspector />
+              <ReferencePanel />
               <AdvancedPanel />
             </aside>
           </>
