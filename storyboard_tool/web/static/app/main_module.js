@@ -25,6 +25,7 @@ const APP_SCRIPTS = [
   "core/settings.js",
   "core/hints.js",
   "core/drop.js",
+  "autosave_guard.js",
 ];
 
 const ES_MODULE_SCRIPTS = new Set(["core/settings.js"]);
