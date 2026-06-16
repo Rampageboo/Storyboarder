@@ -120,7 +120,12 @@ class Project:
         return self.root_path.name
 
     def to_dict(self) -> dict[str, Any]:
-        return {}
+        return {
+            "name": self.name,
+            "root_path": str(self.root_path),
+            "shots": [shot.to_dict() for shot in self.shots],
+            "settings": dict(self.settings),
+        }
 
 
 def _string_list(value: Any) -> list[str]:
