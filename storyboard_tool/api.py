@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sys
+import threading
 import time
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -14,6 +15,9 @@ from pydantic import BaseModel, Field
 
 from . import project_manager
 from .backend_service import StoryboardBackendService
+
+# Photoshop plugin treats bridge files older than ~8s as stale (see BRIDGE_STALE_MS in panel.js).
+_BRIDGE_REFRESH_SECONDS = 1.5
 
 
 class ProjectPathRequest(BaseModel):
@@ -158,8 +162,30 @@ class AddShotRequest(BaseModel):
 def create_app(base_dir: Path, bridge_port: int = 8000) -> FastAPI:
     @asynccontextmanager
     async def lifespan(app: FastAPI):
-        yield
-        _shutdown_reference_cleanup(app)
+        stop_event = threading.Event()
+
+        def bridge_refresh_loop() -> None:
+            from . import app_state
+
+            while not stop_event.wait(_BRIDGE_REFRESH_SECONDS):
+                try:
+                    app_state._touch_live_bridge(app)
+                except Exception:
+                    # Keep the loop alive; bridge file writes are best-effort.
+                    pass
+
+        refresh_thread = threading.Thread(
+            target=bridge_refresh_loop,
+            name="storyboard-bridge-refresh",
+            daemon=True,
+        )
+        refresh_thread.start()
+        try:
+            yield
+        finally:
+            stop_event.set()
+            refresh_thread.join(timeout=2.0)
+            _shutdown_reference_cleanup(app)
 
     app = FastAPI(title="Storyboard Tool", lifespan=lifespan)
     app.state.base_dir = base_dir

@@ -21,8 +21,6 @@ export function ShotInspector() {
     return project.shots.find((s) => s.shot_id === selectedShotId) || null
   }, [project, selectedShotId])
 
-  // Tags use a local raw-text buffer for typing UX; re-seed only when the selected shot changes
-  // (never on background project updates, which would wipe in-progress edits).
   const [tagsText, setTagsText] = useState<string>('')
   useEffect(() => {
     if (!selectedShotId) {
@@ -36,17 +34,16 @@ export function ShotInspector() {
   }, [selectedShotId])
 
   if (!project) {
-    return (
-      <section className="inspector">
-        <div className="inspector-empty">No project open</div>
-      </section>
-    )
+    return null
   }
 
   if (!shot) {
     return (
       <section className="inspector">
-        <div className="inspector-empty">No shot selected</div>
+        <div className="inspector-empty">
+          <p>Select or add a shot</p>
+          <p className="inspector-empty-hint">Shot metadata will appear here.</p>
+        </div>
       </section>
     )
   }
@@ -64,10 +61,16 @@ export function ShotInspector() {
   return (
     <section className="inspector">
       <div className="inspector-header">
-        <div className="inspector-title">Shot Inspector</div>
+        <div>
+          <div className="inspector-title">Shot Inspector</div>
+          <div className="inspector-subtitle">
+            {dirty ? 'Unsaved changes' : 'All changes saved'}
+            {saving ? ' · Saving…' : ''}
+          </div>
+        </div>
         <div className="inspector-actions">
           <button type="button" onClick={() => void saveShot(shotId)} disabled={!dirty || saving}>
-            {saving ? 'Saving…' : 'Save'}
+            {saving ? 'Saving…' : 'Save shot'}
           </button>
         </div>
       </div>
@@ -183,6 +186,7 @@ export function ShotInspector() {
             <input
               type="number"
               step="0.1"
+              min="0"
               value={String(draft?.duration_seconds ?? shot.duration_seconds ?? 3)}
               onChange={(e) => editShotField(shotId, 'duration_seconds', Number(e.target.value))}
             />

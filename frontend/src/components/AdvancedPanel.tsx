@@ -3,6 +3,8 @@ import {
   getAnnotations,
   getBridgeStatus,
   openBlenderScene,
+  recoverShotSource,
+  relinkPreview,
   saveAnnotations,
   uploadShotReference,
   uploadShotSource,
@@ -11,15 +13,24 @@ import { useProject } from '../state/ProjectContext'
 import './AdvancedPanel.css'
 
 export function AdvancedPanel() {
-  const { project, selectedShotId, setProject, flushDirtyShots } = useProject()
+  const { project, selectedShotId, setProject, flushDirtyShots, projectActionBusy, reportError } = useProject()
+  const [open, setOpen] = useState(false)
   const [annotationsJson, setAnnotationsJson] = useState('')
   const [bridgeJson, setBridgeJson] = useState('')
   const [scene3dJson, setScene3dJson] = useState('')
   const [busy, setBusy] = useState(false)
+  const [sourceNote, setSourceNote] = useState('')
+  const [relinkPath, setRelinkPath] = useState('')
   const sourceInputRef = useRef<HTMLInputElement | null>(null)
   const referenceInputRef = useRef<HTMLInputElement | null>(null)
 
+  const shot = useMemo(() => {
+    if (!project || !selectedShotId) return null
+    return project.shots.find((s) => s.shot_id === selectedShotId) || null
+  }, [project, selectedShotId])
+
   const hasShot = Boolean(project && selectedShotId)
+  const disabled = busy || projectActionBusy
 
   const refSegmentsCount = useMemo(() => {
     const segments = project?.settings?.ref_segments
@@ -28,6 +39,10 @@ export function AdvancedPanel() {
 
   useEffect(() => {
     setAnnotationsJson('')
+    setSourceNote('')
+    const current = project?.shots.find((s) => s.shot_id === selectedShotId)
+    setRelinkPath(current?.preview_image_path || current?.image_path || '')
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedShotId])
 
   const loadAnnotations = useCallback(async () => {
@@ -46,13 +61,13 @@ export function AdvancedPanel() {
     let parsed: unknown
     try {
       parsed = annotationsJson ? JSON.parse(annotationsJson) : {}
-    } catch (e) {
-      window.alert('Annotations JSON 解析失败，请检查格式。')
+    } catch {
+      window.alert('Invalid annotations JSON.')
       return
     }
     const annotations = (parsed as { annotations?: unknown }).annotations
     if (!Array.isArray(annotations)) {
-      window.alert('Annotations JSON 必须包含 annotations: []')
+      window.alert('JSON must include annotations: []')
       return
     }
     setBusy(true)
@@ -93,7 +108,7 @@ export function AdvancedPanel() {
         const payload = await uploadShotSource(selectedShotId, file)
         setProject(payload)
       } catch (error) {
-        window.alert(error instanceof Error ? error.message : String(error))
+        reportError(error)
       } finally {
         setBusy(false)
       }
@@ -110,7 +125,7 @@ export function AdvancedPanel() {
         const payload = await uploadShotReference(selectedShotId, file)
         setProject(payload)
       } catch (error) {
-        window.alert(error instanceof Error ? error.message : String(error))
+        reportError(error)
       } finally {
         setBusy(false)
       }
@@ -118,90 +133,158 @@ export function AdvancedPanel() {
     [selectedShotId, setProject, flushDirtyShots],
   )
 
+  const recoverSource = useCallback(async () => {
+    if (!selectedShotId) return
+    if (!window.confirm('Rebuild the source PSD from its layers? A backup is saved to _history/.')) return
+    setBusy(true)
+    try {
+      await flushDirtyShots()
+      const payload = await recoverShotSource(selectedShotId)
+      setProject(payload)
+      const result = (payload as unknown as { result?: { layers_recovered?: number } }).result
+      setSourceNote(`Recovered: ${result?.layers_recovered ?? '?'} layer(s). Backup in _history/.`)
+    } catch (error) {
+      reportError(error)
+    } finally {
+      setBusy(false)
+    }
+  }, [selectedShotId, setProject, flushDirtyShots, reportError])
+
+  const doRelinkPreview = useCallback(async () => {
+    if (!selectedShotId) return
+    const relative = relinkPath.trim()
+    if (!relative) return
+    setBusy(true)
+    try {
+      await flushDirtyShots()
+      const payload = await relinkPreview(selectedShotId, { relative_path: relative })
+      setProject(payload)
+      setSourceNote('Preview relinked.')
+    } catch (error) {
+      reportError(error)
+    } finally {
+      setBusy(false)
+    }
+  }, [selectedShotId, relinkPath, setProject, flushDirtyShots, reportError])
+
+  if (!project) return null
+
   return (
-    <section className="advanced">
-      <div className="advanced-header">
-        <div className="advanced-title">Advanced</div>
-      </div>
+    <section className={`advanced ${open ? 'is-open' : ''}`}>
+      <button type="button" className="advanced-toggle" onClick={() => setOpen((v) => !v)}>
+        <span>Advanced</span>
+        <span className="advanced-toggle-icon">{open ? '▾' : '▸'}</span>
+      </button>
 
-      <div className="advanced-body">
-        <div className="advanced-section">
-          <div className="advanced-section-title">Shot files</div>
-          <div className="advanced-actions">
-            <button type="button" onClick={() => sourceInputRef.current?.click()} disabled={!hasShot || busy}>
-              Upload source (PSD)
-            </button>
-            <button type="button" onClick={() => referenceInputRef.current?.click()} disabled={!hasShot || busy}>
-              Add reference image
-            </button>
+      {open ? (
+        <div className="advanced-body">
+          <div className="advanced-section">
+            <div className="advanced-section-title">Shot files</div>
+            <div className="advanced-actions">
+              <button type="button" onClick={() => sourceInputRef.current?.click()} disabled={!hasShot || disabled}>
+                Upload PSD/source
+              </button>
+              <button type="button" onClick={() => referenceInputRef.current?.click()} disabled={!hasShot || disabled}>
+                Add reference
+              </button>
+            </div>
+            <input
+              ref={sourceInputRef}
+              type="file"
+              hidden
+              accept=".psd,image/*"
+              onChange={(e) => {
+                const file = e.target.files?.[0]
+                void uploadSource(file ?? undefined)
+                e.target.value = ''
+              }}
+            />
+            <input
+              ref={referenceInputRef}
+              type="file"
+              accept="image/*"
+              hidden
+              onChange={(e) => {
+                const file = e.target.files?.[0]
+                void uploadReference(file ?? undefined)
+                e.target.value = ''
+              }}
+            />
           </div>
-          <input
-            ref={sourceInputRef}
-            type="file"
-            style={{ display: 'none' }}
-            onChange={(e) => {
-              const file = e.target.files?.[0]
-              void uploadSource(file ?? undefined)
-              e.target.value = ''
-            }}
-          />
-          <input
-            ref={referenceInputRef}
-            type="file"
-            accept="image/*"
-            style={{ display: 'none' }}
-            onChange={(e) => {
-              const file = e.target.files?.[0]
-              void uploadReference(file ?? undefined)
-              e.target.value = ''
-            }}
-          />
-        </div>
 
-        <div className="advanced-section">
-          <div className="advanced-section-title">Annotations (basic JSON)</div>
-          <div className="advanced-actions">
-            <button type="button" onClick={loadAnnotations} disabled={!hasShot || busy}>
-              Load
-            </button>
-            <button type="button" onClick={persistAnnotations} disabled={!hasShot || busy}>
-              Save
-            </button>
-          </div>
-          <textarea
-            className="advanced-textarea"
-            value={annotationsJson}
-            onChange={(e) => setAnnotationsJson(e.target.value)}
-            placeholder={hasShot ? 'Click Load to fetch /api/shots/{id}/annotations' : 'Select a shot first'}
-          />
-        </div>
+          <details className="advanced-details">
+            <summary>Photoshop source repair</summary>
+            <div className="advanced-actions">
+              <button
+                type="button"
+                onClick={() => void recoverSource()}
+                disabled={!hasShot || disabled || !shot?.source_file_path}
+                title="Rebuild a Photoshop-unopenable source PSD from its layers"
+              >
+                Recover source
+              </button>
+            </div>
+            <input
+              className="advanced-input"
+              value={relinkPath}
+              onChange={(e) => setRelinkPath(e.target.value)}
+              placeholder="shots/shot_001/shot_001_preview.png"
+            />
+            <div className="advanced-actions">
+              <button
+                type="button"
+                onClick={() => void doRelinkPreview()}
+                disabled={!hasShot || disabled || !relinkPath.trim()}
+                title="Point this shot's preview at a project-relative file"
+              >
+                Relink preview
+              </button>
+            </div>
+            {sourceNote ? <div className="advanced-muted">{sourceNote}</div> : null}
+          </details>
 
-        <div className="advanced-section">
-          <div className="advanced-section-title">3D Scene</div>
-          <div className="advanced-actions">
-            <button type="button" onClick={openBlender} disabled={!project || busy}>
-              Open Blender scene (API)
-            </button>
-          </div>
-          <pre className="advanced-pre">{scene3dJson || '—'}</pre>
-        </div>
+          <details className="advanced-details">
+            <summary>Annotations JSON</summary>
+            <div className="advanced-actions">
+              <button type="button" onClick={() => void loadAnnotations()} disabled={!hasShot || disabled}>
+                Load
+              </button>
+              <button type="button" onClick={() => void persistAnnotations()} disabled={!hasShot || disabled}>
+                Save
+              </button>
+            </div>
+            <textarea
+              className="advanced-textarea"
+              rows={6}
+              value={annotationsJson}
+              onChange={(e) => setAnnotationsJson(e.target.value)}
+              placeholder={hasShot ? 'Load annotations from server' : 'Select a shot first'}
+            />
+          </details>
 
-        <div className="advanced-section">
-          <div className="advanced-section-title">Reference segments</div>
-          <div className="advanced-muted">ref_segments: {refSegmentsCount}</div>
-        </div>
+          <details className="advanced-details">
+            <summary>3D / Blender</summary>
+            <div className="advanced-actions">
+              <button type="button" onClick={() => void openBlender()} disabled={disabled}>
+                Open Blender scene
+              </button>
+            </div>
+            {scene3dJson ? <pre className="advanced-pre">{scene3dJson}</pre> : null}
+          </details>
 
-        <div className="advanced-section">
-          <div className="advanced-section-title">Photoshop bridge (status)</div>
-          <div className="advanced-actions">
-            <button type="button" onClick={refreshBridge} disabled={busy}>
-              Refresh status
-            </button>
-          </div>
-          <pre className="advanced-pre">{bridgeJson || '—'}</pre>
+          <div className="advanced-muted">Reference segments: {refSegmentsCount}</div>
+
+          <details className="advanced-details">
+            <summary>Photoshop bridge status</summary>
+            <div className="advanced-actions">
+              <button type="button" onClick={() => void refreshBridge()} disabled={disabled}>
+                Refresh
+              </button>
+            </div>
+            {bridgeJson ? <pre className="advanced-pre">{bridgeJson}</pre> : null}
+          </details>
         </div>
-      </div>
+      ) : null}
     </section>
   )
 }
-

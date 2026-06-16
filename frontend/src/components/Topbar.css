@@ -1,11 +1,13 @@
 .topbar {
+  flex-shrink: 0;
+  height: var(--topbar-height);
   display: grid;
-  grid-template-columns: 1fr 2fr 1fr;
+  grid-template-columns: auto 1fr auto;
   align-items: center;
   gap: 12px;
-  padding: 10px 12px;
-  border-bottom: 1px solid rgba(0, 0, 0, 0.08);
-  background: #ffffff;
+  padding: 0 12px;
+  border-bottom: 1px solid var(--color-border);
+  background: var(--color-surface);
 }
 
 .topbar-group {
@@ -14,49 +16,51 @@
 }
 
 .topbar button {
-  font: inherit;
-  padding: 6px 10px;
-  border-radius: 6px;
-  border: 1px solid rgba(0, 0, 0, 0.12);
+  padding: 7px 12px;
+  border-radius: 8px;
+  border: 1px solid var(--color-border);
   background: #f7f7f7;
-  cursor: pointer;
-}
-
-.topbar button:disabled {
-  cursor: not-allowed;
-  opacity: 0.6;
 }
 
 .topbar-center {
   text-align: center;
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
+  min-width: 0;
 }
 
 .topbar-title {
   font-weight: 600;
+  font-size: 14px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .topbar-subtitle {
   font-size: 12px;
-  color: #666;
+  color: var(--color-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
-.topbar-error {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 10px;
-  font-size: 12px;
-  color: #8a1f1f;
+.topbar-right {
+  display: flex;
+  justify-content: flex-end;
+  min-width: 0;
 }
 
-.topbar-error-close {
-  padding: 0 6px;
-  border: none;
-  background: transparent;
-  font-size: 16px;
-  line-height: 1;
+.topbar-ps-status {
+  font-size: 11px;
+  color: var(--color-muted);
+  padding: 4px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--color-border);
+  background: #fafafa;
+  white-space: nowrap;
 }
 
+.topbar-ps-status.is-linked {
+  color: #2b8a3e;
+  border-color: rgba(43, 138, 62, 0.35);
+  background: rgba(43, 138, 62, 0.08);
+}

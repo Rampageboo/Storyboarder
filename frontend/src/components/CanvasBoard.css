@@ -1,29 +1,73 @@
 .canvas {
+  flex: 1;
+  min-height: 0;
   display: flex;
   flex-direction: column;
-  min-height: 0;
-  border-right: 1px solid rgba(0, 0, 0, 0.08);
-  background: #ffffff;
+  background: var(--color-surface);
 }
 
 .canvas-header {
+  flex-shrink: 0;
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   justify-content: space-between;
+  gap: 12px;
   padding: 10px 12px;
-  border-bottom: 1px solid rgba(0, 0, 0, 0.08);
+  border-bottom: 1px solid var(--color-border);
 }
 
 .canvas-title {
   font-weight: 600;
+  font-size: 13px;
 }
 
-.canvas-header button {
-  font: inherit;
-  padding: 6px 10px;
-  border-radius: 6px;
-  border: 1px solid rgba(0, 0, 0, 0.12);
+.canvas-subtitle {
+  font-size: 12px;
+  color: var(--color-muted);
+  margin-top: 2px;
+}
+
+.canvas-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  justify-content: flex-end;
+}
+
+.canvas-actions button {
+  padding: 7px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--color-border);
   background: #f7f7f7;
+  font-size: 12px;
+}
+
+.canvas-actions button.primary {
+  background: var(--color-accent);
+  border-color: var(--color-accent);
+  color: #fff;
+}
+
+.canvas-actions button.subtle {
+  background: transparent;
+}
+
+.canvas-actions-ps {
+  flex-shrink: 0;
+  justify-content: flex-start;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.canvas-note {
+  flex-shrink: 0;
+  padding: 6px 12px;
+  font-size: 11px;
+  color: var(--color-muted);
+  border-bottom: 1px solid var(--color-border);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .canvas-body {
@@ -32,7 +76,9 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  background: #f5f5f5;
+  padding: 12px;
+  background: #e8e8e8;
+  overflow: auto;
 }
 
 .canvas-image {
@@ -40,10 +86,58 @@
   max-height: 100%;
   object-fit: contain;
   display: block;
+  border-radius: 4px;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.12);
 }
 
 .canvas-placeholder,
-.canvas-empty {
-  color: #666;
+.canvas-empty-state {
+  text-align: center;
+  color: var(--color-muted);
 }
 
+.canvas-placeholder {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  padding: 24px;
+}
+
+.canvas-placeholder p {
+  margin: 0;
+}
+
+.canvas-placeholder button {
+  padding: 10px 16px;
+  border-radius: 8px;
+  border: 1px solid var(--color-accent);
+  background: var(--color-accent);
+  color: #fff;
+}
+
+.canvas-empty-state {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 24px;
+}
+
+.canvas-empty-hint {
+  font-size: 12px;
+  color: var(--color-muted);
+}
+
+.canvas-footer {
+  flex-shrink: 0;
+  padding: 8px 12px;
+  border-top: 1px solid var(--color-border);
+  font-size: 11px;
+  color: var(--color-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}

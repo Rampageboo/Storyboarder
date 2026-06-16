@@ -1,0 +1,26 @@
+{
+  "autosave": true,
+  "pdf_layout": "two_per_page",
+  "recent_projects": [
+    "D:\\Storyboarder\\Storyboard_Project"
+  ],
+  "backup_on_save": true,
+  "photoshop_path": "",
+  "blender_path": "",
+  "canvas_background_color": "#E8E8E8",
+  "canvas_width": 1920,
+  "canvas_height": 1080,
+  "reference_video_path": "",
+  "reference_model_path": "",
+  "reference_image_path": "",
+  "reference_segment_mode": "video",
+  "reference_links": [],
+  "ref_segment": {},
+  "ref_segments": [],
+  "active_ref_segment_id": "",
+  "ref_segment_video": {},
+  "ref_segment_apply": {},
+  "scene3d": {
+    "blend_file_path": "scene3d/scene.blend"
+  }
+}

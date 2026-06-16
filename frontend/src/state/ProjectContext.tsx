@@ -10,8 +10,9 @@ import {
   type SetStateAction,
 } from 'react'
 import { createProject, getProject, openProject, saveProject, updateShot } from '../api'
+import { browseProjectJson } from '../api'
 import { isNoProjectOpenError } from '../api'
-import type { OpenProjectRequest, ProjectPathRequest, ProjectPayload, Shot, ShotUpdate } from '../types'
+import type { ProjectPathRequest, ProjectPayload, Shot, ShotUpdate } from '../types'
 
 interface ProjectContextValue {
   project: ProjectPayload | null
@@ -21,8 +22,10 @@ interface ProjectContextValue {
   setProject: Dispatch<SetStateAction<ProjectPayload | null>>
   reloadProject: () => Promise<void>
   newProject: (body?: ProjectPathRequest) => Promise<void>
-  openProject: (body: OpenProjectRequest) => Promise<void>
+  openProjectFromDialog: () => Promise<void>
   saveProject: () => Promise<void>
+  initialLoading: boolean
+  projectActionBusy: boolean
   // Per-shot editing (centralized dirty/version tracking).
   getDraft: (shotId: string) => ShotUpdate | undefined
   editShotField: <K extends keyof ShotUpdate>(shotId: string, key: K, value: ShotUpdate[K]) => void
@@ -33,6 +36,7 @@ interface ProjectContextValue {
   flushDirtyShots: () => Promise<void>
   lastError: string | null
   clearError: () => void
+  reportError: (error: unknown) => void
 }
 
 const ProjectContext = createContext<ProjectContextValue | null>(null)
@@ -65,6 +69,8 @@ export function ProjectProvider({ children }: PropsWithChildren) {
   const [project, setProject] = useState<ProjectPayload | null>(null)
   const [selectedShotId, setSelectedShotId] = useState<string | null>(null)
   const [lastError, setLastError] = useState<string | null>(null)
+  const [initialLoading, setInitialLoading] = useState(true)
+  const [projectActionBusy, setProjectActionBusy] = useState(false)
 
   // Per-shot edit state. `drafts` holds only changed fields per shot; presence ⇒ dirty.
   const [drafts, setDrafts] = useState<Record<string, ShotUpdate>>({})
@@ -78,6 +84,10 @@ export function ProjectProvider({ children }: PropsWithChildren) {
   draftsRef.current = drafts
 
   const clearError = useCallback(() => setLastError(null), [])
+
+  const reportError = useCallback((error: unknown) => {
+    setLastError(error instanceof Error ? error.message : String(error))
+  }, [])
 
   const resetEditState = useCallback(() => {
     versionsRef.current = {}
@@ -164,14 +174,29 @@ export function ProjectProvider({ children }: PropsWithChildren) {
 
   // Save every dirty shot before destructive/structural actions. Sequential to avoid interleaved
   // server-side mutation of the shared project. Re-throws so callers abort their action.
+  //
+  // A stale in-flight save keeps its draft (saveShot ignores stale responses), so one pass may not
+  // reach clean. Retry a bounded number of times until no dirty drafts remain; if edits keep
+  // changing past the limit, fail loudly so the caller aborts instead of discarding the draft.
   const flushDirtyShots = useCallback(async (): Promise<void> => {
-    const ids = Object.keys(draftsRef.current).filter((id) => draftIsDirty(draftsRef.current[id]))
-    for (const id of ids) {
-      await saveShot(id)
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      const ids = Object.keys(draftsRef.current).filter((id) => draftIsDirty(draftsRef.current[id]))
+      if (ids.length === 0) return
+      for (const id of ids) {
+        await saveShot(id)
+      }
+    }
+
+    const remaining = Object.keys(draftsRef.current).filter((id) => draftIsDirty(draftsRef.current[id]))
+    if (remaining.length > 0) {
+      const message = 'Unsaved edits changed while saving. Try again before continuing.'
+      setLastError(message)
+      throw new Error(message)
     }
   }, [saveShot])
 
   const reloadProject = useCallback(async () => {
+    setInitialLoading(true)
     try {
       const payload = await getProject()
       resetEditState()
@@ -187,13 +212,16 @@ export function ProjectProvider({ children }: PropsWithChildren) {
         return
       }
       setLastError(error instanceof Error ? error.message : String(error))
+    } finally {
+      setInitialLoading(false)
     }
   }, [resetEditState])
 
   const newProjectAction = useCallback(
     async (body: ProjectPathRequest = {}) => {
-      await flushDirtyShots()
+      setProjectActionBusy(true)
       try {
+        await flushDirtyShots()
         const payload = await createProject(body)
         resetEditState()
         setProject(payload)
@@ -202,37 +230,44 @@ export function ProjectProvider({ children }: PropsWithChildren) {
       } catch (error) {
         setLastError(error instanceof Error ? error.message : String(error))
         throw error
+      } finally {
+        setProjectActionBusy(false)
       }
     },
     [flushDirtyShots, resetEditState],
   )
 
-  const openProjectAction = useCallback(
-    async (body: OpenProjectRequest) => {
+  const openProjectFromDialog = useCallback(async () => {
+    setProjectActionBusy(true)
+    try {
       await flushDirtyShots()
-      try {
-        const payload = await openProject(body)
-        resetEditState()
-        setProject(payload)
-        setLastError(null)
-        setSelectedShotId(payload.shots[0]?.shot_id ?? null)
-      } catch (error) {
-        setLastError(error instanceof Error ? error.message : String(error))
-        throw error
-      }
-    },
-    [flushDirtyShots, resetEditState],
-  )
+      const result = await browseProjectJson()
+      if (result.cancelled || !result.path) return
+      const payload = await openProject({ project_json_path: result.path })
+      resetEditState()
+      setProject(payload)
+      setLastError(null)
+      setSelectedShotId(payload.shots[0]?.shot_id ?? null)
+    } catch (error) {
+      setLastError(error instanceof Error ? error.message : String(error))
+      throw error
+    } finally {
+      setProjectActionBusy(false)
+    }
+  }, [flushDirtyShots, resetEditState])
 
   const saveProjectAction = useCallback(async () => {
-    await flushDirtyShots()
+    setProjectActionBusy(true)
     try {
+      await flushDirtyShots()
       const payload = await saveProject()
       setProject(payload)
       setLastError(null)
     } catch (error) {
       setLastError(error instanceof Error ? error.message : String(error))
       throw error
+    } finally {
+      setProjectActionBusy(false)
     }
   }, [flushDirtyShots])
 
@@ -244,8 +279,10 @@ export function ProjectProvider({ children }: PropsWithChildren) {
       setProject,
       reloadProject,
       newProject: newProjectAction,
-      openProject: openProjectAction,
+      openProjectFromDialog,
       saveProject: saveProjectAction,
+      initialLoading,
+      projectActionBusy,
       getDraft,
       editShotField,
       isShotDirty,
@@ -255,14 +292,17 @@ export function ProjectProvider({ children }: PropsWithChildren) {
       flushDirtyShots,
       lastError,
       clearError,
+      reportError,
     }),
     [
       project,
       selectedShotId,
       reloadProject,
       newProjectAction,
-      openProjectAction,
+      openProjectFromDialog,
       saveProjectAction,
+      initialLoading,
+      projectActionBusy,
       getDraft,
       editShotField,
       isShotDirty,
@@ -272,6 +312,7 @@ export function ProjectProvider({ children }: PropsWithChildren) {
       flushDirtyShots,
       lastError,
       clearError,
+      reportError,
     ],
   )
 

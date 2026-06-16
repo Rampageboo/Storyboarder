@@ -1,13 +1,29 @@
 import { requestJson } from './client'
 
 export interface BridgeStatusPayload {
+  app_running?: boolean
+  project_open?: boolean
+  plugin_linked?: boolean
+  plugin_last_seen_seconds_ago?: number | null
+  plugin_open_shot_ids?: string[]
   ok?: string
   status?: string
   bridge_url?: string
   server_port?: number
   plugin_last_seen?: number
-  plugin_open_shot_ids?: string[]
   [key: string]: unknown
+}
+
+export interface LiveBridgeUpdate {
+  selected_shot_id?: string | null
+}
+
+/** Publish live bridge state so the Photoshop plugin can link (writes JSON + HTTP). */
+export function publishLiveBridge(selectedShotId = ''): Promise<Record<string, unknown>> {
+  return requestJson<Record<string, unknown>>('/api/bridge/live', {
+    method: 'PUT',
+    body: { selected_shot_id: selectedShotId },
+  })
 }
 
 export function getBridgeStatus(): Promise<BridgeStatusPayload> {

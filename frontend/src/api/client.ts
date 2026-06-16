@@ -37,7 +37,8 @@ async function readErrorMessage(response: Response): Promise<string> {
 }
 
 export async function requestJson<T>(url: string, options: RequestOptions = {}): Promise<T> {
-  const { silent: _silent, body, headers: customHeaders, ...fetchOptions } = options
+  const { silent, body, headers: customHeaders, ...fetchOptions } = options
+  void silent
   const headers = new Headers(customHeaders)
   const response = await fetch(url, {
     ...fetchOptions,
