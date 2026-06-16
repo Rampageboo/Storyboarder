@@ -7,10 +7,24 @@ function fileName(path: string) {
   return path.split(/[/\\]/).pop() || path
 }
 
+// A reference thumbnail that degrades to a clean "missing" tile instead of a broken-image icon.
+function RefThumb({ url, name }: { url: string; name: string }) {
+  const [failed, setFailed] = useState(false)
+  useEffect(() => {
+    setFailed(false)
+  }, [url])
+  if (failed) {
+    return <div className="refs-thumb-missing">missing</div>
+  }
+  return <img src={url} alt={name} loading="lazy" onError={() => setFailed(true)} />
+}
+
 export function ReferencePanel() {
   const { project, selectedShotId, setProject, flushDirtyShots, projectActionBusy, reportError } = useProject()
   const [busy, setBusy] = useState(false)
+  const [bust, setBust] = useState(0)
   const [lightbox, setLightbox] = useState<string | null>(null)
+  const [lightboxFailed, setLightboxFailed] = useState(false)
   const inputRef = useRef<HTMLInputElement | null>(null)
 
   const shot = useMemo(() => {
@@ -23,11 +37,26 @@ export function ReferencePanel() {
     setLightbox(null)
   }, [selectedShotId])
 
-  if (!project || !shot) return null
+  useEffect(() => {
+    setLightboxFailed(false)
+  }, [lightbox])
+
+  if (!project || !shot) {
+    return (
+      <section className="refs refs-idle">
+        <div className="refs-header">
+          <span className="refs-title">Shot references</span>
+        </div>
+        <div className="refs-empty">Select a board to manage per-shot reference images.</div>
+      </section>
+    )
+  }
 
   const refs = shot.reference_image_paths || []
   const shotId = shot.shot_id
   const disabled = busy || projectActionBusy
+  // Cache-bust so a replaced reference reloads instead of showing the stale cached image.
+  const refUrl = (path: string) => `${projectFileUrl(path)}&v=${bust}`
 
   const addReference = (file: File | undefined) => {
     if (!file) return
@@ -36,6 +65,7 @@ export function ReferencePanel() {
       try {
         await flushDirtyShots()
         setProject(await uploadShotReference(shotId, file))
+        setBust((x) => x + 1)
       } catch (error) {
         reportError(error)
       } finally {
@@ -51,6 +81,7 @@ export function ReferencePanel() {
       try {
         await flushDirtyShots()
         setProject(await removeShotReference(shotId, { path }))
+        setBust((x) => x + 1)
         setLightbox((cur) => (cur === path ? null : cur))
       } catch (error) {
         reportError(error)
@@ -86,7 +117,7 @@ export function ReferencePanel() {
           {refs.map((path) => (
             <div className="refs-item" key={path}>
               <button type="button" className="refs-thumb" onClick={() => setLightbox(path)} title={`Preview ${path}`}>
-                <img src={projectFileUrl(path)} alt={fileName(path)} loading="lazy" />
+                <RefThumb url={refUrl(path)} name={fileName(path)} />
               </button>
               <div className="refs-meta">
                 <span className="refs-name" title={path}>
@@ -109,7 +140,18 @@ export function ReferencePanel() {
 
       {lightbox ? (
         <div className="refs-lightbox" role="dialog" aria-modal="true" onClick={() => setLightbox(null)}>
-          <img src={projectFileUrl(lightbox)} alt={fileName(lightbox)} onClick={(e) => e.stopPropagation()} />
+          {lightboxFailed ? (
+            <div className="refs-lightbox-missing" onClick={(e) => e.stopPropagation()}>
+              Image missing or unreadable
+            </div>
+          ) : (
+            <img
+              src={refUrl(lightbox)}
+              alt={fileName(lightbox)}
+              onClick={(e) => e.stopPropagation()}
+              onError={() => setLightboxFailed(true)}
+            />
+          )}
           <div className="refs-lightbox-path">{lightbox}</div>
           <button type="button" className="refs-lightbox-close" onClick={() => setLightbox(null)} aria-label="Close preview">
             ×

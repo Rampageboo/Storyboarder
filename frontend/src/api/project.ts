@@ -34,8 +34,19 @@ export function saveProject(): Promise<ProjectPayload> {
   })
 }
 
-export function openBlenderScene(): Promise<Record<string, unknown>> {
-  return requestJson<Record<string, unknown>>('/api/project/scene3d/open-blender', {
+/** Open the project's Blender scene with the configured Blender executable. Returns a ProjectPayload. */
+export function openBlenderScene(): Promise<ProjectPayload> {
+  return requestJson<ProjectPayload>('/api/project/scene3d/open-blender', {
     method: 'POST',
+  })
+}
+
+/** Import a Blender-exported GLB/GLTF as the project's 3D scene. Returns a ProjectPayload. */
+export function importScene3d(file: File): Promise<ProjectPayload> {
+  const form = new FormData()
+  form.append('file', file)
+  return requestJson<ProjectPayload>('/api/project/scene3d/import', {
+    method: 'POST',
+    body: form,
   })
 }

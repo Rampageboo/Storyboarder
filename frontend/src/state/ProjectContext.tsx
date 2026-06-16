@@ -2,6 +2,7 @@ import {
   createContext,
   useCallback,
   useContext,
+  useEffect,
   useMemo,
   useRef,
   useState,
@@ -34,6 +35,14 @@ interface ProjectContextValue {
   savingShots: Record<string, boolean>
   saveShot: (shotId: string) => Promise<void>
   flushDirtyShots: () => Promise<void>
+  visualEpoch: number
+  // Reference-segment range draft, shared by the filmstrip dots and the ReferenceSidebar form.
+  // Local-only until the user applies — selecting dots never writes to disk.
+  segmentRange: { anchorShotId: string | null; endShotId: string | null }
+  setSegmentAnchor: (shotId: string | null) => void
+  setSegmentEnd: (shotId: string | null) => void
+  pickSegmentShot: (shotId: string) => void
+  clearSegmentRange: () => void
   lastError: string | null
   clearError: () => void
   reportError: (error: unknown) => void
@@ -75,6 +84,11 @@ export function ProjectProvider({ children }: PropsWithChildren) {
   // Per-shot edit state. `drafts` holds only changed fields per shot; presence ⇒ dirty.
   const [drafts, setDrafts] = useState<Record<string, ShotUpdate>>({})
   const [savingShots, setSavingShots] = useState<Record<string, boolean>>({})
+  const [visualEpoch, setVisualEpoch] = useState(0)
+  const [segmentRange, setSegmentRange] = useState<{ anchorShotId: string | null; endShotId: string | null }>({
+    anchorShotId: null,
+    endShotId: null,
+  })
   const versionsRef = useRef<Record<string, number>>({})
 
   // Refs mirror the latest committed values for synchronous reads inside async save/flush.
@@ -82,6 +96,11 @@ export function ProjectProvider({ children }: PropsWithChildren) {
   const draftsRef = useRef<Record<string, ShotUpdate>>({})
   projectRef.current = project
   draftsRef.current = drafts
+
+  // Bump thumbnail cache keys whenever committed project data changes (reference apply, sync, etc.).
+  useEffect(() => {
+    if (project) setVisualEpoch((v) => v + 1)
+  }, [project])
 
   const clearError = useCallback(() => setLastError(null), [])
 
@@ -94,6 +113,28 @@ export function ProjectProvider({ children }: PropsWithChildren) {
     draftsRef.current = {}
     setDrafts({})
     setSavingShots({})
+    setSegmentRange({ anchorShotId: null, endShotId: null })
+  }, [])
+
+  const setSegmentAnchor = useCallback((shotId: string | null) => {
+    setSegmentRange((r) => ({ ...r, anchorShotId: shotId }))
+  }, [])
+
+  const setSegmentEnd = useCallback((shotId: string | null) => {
+    setSegmentRange((r) => ({ ...r, endShotId: shotId }))
+  }, [])
+
+  const clearSegmentRange = useCallback(() => {
+    setSegmentRange({ anchorShotId: null, endShotId: null })
+  }, [])
+
+  // Filmstrip dot interaction: first pick sets the start, second sets the end, a third starts over.
+  const pickSegmentShot = useCallback((shotId: string) => {
+    setSegmentRange((r) => {
+      if (!r.anchorShotId) return { anchorShotId: shotId, endShotId: null }
+      if (!r.endShotId) return { anchorShotId: r.anchorShotId, endShotId: shotId }
+      return { anchorShotId: shotId, endShotId: null }
+    })
   }, [])
 
   const editShotField = useCallback(
@@ -290,6 +331,7 @@ export function ProjectProvider({ children }: PropsWithChildren) {
       savingShots,
       saveShot,
       flushDirtyShots,
+      visualEpoch,
       lastError,
       clearError,
       reportError,
@@ -310,6 +352,7 @@ export function ProjectProvider({ children }: PropsWithChildren) {
       savingShots,
       saveShot,
       flushDirtyShots,
+      visualEpoch,
       lastError,
       clearError,
       reportError,

@@ -1,5 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { getBridgeStatus, openBlenderScene, recoverShotSource, relinkPreview, uploadShotSource } from '../api'
+import {
+  getBridgeStatus,
+  recoverShotSource,
+  relinkPreview,
+  updateSettings,
+  uploadShotSource,
+} from '../api'
 import { useProject } from '../state/ProjectContext'
 import { AnnotationList } from './AnnotationList'
 import './AdvancedPanel.css'
@@ -8,10 +14,13 @@ export function AdvancedPanel() {
   const { project, selectedShotId, setProject, flushDirtyShots, projectActionBusy, reportError } = useProject()
   const [open, setOpen] = useState(false)
   const [bridgeJson, setBridgeJson] = useState('')
-  const [scene3dJson, setScene3dJson] = useState('')
   const [busy, setBusy] = useState(false)
   const [sourceNote, setSourceNote] = useState('')
   const [relinkPath, setRelinkPath] = useState('')
+  const [canvasW, setCanvasW] = useState('1920')
+  const [canvasH, setCanvasH] = useState('1080')
+  const [canvasColor, setCanvasColor] = useState('#E8E8E8')
+  const [canvasNote, setCanvasNote] = useState('')
   const sourceInputRef = useRef<HTMLInputElement | null>(null)
 
   const shot = useMemo(() => {
@@ -34,21 +43,20 @@ export function AdvancedPanel() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedShotId])
 
+  // Seed the Canvas defaults form from project settings (re-seed if they change on disk).
+  useEffect(() => {
+    const s = project?.settings
+    setCanvasW(String(s?.canvas_width ?? 1920))
+    setCanvasH(String(s?.canvas_height ?? 1080))
+    setCanvasColor(String(s?.canvas_background_color ?? '#E8E8E8'))
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [project?.settings?.canvas_width, project?.settings?.canvas_height, project?.settings?.canvas_background_color])
+
   const refreshBridge = useCallback(async () => {
     setBusy(true)
     try {
       const payload = await getBridgeStatus()
       setBridgeJson(JSON.stringify(payload, null, 2))
-    } finally {
-      setBusy(false)
-    }
-  }, [])
-
-  const openBlender = useCallback(async () => {
-    setBusy(true)
-    try {
-      const payload = await openBlenderScene()
-      setScene3dJson(JSON.stringify(payload, null, 2))
     } finally {
       setBusy(false)
     }
@@ -103,6 +111,31 @@ export function AdvancedPanel() {
     }
   }, [selectedShotId, relinkPath, setProject, flushDirtyShots, reportError])
 
+  // Edit the project-wide canvas defaults used by "Create blank canvas". Basic guards only.
+  const saveCanvasDefaults = useCallback(async () => {
+    const w = Number(canvasW)
+    const h = Number(canvasH)
+    const color = canvasColor.trim()
+    if (!Number.isInteger(w) || w <= 0 || !Number.isInteger(h) || h <= 0) {
+      window.alert('Canvas width and height must be positive whole numbers.')
+      return
+    }
+    if (!color) {
+      window.alert('Canvas background color cannot be empty.')
+      return
+    }
+    setBusy(true)
+    try {
+      await flushDirtyShots()
+      setProject(await updateSettings({ canvas_width: w, canvas_height: h, canvas_background_color: color }))
+      setCanvasNote(`Saved: ${w}×${h}, ${color}`)
+    } catch (error) {
+      reportError(error)
+    } finally {
+      setBusy(false)
+    }
+  }, [canvasW, canvasH, canvasColor, flushDirtyShots, setProject, reportError])
+
   if (!project) return null
 
   return (
@@ -133,6 +166,50 @@ export function AdvancedPanel() {
               }}
             />
           </div>
+
+          <details className="advanced-details">
+            <summary>Canvas defaults</summary>
+            <div className="advanced-fields">
+              <label className="advanced-field">
+                <span>Width</span>
+                <input
+                  className="advanced-input"
+                  type="number"
+                  min="1"
+                  step="1"
+                  value={canvasW}
+                  onChange={(e) => setCanvasW(e.target.value)}
+                />
+              </label>
+              <label className="advanced-field">
+                <span>Height</span>
+                <input
+                  className="advanced-input"
+                  type="number"
+                  min="1"
+                  step="1"
+                  value={canvasH}
+                  onChange={(e) => setCanvasH(e.target.value)}
+                />
+              </label>
+              <label className="advanced-field">
+                <span>Background</span>
+                <input
+                  className="advanced-input"
+                  value={canvasColor}
+                  onChange={(e) => setCanvasColor(e.target.value)}
+                  placeholder="#E8E8E8"
+                />
+              </label>
+            </div>
+            <div className="advanced-actions">
+              <button type="button" onClick={() => void saveCanvasDefaults()} disabled={disabled}>
+                Save canvas defaults
+              </button>
+            </div>
+            <div className="advanced-muted">Used when creating a new blank canvas for a shot.</div>
+            {canvasNote ? <div className="advanced-muted">{canvasNote}</div> : null}
+          </details>
 
           <details className="advanced-details">
             <summary>Annotations</summary>
@@ -168,16 +245,6 @@ export function AdvancedPanel() {
               </button>
             </div>
             {sourceNote ? <div className="advanced-muted">{sourceNote}</div> : null}
-          </details>
-
-          <details className="advanced-details">
-            <summary>3D / Blender</summary>
-            <div className="advanced-actions">
-              <button type="button" onClick={() => void openBlender()} disabled={disabled}>
-                Open Blender scene
-              </button>
-            </div>
-            {scene3dJson ? <pre className="advanced-pre">{scene3dJson}</pre> : null}
           </details>
 
           <div className="advanced-muted">Reference segments: {refSegmentsCount}</div>

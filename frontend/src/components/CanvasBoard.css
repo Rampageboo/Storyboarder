@@ -1,9 +1,10 @@
 .canvas {
-  flex: 1;
+  flex: 1 1 0;
   min-height: 0;
   display: flex;
   flex-direction: column;
   background: var(--color-surface);
+  overflow: hidden;
 }
 
 .canvas-header {
@@ -12,7 +13,7 @@
   align-items: flex-start;
   justify-content: space-between;
   gap: 12px;
-  padding: 10px 12px;
+  padding: 12px var(--panel-padding);
   border-bottom: 1px solid var(--color-border);
 }
 
@@ -54,9 +55,42 @@
 
 .canvas-actions-ps {
   flex-shrink: 0;
+  flex-wrap: wrap;
+  align-items: center;
   justify-content: flex-start;
-  padding: 8px 12px;
+  gap: 8px;
+  padding: 8px var(--panel-padding);
   border-bottom: 1px solid var(--color-border);
+}
+
+.canvas-status-chips {
+  display: flex;
+  gap: 6px;
+  margin-left: auto;
+}
+
+.canvas-autoopen {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11px;
+  color: var(--color-muted);
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.canvas-autoopen input {
+  margin: 0;
+}
+
+.canvas-status-compact {
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 6px var(--panel-padding);
+  border-bottom: 1px solid var(--color-border);
+  background: #fafafa;
 }
 
 .canvas-note {
@@ -65,24 +99,71 @@
   color: var(--color-text);
 }
 
-.canvas-body {
+.canvas-missing {
+  margin-top: 4px;
+  font-size: 11px;
+  color: var(--color-danger);
+}
+
+.canvas-repair {
+  margin-top: 4px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.canvas-repair-input {
   flex: 1;
+  min-width: 0;
+  font: 11px/1.4 var(--font-mono);
+  padding: 5px 6px;
+  border-radius: 6px;
+  border: 1px solid var(--color-border);
+}
+
+.canvas-repair button {
+  flex-shrink: 0;
+  padding: 5px 8px;
+  border-radius: 6px;
+  border: 1px solid var(--color-border);
+  background: #fff;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.canvas-repair-hint {
+  font-size: 10px;
+  color: var(--color-muted);
+}
+
+.canvas-body {
+  flex: 1 1 0;
   min-height: 0;
+  padding: 16px 20px;
+  background: #e8e8e8;
+  overflow: auto;
+}
+
+.canvas-media {
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  min-width: 0;
   display: flex;
   align-items: center;
   justify-content: center;
-  padding: 12px;
-  background: #e8e8e8;
-  overflow: auto;
 }
 
 .canvas-image {
   max-width: 100%;
   max-height: 100%;
+  width: auto;
+  height: auto;
   object-fit: contain;
+  object-position: center;
   display: block;
-  border-radius: 4px;
-  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.12);
+  border-radius: 6px;
+  box-shadow: 0 4px 24px rgba(0, 0, 0, 0.14);
 }
 
 .canvas-placeholder,
@@ -126,25 +207,12 @@
   color: var(--color-muted);
 }
 
-.canvas-status {
-  flex-shrink: 0;
-  padding: 8px 12px;
-  border-top: 1px solid var(--color-border);
-  display: flex;
-  flex-direction: column;
-  gap: 3px;
-}
-
-.canvas-status-chips {
-  display: flex;
-  gap: 6px;
-}
-
 .canvas-chip {
-  font-size: 11px;
+  font-size: 10px;
   padding: 2px 8px;
   border-radius: 999px;
   border: 1px solid var(--color-border);
+  white-space: nowrap;
 }
 
 .canvas-chip.ok {
@@ -158,7 +226,7 @@
 }
 
 .canvas-status-path {
-  font-size: 11px;
+  font-size: 10px;
   color: var(--color-muted);
   white-space: nowrap;
   overflow: hidden;

@@ -21,7 +21,15 @@ export interface OpenProjectRequest {
   project_json_path: string
 }
 
+export interface MissingFileRow {
+  shot_id: string
+  field: string
+  path: string
+}
+
+/** GET /api/project/missing-files response (key is `missing_files`; each row points at one
+ * metadata path that no longer exists on disk). */
 export interface MissingFilesPayload {
-  missing: string[]
+  missing_files?: MissingFileRow[]
   [key: string]: unknown
 }

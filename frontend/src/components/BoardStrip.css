@@ -1,0 +1,230 @@
+.board-strip {
+  flex: 0 0 var(--board-strip-height);
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background: var(--color-surface);
+  border-top: 1px solid var(--color-border);
+  box-shadow: 0 -2px 8px rgba(0, 0, 0, 0.04);
+}
+
+.board-strip-toolbar {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--color-border);
+  background: #fafafa;
+}
+
+.board-strip-title {
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.board-strip-count {
+  font-weight: 400;
+  color: var(--color-muted);
+}
+
+.board-strip-actions {
+  display: flex;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.board-strip-actions button {
+  padding: 5px 10px;
+  border-radius: 6px;
+  border: 1px solid var(--color-border);
+  background: #fff;
+  font-size: 11px;
+}
+
+/* Horizontal scroll viewport — only cards move, not the strip chrome */
+.board-strip-viewport {
+  flex: 1 1 auto;
+  min-height: 0;
+  min-width: 0;
+  width: 100%;
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding: 10px 12px 6px;
+  overscroll-behavior-x: contain;
+  scrollbar-gutter: stable;
+}
+
+.board-strip-track {
+  display: inline-flex;
+  flex-direction: row;
+  flex-wrap: nowrap;
+  align-items: flex-start;
+  gap: 10px;
+  height: 100%;
+  vertical-align: top;
+}
+
+.board-strip-card {
+  flex: 0 0 var(--board-strip-card-width);
+  width: var(--board-strip-card-width);
+  height: var(--board-strip-card-height);
+  display: inline-flex;
+  flex-direction: column;
+  margin: 0;
+  padding: 0;
+  border: 2px solid var(--color-border);
+  border-radius: 6px;
+  background: #fff;
+  text-align: left;
+  cursor: pointer;
+  overflow: hidden;
+  appearance: none;
+  box-sizing: border-box;
+  vertical-align: top;
+}
+
+.board-strip-card.is-selected {
+  border-color: var(--color-accent);
+  background: var(--color-accent-soft);
+  box-shadow: 0 0 0 1px rgba(59, 91, 219, 0.4);
+}
+
+.board-strip-thumb {
+  position: relative;
+  flex: 0 0 var(--board-strip-thumb-height);
+  width: 100%;
+  height: var(--board-strip-thumb-height);
+  background: #e2e2e2;
+  border-bottom: 1px solid rgba(0, 0, 0, 0.08);
+  overflow: hidden;
+}
+
+.board-strip-index {
+  position: absolute;
+  top: 5px;
+  left: 5px;
+  z-index: 2;
+  font-size: 10px;
+  font-weight: 700;
+  padding: 2px 6px;
+  border-radius: 3px;
+  background: rgba(0, 0, 0, 0.72);
+  color: #fff;
+  line-height: 1.3;
+  pointer-events: none;
+}
+
+.board-strip-dirty {
+  position: absolute;
+  top: 5px;
+  right: 5px;
+  z-index: 2;
+  color: #ff6b6b;
+  font-size: 10px;
+  pointer-events: none;
+}
+
+.board-strip-meta {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 2px;
+  padding: 6px 8px;
+}
+
+.board-strip-label {
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1.25;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.board-strip-details {
+  display: flex;
+  justify-content: space-between;
+  gap: 6px;
+  font-size: 10px;
+  color: var(--color-muted);
+}
+
+.board-strip-status {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 58%;
+}
+
+.board-strip-hint {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: 10px;
+  color: var(--color-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  text-align: center;
+}
+
+.board-strip-badges {
+  display: flex;
+  gap: 3px;
+}
+
+.bs-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  border-radius: 3px;
+  font-size: 9px;
+  font-weight: 700;
+  border: 1px solid var(--color-border);
+  color: var(--color-muted);
+  background: #fff;
+}
+
+.bs-badge.on {
+  color: #2b8a3e;
+  border-color: rgba(43, 138, 62, 0.45);
+  background: rgba(40, 167, 69, 0.12);
+}
+
+.bs-badge.off {
+  opacity: 0.55;
+}
+
+.bs-badge.warn {
+  color: var(--color-danger);
+  border-color: rgba(155, 28, 28, 0.5);
+  background: rgba(155, 28, 28, 0.1);
+}
+
+.board-strip-empty {
+  margin: auto;
+  text-align: center;
+  color: var(--color-muted);
+  font-size: 13px;
+  padding: 12px;
+}
+
+.board-strip-empty p {
+  margin: 0 0 8px;
+}
+
+.board-strip-empty-cta {
+  padding: 8px 12px;
+  border-radius: 8px;
+  border: 1px solid var(--color-accent);
+  background: var(--color-accent);
+  color: #fff;
+}

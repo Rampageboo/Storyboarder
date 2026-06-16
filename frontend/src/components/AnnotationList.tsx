@@ -15,6 +15,16 @@ function isTextAnnotation(item: Annotation) {
   return typeof item.text === 'string' || item.type === 'text'
 }
 
+type Placement = 'top-left' | 'center' | 'bottom-left'
+
+// Normalized (0..1) anchor points for new text labels. start === end (a point label);
+// the legacy canvas overlay reads `start` for fillText, so this stays drawing-compatible.
+const PLACEMENTS: Record<Placement, { x: number; y: number }> = {
+  'top-left': { x: 0.08, y: 0.1 },
+  center: { x: 0.5, y: 0.5 },
+  'bottom-left': { x: 0.08, y: 0.9 },
+}
+
 export function AnnotationList({ shotId }: { shotId: string | null }) {
   const { reportError } = useProject()
   const [items, setItems] = useState<Annotation[]>([])
@@ -22,6 +32,7 @@ export function AnnotationList({ shotId }: { shotId: string | null }) {
   const [busy, setBusy] = useState(false)
   const [dirty, setDirty] = useState(false)
   const [newText, setNewText] = useState('')
+  const [placement, setPlacement] = useState<Placement>('top-left')
 
   useEffect(() => {
     setItems([])
@@ -66,8 +77,9 @@ export function AnnotationList({ shotId }: { shotId: string | null }) {
   const addText = () => {
     const text = newText.trim()
     if (!text) return
+    const pos = PLACEMENTS[placement]
     setNewText('')
-    void persist([...items, { type: 'text', text, start: { x: 0.1, y: 0.1 }, end: { x: 0.1, y: 0.1 } }])
+    void persist([...items, { type: 'text', text, start: { ...pos }, end: { ...pos } }])
   }
 
   const editText = (index: number, text: string) => {
@@ -133,6 +145,16 @@ export function AnnotationList({ shotId }: { shotId: string | null }) {
               }}
               placeholder="New text annotation"
             />
+            <select
+              className="annot-select"
+              value={placement}
+              onChange={(e) => setPlacement(e.target.value as Placement)}
+              title="Where to place the new text label on the frame"
+            >
+              <option value="top-left">Top-left</option>
+              <option value="center">Center</option>
+              <option value="bottom-left">Bottom-left</option>
+            </select>
             <button type="button" onClick={addText} disabled={busy || !newText.trim()}>
               Add
             </button>

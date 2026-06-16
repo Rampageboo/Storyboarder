@@ -1,8 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import {
   createShotCanvas,
+  getMissingFiles,
   openShotPreview,
   openShotSource,
+  recoverShotSource,
+  relinkPreview,
   removeShotImage,
   shotImageUrl,
   syncShot,
@@ -10,6 +13,7 @@ import {
   uploadShotSource,
 } from '../api'
 import { useProject } from '../state/ProjectContext'
+import { shotDisplayLabel } from '../utils/shotDisplay'
 import './CanvasBoard.css'
 
 type SyncResult = { synced?: boolean; message?: string }
@@ -20,6 +24,15 @@ export function CanvasBoard() {
   const [loadFailed, setLoadFailed] = useState(false)
   const [busy, setBusy] = useState(false)
   const [note, setNote] = useState('')
+  const [missing, setMissing] = useState<{ source: boolean; preview: boolean; refs: number } | null>(null)
+  const [relinkPath, setRelinkPath] = useState('')
+  const [autoOpenPs, setAutoOpenPs] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem('sb.autoOpenPsAfterCreate') === '1'
+    } catch {
+      return false
+    }
+  })
   const imageInputRef = useRef<HTMLInputElement | null>(null)
   const sourceInputRef = useRef<HTMLInputElement | null>(null)
 
@@ -50,6 +63,40 @@ export function CanvasBoard() {
   useEffect(() => {
     setNote('')
   }, [selectedShotId])
+
+  // Seed the relink-preview repair field from the shot's current (possibly missing) preview path.
+  useEffect(() => {
+    const cur = project?.shots.find((s) => s.shot_id === selectedShotId)
+    setRelinkPath(cur?.preview_image_path || cur?.image_path || '')
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedShotId])
+
+  // On-disk missing-file status for the selected shot (metadata path present but file gone).
+  // Stale-guarded and silent — an ordinary missing thumbnail must never raise the error banner.
+  useEffect(() => {
+    if (!selectedShotId) {
+      setMissing(null)
+      return
+    }
+    let cancelled = false
+    getMissingFiles()
+      .then((payload) => {
+        if (cancelled) return
+        const rows = (payload.missing_files ?? []).filter((r) => r.shot_id === selectedShotId)
+        setMissing({
+          source: rows.some((r) => r.field === 'source_file_path'),
+          preview: rows.some((r) => r.field === 'preview_image_path'),
+          refs: rows.filter((r) => r.field === 'reference_image_paths').length,
+        })
+      })
+      .catch(() => {
+        if (!cancelled) setMissing(null)
+      })
+    return () => {
+      cancelled = true
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedShotId, sourcePath, previewPath, shot?.preview_disk_mtime, shot?.reference_image_paths?.length])
 
   const disabled = busy || projectActionBusy
 
@@ -105,7 +152,16 @@ export function CanvasBoard() {
       setProject(await createShotCanvas(shotId, {}))
       setLoadFailed(false)
       setBust((x) => x + 1)
-      setNote('Blank canvas created — source PSD is now linked.')
+      if (autoOpenPs) {
+        const result = await openShotSource(shotId)
+        setNote(
+          result.switched === 'true'
+            ? 'Canvas created; switched to the Photoshop tab.'
+            : `Canvas created and opened in Photoshop: ${result.path ?? ''}`,
+        )
+      } else {
+        setNote('Blank canvas created — source PSD is now linked.')
+      }
     })
   }
 
@@ -148,6 +204,36 @@ export function CanvasBoard() {
       .finally(() => setBusy(false))
   }
 
+  // Repair: point the preview at an existing project-relative file.
+  const handleRelinkPreview = () => {
+    if (!shot) return
+    const rel = relinkPath.trim()
+    if (!rel) {
+      window.alert('Enter a project-relative preview path.')
+      return
+    }
+    const shotId = shot.shot_id
+    void runReplacing(async () => {
+      setProject(await relinkPreview(shotId, { relative_path: rel }))
+      setLoadFailed(false)
+      setBust((x) => x + 1)
+      setNote('Preview relinked.')
+    })
+  }
+
+  // Repair: rebuild a missing/broken source PSD from its layers (no relink-source endpoint exists).
+  const handleRecoverSource = () => {
+    if (!shot) return
+    if (!window.confirm('Rebuild the source PSD from its layers/history? A backup is saved to _history/.')) return
+    const shotId = shot.shot_id
+    void runReplacing(async () => {
+      const payload = await recoverShotSource(shotId)
+      setProject(payload)
+      const result = (payload as unknown as { result?: { layers_recovered?: number } }).result
+      setNote(`Recovered source: ${result?.layers_recovered ?? '?'} layer(s).`)
+    })
+  }
+
   if (!project) {
     return (
       <div className="canvas canvas-empty-state">
@@ -160,7 +246,7 @@ export function CanvasBoard() {
     return (
       <div className="canvas canvas-empty-state">
         <p>Select or add a shot</p>
-        <p className="canvas-empty-hint">Choose a shot from the list on the left.</p>
+        <p className="canvas-empty-hint">Choose a board from the strip below.</p>
       </div>
     )
   }
@@ -170,7 +256,7 @@ export function CanvasBoard() {
       <div className="canvas-header">
         <div>
           <div className="canvas-title">Preview</div>
-          <div className="canvas-subtitle">{shot.title || shot.shot_id}</div>
+          <div className="canvas-subtitle">{shotDisplayLabel(shot)}</div>
         </div>
         <div className="canvas-actions">
           <button type="button" className="primary" onClick={() => imageInputRef.current?.click()} disabled={disabled}>
@@ -240,21 +326,99 @@ export function CanvasBoard() {
         >
           Open preview
         </button>
+        <label className="canvas-autoopen" title="Open the new source in Photoshop right after creating a canvas">
+          <input
+            type="checkbox"
+            checked={autoOpenPs}
+            onChange={(e) => {
+              const next = e.target.checked
+              setAutoOpenPs(next)
+              try {
+                localStorage.setItem('sb.autoOpenPsAfterCreate', next ? '1' : '0')
+              } catch {
+                /* localStorage unavailable — keep session-only */
+              }
+            }}
+          />
+          Open PS after create
+        </label>
+        <div className="canvas-status-chips">
+          <span className={`canvas-chip ${hasSource ? 'ok' : 'missing'}`}>Source: {hasSource ? 'linked' : 'missing'}</span>
+          <span className={`canvas-chip ${hasPreview ? 'ok' : 'missing'}`}>Preview: {hasPreview ? 'linked' : 'missing'}</span>
+        </div>
       </div>
+
+      {(sourcePath || previewPath || note || (missing && (missing.source || missing.preview || missing.refs > 0))) ? (
+        <div className="canvas-status-compact">
+          {sourcePath ? (
+            <div className="canvas-status-path" title={sourcePath}>
+              Source: {sourcePath}
+            </div>
+          ) : null}
+          {previewPath ? (
+            <div className="canvas-status-path" title={previewPath}>
+              Preview: {previewPath}
+            </div>
+          ) : null}
+          {note ? <div className="canvas-note">{note}</div> : null}
+          {missing && (missing.source || missing.preview || missing.refs > 0) ? (
+            <div className="canvas-missing">
+              ⚠{' '}
+              {[
+                missing.source ? 'source file missing on disk' : null,
+                missing.preview ? 'preview file missing on disk' : null,
+                missing.refs > 0 ? `${missing.refs} reference file${missing.refs === 1 ? '' : 's'} missing` : null,
+              ]
+                .filter(Boolean)
+                .join(' · ')}
+            </div>
+          ) : null}
+          {missing?.preview ? (
+            <div className="canvas-repair">
+              <input
+                className="canvas-repair-input"
+                value={relinkPath}
+                onChange={(e) => setRelinkPath(e.target.value)}
+                placeholder="shots/shot_001/shot_001_preview.png"
+              />
+              <button type="button" onClick={() => handleRelinkPreview()} disabled={disabled || !relinkPath.trim()}>
+                Relink preview
+              </button>
+            </div>
+          ) : null}
+          {missing?.source ? (
+            <div className="canvas-repair">
+              <button type="button" onClick={() => handleRecoverSource()} disabled={disabled}>
+                Recover source
+              </button>
+              <span className="canvas-repair-hint">Rebuilds the PSD from its layers.</span>
+            </div>
+          ) : null}
+          {missing && missing.refs > 0 ? (
+            <div className="canvas-repair-hint">Remove missing reference images in the References panel.</div>
+          ) : null}
+        </div>
+      ) : null}
 
       <div className="canvas-body">
         {hasImage ? (
-          <img
-            className="canvas-image"
-            src={imgSrc}
-            alt={shot.title || shot.shot_id}
-            onError={() => setLoadFailed(true)}
-            onLoad={() => setLoadFailed(false)}
-          />
+          <div className="canvas-media">
+            <img
+              className="canvas-image"
+              src={imgSrc}
+              alt={shotDisplayLabel(shot)}
+              onError={() => setLoadFailed(true)}
+              onLoad={() => setLoadFailed(false)}
+            />
+          </div>
         ) : !hasSource && !hasPreview ? (
           <div className="canvas-placeholder">
             <p>Start drawing this shot</p>
             <p className="canvas-empty-hint">Create a blank PSD canvas, upload an image, or upload an existing PSD.</p>
+            <p className="canvas-empty-hint">
+              New canvases use {project.settings?.canvas_width ?? 1920}×{project.settings?.canvas_height ?? 1080},{' '}
+              {project.settings?.canvas_background_color ?? '#E8E8E8'}.
+            </p>
             <div className="canvas-actions">
               <button type="button" className="primary" onClick={() => handleCreateCanvas()} disabled={disabled}>
                 Create blank canvas
@@ -285,24 +449,6 @@ export function CanvasBoard() {
             </div>
           </div>
         )}
-      </div>
-
-      <div className="canvas-status">
-        <div className="canvas-status-chips">
-          <span className={`canvas-chip ${hasSource ? 'ok' : 'missing'}`}>Source: {hasSource ? 'linked' : 'missing'}</span>
-          <span className={`canvas-chip ${hasPreview ? 'ok' : 'missing'}`}>Preview: {hasPreview ? 'linked' : 'missing'}</span>
-        </div>
-        {sourcePath ? (
-          <div className="canvas-status-path" title={sourcePath}>
-            Source: {sourcePath}
-          </div>
-        ) : null}
-        {previewPath ? (
-          <div className="canvas-status-path" title={previewPath}>
-            Preview: {previewPath}
-          </div>
-        ) : null}
-        {note ? <div className="canvas-note">{note}</div> : null}
       </div>
     </div>
   )

@@ -9,7 +9,7 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 10px 12px;
+  padding: 12px var(--panel-padding);
   border: none;
   background: transparent;
   font-weight: 600;
@@ -28,7 +28,7 @@
 .advanced-body {
   max-height: 240px;
   overflow: auto;
-  padding: 0 12px 12px;
+  padding: 0 var(--panel-padding) 14px;
   display: flex;
   flex-direction: column;
   gap: 10px;
@@ -77,6 +77,30 @@
   padding: 7px 8px;
   border-radius: 6px;
   border: 1px solid var(--color-border);
+}
+
+.advanced-fields {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: 6px;
+}
+
+.advanced-field {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 11px;
+  color: var(--color-muted);
+}
+
+.advanced-field span {
+  width: 72px;
+  flex-shrink: 0;
+}
+
+.advanced-field .advanced-input {
+  margin: 0;
 }
 
 .advanced-textarea {

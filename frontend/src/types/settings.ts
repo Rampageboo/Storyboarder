@@ -8,9 +8,13 @@ export interface RefSegmentSettings {
   [key: string]: unknown
 }
 
+export type ReferenceMediaType = 'image' | 'video' | 'model'
+
 export interface ReferenceLink {
-  id?: string
-  path?: string
+  id: string
+  path: string
+  type: ReferenceMediaType | string
+  title?: string
   [key: string]: unknown
 }
 

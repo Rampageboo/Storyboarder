@@ -11,8 +11,14 @@
   --color-danger: #9b1c1c;
   --color-danger-bg: #fde8e8;
   --topbar-height: 52px;
-  --sidebar-width: 272px;
   --inspector-width: 360px;
+  --reference-sidebar-width: 252px;
+  --board-strip-height: 188px;
+  --board-strip-card-width: 148px;
+  --board-strip-card-height: 132px;
+  --board-strip-thumb-height: 84px;
+  --workspace-gap: 8px;
+  --panel-padding: 14px;
   font-family: var(--font-sans);
   line-height: 1.45;
   font-weight: 400;
@@ -53,4 +59,32 @@ button {
 button:disabled {
   cursor: not-allowed;
   opacity: 0.55;
+}
+
+/* Horizontal scrollbar for the board strip viewport */
+.board-strip-viewport {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(0, 0, 0, 0.35) rgba(0, 0, 0, 0.06);
+}
+
+.board-strip-viewport::-webkit-scrollbar {
+  height: 12px;
+}
+
+.board-strip-viewport::-webkit-scrollbar-track {
+  margin-top: 4px;
+  background: rgba(0, 0, 0, 0.05);
+  border-radius: 6px;
+}
+
+.board-strip-viewport::-webkit-scrollbar-thumb {
+  background: rgba(0, 0, 0, 0.28);
+  border: 2px solid transparent;
+  border-radius: 6px;
+  background-clip: padding-box;
+}
+
+.board-strip-viewport::-webkit-scrollbar-thumb:hover {
+  background: rgba(0, 0, 0, 0.42);
+  background-clip: padding-box;
 }

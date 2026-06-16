@@ -1,0 +1,247 @@
+.refws {
+  flex-shrink: 0;
+  border-top: 1px solid var(--color-border);
+  background: #fafafa;
+}
+
+.refws-toggle {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px var(--panel-padding);
+  border: none;
+  background: transparent;
+  font-weight: 600;
+  font-size: 12px;
+  color: var(--color-muted);
+  cursor: pointer;
+}
+
+.refws-toggle:hover {
+  background: rgba(0, 0, 0, 0.03);
+}
+
+.refws-toggle-icon {
+  font-size: 11px;
+}
+
+.refws-body {
+  max-height: 340px;
+  overflow: auto;
+  padding: 0 var(--panel-padding) 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.refws-section {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.refws-section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.refws-section-title {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--color-muted);
+}
+
+.refws-section-head button,
+.refws-actions button {
+  padding: 6px 8px;
+  border-radius: 8px;
+  border: 1px solid var(--color-border);
+  background: #fff;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.refws-actions button.primary {
+  background: var(--color-accent);
+  border-color: var(--color-accent);
+  color: #fff;
+}
+
+.refws-empty {
+  font-size: 11px;
+  color: var(--color-muted);
+}
+
+.refws-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.refws-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.refws-type {
+  flex-shrink: 0;
+  font-size: 9px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding: 2px 6px;
+  border-radius: 999px;
+  border: 1px solid var(--color-border);
+  color: var(--color-muted);
+  background: #fff;
+}
+
+.refws-type-video {
+  color: #1864ab;
+  border-color: rgba(24, 100, 171, 0.4);
+}
+
+.refws-type-image {
+  color: #2b8a3e;
+  border-color: rgba(43, 138, 62, 0.4);
+}
+
+.refws-type-model {
+  color: #862e9c;
+  border-color: rgba(134, 46, 156, 0.4);
+}
+
+.refws-name {
+  flex: 1;
+  min-width: 0;
+  text-align: left;
+  background: none;
+  border: none;
+  padding: 0;
+  font-size: 11px;
+  color: var(--color-text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  cursor: pointer;
+}
+
+.refws-name:disabled {
+  cursor: default;
+  color: var(--color-muted);
+}
+
+.refws-seg-range {
+  flex: 1;
+  min-width: 0;
+  font-size: 11px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.refws-remove {
+  flex-shrink: 0;
+  width: 20px;
+  height: 20px;
+  line-height: 1;
+  border-radius: 4px;
+  border: 1px solid var(--color-border);
+  background: #fff;
+  color: var(--color-danger);
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.refws-fields {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.refws-field {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 11px;
+  color: var(--color-muted);
+}
+
+.refws-field span {
+  width: 78px;
+  flex-shrink: 0;
+}
+
+.refws-field select,
+.refws-field input {
+  flex: 1;
+  min-width: 0;
+  font-size: 11px;
+  padding: 5px 6px;
+  border-radius: 6px;
+  border: 1px solid var(--color-border);
+  background: #fff;
+}
+
+.refws-hint {
+  font-size: 10px;
+  color: var(--color-muted);
+}
+
+.refws-note {
+  font-size: 11px;
+  color: var(--color-text);
+}
+
+.refws-lightbox {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  background: rgba(0, 0, 0, 0.78);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 24px;
+}
+
+.refws-lightbox img,
+.refws-lightbox video {
+  max-width: 90vw;
+  max-height: 80vh;
+  object-fit: contain;
+  border-radius: 4px;
+  box-shadow: 0 8px 40px rgba(0, 0, 0, 0.5);
+  background: #000;
+}
+
+.refws-lightbox-path {
+  color: #fff;
+  font-size: 12px;
+  font-family: var(--font-mono);
+  max-width: 90vw;
+  word-break: break-all;
+  text-align: center;
+}
+
+.refws-lightbox-close {
+  position: absolute;
+  top: 16px;
+  right: 20px;
+  width: 36px;
+  height: 36px;
+  border-radius: 999px;
+  border: none;
+  background: rgba(255, 255, 255, 0.18);
+  color: #fff;
+  font-size: 22px;
+  line-height: 1;
+  cursor: pointer;
+}

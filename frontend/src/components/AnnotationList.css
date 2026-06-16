@@ -73,6 +73,15 @@
   gap: 6px;
 }
 
+.annot-select {
+  flex-shrink: 0;
+  font-size: 11px;
+  padding: 6px 4px;
+  border-radius: 6px;
+  border: 1px solid var(--color-border);
+  background: #fff;
+}
+
 .annot-add button {
   flex-shrink: 0;
   padding: 6px 10px;

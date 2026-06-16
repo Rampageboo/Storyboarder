@@ -1,0 +1,87 @@
+.scene3d {
+  flex-shrink: 0;
+  border-top: 1px solid var(--color-border);
+  background: #fafafa;
+}
+
+.scene3d-toggle {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px var(--panel-padding, 12px);
+  border: none;
+  background: transparent;
+  font-weight: 600;
+  font-size: 12px;
+  color: var(--color-muted);
+  cursor: pointer;
+}
+
+.scene3d-toggle:hover {
+  background: rgba(0, 0, 0, 0.03);
+}
+
+.scene3d-toggle-icon {
+  font-size: 11px;
+}
+
+.scene3d-body {
+  padding: 0 var(--panel-padding, 12px) 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.scene3d-status {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.scene3d-chip {
+  flex-shrink: 0;
+  font-size: 10px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--color-border);
+}
+
+.scene3d-chip.ok {
+  background: rgba(40, 167, 69, 0.12);
+  border-color: rgba(40, 167, 69, 0.4);
+}
+
+.scene3d-chip.off {
+  color: var(--color-muted);
+  background: rgba(0, 0, 0, 0.04);
+}
+
+.scene3d-path {
+  font-size: 11px;
+  color: var(--color-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.scene3d-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.scene3d-actions button {
+  padding: 6px 8px;
+  border-radius: 8px;
+  border: 1px solid var(--color-border);
+  background: #fff;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.scene3d-note {
+  font-size: 11px;
+  color: var(--color-text);
+}

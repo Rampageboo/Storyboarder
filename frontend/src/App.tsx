@@ -1,13 +1,16 @@
 import { useCallback, useEffect } from 'react'
 import { Topbar } from './components/Topbar'
 import { ShotInspector } from './components/ShotInspector'
-import { Timeline } from './components/Timeline'
+import { BoardStrip } from './components/BoardStrip'
 import { CanvasBoard } from './components/CanvasBoard'
-import { BoardOverview } from './components/BoardOverview'
 import { ReferencePanel } from './components/ReferencePanel'
+import { ReferenceSidebar } from './components/ReferenceSidebar'
+import { Scene3DPanel } from './components/Scene3DPanel'
+import { NeighborContext } from './components/NeighborContext'
 import { AdvancedPanel } from './components/AdvancedPanel'
 import { ProjectProvider, useProject } from './state/ProjectContext'
 import { LiveBridgeProvider } from './state/LiveBridgeContext'
+import { useGlobalShortcuts } from './hooks/useGlobalShortcuts'
 import './App.css'
 
 function WelcomePanel() {
@@ -49,6 +52,7 @@ function WelcomePanel() {
 
 function AppInner() {
   const { project, initialLoading, lastError, clearError, reloadProject } = useProject()
+  useGlobalShortcuts()
 
   useEffect(() => {
     void reloadProject()
@@ -66,22 +70,22 @@ function AppInner() {
         </div>
       ) : null}
       <div className="workspace">
-        <aside className="sidebar">
-          <Timeline />
-        </aside>
         {initialLoading ? (
           <div className="loading-panel">Loading project…</div>
         ) : !project ? (
           <WelcomePanel />
         ) : (
           <>
+            <ReferenceSidebar />
             <main className="main-center">
               <CanvasBoard />
-              <BoardOverview />
+              <NeighborContext />
+              <BoardStrip />
             </main>
             <aside className="main-right">
               <ShotInspector />
               <ReferencePanel />
+              <Scene3DPanel />
               <AdvancedPanel />
             </aside>
           </>
