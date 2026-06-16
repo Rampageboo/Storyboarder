@@ -1,0 +1,76 @@
+.inspector {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.inspector-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 12px;
+  background: #ffffff;
+  border-bottom: 1px solid rgba(0, 0, 0, 0.08);
+}
+
+.inspector-title {
+  font-weight: 600;
+}
+
+.inspector-actions button {
+  font: inherit;
+  padding: 6px 10px;
+  border-radius: 6px;
+  border: 1px solid rgba(0, 0, 0, 0.12);
+  background: #f7f7f7;
+}
+
+.inspector-body {
+  flex: 1;
+  overflow: auto;
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.inspector-empty {
+  margin: auto;
+  color: #666;
+}
+
+.field-label {
+  font-size: 12px;
+  color: #666;
+  margin-bottom: 4px;
+}
+
+.field-row label,
+.field-grid label,
+.inspector-body > label {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+
+.field-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+
+.inspector input,
+.inspector select,
+.inspector textarea {
+  font: inherit;
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: 1px solid rgba(0, 0, 0, 0.12);
+  background: #ffffff;
+}
+
+.inspector textarea {
+  resize: vertical;
+}
+

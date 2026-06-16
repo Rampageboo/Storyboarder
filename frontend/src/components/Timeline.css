@@ -1,0 +1,87 @@
+.timeline {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.timeline-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 12px;
+  font-weight: 600;
+  border-bottom: 1px solid rgba(0, 0, 0, 0.08);
+}
+
+.timeline-actions {
+  display: inline-flex;
+  gap: 6px;
+}
+
+.timeline-actions button {
+  font: inherit;
+  padding: 6px 8px;
+  border-radius: 6px;
+  border: 1px solid rgba(0, 0, 0, 0.12);
+  background: #f7f7f7;
+}
+
+.timeline-empty {
+  padding: 12px;
+  color: #666;
+  font-size: 13px;
+}
+
+.timeline-strip {
+  flex: 1;
+  overflow: auto;
+  padding: 8px;
+}
+
+.timeline-track {
+  position: relative;
+  height: 72px;
+}
+
+.timeline-shot,
+.timeline-insert {
+  position: absolute;
+  top: 8px;
+  height: 56px;
+  border-radius: 10px;
+  border: 1px solid rgba(0, 0, 0, 0.12);
+  background: #f7f7f7;
+  cursor: pointer;
+  text-align: left;
+  padding: 8px 10px;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+}
+
+.timeline-shot.is-selected {
+  border-color: rgba(80, 80, 255, 0.45);
+  background: rgba(80, 80, 255, 0.08);
+}
+
+.timeline-shot-title {
+  font-weight: 600;
+  font-size: 12px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.timeline-shot-sub {
+  font-size: 11px;
+  color: #666;
+}
+
+.timeline-insert {
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  font-weight: 700;
+}
+
