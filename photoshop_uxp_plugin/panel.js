@@ -3,8 +3,8 @@ const fs = require("uxp").storage.localFileSystem;
 
 const app = photoshop.app;
 const DEFAULT_CANVAS_COLOR = "#E8E8E8";
-const CANVAS_WIDTH = 1920;
-const CANVAS_HEIGHT = 1080;
+const DEFAULT_CANVAS_WIDTH = 1920;
+const DEFAULT_CANVAS_HEIGHT = 1080;
 const SHARED_BRIDGE_PATH = "C:/Users/Public/StoryboardTool/storyboard_live_bridge.json";
 const SHARED_HEARTBEAT_PATH = "C:/Users/Public/StoryboardTool/storyboard_plugin_heartbeat.json";
 const SB_POLL_MS = 1500;
@@ -12,6 +12,7 @@ const BRIDGE_CACHE_FILE = "storyboard_bridge_cache.json";
 const BRIDGE_STALE_MS = 8000;
 const OVERLAY_LAYER_PREFIX = "SB ref:";
 const SB_BG_LAYER_NAME = "SB bg";
+const DRAWING_LAYER_NAME = "Layer 1";
 const OVERLAY_OPACITY = 45;
 const SHOT_CSV_COLUMNS = [
   "order",
@@ -45,10 +46,20 @@ let projectRoot = null;
 let projectData = null;
 let shotFolder = null;
 let canvasColor = DEFAULT_CANVAS_COLOR;
+let canvasWidth = DEFAULT_CANVAS_WIDTH;
+let canvasHeight = DEFAULT_CANVAS_HEIGHT;
 let linkedFromStoryboard = false;
 let lastBridgeSignature = "";
 let linkedProjectRootPath = "";
 let bridgePollTimer = null;
+let backgroundSyncTimer = null;
+let backgroundSyncInFlight = false;
+let activeDocWatchTimer = null;
+let lastActiveDocKey = "";
+let lastFocusToken = 0;
+let focusBaselineSet = false;
+let focusSwitchInFlight = false;
+const boardBackgroundSigByShot = new Map();
 
 function $(id) {
   return document.getElementById(id);
@@ -66,10 +77,15 @@ function init() {
   $("applyBackground").addEventListener("click", () => runPanelAction(applyCanvasBackground));
   $("saveAndStay").addEventListener("click", () => runPanelAction(saveCurrentShot));
   $("saveAndNext").addEventListener("click", () => runPanelAction(saveAndGoNext));
+  $("recoverPsd")?.addEventListener("click", () => runPanelAction(recoverCurrentShotPsd));
   $("relinkNow").addEventListener("click", () => runPanelAction(reconnectStoryboardBridge));
   setLinkedUi(false);
   setLinkStatus("Connecting…", true);
   startStoryboardBridgePolling();
+  registerDocumentBackgroundListeners();
+  startActiveDocumentWatch();
+  scheduleBackgroundSyncForActiveDocument();
+  updateCurrentShotIndicator();
 }
 
 function setLinkedUi(linked) {
@@ -112,6 +128,10 @@ async function chooseProjectFolder() {
   setLinkedUi(false);
   setLinkStatus("Manual project", true);
   setStatus(`Project loaded (${projectData.shots.length} shots).`);
+  if (app.activeDocument) {
+    scheduleBackgroundSyncForActiveDocument();
+  }
+  updateCurrentShotIndicator();
 }
 
 async function chooseShotFolder() {
@@ -135,8 +155,9 @@ async function chooseShotFolder() {
   setLinkStatus("Manual folder", true);
   setStatus(`Shot folder selected.`);
   if (app.activeDocument) {
-    await applyCanvasBackground();
+    scheduleBackgroundSyncForActiveDocument();
   }
+  updateCurrentShotIndicator();
 }
 
 function startStoryboardBridgePolling() {
@@ -291,11 +312,13 @@ async function ensureSharedBridgeDir() {
 }
 
 async function sendPluginHeartbeat(live) {
+  const openShotIds = getOpenShotIds();
   const payload = JSON.stringify({
     at: new Date().toISOString(),
     plugin: "storyboard-bridge",
     project_root: live?.project_root || "",
     selected_shot_id: live?.selected_shot_id || "",
+    open_shot_ids: openShotIds,
   });
   try {
     const dir = await ensureSharedBridgeDir();
@@ -311,9 +334,15 @@ async function sendPluginHeartbeat(live) {
     urls.push(`http://127.0.0.1:${port}/api/bridge/plugin-heartbeat`);
     urls.push(`http://localhost:${port}/api/bridge/plugin-heartbeat`);
   }
+  const body = JSON.stringify({ open_shot_ids: openShotIds });
   for (const url of urls) {
     try {
-      await fetch(url, { method: "POST", cache: "no-store" });
+      await fetch(url, {
+        method: "POST",
+        cache: "no-store",
+        headers: { "Content-Type": "application/json" },
+        body,
+      });
       return;
     } catch {
       // Try the next endpoint.
@@ -370,6 +399,8 @@ async function applyLiveBridge(live) {
     live.project_root,
     live.selected_shot_id,
     live.canvas_background_color,
+    live.canvas_width,
+    live.canvas_height,
     live.shot_count,
   ].join("|");
   const isSame = signature === lastBridgeSignature;
@@ -381,6 +412,9 @@ async function applyLiveBridge(live) {
     setLinkedUi(false);
     setLinkStatus("Folder access failed — use Advanced", true);
     canvasColor = normalizeHexColor(live.canvas_background_color);
+    const fallbackSize = normalizeCanvasSize(live.canvas_width, live.canvas_height);
+    canvasWidth = fallbackSize.width;
+    canvasHeight = fallbackSize.height;
     updateColorSwatch();
     return;
   }
@@ -394,19 +428,22 @@ async function applyLiveBridge(live) {
     populateShotSelect();
   }
 
-  const shotId = live.selected_shot_id || detectShotFromDocument();
+  // Prefer the shot the artist is actually editing (the active Photoshop tab) so
+  // picking a shot in the panel — which opens it — sticks, instead of being reset
+  // to Storyboard Tool's selection on the next poll. Fall back to ST's selection
+  // only when no shot document is open.
+  const shotId = detectShotFromDocument() || live.selected_shot_id;
   if (shotId) {
     setSelectedShotId(shotId);
-    if (live.shot_folder) {
-      shotFolder = await resolveFolderEntry(live.shot_folder);
-    } else {
-      shotFolder = await getShotFolderEntry(shotId);
-    }
+    shotFolder = await getShotFolderEntry(shotId);
   }
 
   const nextColor = normalizeHexColor(live.canvas_background_color);
   const colorChanged = nextColor !== canvasColor;
   canvasColor = nextColor;
+  const nextSize = normalizeCanvasSize(live.canvas_width || canvasWidth, live.canvas_height || canvasHeight);
+  canvasWidth = nextSize.width;
+  canvasHeight = nextSize.height;
   updateColorSwatch();
 
   if (colorChanged && app.activeDocument && isAutoApplyColorEnabled()) {
@@ -417,6 +454,46 @@ async function applyLiveBridge(live) {
   setLinkStatus(`Linked · ${label}`);
   if (!isSame && shotId) {
     setStatus(`Synced: ${shotId}`);
+  }
+
+  if (shotId && app.activeDocument && detectShotFromDocument() === shotId) {
+    scheduleBackgroundSyncForActiveDocument();
+  }
+
+  await maybeHandleFocusRequest(live);
+
+  // Project data may have just loaded; refresh the label so it can show titles.
+  updateCurrentShotIndicator();
+}
+
+// Storyboard Tool sets a focus request (shot_id + monotonic token) when the user
+// asks to open a shot that is already a tab in Photoshop. Acting only on a new
+// token — and adopting the current token as a baseline on first sight — means
+// passive polls never yank tabs and stale requests are not replayed on reload.
+async function maybeHandleFocusRequest(live) {
+  const request = live?.focus_request;
+  const token = Number(request?.token || 0);
+  if (!focusBaselineSet) {
+    focusBaselineSet = true;
+    lastFocusToken = token;
+    return;
+  }
+  if (token === lastFocusToken || focusSwitchInFlight) {
+    return;
+  }
+  lastFocusToken = token;
+  const shotId = String(request?.shot_id || "").trim().toLowerCase();
+  if (!shotId) {
+    return;
+  }
+  focusSwitchInFlight = true;
+  try {
+    await switchToShot(shotId);
+    setStatus(`Switched to ${shotId} (already open).`);
+  } catch (error) {
+    setStatus(error.message || String(error));
+  } finally {
+    focusSwitchInFlight = false;
   }
 }
 
@@ -608,14 +685,41 @@ function escapeCsvCell(value) {
   return text;
 }
 
+function shotOptionLabel(shot, index) {
+  const order = index + 1;
+  const title = String(shot?.title || "").trim();
+  return title ? `${order}. ${title}` : `${order}. ${formatShotIdLabel(shot.shot_id)}`;
+}
+
 function populateShotSelect() {
   const select = $("shotSelect");
-  select.innerHTML = "";
-  for (const shot of projectData?.shots || []) {
-    const option = document.createElement("option");
-    option.value = shot.shot_id;
-    option.textContent = formatShotIdLabel(shot.shot_id);
-    select.appendChild(option);
+  if (!select) {
+    return;
+  }
+  const shots = projectData?.shots || [];
+  const signature = shots.map((shot) => shot.shot_id).join("|");
+  if (select.getAttribute("data-shots-sig") === signature && select.options.length === shots.length) {
+    // Same shot list — refresh labels (titles/order may have changed) without
+    // rebuilding, so the user's current selection is never reset out from under
+    // them on the next bridge poll.
+    shots.forEach((shot, index) => {
+      if (select.options[index]) {
+        select.options[index].textContent = shotOptionLabel(shot, index);
+      }
+    });
+  } else {
+    const previous = select.value;
+    select.innerHTML = "";
+    shots.forEach((shot, index) => {
+      const option = document.createElement("option");
+      option.value = shot.shot_id;
+      option.textContent = shotOptionLabel(shot, index);
+      select.appendChild(option);
+    });
+    select.setAttribute("data-shots-sig", signature);
+    if (previous && shots.some((shot) => shot.shot_id === previous)) {
+      select.value = previous;
+    }
   }
   updateOverlayCountLimits();
 }
@@ -698,18 +802,33 @@ function currentShotRecord() {
   return shot;
 }
 
-function detectShotFromDocument() {
-  const doc = app.activeDocument;
-  if (!doc?.name) {
-    return "";
-  }
-  const base = String(doc.name).replace(/\.[^.]+$/, "");
+function shotIdFromDocumentName(name) {
+  const base = String(name || "").replace(/\.[^.]+$/, "");
   const legacy = base.match(/^(shot_\d{3,})/i);
   if (legacy) {
     return legacy[1].toLowerCase();
   }
   const uuid = base.match(/^([a-f0-9]{32})$/i);
   return uuid ? uuid[1].toLowerCase() : "";
+}
+
+function detectShotFromDocument() {
+  return shotIdFromDocumentName(app.activeDocument?.name);
+}
+
+function getOpenShotIds() {
+  const ids = new Set();
+  try {
+    for (const doc of app.documents) {
+      const shotId = shotIdFromDocumentName(doc.name);
+      if (shotId) {
+        ids.add(shotId);
+      }
+    }
+  } catch {
+    // Document enumeration is best-effort.
+  }
+  return [...ids];
 }
 
 async function getShotFolderEntry(shotId) {
@@ -865,6 +984,107 @@ function collectOverlayLayers(layers, output = []) {
   return output;
 }
 
+function collectBoardBackgroundLayers(layers, output = []) {
+  for (const layer of layers || []) {
+    if (String(layer.name || "") === SB_BG_LAYER_NAME) {
+      output.push(layer);
+    }
+    if (layer.layers?.length) {
+      collectBoardBackgroundLayers(layer.layers, output);
+    }
+  }
+  return output;
+}
+
+function collectExportHiddenLayers(doc) {
+  const output = [];
+  const walk = (layers) => {
+    for (const layer of layers || []) {
+      const name = String(layer.name || "");
+      if (name === SB_BG_LAYER_NAME || name.startsWith(OVERLAY_LAYER_PREFIX)) {
+        output.push(layer);
+      }
+      if (layer.layers?.length) {
+        walk(layer.layers);
+      }
+    }
+  };
+  walk(doc?.layers);
+  const canvasLayer = findBackgroundLayer(doc);
+  if (canvasLayer && !output.includes(canvasLayer)) {
+    output.push(canvasLayer);
+  }
+  return output;
+}
+
+function captureActiveLayerIds(doc) {
+  try {
+    return (doc?.activeLayers || []).map((layer) => layer.id);
+  } catch {
+    return [];
+  }
+}
+
+function restoreActiveLayersByIds(doc, ids) {
+  if (!doc || !ids?.length) {
+    return;
+  }
+  const byId = new Map();
+  const walk = (layers) => {
+    for (const layer of layers || []) {
+      byId.set(layer.id, layer);
+      if (layer.layers?.length) {
+        walk(layer.layers);
+      }
+    }
+  };
+  walk(doc.layers);
+  const layers = ids.map((id) => byId.get(id)).filter(Boolean);
+  if (layers.length) {
+    try {
+      doc.activeLayers = layers;
+    } catch {
+      // Selection restore is best-effort.
+    }
+  }
+}
+
+function hasDrawingLayer(doc) {
+  for (const layer of doc?.layers || []) {
+    if (layer.isBackgroundLayer) {
+      continue;
+    }
+    const name = String(layer.name || "");
+    if (name === "Background" || name === SB_BG_LAYER_NAME || name.startsWith(OVERLAY_LAYER_PREFIX)) {
+      continue;
+    }
+    return true;
+  }
+  return false;
+}
+
+async function ensureDrawingLayerInModal(doc) {
+  if (!doc || hasDrawingLayer(doc)) {
+    return null;
+  }
+  await photoshop.action.batchPlay(
+    [
+      {
+        _obj: "make",
+        _target: [{ _ref: "layer" }],
+      },
+    ],
+    { synchronousExecution: true },
+  );
+  await renameActiveLayer(DRAWING_LAYER_NAME);
+  const layer = app.activeDocument.activeLayers[0] || null;
+  if (layer) {
+    await layer.move(app.activeDocument, photoshop.constants.ElementPlacement.PLACEATBEGINNING);
+    app.activeDocument.activeLayers = [layer];
+  }
+  return layer;
+}
+
 async function deleteLayersInModal(layers) {
   for (const layer of layers) {
     try {
@@ -978,23 +1198,15 @@ async function fitLayerToDocumentInModal(layer) {
 
 async function resolveBoardBackgroundEntry(shotId) {
   const folder = await getShotFolderEntry(shotId);
-  const candidates = [`${shotId}_background.png`];
-  const shot = (projectData?.shots || []).find((item) => item.shot_id === shotId);
-  const previewRel = shot?.preview_image_path || shot?.image_path || "";
-  if (previewRel) {
-    const previewName = previewRel.split("/").pop();
-    if (previewName && !candidates.includes(previewName)) {
-      candidates.push(previewName);
-    }
+  // The board background (`SB bg`) reference is ONLY the dedicated background
+  // file. Never fall back to the shot's preview — that preview is the artist's
+  // own drawing, and importing it as `SB bg` would duplicate the drawing as a
+  // reference layer (and resurrect it after the reference is deleted).
+  try {
+    return await folder.getEntry(`${shotId}_background.png`);
+  } catch {
+    return null;
   }
-  for (const name of candidates) {
-    try {
-      return await folder.getEntry(name);
-    } catch {
-      // Try the next candidate.
-    }
-  }
-  return null;
 }
 
 function findBoardBackgroundLayer(doc) {
@@ -1007,7 +1219,7 @@ function findBoardBackgroundLayer(doc) {
 }
 
 async function removeBoardBackgroundLayerInModal(doc) {
-  const layers = (doc.layers || []).filter((layer) => String(layer.name || "") === SB_BG_LAYER_NAME);
+  const layers = collectBoardBackgroundLayers(doc.layers);
   if (layers.length) {
     await deleteLayersInModal(layers);
   }
@@ -1033,9 +1245,32 @@ async function setLayerVisibilityInModal(layer, visible) {
   );
 }
 
-async function importBoardBackgroundInModal(shotId) {
-  const entry = await resolveBoardBackgroundEntry(shotId);
-  if (!entry) {
+async function ensureBoardBackgroundStackOrderInModal(doc) {
+  const background = findBackgroundLayer(doc);
+  const sbBg = findBoardBackgroundLayer(doc);
+  if (!sbBg) {
+    return;
+  }
+  if (background) {
+    await sbBg.move(background, photoshop.constants.ElementPlacement.PLACEBEFORE);
+  } else {
+    await sbBg.move(doc, photoshop.constants.ElementPlacement.PLACEATEND);
+  }
+}
+
+async function finalizeRecoveredShotInModal(shotId) {
+  const doc = app.activeDocument;
+  if (!doc) {
+    return;
+  }
+  await syncBoardBackgroundFromDisk(shotId, true);
+  await ensureBoardBackgroundStackOrderInModal(doc);
+  await ensureDrawingLayerInModal(doc);
+}
+
+async function importBoardBackgroundInModal(shotId, entry = null) {
+  const resolvedEntry = entry || (await resolveBoardBackgroundEntry(shotId));
+  if (!resolvedEntry) {
     return false;
   }
   const doc = app.activeDocument;
@@ -1043,17 +1278,226 @@ async function importBoardBackgroundInModal(shotId) {
     throw new Error("No active Photoshop document.");
   }
 
+  const previousActiveIds = captureActiveLayerIds(doc);
   await removeBoardBackgroundLayerInModal(doc);
-  const placedLayer = await placeFileEntryAsLayer(entry);
+  const placedLayer = await placeFileEntryAsLayer(resolvedEntry);
   if (placedLayer) {
     await fitLayerToDocumentInModal(placedLayer);
   }
   await renameActiveLayer(SB_BG_LAYER_NAME);
   const canvasLayer = findBackgroundLayer(doc);
   if (placedLayer) {
-    await moveLayerBelowReference(placedLayer, canvasLayer);
+    if (canvasLayer) {
+      // Above the canvas-color fill, below the drawing (panel top = front).
+      await placedLayer.move(canvasLayer, photoshop.constants.ElementPlacement.PLACEBEFORE);
+    } else {
+      await placedLayer.move(doc, photoshop.constants.ElementPlacement.PLACEATEND);
+    }
   }
+  await ensureBoardBackgroundStackOrderInModal(doc);
+  restoreActiveLayersByIds(doc, previousActiveIds);
   return true;
+}
+
+async function boardBackgroundSignature(entry) {
+  // A signature that only changes when the file actually changes. Returns null
+  // when it cannot be determined — callers must treat null as "no evidence of
+  // change" and never re-import on it (mtime via fileUnixMtime is unreliable
+  // because it falls back to Date.now(), which would loop forever).
+  try {
+    const metadata = await entry.getMetadata();
+    const parts = [];
+    if (metadata?.dateModified) {
+      parts.push(`m:${metadata.dateModified.getTime()}`);
+    } else if (metadata?.modificationDate) {
+      parts.push(`m:${metadata.modificationDate.getTime()}`);
+    }
+    if (typeof metadata?.size === "number") {
+      parts.push(`s:${metadata.size}`);
+    }
+    if (parts.length) {
+      return parts.join("|");
+    }
+  } catch {
+    // Metadata unavailable.
+  }
+  return null;
+}
+
+// Decide — without opening a modal — whether the board background layer needs
+// to be rebuilt. Adopts the on-disk signature as the baseline the first time so
+// passive re-syncs become no-ops until the file genuinely changes.
+async function boardBackgroundRefreshNeeded(shotId, force = false) {
+  const doc = app.activeDocument;
+  if (!doc) {
+    return false;
+  }
+  const entry = await resolveBoardBackgroundEntry(shotId);
+  const hasLayer = !!findBoardBackgroundLayer(doc);
+  if (!entry) {
+    return hasLayer; // Stale layer with no source file → remove it.
+  }
+  if (force || !hasLayer) {
+    return true;
+  }
+  const signature = await boardBackgroundSignature(entry);
+  if (signature === null) {
+    return false; // Cannot tell → assume unchanged, never loop.
+  }
+  const lastSignature = boardBackgroundSigByShot.get(shotId);
+  if (lastSignature === undefined || lastSignature === null) {
+    boardBackgroundSigByShot.set(shotId, signature);
+    return false;
+  }
+  return signature !== lastSignature;
+}
+
+async function syncBoardBackgroundFromDisk(shotId, force = false) {
+  const doc = app.activeDocument;
+  if (!doc) {
+    return false;
+  }
+
+  const entry = await resolveBoardBackgroundEntry(shotId);
+  if (!entry) {
+    boardBackgroundSigByShot.delete(shotId);
+    await removeBoardBackgroundLayerInModal(doc);
+    return false;
+  }
+
+  if (!(await boardBackgroundRefreshNeeded(shotId, force))) {
+    return false;
+  }
+
+  const signature = await boardBackgroundSignature(entry);
+  const imported = await importBoardBackgroundInModal(shotId, entry);
+  if (imported && signature !== null) {
+    boardBackgroundSigByShot.set(shotId, signature);
+  }
+  return imported;
+}
+
+function registerDocumentBackgroundListeners() {
+  const events = ["open", "select", "close"];
+  try {
+    photoshop.action.addNotificationListener(events, (eventName) => {
+      updateCurrentShotIndicator();
+      if (eventName === "open" || eventName === "select") {
+        scheduleBackgroundSyncForActiveDocument();
+      }
+    });
+  } catch {
+    // Notification listeners are optional.
+  }
+}
+
+function activeDocumentKey() {
+  try {
+    const doc = app.activeDocument;
+    if (!doc) {
+      return "";
+    }
+    return `${doc.id}:${doc.name}`;
+  } catch {
+    return "";
+  }
+}
+
+// Switching tabs in Photoshop does not always fire a notification we can hook,
+// so poll the active document and refresh the "Now editing" label when it
+// changes. This only reads document/layer-free properties — no modal needed.
+function startActiveDocumentWatch() {
+  if (activeDocWatchTimer) {
+    clearInterval(activeDocWatchTimer);
+  }
+  activeDocWatchTimer = setInterval(() => {
+    const key = activeDocumentKey();
+    if (key !== lastActiveDocKey) {
+      lastActiveDocKey = key;
+      updateCurrentShotIndicator();
+    }
+  }, 700);
+}
+
+function updateCurrentShotIndicator() {
+  const node = $("currentShot");
+  if (!node) {
+    return;
+  }
+  let doc = null;
+  try {
+    doc = app.activeDocument;
+  } catch {
+    doc = null;
+  }
+  if (!doc) {
+    node.hidden = true;
+    return;
+  }
+
+  const shotId = detectShotFromDocument();
+  if (!shotId) {
+    node.textContent = `Editing: ${doc.name} (not a storyboard shot)`;
+    node.classList.add("muted");
+    node.hidden = false;
+    return;
+  }
+
+  node.classList.remove("muted");
+  const shots = projectData?.shots || [];
+  const index = shots.findIndex((shot) => shot.shot_id === shotId);
+  const idLabel = formatShotIdLabel(shotId);
+  let text;
+  if (index >= 0) {
+    const title = String(shots[index].title || "").trim();
+    text = `Editing shot ${index + 1}/${shots.length}`;
+    text += title ? ` · ${title} (${idLabel})` : ` · ${idLabel}`;
+  } else {
+    text = `Editing · ${idLabel}`;
+  }
+  node.textContent = text;
+  node.hidden = false;
+}
+
+function scheduleBackgroundSyncForActiveDocument() {
+  if (backgroundSyncTimer) {
+    clearTimeout(backgroundSyncTimer);
+  }
+  backgroundSyncTimer = setTimeout(() => {
+    backgroundSyncTimer = null;
+    syncActiveDocumentBackground().catch(() => {});
+  }, 400);
+}
+
+async function syncActiveDocumentBackground() {
+  const shotId = detectShotFromDocument();
+  if (!shotId || !app.activeDocument) {
+    return;
+  }
+  if (!projectRoot && !shotFolder) {
+    return;
+  }
+  if (backgroundSyncInFlight) {
+    return;
+  }
+  // Check whether anything actually changed before entering a modal, so passive
+  // events (layer select, the 1.5s live-bridge poll) never flicker a modal or
+  // rebuild the layer stack while the artist is working.
+  if (!(await boardBackgroundRefreshNeeded(shotId, false))) {
+    return;
+  }
+  backgroundSyncInFlight = true;
+  let synced = false;
+  try {
+    await runModal("Sync board background", async () => {
+      synced = await syncBoardBackgroundFromDisk(shotId, true);
+    });
+  } finally {
+    backgroundSyncInFlight = false;
+  }
+  if (synced) {
+    setStatus(`Background synced for ${shotId}.`);
+  }
 }
 
 async function moveLayerBelowReference(layer, referenceLayer) {
@@ -1137,7 +1581,14 @@ async function applyCanvasBackgroundInModal() {
     throw new Error("No active Photoshop document.");
   }
 
-  const targetLayer = findBackgroundLayer(doc);
+  // Filling the background must not steal the artist's active layer selection.
+  const previousActiveIds = captureActiveLayerIds(doc);
+  let targetLayer = findBackgroundLayer(doc);
+  if (!targetLayer) {
+    // No canvas-color base exists (e.g. a PSD opened with only `SB bg`). Create
+    // one rather than painting over the reference or the drawing.
+    targetLayer = await createCanvasBackgroundLayerInModal(doc);
+  }
   if (!targetLayer) {
     throw new Error("No layer found to fill with the canvas color.");
   }
@@ -1165,21 +1616,113 @@ async function applyCanvasBackgroundInModal() {
     ],
     { synchronousExecution: true },
   );
+  restoreActiveLayersByIds(doc, previousActiveIds);
+}
+
+const PSD_MIN_VALID_BYTES = 26; // A PSD header alone is 26 bytes; anything smaller is empty/truncated.
+const SHOT_HISTORY_FOLDER = "_history";
+
+async function psdFileSize(entry) {
+  try {
+    const metadata = await entry.getMetadata();
+    const size = Number(metadata?.size);
+    return Number.isFinite(size) ? size : -1;
+  } catch {
+    return -1; // Size unknown — callers must not treat this as broken.
+  }
+}
+
+function psdSizeLooksBroken(size) {
+  return size >= 0 && size < PSD_MIN_VALID_BYTES;
+}
+
+async function psdEntryLooksOpenable(entry) {
+  return !psdSizeLooksBroken(await psdFileSize(entry));
+}
+
+async function shotHistoryFolder(folder) {
+  try {
+    return await folder.getEntry(SHOT_HISTORY_FOLDER);
+  } catch {
+    return await folder.createFolder(SHOT_HISTORY_FOLDER);
+  }
+}
+
+// Best-effort native copy of a file aside into the shot's _history folder so a
+// corrupt or about-to-be-overwritten PSD can be recovered manually.
+async function copyPsdToHistory(folder, entry) {
+  try {
+    if (!entry || typeof entry.copyTo !== "function") {
+      return;
+    }
+    const history = await shotHistoryFolder(folder);
+    await entry.copyTo(history, { overwrite: true });
+  } catch {
+    // History copies are optional.
+  }
+}
+
+async function backupExistingPsd(folder, shotId) {
+  try {
+    const existing = await folder.getEntry(`${shotId}.psd`);
+    if (await psdEntryLooksOpenable(existing)) {
+      await copyPsdToHistory(folder, existing);
+    }
+  } catch {
+    // No prior PSD to back up.
+  }
+}
+
+async function preserveBrokenPsd(folder, shotId) {
+  try {
+    const entry = await folder.getEntry(`${shotId}.psd`);
+    await copyPsdToHistory(folder, entry);
+  } catch {
+    // Nothing to preserve.
+  }
 }
 
 async function savePsdInModal(folder, shotId) {
+  // Never overwrite an existing PSD via saveAs — that is the call that corrupts
+  // files. The artist saves with native Ctrl+S; the plugin only ever creates the
+  // PSD the first time it does not exist yet (so a brand-new canvas has a file).
+  const existing = await getShotPsdEntry(folder, shotId);
+  if (existing) {
+    return existing;
+  }
   const file = await folder.createFile(`${shotId}.psd`, { overwrite: true });
   await app.activeDocument.saveAs.psd(file, {}, false);
+  if ((await psdFileSize(file)) === 0) {
+    throw new Error(
+      `Creating ${shotId}.psd produced an empty file. Your work is still open in Photoshop — try again.`,
+    );
+  }
   return file;
+}
+
+async function saveActiveDocumentNativeInModal() {
+  // Photoshop's native Save (Ctrl+S) — does not use UXP saveAs overwrite, which can
+  // corrupt PSDs when writing into the project folder.
+  try {
+    await photoshop.action.batchPlay([{ _obj: "save" }], { synchronousExecution: true });
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 async function exportPreviewInModal(folder, shotId) {
   const doc = app.activeDocument;
-  const bgLayer = doc ? findBoardBackgroundLayer(doc) : null;
+  // Export only the artist's strokes on transparency. Hide the canvas-color fill
+  // (Background), the board background reference (SB bg), and onion-skin overlays
+  // (SB ref:) — Storyboard Tool paints the canvas color behind the PNG in-app.
+  const previousActiveIds = captureActiveLayerIds(doc);
   const hiddenLayers = [];
-  if (bgLayer?.visible) {
-    await setLayerVisibilityInModal(bgLayer, false);
-    hiddenLayers.push(bgLayer);
+  for (const layer of collectExportHiddenLayers(doc)) {
+    if (layer.visible) {
+      await setLayerVisibilityInModal(layer, false);
+      hiddenLayers.push(layer);
+    }
   }
   try {
     const file = await folder.createFile(`${shotId}_preview.png`, { overwrite: true });
@@ -1189,10 +1732,12 @@ async function exportPreviewInModal(folder, shotId) {
     for (const layer of hiddenLayers) {
       await setLayerVisibilityInModal(layer, true);
     }
+    restoreActiveLayersByIds(doc, previousActiveIds);
   }
 }
 
 async function createCanvasDocumentInModal(shotId) {
+  const size = currentCanvasSize();
   await photoshop.action.batchPlay(
     [
       {
@@ -1201,8 +1746,8 @@ async function createCanvasDocumentInModal(shotId) {
         using: {
           _obj: "document",
           name: shotId,
-          width: { _unit: "pixelsUnit", _value: CANVAS_WIDTH },
-          height: { _unit: "pixelsUnit", _value: CANVAS_HEIGHT },
+          width: { _unit: "pixelsUnit", _value: size.width },
+          height: { _unit: "pixelsUnit", _value: size.height },
           resolution: { _unit: "densityUnit", _value: 72 },
           depth: 8,
           mode: { _class: "RGBColorMode" },
@@ -1216,22 +1761,136 @@ async function createCanvasDocumentInModal(shotId) {
 }
 
 async function saveActiveDocumentToFolder(folder, shotId) {
-  const psdFile = await savePsdInModal(folder, shotId);
   const previewFile = await exportPreviewInModal(folder, shotId);
+  const existingPsd = await getShotPsdEntry(folder, shotId);
+  let psdFile = existingPsd;
+  if (!existingPsd) {
+    // First-time canvas only — establish the linked PSD path once.
+    psdFile = await savePsdInModal(folder, shotId);
+  }
   return { psdFile, previewFile };
 }
 
-async function openOrActivateShotDocument(shotId, psdEntry) {
+async function storyboardApiOrigins() {
+  const cache = await loadBridgeCache();
+  const origins = [];
+  const port = Number(cache?.port || 0);
+  if (port > 0) {
+    origins.push(`http://127.0.0.1:${port}`);
+    origins.push(`http://localhost:${port}`);
+  }
+  for (const candidate of [8000, 8001, 8002, 8003, 8004]) {
+    origins.push(`http://127.0.0.1:${candidate}`);
+  }
+  return [...new Set(origins)];
+}
+
+// Ask Storyboard Tool to rebuild a Photoshop-unopenable PSD. preserveLayers keeps
+// the original layer data (blend modes, opacity, masks) via a psd_tools round-trip;
+// false forces a flattened rebuild. Returns the recovery result (or null).
+async function requestPsdRecovery(shotId, preserveLayers = true) {
+  const query = preserveLayers ? "" : "?preserve_layers=false";
+  for (const origin of await storyboardApiOrigins()) {
+    try {
+      const response = await fetch(`${origin}/api/shots/${shotId}/recover-source${query}`, {
+        method: "POST",
+        cache: "no-store",
+      });
+      if (response.ok) {
+        const payload = await response.json();
+        return payload?.result || payload;
+      }
+    } catch {
+      // Try the next candidate origin.
+    }
+  }
+  return null;
+}
+
+async function requestShotSync(shotId, force = true) {
+  const query = force ? "?force=true" : "";
+  for (const origin of await storyboardApiOrigins()) {
+    try {
+      const response = await fetch(`${origin}/api/shots/${encodeURIComponent(shotId)}/sync${query}`, {
+        method: "POST",
+        cache: "no-store",
+      });
+      if (response.ok) {
+        return await response.json();
+      }
+    } catch {
+      // Try the next candidate origin.
+    }
+  }
+  return null;
+}
+
+async function getShotPsdEntry(folder, shotId) {
+  try {
+    return await folder.getEntry(`${shotId}.psd`);
+  } catch {
+    return null;
+  }
+}
+
+// Rebuild a broken shot PSD and open it. Tries to preserve the original layers
+// first; if Photoshop still cannot open that rebuild, escalates to a flattened
+// rebuild. Returns { doc, rebuilt } on success, or null if it could not be opened.
+async function recoverBrokenShotAndOpen(shotId, folder) {
+  for (const preserveLayers of [true, false]) {
+    const rebuilt = await requestPsdRecovery(shotId, preserveLayers);
+    if (!rebuilt) {
+      return null; // Storyboard Tool unreachable or the file is unreadable.
+    }
+    const entry = await getShotPsdEntry(folder, shotId);
+    if (entry && (await psdEntryLooksOpenable(entry))) {
+      const opened = await openPsdEntry(entry);
+      if (opened && isDocumentOpen(opened) && shotIdFromDocumentName(opened.name) === shotId) {
+        return { doc: opened, rebuilt };
+      }
+    }
+    // The rebuilt file still will not open. Escalate to a flattened rebuild only
+    // when we just tried (and got) a layer-preserving one; otherwise give up.
+    if (!(preserveLayers && rebuilt.method === "layers")) {
+      return null;
+    }
+  }
+  return null;
+}
+
+// Activates the shot's existing tab, opens its PSD, or — when the file is
+// missing or unreadable (corrupt) — asks Storyboard Tool to rebuild it from its
+// layers and retries, falling back to a fresh canvas. Returns
+// { doc, createdFresh, recoveredBroken, rebuilt } so callers can set up a freshly
+// created canvas and report what happened.
+async function openOrCreateShotDocInModal(shotId, folder, psdEntry) {
   const existing = findOpenDocumentForShot(shotId);
   if (existing) {
-    return existing;
+    return { doc: existing, createdFresh: false, recoveredBroken: false };
   }
+
+  let recoveredBroken = false;
   if (psdEntry) {
-    const opened = await openPsdEntry(psdEntry);
-    return opened || app.activeDocument;
+    if (await psdEntryLooksOpenable(psdEntry)) {
+      const opened = await openPsdEntry(psdEntry);
+      if (opened && isDocumentOpen(opened) && shotIdFromDocumentName(opened.name) === shotId) {
+        return { doc: opened, createdFresh: false, recoveredBroken: false };
+      }
+    }
+    // Photoshop could not open the file. Ask Storyboard Tool to rebuild it from
+    // its own layers (the broken original is backed up under _history/), then
+    // retry opening the rebuilt PSD.
+    const recovered = await recoverBrokenShotAndOpen(shotId, folder);
+    if (recovered) {
+      return { doc: recovered.doc, createdFresh: false, recoveredBroken: true, rebuilt: recovered.rebuilt };
+    }
+    // Recovery unavailable or still unreadable: preserve a copy and start fresh.
+    await preserveBrokenPsd(folder, shotId);
+    recoveredBroken = true;
   }
+
   await createCanvasDocumentInModal(shotId);
-  return app.activeDocument;
+  return { doc: app.activeDocument, createdFresh: true, recoveredBroken };
 }
 
 async function closeDocumentInModal(doc, keepDoc) {
@@ -1263,26 +1922,31 @@ async function closeDocumentInModal(doc, keepDoc) {
   }
 }
 
-async function finishShotSwitch(previousDoc, nextDoc) {
+async function finishShotSwitch(previousDoc, nextDoc, { closePrevious = true } = {}) {
   const activeNext = activateDocument(nextDoc || app.activeDocument);
   if (!activeNext) {
     throw new Error("Could not activate the target shot document.");
   }
-  if (previousDoc && previousDoc.id !== activeNext.id) {
+  // closePrevious=false keeps the previous shot's tab open (its PSD may have
+  // unsaved strokes the artist still needs to Ctrl+S) instead of discarding it.
+  if (closePrevious && previousDoc && previousDoc.id !== activeNext.id) {
     await closeDocumentInModal(previousDoc, activeNext);
   }
   return activeNext;
 }
 
 async function saveCurrentShot() {
-  await exportBoth();
-  await updateProjectAfterSave();
-  setStatus(`Saved ${currentShotId()}. Stay in Photoshop — Storyboard Tool will sync in the background.`);
+  const shotId = await exportDrawingPreview();
+  await updateProjectAfterSave(shotId);
+  setStatus(
+    `Exported drawing for ${shotId}. Press Ctrl+S in Photoshop to save the PSD (Storyboard Tool syncs the preview automatically).`,
+  );
 }
 
 async function saveAndGoNext() {
-  const shotId = currentShotId();
-  const currentFolder = await requireWorkingFolder();
+  const shotId = activeShotId();
+  setSelectedShotId(shotId);
+  const currentFolder = await ensureShotStructure(shotId);
   const nextShot = await resolveNextShot(shotId);
 
   let nextFolder = null;
@@ -1302,37 +1966,42 @@ async function saveAndGoNext() {
 
   await runModal("Save & next shot", async () => {
     const previousDoc = app.activeDocument;
-    await applyCanvasBackgroundInModal();
-    await savePsdInModal(currentFolder, shotId);
     await exportPreviewInModal(currentFolder, shotId);
+    // Do NOT save or close the current shot — its tab stays open so unsaved
+    // strokes are never discarded. The artist saves the PSD with Ctrl+S.
 
     if (!nextShot) {
       return;
     }
 
     const nextShotId = nextShot.shot_id;
-    const nextDoc = await openOrActivateShotDocument(nextShotId, nextPsdEntry);
+    const result = await openOrCreateShotDocInModal(nextShotId, nextFolder, nextPsdEntry);
+    const nextDoc = result.doc;
     if (!nextDoc) {
       throw new Error(`Could not open ${nextShotId}.`);
     }
 
-    if (!nextPsdEntry) {
+    if (result.createdFresh) {
       canvasColor = nextColor;
       await applyCanvasBackgroundInModal();
-      await importBoardBackgroundInModal(nextShotId);
+      await syncBoardBackgroundFromDisk(nextShotId, true);
+      await ensureDrawingLayerInModal(app.activeDocument);
       await saveActiveDocumentToFolder(nextFolder, nextShotId);
       createdNewNext = true;
     } else {
-      await importBoardBackgroundInModal(nextShotId);
+      await syncBoardBackgroundFromDisk(nextShotId, true);
+      await ensureDrawingLayerInModal(app.activeDocument);
     }
 
-    await finishShotSwitch(previousDoc, app.activeDocument || nextDoc);
+    await finishShotSwitch(previousDoc, app.activeDocument || nextDoc, { closePrevious: false });
   });
 
   await updateProjectAfterSave(shotId, currentFolder);
 
   if (!nextShot) {
-    setStatus(`Saved ${shotId}. No more shots in the project.`);
+    setStatus(
+      `Exported drawing for ${shotId}. No more shots in the project. Press Ctrl+S to save the PSD.`,
+    );
     return;
   }
 
@@ -1342,30 +2011,66 @@ async function saveAndGoNext() {
   updateColorSwatch();
 
   if (createdNewNext) {
-    const psdFile = await nextFolder.getEntry(`${nextShot.shot_id}.psd`);
-    await writeBridgeFiles(nextShot.shot_id, `shots/${nextShot.shot_id}/${nextShot.shot_id}.psd`, nextFolder);
-    if (projectData) {
-      const shot = projectData.shots.find((item) => item.shot_id === nextShot.shot_id);
-      if (shot) {
-        applySavedPaths(shot, nextShot.shot_id, await fileUnixMtime(psdFile));
-        await saveProjectJson();
-      }
-    }
+    await updateProjectAfterSave(nextShot.shot_id, nextFolder);
   }
 
-  setStatus(`Saved ${shotId}. Now working on ${nextShot.shot_id}.`);
+  setStatus(
+    `Exported drawing for ${shotId}. Now on ${nextShot.shot_id}. ${shotId}'s tab stays open — switch to it and Ctrl+S to save its PSD.`,
+  );
 }
 
 async function switchToSelectedShot() {
-  const shotId = currentShotId();
+  // Read the dropdown directly — currentShotId() prefers the hidden #shotId
+  // field, which lags behind the dropdown and would switch back to the old shot.
+  const shotId = String($("shotSelect")?.value || "").trim().toLowerCase();
+  if (!isValidShotId(shotId)) {
+    throw new Error("Pick a shot from the list first.");
+  }
   await switchToShot(shotId);
 }
 
+// Report a Photoshop "could not open / program error" for the selected shot and
+// ask Storyboard Tool to rebuild its PSD (keeping the original layers when it can),
+// then re-open it.
+async function recoverCurrentShotPsd() {
+  const shotId = String($("shotSelect")?.value || "").trim().toLowerCase() || currentShotId();
+  if (!isValidShotId(shotId)) {
+    throw new Error("Pick a shot from the list first.");
+  }
+  const folder = await ensureShotStructure(shotId);
+  setStatus(`Reporting PS error for ${shotId} — rebuilding…`);
+  let recovered = null;
+  await runModal(`Recover ${shotId}`, async () => {
+    const previousDoc = app.activeDocument;
+    recovered = await recoverBrokenShotAndOpen(shotId, folder);
+    if (recovered) {
+      await finalizeRecoveredShotInModal(shotId);
+      await finishShotSwitch(previousDoc, app.activeDocument || recovered.doc);
+    }
+  });
+  if (!recovered) {
+    throw new Error(
+      "Could not rebuild the PSD. Make sure Storyboard Tool is running with this project open.",
+    );
+  }
+  setSelectedShotId(shotId);
+  shotFolder = folder;
+  const layers = recovered.rebuilt?.layers_recovered ?? "?";
+  const how = recovered.rebuilt?.method === "flatten" ? "flattened" : "with layers preserved";
+  setStatus(`Recovered ${shotId} ${how}: ${layers} layer(s). Broken original kept in ${SHOT_HISTORY_FOLDER}/.`);
+}
+
 async function switchToShot(shotId) {
-  if (detectShotFromDocument() === shotId && app.activeDocument) {
+    if (detectShotFromDocument() === shotId && app.activeDocument) {
     setSelectedShotId(shotId);
     shotFolder = await ensureShotStructure(shotId);
-    setStatus(`Already working on ${shotId}.`);
+    let synced = false;
+    await runModal("Sync board background", async () => {
+      synced = await syncBoardBackgroundFromDisk(shotId);
+      await ensureBoardBackgroundStackOrderInModal(app.activeDocument);
+      await ensureDrawingLayerInModal(app.activeDocument);
+    });
+    setStatus(synced ? `Background synced for ${shotId}.` : `Already working on ${shotId}.`);
     return;
   }
 
@@ -1374,6 +2079,8 @@ async function switchToShot(shotId) {
   const psdName = `${shotId}.psd`;
   let psdEntry = null;
   let createdNew = false;
+  let recoveredBroken = false;
+  let rebuiltInfo = null;
 
   try {
     psdEntry = await folder.getEntry(psdName);
@@ -1383,18 +2090,28 @@ async function switchToShot(shotId) {
 
   await runModal(`Open ${shotId}`, async () => {
     const previousDoc = app.activeDocument;
-    const nextDoc = await openOrActivateShotDocument(shotId, psdEntry);
+    const result = await openOrCreateShotDocInModal(shotId, folder, psdEntry);
+    const nextDoc = result.doc;
     if (!nextDoc) {
       throw new Error(`Could not open ${shotId}.`);
     }
-    if (!psdEntry) {
+    recoveredBroken = result.recoveredBroken;
+    rebuiltInfo = result.rebuilt || null;
+    if (result.createdFresh) {
       canvasColor = nextColor;
       await applyCanvasBackgroundInModal();
-      await importBoardBackgroundInModal(shotId);
+      await syncBoardBackgroundFromDisk(shotId, true);
+      await ensureDrawingLayerInModal(app.activeDocument);
       await saveActiveDocumentToFolder(folder, shotId);
       createdNew = true;
     } else {
-      await importBoardBackgroundInModal(shotId);
+      if (rebuiltInfo) {
+        await finalizeRecoveredShotInModal(shotId);
+      } else {
+        await syncBoardBackgroundFromDisk(shotId, true);
+        await ensureBoardBackgroundStackOrderInModal(app.activeDocument);
+        await ensureDrawingLayerInModal(app.activeDocument);
+      }
     }
     await finishShotSwitch(previousDoc, app.activeDocument || nextDoc);
   });
@@ -1406,20 +2123,23 @@ async function switchToShot(shotId) {
   updateColorSwatch();
 
   if (createdNew) {
-    const psdFile = await folder.getEntry(psdName);
-    await writeBridgeFiles(shotId, `shots/${shotId}/${shotId}.psd`);
-    if (projectData) {
-      const shot = projectData.shots.find((item) => item.shot_id === shotId);
-      if (shot) {
-        applySavedPaths(shot, shotId, await fileUnixMtime(psdFile));
-        await saveProjectJson();
-      }
-    }
-    setStatus(`Created canvas for ${shotId}.`);
+    await updateProjectAfterSave(shotId, folder);
+    setStatus(
+      recoveredBroken
+        ? `${psdName} was unreadable — kept a copy in ${SHOT_HISTORY_FOLDER}/ and created a fresh canvas.`
+        : `Created canvas for ${shotId}.`,
+    );
     return;
   }
 
-  setStatus(psdEntry ? `Opened ${shotId}.` : `Opened ${shotId}.`);
+  if (rebuiltInfo) {
+    const layers = rebuiltInfo.layers_recovered ?? "?";
+    const how = rebuiltInfo.method === "flatten" ? "flattened" : "with layers preserved";
+    setStatus(`Recovered ${shotId} ${how}: ${layers} layer(s). Broken original kept in ${SHOT_HISTORY_FOLDER}/.`);
+    return;
+  }
+
+  setStatus(`Opened ${shotId}.`);
 }
 
 async function createCanvasForShot(shotId) {
@@ -1428,52 +2148,69 @@ async function createCanvasForShot(shotId) {
   await runModal(`Create ${shotId}`, async () => {
     await createCanvasDocumentInModal(shotId);
     await applyCanvasBackgroundInModal();
-    await importBoardBackgroundInModal(shotId);
+    await syncBoardBackgroundFromDisk(shotId, true);
+    await ensureDrawingLayerInModal(app.activeDocument);
     await saveActiveDocumentToFolder(folder, shotId);
     createdNew = true;
   });
   if (!createdNew) {
     return;
   }
-  const psdFile = await folder.getEntry(`${shotId}.psd`);
-  await writeBridgeFiles(shotId, `shots/${shotId}/${shotId}.psd`);
-  if (projectData) {
-    const shot = projectData.shots.find((item) => item.shot_id === shotId);
-    if (shot) {
-      applySavedPaths(shot, shotId, await fileUnixMtime(psdFile));
-      await saveProjectJson();
-    }
-  }
+  await updateProjectAfterSave(shotId, folder);
 }
 
-async function exportBoth() {
-  const folder = await requireWorkingFolder();
-  const shotId = currentShotId();
-  await runModal("Save shot", async () => {
-    await applyCanvasBackgroundInModal();
-    await savePsdInModal(folder, shotId);
+async function exportDrawingPreview() {
+  // Export drawing preview for Storyboard Tool only. PSD is saved by the artist
+  // with Photoshop's native Ctrl+S — UXP saveAs.psd overwrite often corrupts files.
+  const shotId = activeShotId();
+  setSelectedShotId(shotId);
+  const folder = await ensureShotStructure(shotId);
+  await runModal("Export drawing", async () => {
     await exportPreviewInModal(folder, shotId);
   });
+  return shotId;
 }
 
 async function updateProjectAfterSave(shotId = currentShotId(), folder = null) {
   const resolvedFolder = folder || (await ensureShotStructure(shotId));
-  const psdFile = await resolvedFolder.getEntry(`${shotId}.psd`);
-  const mtime = await fileUnixMtime(psdFile);
-  await writeBridgeFiles(shotId, `shots/${shotId}/${shotId}.psd`, resolvedFolder);
-  if (!projectData) {
-    return;
+  const psdFile = await getShotPsdEntry(resolvedFolder, shotId);
+  let previewFile = null;
+  try {
+    previewFile = await resolvedFolder.getEntry(`${shotId}_preview.png`);
+  } catch {
+    previewFile = null;
   }
-  const shot = (projectData.shots || []).find((item) => item.shot_id === shotId);
-  if (!shot) {
-    return;
+  if (psdFile) {
+    await writeBridgeFiles(shotId, `shots/${shotId}/${shotId}.psd`, resolvedFolder);
   }
-  applySavedPaths(shot, shotId, mtime);
-  await saveProjectJson();
+  let mtime = 0;
+  if (previewFile) {
+    mtime = Math.max(mtime, await fileUnixMtime(previewFile));
+  }
+  if (psdFile) {
+    mtime = Math.max(mtime, await fileUnixMtime(psdFile));
+  }
+  if (!mtime) {
+    mtime = Date.now() / 1000;
+  }
+  if (projectData) {
+    const shot = (projectData.shots || []).find((item) => item.shot_id === shotId);
+    if (shot) {
+      const previous = Number(shot.source_sync_mtime || 0);
+      if (mtime <= previous) {
+        mtime = previous + 0.001;
+      }
+      applySavedPaths(shot, shotId, mtime, Boolean(psdFile));
+      await saveProjectJson();
+    }
+  }
+  await requestShotSync(shotId, true);
 }
 
-function applySavedPaths(shot, shotId, mtime) {
-  shot.source_file_path = `shots/${shotId}/${shotId}.psd`;
+function applySavedPaths(shot, shotId, mtime, hasPsd = true) {
+  if (hasPsd) {
+    shot.source_file_path = `shots/${shotId}/${shotId}.psd`;
+  }
   shot.preview_image_path = `shots/${shotId}/${shotId}_preview.png`;
   shot.image_path = shot.preview_image_path;
   shot.thumbnail_path = `shots/${shotId}/${shotId}_thumb.png`;
@@ -1484,6 +2221,8 @@ async function writeBridgeFiles(shotId, sourcePath, folder = null) {
   const resolvedFolder = folder || (await ensureShotStructure(shotId));
   const payload = {
     canvas_background_color: canvasColor,
+    canvas_width: canvasWidth,
+    canvas_height: canvasHeight,
     shot_id: shotId,
     source_file_path: sourcePath,
     last_saved_at: new Date().toISOString(),
@@ -1515,17 +2254,22 @@ async function openPsdEntry(entry) {
     // Fall back to batchPlay open with a session token.
   }
 
-  const token = await fs.createSessionToken(entry);
-  await photoshop.action.batchPlay(
-    [
-      {
-        _obj: "open",
-        null: { _path: token, _kind: "local" },
-      },
-    ],
-    { synchronousExecution: true },
-  );
-  return app.activeDocument;
+  try {
+    const token = await fs.createSessionToken(entry);
+    await photoshop.action.batchPlay(
+      [
+        {
+          _obj: "open",
+          null: { _path: token, _kind: "local" },
+        },
+      ],
+      { synchronousExecution: true },
+    );
+    return app.activeDocument;
+  } catch {
+    // Both open paths failed — likely a corrupt PSD. Let the caller recover.
+    return null;
+  }
 }
 
 function isDocumentOpen(doc) {
@@ -1535,11 +2279,17 @@ function isDocumentOpen(doc) {
   return app.documents.some((item) => item.id === doc.id);
 }
 
-async function requireWorkingFolder() {
+function activeShotId() {
   if (!app.activeDocument) {
     throw new Error("No active Photoshop document.");
   }
-  return ensureShotStructure(currentShotId());
+  const shotId = detectShotFromDocument();
+  if (!shotId) {
+    throw new Error(
+      "The active Photoshop tab is not a recognized shot. Open the shot from Storyboard Tool or the panel before saving.",
+    );
+  }
+  return shotId;
 }
 
 function requireProjectRoot() {
@@ -1587,6 +2337,10 @@ async function applyCanvasBackground() {
 }
 
 function findBackgroundLayer(doc) {
+  // The canvas-color base is ONLY the locked Background layer or a layer we
+  // explicitly named "Background". Never fall back to an arbitrary bottom layer:
+  // that could be `SB bg` (the reference) or the artist's drawing, and filling
+  // it with the canvas color would destroy the reference / artwork.
   try {
     if (doc.backgroundLayer) {
       return doc.backgroundLayer;
@@ -1595,14 +2349,28 @@ function findBackgroundLayer(doc) {
     // Some documents do not expose backgroundLayer.
   }
 
-  for (const layer of doc.layers) {
+  for (const layer of doc.layers || []) {
     if (layer.isBackgroundLayer || layer.name === "Background") {
       return layer;
     }
   }
 
-  const layers = doc.layers;
-  return layers.length ? layers[layers.length - 1] : null;
+  return null;
+}
+
+async function createCanvasBackgroundLayerInModal(doc) {
+  // Add a dedicated canvas-color base at the very bottom (below `SB bg` and the
+  // drawing) for documents that were opened without a real Background layer.
+  await photoshop.action.batchPlay(
+    [{ _obj: "make", _target: [{ _ref: "layer" }] }],
+    { synchronousExecution: true },
+  );
+  await renameActiveLayer("Background");
+  const layer = doc.activeLayers[0] || null;
+  if (layer) {
+    await layer.move(doc, photoshop.constants.ElementPlacement.PLACEATEND);
+  }
+  return layer;
 }
 
 async function readEntryText(entry) {
@@ -1661,34 +2429,97 @@ async function hasProjectMarker(folder) {
 }
 
 async function readProjectCanvasColor(folder) {
+  const settings = await readProjectCanvasSettings(folder);
+  canvasWidth = settings.width;
+  canvasHeight = settings.height;
+  return settings.color;
+}
+
+async function readProjectCanvasSettings(folder) {
+  let color = DEFAULT_CANVAS_COLOR;
+  let width = DEFAULT_CANVAS_WIDTH;
+  let height = DEFAULT_CANVAS_HEIGHT;
   try {
     const root = projectRoot || (await findProjectRoot(folder));
     if (root) {
+      const projectSettings = await readJsonObject(root, "settings.json");
+      if (projectSettings) {
+        if (projectSettings.canvas_background_color) {
+          color = normalizeHexColor(projectSettings.canvas_background_color);
+        }
+        if (projectSettings.canvas_width) {
+          width = Number(projectSettings.canvas_width);
+        }
+        if (projectSettings.canvas_height) {
+          height = Number(projectSettings.canvas_height);
+        }
+      }
+
       const rootTxt = await readCanvasColorTxt(root);
       if (rootTxt) {
-        return rootTxt;
+        color = rootTxt;
       }
-      for (const fileName of ["storyboard_live_bridge.json", "storyboard_bridge.json", "settings.json"]) {
-        const value = await readJsonField(root, fileName, "canvas_background_color");
-        if (value) {
-          return normalizeHexColor(value);
+
+      for (const fileName of ["storyboard_live_bridge.json", "storyboard_bridge.json"]) {
+        const bridge = await readJsonObject(root, fileName);
+        if (!bridge) {
+          continue;
+        }
+        if (bridge.canvas_background_color) {
+          color = normalizeHexColor(bridge.canvas_background_color);
+        }
+        if (bridge.canvas_width) {
+          width = Number(bridge.canvas_width);
+        }
+        if (bridge.canvas_height) {
+          height = Number(bridge.canvas_height);
         }
       }
     }
 
     const localTxt = await readCanvasColorTxt(folder);
     if (localTxt) {
-      return localTxt;
+      color = localTxt;
     }
 
-    const localBridge = await readJsonField(folder, "storyboard_bridge.json", "canvas_background_color");
+    const localBridge = await readJsonObject(folder, "storyboard_bridge.json");
     if (localBridge) {
-      return normalizeHexColor(localBridge);
+      if (localBridge.canvas_background_color) {
+        color = normalizeHexColor(localBridge.canvas_background_color);
+      }
+      if (localBridge.canvas_width) {
+        width = Number(localBridge.canvas_width);
+      }
+      if (localBridge.canvas_height) {
+        height = Number(localBridge.canvas_height);
+      }
     }
   } catch (error) {
-    setStatus(`Color read failed: ${error.message || error}`);
+    setStatus(`Canvas settings read failed: ${error.message || error}`);
   }
-  return DEFAULT_CANVAS_COLOR;
+  const size = normalizeCanvasSize(width, height);
+  return { color, width: size.width, height: size.height };
+}
+
+async function readJsonObject(folder, fileName) {
+  try {
+    const entry = await folder.getEntry(fileName);
+    const text = await readEntryText(entry);
+    const data = JSON.parse(text);
+    return data && typeof data === "object" ? data : null;
+  } catch {
+    return null;
+  }
+}
+
+function normalizeCanvasSize(width, height) {
+  const w = Math.min(Math.max(parseInt(width, 10) || DEFAULT_CANVAS_WIDTH, 320), 8192);
+  const h = Math.min(Math.max(parseInt(height, 10) || DEFAULT_CANVAS_HEIGHT, 180), 8192);
+  return { width: w, height: h };
+}
+
+function currentCanvasSize() {
+  return normalizeCanvasSize(canvasWidth, canvasHeight);
 }
 
 async function readJsonField(folder, fileName, fieldName) {

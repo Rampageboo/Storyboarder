@@ -29,8 +29,12 @@ function getProjectCanvasSize(project = state.project) {
 }
 
 function applyCanvasAspectRatio(size = getProjectCanvasSize()) {
-  document.documentElement.style.setProperty("--canvas-aspect-w", String(size.width));
-  document.documentElement.style.setProperty("--canvas-aspect-h", String(size.height));
+  const root = document.documentElement;
+  root.style.setProperty("--canvas-aspect-w", String(size.width));
+  root.style.setProperty("--canvas-aspect-h", String(size.height));
+  if (typeof timelineBoardWidth === "function") {
+    root.style.setProperty("--timeline-board-width", `${timelineBoardWidth(size)}px`);
+  }
   if (typeof invalidateTimelineLayout === "function") invalidateTimelineLayout();
 }
 
@@ -207,3 +211,25 @@ async function showNewProjectSetupDialog() {
 }
 
 applyCanvasAspectRatio();
+
+
+// --- module global bridge (auto) ---
+Object.assign(globalThis, {
+  CANVAS_SIZE_PRESETS,
+  CANVAS_SIZE_LIMITS,
+  canvasSizeUiState,
+  normalizeCanvasSize,
+  getProjectCanvasSize,
+  applyCanvasAspectRatio,
+  canvasSizeLabel,
+  findCanvasPreset,
+  renderCanvasSizePresets,
+  readCanvasSizeFields,
+  syncCanvasSizeFields,
+  bindCanvasSizeInputs,
+  teardownCanvasSizeInputs,
+  setupDialogCanvasSizeControls,
+  setupSettingsCanvasSizeControls,
+  validateCanvasSizeFields,
+  showNewProjectSetupDialog,
+});

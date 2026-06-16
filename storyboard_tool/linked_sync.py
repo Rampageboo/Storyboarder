@@ -2,8 +2,6 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from PIL import Image
-
 from .image_utils import create_thumbnail, export_psd_composite_to_png, is_psd_path
 from .models import Project, Shot
 
@@ -15,6 +13,11 @@ def linked_mtime(project: Project, shot: Shot) -> float:
         if not rel_path:
             continue
         path = project.root_path / rel_path
+        if path.is_file():
+            latest = max(latest, path.stat().st_mtime)
+    shot_dir = project.shots_dir / shot.shot_id
+    for file_name in (f"{shot.shot_id}.psd", f"{shot.shot_id}_preview.png"):
+        path = shot_dir / file_name
         if path.is_file():
             latest = max(latest, path.stat().st_mtime)
     return latest
@@ -33,24 +36,28 @@ def sync_shot_from_linked_files(project: Project, shot: Shot, force: bool = Fals
     if not force and current_mtime <= stored_mtime:
         return {"synced": False, "message": "Already up to date."}
 
-    source_path = _best_source_path(project, shot)
-    if source_path is None:
-        return {"synced": False, "message": "Linked files are missing."}
-
     preview_path = _preview_path(project, shot)
     preview_path.parent.mkdir(parents=True, exist_ok=True)
+    psd_path = _linked_psd_path(project, shot)
 
-    if is_psd_path(source_path):
-        export_psd_composite_to_png(source_path, preview_path)
-    elif source_path.suffix.lower() in {".png", ".jpg", ".jpeg", ".tif", ".tiff", ".webp"}:
-        if source_path.resolve() != preview_path.resolve():
-            with Image.open(source_path) as image:
-                if image.mode not in ("RGB", "RGBA"):
-                    image = image.convert("RGBA")
-                image.save(preview_path, "PNG")
-        # Preview was already updated on disk; just refresh thumbnail below.
+    preview_exists = preview_path.is_file()
+    psd_exists = psd_path is not None
+    if not preview_exists and not psd_exists:
+        return {"synced": False, "message": "Linked files are missing."}
+
+    preview_mtime = preview_path.stat().st_mtime if preview_exists else 0.0
+    psd_mtime = psd_path.stat().st_mtime if psd_exists else 0.0
+
+    # The Photoshop plugin saves PSD + preview together. Prefer the PNG when it
+    # is at least as new as the PSD — psd_tools compositing can disagree with
+    # Photoshop's own export (hidden reference layers, effects, etc.).
+    if preview_exists and (not psd_exists or preview_mtime + 1.0 >= psd_mtime):
+        source_name = preview_path.name
+    elif psd_exists:
+        export_psd_composite_to_png(psd_path, preview_path)
+        source_name = psd_path.name
     else:
-        return {"synced": False, "message": f"Unsupported source format: {source_path.suffix}"}
+        return {"synced": False, "message": "Linked files are missing."}
 
     shot.preview_image_path = preview_path.relative_to(project.root_path).as_posix()
     shot.image_path = shot.preview_image_path
@@ -60,8 +67,8 @@ def sync_shot_from_linked_files(project: Project, shot: Shot, force: bool = Fals
 
     return {
         "synced": True,
-        "message": f"Synced from {source_path.name}",
-        "source": source_path.name,
+        "message": f"Synced from {source_name}",
+        "source": source_name,
     }
 
 
@@ -76,21 +83,15 @@ def sync_project(project: Project, force: bool = False) -> list[dict[str, object
     return results
 
 
-def _best_source_path(project: Project, shot: Shot) -> Path | None:
-    """Pick the linked file with the newest modification time."""
-    candidates: list[Path] = []
+def _linked_psd_path(project: Project, shot: Shot) -> Path | None:
     if shot.source_file_path:
-        candidates.append(project.root_path / shot.source_file_path)
-    if shot.preview_image_path:
-        candidates.append(project.root_path / shot.preview_image_path)
-    if shot.image_path and shot.image_path != shot.preview_image_path:
-        candidates.append(project.root_path / shot.image_path)
-
-    existing = [path.resolve() for path in candidates if path.is_file()]
-    if not existing:
-        return None
-
-    return max(existing, key=lambda path: path.stat().st_mtime)
+        candidate = project.root_path / shot.source_file_path
+        if candidate.is_file() and is_psd_path(candidate):
+            return candidate
+    fallback = project.shots_dir / shot.shot_id / f"{shot.shot_id}.psd"
+    if fallback.is_file() and is_psd_path(fallback):
+        return fallback
+    return None
 
 
 def _preview_path(project: Project, shot: Shot) -> Path:

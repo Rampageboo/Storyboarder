@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from .canvas_settings import get_canvas_size
 from .models import Project, Shot
 from .project_manager import get_canvas_color, get_shot_dir
 
@@ -50,17 +51,31 @@ def plugin_heartbeat_file_path() -> Path:
     return shared_bridge_dir() / PLUGIN_HEARTBEAT_FILENAME
 
 
+def read_plugin_heartbeat() -> dict[str, Any]:
+    """Full heartbeat payload written by the Photoshop plugin (open tabs, etc.)."""
+    path = plugin_heartbeat_file_path()
+    if not path.is_file():
+        return {}
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        if isinstance(payload, dict):
+            return payload
+    except (OSError, ValueError, json.JSONDecodeError):
+        pass
+    return {}
+
+
 def read_plugin_heartbeat_mtime() -> float:
     path = plugin_heartbeat_file_path()
     if not path.is_file():
         return 0.0
-    try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-        if isinstance(payload, dict) and payload.get("at"):
+    payload = read_plugin_heartbeat()
+    if payload.get("at"):
+        try:
             parsed = datetime.fromisoformat(str(payload["at"]).replace("Z", "+00:00"))
             return parsed.timestamp()
-    except (OSError, ValueError, json.JSONDecodeError):
-        pass
+        except ValueError:
+            pass
     try:
         return path.stat().st_mtime
     except OSError:
@@ -72,6 +87,8 @@ def build_payload(
     project: Project | None,
     selected_shot_id: str = "",
     port: int = DEFAULT_PORT,
+    focus_shot_id: str = "",
+    focus_token: int = 0,
 ) -> dict[str, Any]:
     shot: Shot | None = None
     if project and selected_shot_id:
@@ -86,6 +103,7 @@ def build_payload(
 
     bridge_url = f"http://127.0.0.1:{port}/api/bridge/live"
     shared_path = str(shared_bridge_file_path())
+    canvas_width, canvas_height = get_canvas_size(project) if project else (1920, 1080)
     return {
         "version": LIVE_BRIDGE_VERSION,
         "app_running": True,
@@ -100,10 +118,18 @@ def build_payload(
         "project_json_path": str(project.json_path) if project else "",
         "project_name": project.name if project else "",
         "canvas_background_color": get_canvas_color(project) if project else "#E8E8E8",
+        "canvas_width": canvas_width,
+        "canvas_height": canvas_height,
         "selected_shot_id": selected_shot_id if project else "",
         "shot_folder": shot_folder,
         "source_file_path": source_file_path,
         "shot_count": len(project.shots) if project else 0,
+        # One-shot request asking the plugin to focus/open a shot tab. The plugin
+        # acts only when `token` increases, so passive polls never yank tabs.
+        "focus_request": {
+            "shot_id": focus_shot_id if project else "",
+            "token": int(focus_token),
+        },
     }
 
 
@@ -136,8 +162,16 @@ def publish(
     *,
     selected_shot_id: str = "",
     port: int = DEFAULT_PORT,
+    focus_shot_id: str = "",
+    focus_token: int = 0,
 ) -> dict[str, Any]:
-    payload = build_payload(project=project, selected_shot_id=selected_shot_id, port=port)
+    payload = build_payload(
+        project=project,
+        selected_shot_id=selected_shot_id,
+        port=port,
+        focus_shot_id=focus_shot_id,
+        focus_token=focus_token,
+    )
     write_payload_files(base_dir, project, payload)
     return payload
 

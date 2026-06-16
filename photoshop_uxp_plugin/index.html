@@ -8,26 +8,37 @@
     <sp-body id="root">
       <sp-heading size="S">Storyboard Bridge</sp-heading>
       <sp-detail id="linkStatus" class="link-status">Connecting…</sp-detail>
+      <sp-detail id="currentShot" class="current-shot" hidden></sp-detail>
 
       <div id="unlinkedPanel">
         <sp-button id="relinkNow" variant="secondary">Reconnect</sp-button>
       </div>
 
       <div id="linkedPanel" hidden>
-        <sp-label for="shotSelect">Shot</sp-label>
-        <select id="shotSelect" class="shot-select"></select>
-        <sp-button id="openShot" variant="secondary">Open canvas</sp-button>
-        <sp-label for="overlayCount">Overlay previous</sp-label>
-        <sp-textfield id="overlayCount" class="overlay-count" value="1" placeholder="1"></sp-textfield>
-        <sp-button id="overlayPrevious" variant="secondary">Stack refs</sp-button>
-        <sp-button id="clearOverlay" variant="secondary">Clear overlay</sp-button>
-        <sp-button id="saveAndNext" variant="cta">Save &amp; next</sp-button>
-        <sp-button id="saveAndStay" variant="primary">Save</sp-button>
-        <sp-checkbox id="autoAddShot" checked>Auto-add at end</sp-checkbox>
+        <div class="panel-group panel-group-save">
+          <span class="group-label">Save</span>
+          <sp-button id="saveAndNext" variant="cta">Save &amp; next</sp-button>
+          <sp-button id="saveAndStay" variant="primary">Save</sp-button>
+          <sp-checkbox id="autoAddShot" checked>Auto-add at end</sp-checkbox>
+        </div>
+
+        <div class="panel-group">
+          <sp-label for="shotSelect">Shot</sp-label>
+          <select id="shotSelect" class="shot-select"></select>
+          <sp-button id="openShot" variant="secondary">Open canvas</sp-button>
+        </div>
+
+        <div class="panel-group">
+          <span class="group-label">References</span>
+          <sp-label for="overlayCount">Overlay previous</sp-label>
+          <sp-textfield id="overlayCount" class="overlay-count" value="1" placeholder="1"></sp-textfield>
+          <sp-button id="overlayPrevious" variant="secondary">Stack refs</sp-button>
+          <sp-button id="clearOverlay" variant="secondary">Clear overlay</sp-button>
+        </div>
       </div>
 
-      <div id="colorSection">
-        <sp-label>Canvas color</sp-label>
+      <div id="colorSection" class="panel-group">
+        <span class="group-label">Canvas color</span>
         <sp-detail id="colorSwatch" class="color-swatch">#E8E8E8</sp-detail>
         <sp-checkbox id="autoApplyColor" checked>Auto-apply color</sp-checkbox>
         <sp-button id="applyBackground" variant="secondary">Apply canvas color</sp-button>
@@ -39,6 +50,7 @@
 
       <details id="advancedSection" class="advanced-section">
         <summary>Advanced</summary>
+        <sp-button id="recoverPsd" variant="secondary">Recover broken PSD</sp-button>
         <sp-button id="chooseProject" variant="secondary">Choose project folder</sp-button>
         <sp-button id="chooseFolder" variant="secondary">Choose shot folder</sp-button>
       </details>

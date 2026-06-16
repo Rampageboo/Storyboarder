@@ -116,3 +116,16 @@ function bindAnimaticEvents() {
     renderTimeline();
   });
 }
+
+
+// --- module global bridge (auto) ---
+Object.assign(globalThis, {
+  isScene3dOpen,
+  totalDuration,
+  currentAnimaticSeconds,
+  playAnimatic,
+  stopAnimatic,
+  tickAnimatic,
+  selectShotAtTime,
+  bindAnimaticEvents,
+});

@@ -38,3 +38,10 @@ function bindToolbarMenus() {
 
   window.addEventListener("blur", () => closeToolbarMenus());
 }
+
+
+// --- module global bridge (auto) ---
+Object.assign(globalThis, {
+  closeToolbarMenus,
+  bindToolbarMenus,
+});

@@ -73,7 +73,7 @@
         </details>
         <button id="openScene3d" disabled title="3D scene editor">3D Scene</button>
         <button id="undoAction" disabled title="Undo (Ctrl+Z)">Undo</button>
-        <button id="openSettings" title="Settings">Settings</button>
+        <button type="button" id="openSettings" title="Settings">Settings</button>
         <details class="toolbar-menu ps-menu" id="psMenu">
           <summary id="psMenuSummary" class="ps-menu-summary" title="Photoshop">Ps</summary>
           <div class="toolbar-menu-panel ps-menu-panel">
@@ -242,6 +242,7 @@
 
     <div id="shotContextMenu" class="context-menu" hidden>
       <button type="button" data-shot-action="duplicate">Duplicate board</button>
+      <button type="button" data-shot-action="recover">Recover broken PSD</button>
       <button type="button" data-shot-action="delete" class="btn-danger">Delete board</button>
     </div>
 
@@ -449,8 +450,7 @@
           "@core/utils": "/static/core/utils.js",
           "@core/state": "/static/core/state.js",
           "@core/dom": "/static/core/dom.js",
-          "@core/api": "/static/core/api.js",
-          "@core/dispatch": "/static/core/dispatch.js"
+          "@core/api": "/static/core/api.js"
         }
       }
     </script>

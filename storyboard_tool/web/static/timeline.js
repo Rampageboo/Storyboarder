@@ -11,12 +11,24 @@ function boardAddedToast(shotId) {
 
 function captureTimelineScroll() {
   if (!el.timelineStrip) return;
-  state.timelineScrollLeft = Math.max(0, Math.round(el.timelineStrip.scrollLeft));
+  const max = maxTimelineScrollLeft();
+  const left = Math.min(max, Math.max(0, Math.round(el.timelineStrip.scrollLeft)));
+  if (left !== el.timelineStrip.scrollLeft) {
+    el.timelineStrip.scrollLeft = left;
+  }
+  state.timelineScrollLeft = left;
+}
+
+function maxTimelineScrollLeft() {
+  if (!el.timelineStrip) return 0;
+  const total = timelineVirtual.layout?.totalWidth || el.timelineStrip.scrollWidth || 0;
+  return Math.max(0, total - el.timelineStrip.clientWidth);
 }
 
 function restoreTimelineScroll(scrollLeft = state.timelineScrollLeft) {
   if (!el.timelineStrip) return;
-  const left = Math.max(0, Math.round(scrollLeft || 0));
+  const max = maxTimelineScrollLeft();
+  const left = Math.min(max, Math.max(0, Math.round(scrollLeft || 0)));
   el.timelineStrip.scrollLeft = left;
   state.timelineScrollLeft = left;
 }
@@ -107,6 +119,37 @@ async function duplicateShotById(shotId) {
   scrollTimelineToShot(result.shot.shot_id);
 }
 
+async function recoverShotById(shotId) {
+  const shots = state.project?.shots || [];
+  const shot = shots.find((item) => item.shot_id === shotId);
+  if (!shot) return;
+  if (!shot.source_file_path) {
+    showToast("No PSD linked for this board — nothing to recover.");
+    return;
+  }
+  const choice = await showDialog({
+    title: "Recover broken PSD",
+    hint:
+      `Rebuild ${shot.shot_id}'s PSD from its layers. The current file is backed up to ` +
+      `_history/ first. Close it in Photoshop before recovering. "Keep layers" preserves ` +
+      `blend modes/opacity; use "Flatten" only if that still won't open in Photoshop.`,
+    actions: [
+      { label: "Cancel", value: null },
+      { label: "Flatten", value: "flatten" },
+      { label: "Keep layers", value: "layers", primary: true },
+    ],
+  });
+  if (choice !== "layers" && choice !== "flatten") return;
+  await flushSelectedShot();
+  const query = choice === "flatten" ? "?preserve_layers=false" : "";
+  const response = await api(`/api/shots/${shotId}/recover-source${query}`, { method: "POST" });
+  setProject(response);
+  await selectShot(shotId);
+  const result = response.result || {};
+  const how = result.method === "flatten" ? "flattened" : "layers preserved";
+  showToast(`Recovered ${shot.shot_id} (${how}): ${result.layers_recovered ?? "?"} layer(s). Backup in _history/.`);
+}
+
 async function deleteShotById(shotId) {
   const shots = state.project?.shots || [];
   const index = shots.findIndex((item) => item.shot_id === shotId);
@@ -155,16 +198,18 @@ function renderTimeline(activeShotId = state.selectedShotId) {
     timelineVirtual.layoutKey = nextLayoutKey;
     timelineVirtual.layout = buildTimelineLayout(shots);
     timelineVirtual.rangeKey = "";
+    state.timelineScrollLeft = Math.min(state.timelineScrollLeft, maxTimelineScrollLeft());
   }
 
+  restoreTimelineScroll(scrollToRestore);
   renderTimelineViewport(activeShotId);
 
   requestAnimationFrame(() => {
-    restoreTimelineScroll(scrollToRestore);
     if (state.timelineScrollPendingRestore) {
       state.timelineScrollPendingRestore = false;
     }
     scheduleTimelineViewportRender(activeShotId);
+    if (activeShotId) ensureTimelineShowsShot(activeShotId, { behavior: "auto" });
   });
 }
 
@@ -243,6 +288,10 @@ function bindTimelineEvents() {
         await duplicateShotById(shotId);
         return;
       }
+      if (button.dataset.shotAction === "recover") {
+        await recoverShotById(shotId);
+        return;
+      }
       if (button.dataset.shotAction === "delete") {
         await deleteShotById(shotId);
       }
@@ -273,3 +322,24 @@ function bindTimelineEvents() {
     }
   });
 }
+
+
+// --- module global bridge (auto) ---
+Object.assign(globalThis, {
+  boardAddedToast,
+  captureTimelineScroll,
+  maxTimelineScrollLeft,
+  restoreTimelineScroll,
+  createTimelineInsertButton,
+  addShot,
+  navigateShot,
+  shouldIgnoreShotNavigation,
+  filteredShots,
+  hideShotContextMenu,
+  showShotContextMenu,
+  duplicateShotById,
+  deleteShotById,
+  renderTimeline,
+  reorderShot,
+  bindTimelineEvents,
+});

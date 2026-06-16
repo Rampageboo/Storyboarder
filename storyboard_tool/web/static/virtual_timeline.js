@@ -1,8 +1,9 @@
 const TIMELINE_LAYOUT = {
   gap: 6,
   insertWidth: 22,
-  minShotWidth: 132,
-  widthPerSec: 58,
+  thumbHeight: 84,
+  minShotWidth: 56,
+  maxShotWidth: 200,
   bufferPx: 360,
 };
 
@@ -11,16 +12,27 @@ const timelineVirtual = {
   layout: null,
   rangeKey: "",
   viewportRaf: 0,
+  pendingActiveShotId: null,
   activeShotId: null,
   activeShotIndex: -1,
 };
 
-function timelineShotWidth(duration) {
-  return Math.max(TIMELINE_LAYOUT.minShotWidth, Number(duration || 3) * TIMELINE_LAYOUT.widthPerSec);
+function timelineBoardWidth(size = getProjectCanvasSize()) {
+  const canvasW = Math.max(1, Number(size?.width) || 1920);
+  const canvasH = Math.max(1, Number(size?.height) || 1080);
+  const width = Math.round(TIMELINE_LAYOUT.thumbHeight * (canvasW / canvasH));
+  return Math.min(
+    TIMELINE_LAYOUT.maxShotWidth,
+    Math.max(TIMELINE_LAYOUT.minShotWidth, width)
+  );
 }
 
 function timelineLayoutKey(shots) {
-  return (shots || []).map((shot) => `${shot.shot_id}:${shot.duration_seconds}`).join("|");
+  const size = getProjectCanvasSize();
+  const stamps = (shots || [])
+    .map((shot) => timelineCacheKey(shot))
+    .join(",");
+  return `${size.width}x${size.height}|${stamps}`;
 }
 
 function buildTimelineLayout(shots) {
@@ -33,7 +45,7 @@ function buildTimelineLayout(shots) {
     const start = cursor;
     const end = cursor + duration;
     cursor = end;
-    const width = timelineShotWidth(duration);
+    const width = timelineBoardWidth();
     items.push({ type: "shot", shot, index, left, width, start, end, duration });
     left += width + TIMELINE_LAYOUT.gap;
     items.push({ type: "insert", afterShotId: shot.shot_id, left, width: TIMELINE_LAYOUT.insertWidth });
@@ -45,11 +57,27 @@ function buildTimelineLayout(shots) {
   };
 }
 
-function computeVisibleTimelineItems(layout, scrollLeft, viewportWidth) {
+function computeVisibleTimelineItems(layout, scrollLeft, viewportWidth, activeShotId = "") {
   const buffer = TIMELINE_LAYOUT.bufferPx;
   const viewStart = Math.max(0, scrollLeft - buffer);
   const viewEnd = scrollLeft + Math.max(viewportWidth, 320) + buffer;
-  return layout.items.filter((item) => item.left + item.width >= viewStart && item.left <= viewEnd);
+  const inView = (item) => item.left + item.width >= viewStart && item.left <= viewEnd;
+  const visible = new Map();
+  for (const item of layout.items) {
+    if (inView(item)) visible.set(`${item.type}:${item.left}`, item);
+  }
+  if (activeShotId) {
+    const activeIndex = layout.items.findIndex(
+      (item) => item.type === "shot" && item.shot.shot_id === activeShotId
+    );
+    if (activeIndex >= 0) {
+      for (let index = Math.max(0, activeIndex - 2); index <= Math.min(layout.items.length - 1, activeIndex + 2); index += 1) {
+        const item = layout.items[index];
+        visible.set(`${item.type}:${item.left}`, item);
+      }
+    }
+  }
+  return [...visible.values()].sort((a, b) => a.left - b.left);
 }
 
 function ensureTimelineTrack() {
@@ -118,6 +146,54 @@ function timelineShotDisplayName(shot) {
   return formatShotId(shot.shot_id);
 }
 
+function isShotOpenInPs(shotId) {
+  return Array.isArray(state.openInPsShotIds) && state.openInPsShotIds.includes(shotId);
+}
+
+// Toggle the "open in Photoshop" badge on already-rendered cards without a full
+// rebuild, so the live heartbeat can update badges as tabs open/close.
+function patchTimelineOpenInPsState() {
+  if (!el.timelineStrip) return;
+  const openIds = new Set(state.openInPsShotIds || []);
+  el.timelineStrip.querySelectorAll(".timeline-shot").forEach((node) => {
+    node.classList.toggle("is-open-in-ps", openIds.has(node.dataset.shotId));
+  });
+}
+
+function patchTimelineShotThumb(shotId, { bust = "" } = {}) {
+  if (!shotId || !el.timelineStrip) return false;
+  const shot = state.project?.shots?.find((item) => item.shot_id === shotId);
+  if (!shot) return false;
+  const node = timelineShotNode(shotId);
+  const thumb = node?.querySelector(".timeline-thumb");
+  if (!thumb) return false;
+  const thumbMeta = timelineThumbStyle(shot, { bust: bust || Date.now() });
+  thumb.className = `timeline-thumb${thumbMeta.className ? ` ${thumbMeta.className}` : ""}`;
+  if (thumbMeta.style) {
+    thumb.setAttribute("style", thumbMeta.style);
+  } else {
+    thumb.removeAttribute("style");
+  }
+  return true;
+}
+
+function refreshTimelineAfterPreviewSync(shotId = state.selectedShotId) {
+  timelineVirtual.rangeKey = "";
+  const shots = state.project?.shots || [];
+  timelineVirtual.layoutKey = timelineLayoutKey(shots);
+  timelineVirtual.layout = buildTimelineLayout(shots);
+  const bust = Date.now();
+  if (shotId) {
+    patchTimelineShotThumb(shotId, { bust });
+  }
+  if (typeof renderTimeline === "function") {
+    renderTimeline(shotId || state.selectedShotId);
+    return;
+  }
+  scheduleTimelineViewportRender(shotId || state.selectedShotId);
+  patchTimelineActiveState(shotId || state.selectedShotId);
+}
+
 function mountTimelineShotElement(entry, activeShotId) {
   const { shot, index, left, width, start, end, duration } = entry;
   const filteredOut =
@@ -134,7 +210,7 @@ function mountTimelineShotElement(entry, activeShotId) {
   item.type = "button";
   item.className = `timeline-shot ${shot.shot_id === activeShotId ? "active" : ""}${
     filteredOut ? " timeline-shot-filtered" : ""
-  }`;
+  }${isShotOpenInPs(shot.shot_id) ? " is-open-in-ps" : ""}`;
   item.draggable = true;
   item.dataset.shotId = shot.shot_id;
   item.dataset.index = String(index);
@@ -148,15 +224,16 @@ function mountTimelineShotElement(entry, activeShotId) {
   item.innerHTML = `
     <div class="timeline-thumb${thumbClass}" ${thumbnailStyle}>
       <span class="timeline-order" aria-hidden="true">${index + 1}</span>
+      <span class="timeline-ps-badge" title="Open in Photoshop">PS</span>
     </div>
     <div class="timeline-meta">
       <span class="timeline-shot-name" title="${escapeHtml(displayName)}">${escapeHtml(displayName)}</span>
       ${dialoguePreview}
       <div class="timeline-duration-row">
         <input class="timeline-duration" type="number" min="0.1" step="0.1" value="${duration.toFixed(1)}" aria-label="Duration seconds" />
-        <span>s</span>
+        <span class="timeline-duration-unit">s</span>
+        <span class="timeline-range" title="${start.toFixed(1)}s – ${end.toFixed(1)}s">${start.toFixed(1)}–${end.toFixed(1)}s</span>
       </div>
-      <span class="timeline-range">${start.toFixed(1)}s - ${end.toFixed(1)}s</span>
     </div>
   `;
   item.setAttribute("aria-label", `Board ${index + 1}${displayName ? `: ${displayName}` : ""}`);
@@ -172,10 +249,16 @@ function mountTimelineShotElement(entry, activeShotId) {
     dot.classList.add("is-selected-board");
   }
 
+  const slot = document.createElement("div");
+  slot.className = "timeline-segment-slot";
+  slot.dataset.segmentSlot = "";
+  slot.dataset.index = String(index);
+
   bindTimelineShotEvents(item, shot, activeShotId);
   if (typeof bindRefSegmentDot === "function") bindRefSegmentDot(dot);
 
   wrap.appendChild(item);
+  wrap.appendChild(slot);
   wrap.appendChild(dot);
   return wrap;
 }
@@ -237,6 +320,7 @@ function bindTimelineShotEvents(item, shot, activeShotId) {
     }
     state.project.dirty = true;
     await saveShot(shot);
+    timelineVirtual.rangeKey = "";
     renderTimeline(activeShotId);
   });
 }
@@ -250,16 +334,32 @@ function updateTimelineMeta(shots, activeShotId = state.selectedShotId) {
   el.progressSlider.value = current.toFixed(1);
 }
 
+function refreshTimelineAfterSegmentGesture() {
+  timelineVirtual.rangeKey = "";
+  if (typeof scheduleTimelineViewportRender === "function") {
+    scheduleTimelineViewportRender(state.selectedShotId);
+  }
+}
+
 function renderTimelineViewport(activeShotId = state.selectedShotId) {
   const layout = timelineVirtual.layout;
   const track = ensureTimelineTrack();
   if (!layout || !track) return;
 
   track.style.width = `${layout.totalWidth}px`;
+
+  // Rebuilding shot nodes mid-drag destroys the dot under the pointer and leaves
+  // segment bars / dots out of sync (especially when pulling a second segment).
+  if (typeof refSegmentDrag !== "undefined" && refSegmentDrag) {
+    patchTimelineActiveState(activeShotId);
+    if (typeof patchRefSegmentUi === "function") patchRefSegmentUi();
+    return;
+  }
+
   const scrollLeft = el.timelineStrip?.scrollLeft || 0;
   const viewportWidth = el.timelineStrip?.clientWidth || 640;
-  const visible = computeVisibleTimelineItems(layout, scrollLeft, viewportWidth);
-  const rangeKey = `${layout.totalWidth}:${scrollLeft}:${viewportWidth}:${visible
+  const visible = computeVisibleTimelineItems(layout, scrollLeft, viewportWidth, activeShotId);
+  const rangeKey = `${timelineVirtual.layoutKey}:${layout.totalWidth}:${scrollLeft}:${viewportWidth}:${activeShotId || ""}:${visible
     .map((item) => `${item.type}:${item.left}`)
     .join(",")}`;
 
@@ -268,12 +368,17 @@ function renderTimelineViewport(activeShotId = state.selectedShotId) {
     if (typeof patchRefSegmentUi === "function") patchRefSegmentUi();
     return;
   }
+
   timelineVirtual.rangeKey = rangeKey;
+  const segmentLayer = track.querySelector(":scope > .timeline-segment-layer");
   track.replaceChildren();
   for (const entry of visible) {
     track.appendChild(
       entry.type === "shot" ? mountTimelineShotElement(entry, activeShotId) : mountTimelineInsertElement(entry)
     );
+  }
+  if (segmentLayer) {
+    track.appendChild(segmentLayer);
   }
   timelineVirtual.activeShotId = activeShotId || null;
   timelineVirtual.activeShotIndex = timelineSelectedBoardIndex(activeShotId);
@@ -281,10 +386,11 @@ function renderTimelineViewport(activeShotId = state.selectedShotId) {
 }
 
 function scheduleTimelineViewportRender(activeShotId = state.selectedShotId) {
+  timelineVirtual.pendingActiveShotId = activeShotId || state.selectedShotId || null;
   if (timelineVirtual.viewportRaf) return;
   timelineVirtual.viewportRaf = requestAnimationFrame(() => {
     timelineVirtual.viewportRaf = 0;
-    renderTimelineViewport(activeShotId);
+    renderTimelineViewport(timelineVirtual.pendingActiveShotId || state.selectedShotId);
   });
 }
 
@@ -296,17 +402,47 @@ function invalidateTimelineLayout() {
   timelineVirtual.activeShotIndex = -1;
 }
 
+function isTimelineShotInViewport(shotId) {
+  if (!shotId || !el.timelineStrip || !timelineVirtual.layout) return true;
+  const entry = timelineVirtual.layout.items.find(
+    (item) => item.type === "shot" && item.shot.shot_id === shotId
+  );
+  if (!entry) return true;
+  const scrollLeft = el.timelineStrip.scrollLeft;
+  const viewportWidth = el.timelineStrip.clientWidth || 0;
+  const margin = 32;
+  return (
+    entry.left + entry.width >= scrollLeft + margin &&
+    entry.left <= scrollLeft + viewportWidth - margin
+  );
+}
+
+function ensureTimelineShowsShot(shotId, { behavior = "auto" } = {}) {
+  if (!shotId || !el.timelineStrip || !timelineVirtual.layout) return;
+  if (isTimelineShotInViewport(shotId)) {
+    scheduleTimelineViewportRender(shotId);
+    return;
+  }
+  scrollTimelineToShot(shotId, behavior);
+}
+
 function scrollTimelineToShot(shotId, behavior = "smooth") {
   if (!shotId || !el.timelineStrip) return;
   const layout = timelineVirtual.layout;
   const entry = layout?.items.find((item) => item.type === "shot" && item.shot.shot_id === shotId);
   if (entry) {
-    const targetLeft = Math.max(0, entry.left - 48);
+    const maxLeft = typeof maxTimelineScrollLeft === "function" ? maxTimelineScrollLeft() : 0;
+    const targetLeft = Math.min(maxLeft, Math.max(0, entry.left - 48));
     el.timelineStrip.scrollTo({ left: targetLeft, behavior });
-    requestAnimationFrame(() => {
+    const afterScroll = () => {
       captureTimelineScroll();
       scheduleTimelineViewportRender(state.selectedShotId);
-    });
+    };
+    if (behavior === "smooth" && "onscrollend" in el.timelineStrip) {
+      el.timelineStrip.addEventListener("scrollend", afterScroll, { once: true });
+      return;
+    }
+    requestAnimationFrame(afterScroll);
     return;
   }
   requestAnimationFrame(() => {
@@ -316,3 +452,35 @@ function scrollTimelineToShot(shotId, behavior = "smooth") {
     requestAnimationFrame(() => captureTimelineScroll());
   });
 }
+
+
+// --- module global bridge (auto) ---
+Object.assign(globalThis, {
+  TIMELINE_LAYOUT,
+  timelineVirtual,
+  timelineBoardWidth,
+  timelineLayoutKey,
+  buildTimelineLayout,
+  computeVisibleTimelineItems,
+  ensureTimelineTrack,
+  timelineShotNode,
+  timelineSelectedBoardIndex,
+  patchTimelineSelectedDot,
+  patchTimelineActiveState,
+  timelineShotDisplayName,
+  mountTimelineShotElement,
+  mountTimelineInsertElement,
+  bindTimelineShotEvents,
+  isShotOpenInPs,
+  patchTimelineOpenInPsState,
+  patchTimelineShotThumb,
+  refreshTimelineAfterPreviewSync,
+  updateTimelineMeta,
+  renderTimelineViewport,
+  scheduleTimelineViewportRender,
+  refreshTimelineAfterSegmentGesture,
+  invalidateTimelineLayout,
+  isTimelineShotInViewport,
+  ensureTimelineShowsShot,
+  scrollTimelineToShot,
+});

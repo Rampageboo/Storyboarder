@@ -239,18 +239,28 @@ def remove_image_for_shot(project: Project, shot: Shot) -> None:
     shot.thumbnail_path = ""
 
 
+def remove_board_background_for_shot(project: Project, shot: Shot) -> None:
+    """Drop only the reference background, preserving the artist's drawing.
+
+    Unlike ``remove_image_for_shot``, this leaves ``preview_image_path`` /
+    ``image_path`` / ``thumbnail_path`` intact so a board the artist has drawn on
+    keeps its illustration when its reference is removed.
+    """
+    shot_dir = get_shot_dir(project, shot)
+    (shot_dir / board_background_filename(shot.shot_id)).unlink(missing_ok=True)
+
+
 def get_shot_board_background_path(project: Project, shot: Shot) -> Path | None:
+    # The board background reference is ONLY the dedicated background file — never
+    # the shot preview. The preview is the artist's drawing; treating it as the
+    # background lets `ensure_psd_board_background_layer` bake the drawing into the
+    # PSD as an `SB bg` layer, which the preview composite then hides → blank. This
+    # mirrors the Photoshop plugin's `resolveBoardBackgroundEntry`.
     shot_dir = get_shot_dir(project, shot)
     dedicated = shot_dir / board_background_filename(shot.shot_id)
     if dedicated.is_file():
         return dedicated
-    preview_rel = shot.preview_image_path or shot.image_path
-    if not preview_rel:
-        return None
-    preview = project.root_path / preview_rel
-    if not preview.is_file() or is_solid_color_image(preview):
-        return None
-    return preview
+    return None
 
 
 def sync_psd_board_background(project: Project, shot: Shot, psd_path: Path) -> bool:
@@ -258,6 +268,56 @@ def sync_psd_board_background(project: Project, shot: Shot, psd_path: Path) -> b
     if background_path is None:
         return False
     return ensure_psd_board_background_layer(psd_path, background_path)
+
+
+def recover_shot_source_psd(project: Project, shot: Shot, *, preserve_layers: bool = True) -> dict[str, Any]:
+    """Rebuild a Photoshop-unopenable source PSD from its own layers.
+
+    Backs the unreadable file up under the shot's ``_history`` folder, rebuilds a
+    clean PSD in place, and refreshes the preview + thumbnail. ``preserve_layers``
+    keeps the original layer data (blend modes, opacity, masks, text); pass False
+    to force a flattened rebuild when the layer-preserving one still won't open.
+    Raises ValueError/FileNotFoundError when recovery is not possible so the
+    caller can fall back to a fresh canvas.
+    """
+    import os
+    import time
+
+    from . import psd_recovery
+
+    if not shot.source_file_path:
+        raise ValueError("No source PSD linked for this shot.")
+    source = project.root_path / shot.source_file_path
+    if not source.is_file():
+        raise FileNotFoundError("Source PSD file is missing.")
+    if not psd_recovery.can_open_with_psd_tools(source):
+        raise ValueError("The PSD is too damaged to read — it cannot be rebuilt.")
+
+    shot_dir = get_shot_dir(project, shot)
+    history = shot_dir / "_history"
+    history.mkdir(parents=True, exist_ok=True)
+    backup = history / f"{shot.shot_id}.broken-{int(time.time())}.psd"
+    shutil.copy2(source, backup)
+
+    # Rebuild to a temp file first, then atomically swap it over the source so a
+    # failed rebuild never destroys the (still backed-up) original.
+    temp = shot_dir / f"{shot.shot_id}.rebuilt.psd"
+    info = psd_recovery.rebuild_psd(source, temp, preserve_layers=preserve_layers)
+    os.replace(temp, source)
+
+    preview_path = shot_dir / f"{shot.shot_id}_preview.png"
+    export_psd_composite_to_png(source, preview_path)
+    _set_shot_preview_paths(project, shot, preview_path)
+    shot.source_sync_mtime = linked_mtime(project, shot)
+
+    return {
+        "backup": backup.relative_to(project.root_path).as_posix(),
+        "method": info.get("method", "flatten"),
+        "layers_recovered": info["layers_recovered"],
+        "layers_skipped": info["layers_skipped"],
+        "width": info["width"],
+        "height": info["height"],
+    }
 
 
 def _save_board_background_copy(source_path: Path, destination_path: Path) -> Path:
@@ -415,6 +475,16 @@ def get_shot_dir(project: Project, shot: Shot) -> Path:
     return project.shots_dir / shot.shot_id
 
 
+def shot_has_psd_canvas(project: Project, shot: Shot) -> bool:
+    """True when the shot folder contains a linked Photoshop canvas."""
+    if shot.source_file_path:
+        path = project.root_path / shot.source_file_path
+        if path.is_file() and is_psd_path(path):
+            return True
+    fallback = get_shot_dir(project, shot) / f"{shot.shot_id}.psd"
+    return fallback.is_file() and is_psd_path(fallback)
+
+
 def _require_index(project: Project, index: int) -> None:
     if index < 0 or index >= len(project.shots):
         raise IndexError("Shot index out of range.")
@@ -424,6 +494,51 @@ def _ensure_project_dirs(root: Path) -> None:
     root.mkdir(parents=True, exist_ok=True)
     for dirname in ("shots", "references", "exports", "scripts", "backups", "scene3d"):
         (root / dirname).mkdir(exist_ok=True)
+
+
+def relink_shot_preview_from_disk(project: Project, shot: Shot) -> bool:
+    """Restore preview metadata when the PNG exists on disk but paths were cleared."""
+    if shot.preview_image_path or shot.image_path:
+        return False
+    preview_path = resolve_shot_preview_path(project, shot)
+    if preview_path is None or is_solid_color_image(preview_path):
+        return False
+    _set_shot_preview_paths(project, shot, preview_path)
+    return True
+
+
+def resolve_shot_preview_path(project: Project, shot: Shot) -> Path | None:
+    """Find the best on-disk preview image for a shot."""
+    candidates: list[Path] = []
+    if shot.preview_image_path:
+        candidates.append(project.root_path / shot.preview_image_path)
+    if shot.image_path and shot.image_path != shot.preview_image_path:
+        candidates.append(project.root_path / shot.image_path)
+    shot_dir = get_shot_dir(project, shot)
+    candidates.append(shot_dir / f"{shot.shot_id}_preview.png")
+    for path in candidates:
+        if path.is_file():
+            return path
+    return None
+
+
+def resolve_shot_thumbnail_path(project: Project, shot: Shot) -> Path | None:
+    """Find the best on-disk thumbnail for timeline / filmstrip display."""
+    candidates: list[Path] = []
+    if shot.thumbnail_path:
+        candidates.append(project.root_path / shot.thumbnail_path)
+    shot_dir = get_shot_dir(project, shot)
+    candidates.append(shot_dir / f"{shot.shot_id}_thumb.png")
+    preview_path = resolve_shot_preview_path(project, shot)
+    if preview_path is not None:
+        candidates.append(preview_path)
+    background_path = get_shot_board_background_path(project, shot)
+    if background_path is not None:
+        candidates.append(background_path)
+    for path in candidates:
+        if path.is_file():
+            return path
+    return None
 
 
 def _ensure_shot_files(project: Project, shot: Shot) -> None:
@@ -438,6 +553,7 @@ def _ensure_shot_files(project: Project, shot: Shot) -> None:
     notes_path = shot_dir / f"{shot.shot_id}_notes.json"
     if not notes_path.exists():
         notes_path.write_text(json.dumps(shot.to_dict(), indent=2), encoding="utf-8")
+    relink_shot_preview_from_disk(project, shot)
 
 
 def _set_shot_preview_paths(project: Project, shot: Shot, preview_path: Path) -> None:
@@ -530,6 +646,7 @@ from .reference_segments import (  # noqa: E402
     reference_media_type,
     remove_project_reference,
     resolve_segment_reference,
+    restore_boards_from_undo,
     set_active_reference_image,
     set_active_reference_model,
     set_active_reference_video,

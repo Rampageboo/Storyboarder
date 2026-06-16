@@ -1,6 +1,7 @@
-// Sole frontend entry: init globals, sequential classic script chain, startup overlay.
+// Sole frontend entry: startup overlay, init globals, ordered feature load.
+// Migrated features use import(); legacy scripts use classic injection.
 
-import "./init_globals.js";
+import { setStartupProgress, failStartupOverlay, armStartupWatchdog } from "./startup_overlay.js";
 
 const APP_SCRIPTS = [
   "core/canvas_size.js",
@@ -19,61 +20,16 @@ const APP_SCRIPTS = [
   "sync_polling.js",
   "external_tools_ui.js",
   "annotations.js",
+  "app_render.js",
   "app.js",
   "core/settings.js",
   "core/hints.js",
   "core/drop.js",
 ];
 
+const ES_MODULE_SCRIPTS = new Set(["core/settings.js"]);
+
 const APP_BUILD = String(Date.now());
-
-const startupUi = {
-  overlay: document.getElementById("startupOverlay"),
-  progress: document.getElementById("startupProgress"),
-  stage: document.getElementById("startupStage"),
-  detail: document.getElementById("startupDetail"),
-  percent: document.getElementById("startupPercent"),
-  value: 0,
-  hidden: false,
-  failed: false,
-};
-
-function setStartupProgress(value, stage, detail) {
-  const requested = Math.max(0, Math.min(100, Math.round(value)));
-  const current = startupUi.value || 0;
-  if (requested < current) return;
-  const percent = Math.max(current, requested);
-  startupUi.value = percent;
-  if (startupUi.progress) startupUi.progress.value = percent;
-  if (startupUi.percent) startupUi.percent.textContent = `${percent}%`;
-  if (stage && startupUi.stage) startupUi.stage.textContent = stage;
-  if (detail && startupUi.detail) startupUi.detail.textContent = detail;
-}
-
-function finishStartupOverlay(detail = "Ready") {
-  if (startupUi.hidden) return;
-  startupUi.hidden = true;
-  setStartupProgress(100, "Ready", detail);
-  if (startupUi.overlay) {
-    startupUi.overlay.classList.add("is-done");
-    startupUi.overlay.style.pointerEvents = "none";
-  }
-  window.setTimeout(() => {
-    if (startupUi.overlay) startupUi.overlay.hidden = true;
-  }, 320);
-}
-
-function failStartupOverlay(detail = "Startup failed") {
-  if (startupUi.hidden) return;
-  startupUi.failed = true;
-  setStartupProgress(Math.max(startupUi.value || 0, 55), "Startup issue", detail);
-  if (startupUi.overlay) {
-    startupUi.overlay.classList.add("has-error");
-    startupUi.overlay.style.pointerEvents = "auto";
-  }
-}
-
-Object.assign(globalThis, { setStartupProgress, finishStartupOverlay, failStartupOverlay });
 
 function loadClassicScript(src) {
   return new Promise((resolve, reject) => {
@@ -85,21 +41,42 @@ function loadClassicScript(src) {
   });
 }
 
-setStartupProgress(8, "Storyboard Tool", "Booting interface");
+async function loadFeatureScript(src) {
+  if (ES_MODULE_SCRIPTS.has(src)) {
+    try {
+      await import(`/static/${src}`);
+    } catch (cause) {
+      throw new Error(`Could not load ${src}`, { cause });
+    }
+    return;
+  }
+  await loadClassicScript(src);
+}
+
+function ensureSettingsClickFallback() {
+  const openBtn = document.getElementById("openSettings");
+  if (!openBtn || openBtn.dataset.settingsUiBound === "1") return;
+  openBtn.dataset.settingsUiBound = "1";
+  openBtn.addEventListener("click", (event) => {
+    event.preventDefault();
+    globalThis.openSettingsModal?.();
+  });
+}
 
 try {
+  await import("/static/app/init_globals.js");
   for (let index = 0; index < APP_SCRIPTS.length; index += 1) {
     const src = APP_SCRIPTS[index];
-    await loadClassicScript(src);
+    await loadFeatureScript(src);
     const progress = 10 + Math.round(((index + 1) / APP_SCRIPTS.length) * 42);
     setStartupProgress(progress, "Loading modules", src);
   }
   setStartupProgress(55, "Storyboard Tool", "Modules loaded");
-  window.setTimeout(() => {
-    if (!startupUi.hidden && !startupUi.failed) {
-      failStartupOverlay("Initialization timed out");
-    }
-  }, 35000);
+  if (!globalThis.bindSettingsUi?.()) {
+    console.warn("[main] bindSettingsUi failed; using click fallback");
+    ensureSettingsClickFallback();
+  }
+  armStartupWatchdog();
 } catch (error) {
   console.error(error);
   failStartupOverlay(error.message || "Startup failed");

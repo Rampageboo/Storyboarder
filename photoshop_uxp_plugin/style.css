@@ -109,6 +109,28 @@ sp-textfield {
   border: 1px solid #3d7a52;
 }
 
+.current-shot {
+  display: block;
+  margin: 0 0 4px;
+  padding: 8px 10px;
+  border-radius: 4px;
+  background: #20304a;
+  color: #cfe0ff;
+  border: 1px solid #3d5a8a;
+  font-weight: 600;
+}
+
+.current-shot.muted {
+  background: #2a2a2a;
+  color: #b3b3b3;
+  border-color: #555;
+  font-weight: 400;
+}
+
+.current-shot[hidden] {
+  display: none !important;
+}
+
 .link-status.waiting {
   background: #3a3420;
   color: #f0e2b8;
@@ -123,4 +145,38 @@ sp-textfield {
 .advanced-section sp-button {
   margin-top: 10px;
   margin-bottom: 0;
+}
+
+/* Task groups */
+.panel-group {
+  display: flex;
+  flex-direction: column;
+}
+
+#linkedPanel .panel-group + .panel-group {
+  margin-top: 14px;
+  padding-top: 14px;
+  border-top: 1px solid #383838;
+}
+
+.group-label {
+  display: block;
+  margin: 0 0 8px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: #8a8a8a;
+}
+
+/* Prominent save zone */
+.panel-group-save {
+  background: #15251a;
+  border: 1px solid #2f5a3d;
+  border-radius: 6px;
+  padding: 12px;
+}
+
+.panel-group-save .group-label {
+  color: #9bd6ad;
 }

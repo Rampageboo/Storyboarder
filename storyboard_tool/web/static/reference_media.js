@@ -283,3 +283,19 @@ function renderReferenceMediaPanel(container, options = {}) {
   container.appendChild(grid);
   scheduleReferenceModelPreviews(container);
 }
+
+
+// --- module global bridge (auto) ---
+Object.assign(globalThis, {
+  resolveReferenceType,
+  referenceModelPreviewUrl,
+  scheduleReferenceModelPreviews,
+  referenceSegmentEditorPath,
+  navigateToReferenceSegmentEditor,
+  referenceLinksFromProject,
+  activeReferenceVideoPath,
+  referenceMediaUrl,
+  referenceDisplayTitle,
+  renderReferenceEmptyState,
+  renderReferenceMediaPanel,
+});

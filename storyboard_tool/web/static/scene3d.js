@@ -18,6 +18,8 @@ function hashString(value) {
   return Math.abs(hash);
 }
 
+const PRIMITIVE_TYPES = new Set(["cube", "sphere", "plane", "cylinder", "cone"]);
+
 function makeId() {
   return crypto.randomUUID().replaceAll("-", "").slice(0, 12);
 }
@@ -168,6 +170,7 @@ export class Scene3DEditor {
             <div class="scene3d-file-name" data-blend-name>scene3d/scene.blend</div>
             <button type="button" data-action="open-blender" class="scene3d-import-btn">在 Blender 中打开</button>
             <button type="button" data-action="import-blender" class="scene3d-import-btn">导入 GLB / GLTF</button>
+            <button type="button" data-action="reload-glb" class="scene3d-import-btn">刷新 GLB</button>
             <label class="scene3d-check">
               <input type="checkbox" data-follow-camera checked />
               跟随相机视角
@@ -231,7 +234,9 @@ export class Scene3DEditor {
             </div>
             <div class="scene3d-tool-group scene3d-blender-only" hidden>
               <button type="button" data-action="play-pause">▶ 播放</button>
-              <button type="button" data-action="stop-animation">■ 停止</button>
+              <button type="button" data-action="go-to-start" title="回到开头">⏮ 开头</button>
+              <button type="button" data-action="step-back" title="后退 0.1s">◀</button>
+              <button type="button" data-action="step-forward" title="前进 0.1s">▶</button>
               <button type="button" data-action="capture-board">印到当前分镜</button>
               <button type="button" data-action="free-view">自由视角</button>
             </div>
@@ -245,19 +250,22 @@ export class Scene3DEditor {
               <button type="button" data-action="apply-shot-camera">保存镜头相机</button>
             </div>
           </div>
-          <div class="scene3d-viewport" data-viewport></div>
+          <div class="scene3d-viewport" data-viewport>
+            <div class="scene3d-format-frame" data-format-frame></div>
+          </div>
           <div class="scene3d-timeline scene3d-blender-only" hidden>
             <input type="range" min="0" max="0" step="0.01" value="0" data-time-slider />
             <span data-time-display>0.0s / 0.0s</span>
           </div>
           <div class="scene3d-hint" data-hint>
-            使用 GLB 自带时间轴播放相机动画 · 不会切换底部分镜 · 「印到当前分镜」可保存当前画面为背景
+            空格播放/暂停 · ←→ 步进 0.1s（Shift 0.5s）· Home 回开头 · F5 刷新 GLB · 播完停在最后一帧
           </div>
         </div>
       </div>
     `;
     this.outlinerEl = this.rootEl.querySelector("[data-outliner]");
     this.viewportEl = this.rootEl.querySelector("[data-viewport]");
+    this.formatFrameEl = this.rootEl.querySelector("[data-format-frame]");
     this.fileNameEl = this.rootEl.querySelector("[data-blend-name]");
     this.cameraSelectEl = this.rootEl.querySelector("[data-camera-select]");
     this.followCameraEl = this.rootEl.querySelector("[data-follow-camera]");
@@ -290,7 +298,7 @@ export class Scene3DEditor {
     this.renderer.toneMappingExposure = 1.0;
     this.renderer.shadowMap.enabled = true;
     this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
-    this.viewportEl.appendChild(this.renderer.domElement);
+    this.formatFrameEl.appendChild(this.renderer.domElement);
 
     this.scene = new THREE.Scene();
     this.scene.background = new THREE.Color(0x1a1d21);
@@ -387,6 +395,10 @@ export class Scene3DEditor {
       this.setActiveCamera(this.cameraSelectEl.value);
     });
     this.timeSliderEl.addEventListener("input", () => {
+      if (this.isPlaying) {
+        this.isPlaying = false;
+        this._updatePlayButton();
+      }
       this.setAnimationTime(Number(this.timeSliderEl.value || 0));
     });
   }
@@ -417,8 +429,17 @@ export class Scene3DEditor {
       case "play-pause":
         this.toggleAnimationPlayback();
         break;
-      case "stop-animation":
-        this.stopAnimation();
+      case "go-to-start":
+        this.goToAnimationStart();
+        break;
+      case "step-back":
+        this.stepAnimation(-0.1);
+        break;
+      case "step-forward":
+        this.stepAnimation(0.1);
+        break;
+      case "reload-glb":
+        this.reloadBlenderScene();
         break;
       case "free-view":
         this.setFollowCamera(false);
@@ -437,6 +458,27 @@ export class Scene3DEditor {
       if (event.code === "Space") {
         event.preventDefault();
         this.toggleAnimationPlayback();
+        return;
+      }
+      if (event.code === "F5") {
+        event.preventDefault();
+        this.reloadBlenderScene();
+        return;
+      }
+      if (event.key === "Home") {
+        event.preventDefault();
+        this.goToAnimationStart();
+        return;
+      }
+      if (event.key === "ArrowLeft") {
+        event.preventDefault();
+        this.stepAnimation(event.shiftKey ? -0.5 : -0.1);
+        return;
+      }
+      if (event.key === "ArrowRight") {
+        event.preventDefault();
+        this.stepAnimation(event.shiftKey ? 0.5 : 0.1);
+        return;
       }
       return;
     }
@@ -635,6 +677,33 @@ export class Scene3DEditor {
     this._updateAnimationHint();
   }
 
+  async reloadBlenderScene() {
+    if (!this.sceneMeta?.file_path) {
+      this.callbacks.onMessage?.("当前项目没有 GLB，请先 Import GLB");
+      return;
+    }
+    const savedTime = this.animationTime;
+    const savedCameraName =
+      this.importedCameras.find((item) => item.id === this.activeCameraId)?.name ||
+      this.sceneMeta.camera_name ||
+      "";
+    this.isPlaying = false;
+    this._updatePlayButton();
+    try {
+      const url = `/api/project/scene3d/file?t=${Date.now()}`;
+      await this._loadBlenderUrl(url, this.sceneMeta.file_name || this.sceneMeta.file_path);
+      if (savedCameraName) {
+        this.setActiveCamera(this._pickBestCameraId(savedCameraName), false);
+      }
+      if (savedTime > 0) {
+        this.setAnimationTime(Math.min(savedTime, this.animationDuration));
+      }
+      this.callbacks.onMessage?.("已刷新 GLB（保留时间与显示设置）");
+    } catch (error) {
+      this.callbacks.onMessage?.(`刷新 GLB 失败：${error?.message || error}`);
+    }
+  }
+
   _trackNodeName(trackName) {
     const dot = String(trackName || "").lastIndexOf(".");
     return dot > 0 ? trackName.slice(0, dot) : trackName;
@@ -651,17 +720,71 @@ export class Scene3DEditor {
     return names;
   }
 
-  _collectSceneCameras(root) {
+  _isNodeInSceneGraph(root, node) {
+    let current = node;
+    while (current) {
+      if (current === root) return true;
+      current = current.parent;
+    }
+    return false;
+  }
+
+  _collectImportedCameras(gltf) {
     const cameras = [];
-    root.traverse((node) => {
-      if (!node.isCamera) return;
+    const seen = new Set();
+    const root = gltf.scene;
+
+    const addCamera = (node, meta = {}) => {
+      if (!node?.isCamera || seen.has(node.uuid)) return;
+      seen.add(node.uuid);
+      const name = String(node.name || node.userData?.name || "").trim() || `Camera ${cameras.length + 1}`;
       cameras.push({
         id: node.uuid,
-        name: node.name || `Camera ${cameras.length + 1}`,
+        name,
         object3d: node,
+        ...meta,
       });
-    });
-    return cameras;
+    };
+
+    const sceneRoots = gltf.scenes?.length ? gltf.scenes : [root];
+    for (const sceneRoot of sceneRoots) {
+      sceneRoot?.traverse((node) => addCamera(node, { source: "scene" }));
+    }
+
+    if (gltf.parser?.associations) {
+      for (const [object3d] of gltf.parser.associations.entries()) {
+        addCamera(object3d, { source: "parser" });
+      }
+    }
+
+    for (const cam of gltf.cameras || []) {
+      addCamera(cam, { source: "gltf.cameras" });
+    }
+
+    for (const item of cameras) {
+      if (!this._isNodeInSceneGraph(root, item.object3d)) {
+        root.add(item.object3d);
+        item.orphan = true;
+      }
+    }
+
+    return cameras.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
+  }
+
+  _diagnoseMissingCameras(gltf) {
+    const json = gltf.parser?.json || {};
+    const nodeCameraCount = (json.nodes || []).filter((node) => node.camera !== undefined).length;
+    const gltfCameraCount = gltf.cameras?.length || 0;
+    if (gltfCameraCount > 0 || nodeCameraCount > 0) {
+      return (
+        `GLB 元数据含 ${Math.max(gltfCameraCount, nodeCameraCount)} 个相机，但未能正确挂到场景。` +
+        " 请检查 Blender：相机不要隐藏（眼睛图标），Limit to 不要勾选 Visible/Active Collection，或把相机放进导出集合。"
+      );
+    }
+    return (
+      "GLB 内完全没有相机数据（不是勾选 Cameras 就行）。" +
+      " 请确认场景里有 Camera 对象、导出时 Limit to 留空、相机可见，并重新导出。"
+    );
   }
 
   _scoreCameraForAnimation(item) {
@@ -1004,7 +1127,7 @@ export class Scene3DEditor {
     }
     this._applyWireframeMode();
 
-    this.importedCameras = this._collectSceneCameras(gltf.scene);
+    this.importedCameras = this._collectImportedCameras(gltf);
     this.animatedNodeNames = this._collectAnimatedNodeNames(gltf.animations);
 
     const clipsToPlay = this._selectAnimationClips(gltf.animations || []);
@@ -1012,6 +1135,7 @@ export class Scene3DEditor {
     this.mixerActions = [];
     for (const clip of clipsToPlay) {
       const action = this.mixer.clipAction(clip);
+      action.setLoop(THREE.LoopOnce, 1);
       action.play();
       this.mixerActions.push(action);
     }
@@ -1035,7 +1159,11 @@ export class Scene3DEditor {
     this.setFollowCamera(this.followCamera);
     this._updateAnimationHint();
     if (this.importedCameras.length === 0) {
-      this.callbacks.onMessage?.("场景已加载，但未找到相机。请在 Blender 导出时勾选 Cameras。");
+      this.callbacks.onMessage?.(this._diagnoseMissingCameras(gltf));
+    } else if (this.importedCameras.some((item) => item.orphan)) {
+      this.callbacks.onMessage?.(
+        `已找到 ${this.importedCameras.length} 个相机（部分未挂到场景树，已自动修复）。`,
+      );
     } else if (!(gltf.animations || []).length) {
       this.callbacks.onMessage?.("场景已加载，但未找到动画。请在 Blender 导出时勾选 Animation。");
     } else if (this.animationDuration <= 0) {
@@ -1445,7 +1573,12 @@ export class Scene3DEditor {
   _syncMixerTime(seconds) {
     if (!this.mixer || !this.mixerActions.length) return;
     const time = Math.max(0, Number(seconds) || 0);
-    this.mixer.setTime(time);
+    for (const action of this.mixerActions) {
+      action.enabled = true;
+      action.paused = false;
+      action.time = time;
+    }
+    this.mixer.update(0);
     this.animationTime = time;
     this.blenderRoot?.updateMatrixWorld(true);
   }
@@ -1465,6 +1598,13 @@ export class Scene3DEditor {
       this.callbacks.onMessage?.("请先导入带相机动画的 GLB");
       return;
     }
+    if (
+      !this.isPlaying &&
+      this.animationDuration > 0 &&
+      this.animationTime >= this.animationDuration - 0.001
+    ) {
+      this.setAnimationTime(0);
+    }
     this.isPlaying = !this.isPlaying;
     this._updatePlayButton();
   }
@@ -1474,18 +1614,55 @@ export class Scene3DEditor {
     this._updatePlayButton();
   }
 
-  stopAnimation() {
+  goToAnimationStart() {
     this.isPlaying = false;
     this.setAnimationTime(0);
     this._updatePlayButton();
+  }
+
+  stepAnimation(deltaSeconds) {
+    if (this.mode !== "blender" || !this.mixer) return;
+    if (this.isPlaying) {
+      this.isPlaying = false;
+      this._updatePlayButton();
+    }
+    this.setAnimationTime(this.animationTime + Number(deltaSeconds || 0));
   }
 
   captureFrameDataUrl() {
     if (this.followCamera && this.mode === "blender") {
       this._applyFollowCamera();
     }
+    const displaySize = new THREE.Vector2();
+    this.renderer.getSize(displaySize);
+    const displayPixelRatio = this.renderer.getPixelRatio();
+    const displayAspect = this.camera.aspect;
+    const projectSize =
+      typeof globalThis.getProjectCanvasSize === "function"
+        ? globalThis.getProjectCanvasSize()
+        : { width: 1920, height: 1080 };
+    const exportWidth = Math.max(1, projectSize.width);
+    const exportHeight = Math.max(1, projectSize.height);
+
+    this.renderer.setPixelRatio(1);
+    this.renderer.setSize(exportWidth, exportHeight, false);
+    this.camera.aspect = exportWidth / exportHeight;
+    this.camera.updateProjectionMatrix();
+    if (this.followCamera && this.mode === "blender") {
+      this._applyFollowCamera();
+    }
     this.renderer.render(this.scene, this.camera);
-    return this.renderer.domElement.toDataURL("image/png");
+    const url = this.renderer.domElement.toDataURL("image/png");
+
+    this.renderer.setPixelRatio(displayPixelRatio);
+    this.renderer.setSize(displaySize.x, displaySize.y, false);
+    this.camera.aspect = displayAspect;
+    this.camera.updateProjectionMatrix();
+    if (this.followCamera && this.mode === "blender") {
+      this._applyFollowCamera();
+    }
+    this.renderer.render(this.scene, this.camera);
+    return url;
   }
 
   getAnimationState() {
@@ -1527,11 +1704,20 @@ export class Scene3DEditor {
     this.orbit.enabled = false;
   }
 
+  _projectAspect() {
+    const size =
+      typeof globalThis.getProjectCanvasSize === "function"
+        ? globalThis.getProjectCanvasSize()
+        : { width: 1920, height: 1080 };
+    return size.width / Math.max(1, size.height);
+  }
+
   _resize() {
-    const width = this.viewportEl.clientWidth;
-    const height = this.viewportEl.clientHeight;
+    const frame = this.formatFrameEl || this.viewportEl;
+    const width = Math.max(1, Math.floor(frame.clientWidth));
+    const height = Math.max(1, Math.floor(frame.clientHeight));
     if (!width || !height) return;
-    this.camera.aspect = width / height;
+    this.camera.aspect = this._projectAspect();
     this.camera.updateProjectionMatrix();
     this.renderer.setSize(width, height, false);
   }
@@ -1540,14 +1726,14 @@ export class Scene3DEditor {
     this.animationId = requestAnimationFrame(() => this._animate());
     const delta = this.clock.getDelta();
     if (this.mode === "blender" && this.mixer && this.isPlaying) {
-      this.mixer.update(delta);
-      this.animationTime = this.mixer.time;
-      if (this.animationDuration > 0 && this.animationTime >= this.animationDuration) {
-        this.animationTime = this.animationDuration;
+      const duration = this.animationDuration || 0;
+      let nextTime = this.animationTime + delta;
+      if (duration > 0 && nextTime >= duration) {
+        nextTime = duration;
         this.isPlaying = false;
-        this._syncMixerTime(this.animationTime);
         this._updatePlayButton();
       }
+      this._syncMixerTime(nextTime);
       this.blenderRoot?.updateMatrixWorld(true);
       this._updateTimelineUi();
     }

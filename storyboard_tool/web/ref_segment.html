@@ -51,6 +51,12 @@
             </div>
           </div>
           <input id="rsgMediaScrubber" class="rsg-scrubber" type="range" min="0" max="0" step="0.001" value="0" aria-label="Media progress" />
+          <div class="rsg-fit-mode" role="group" aria-label="Reference fit">
+            <span class="rsg-fit-mode-label">Fit</span>
+            <button type="button" class="rsg-fit-mode-btn is-active" data-fit-mode="fit" title="Fit inside canvas">Fit</button>
+            <button type="button" class="rsg-fit-mode-btn" data-fit-mode="fill" title="Fill canvas, crop edges">Fill</button>
+            <button type="button" class="rsg-fit-mode-btn" data-fit-mode="stretch" title="Stretch to canvas">Stretch</button>
+          </div>
           <div class="rsg-segment-box">
             <div class="rsg-segment-toolbar">
               <span class="rsg-group-title">Board Segment</span>

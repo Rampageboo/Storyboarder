@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import re
 import shutil
 import uuid
@@ -8,6 +9,7 @@ from typing import Any, BinaryIO
 
 from . import project_manager as pm
 from .image_utils import (
+    board_background_filename,
     copy_and_convert_image_stream,
     normalize_reference_fit_mode,
 )
@@ -34,6 +36,73 @@ def _segment_board_range(shots: list[Shot], anchor_index: int, end_index: int) -
     return min_index, max_index
 
 
+def _undo_root(project: Project) -> Path:
+    return project.root_path / "backups" / "ref_undo"
+
+
+def _board_bake_filenames(shot: Shot) -> list[str]:
+    """The per-board files a reference bake overwrites (preview, background, thumb)."""
+    return [
+        f"{shot.shot_id}_preview.png",
+        board_background_filename(shot.shot_id),
+        f"{shot.shot_id}_thumb.png",
+    ]
+
+
+def snapshot_boards_for_undo(project: Project, min_index: int, max_index: int) -> str:
+    """Back up the boards a bake is about to overwrite; returns an undo token."""
+    token = uuid.uuid4().hex
+    backup_root = _undo_root(project) / token
+    manifest: list[dict[str, Any]] = []
+    for index in range(min_index, max_index + 1):
+        shot = project.shots[index]
+        shot_dir = pm.get_shot_dir(project, shot)
+        shot_backup = backup_root / shot.shot_id
+        saved_files: list[str] = []
+        for name in _board_bake_filenames(shot):
+            source = shot_dir / name
+            if source.is_file():
+                shot_backup.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(source, shot_backup / name)
+                saved_files.append(name)
+        manifest.append({"shot_id": shot.shot_id, "shot": shot.to_dict(), "files": saved_files})
+    backup_root.mkdir(parents=True, exist_ok=True)
+    (backup_root / "manifest.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+    return token
+
+
+def restore_boards_from_undo(project: Project, token: str) -> dict[str, Any]:
+    """Restore boards (image files + shot fields) from a bake snapshot, then drop it."""
+    token = re.sub(r"[^a-f0-9]", "", str(token or ""))
+    if not token:
+        raise ValueError("Invalid undo token.")
+    backup_root = _undo_root(project) / token
+    manifest_path = backup_root / "manifest.json"
+    if not manifest_path.is_file():
+        raise ValueError("Undo snapshot not found.")
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    shots_by_id = {shot.shot_id: shot for shot in project.shots}
+    restored = 0
+    for entry in manifest:
+        shot_id = entry.get("shot_id")
+        current = shots_by_id.get(shot_id)
+        if current is None:
+            continue  # board was deleted since the bake; nothing to restore
+        shot_dir = pm.get_shot_dir(project, current)
+        saved_files = set(entry.get("files", []))
+        for name in _board_bake_filenames(current):
+            target = shot_dir / name
+            backup_file = backup_root / shot_id / name
+            if name in saved_files and backup_file.is_file():
+                shutil.copy2(backup_file, target)
+            else:
+                target.unlink(missing_ok=True)  # file did not exist before the bake
+        project.shots[project.shots.index(current)] = Shot.from_dict(entry.get("shot", {}))
+        restored += 1
+    shutil.rmtree(backup_root, ignore_errors=True)
+    return {"restored": restored}
+
+
 def _segment_storyboard_duration(shots: list[Shot], min_index: int, max_index: int) -> float:
     """Shared storyboard-duration accumulation used by every ref-segment apply function."""
     storyboard_duration = 0.0
@@ -44,7 +113,10 @@ def _segment_storyboard_duration(shots: list[Shot], min_index: int, max_index: i
 
 def normalize_ref_segments(settings: dict[str, Any]) -> list[dict[str, Any]]:
     raw = settings.get("ref_segments")
-    if isinstance(raw, list) and raw:
+    # An explicitly-present list is authoritative even when empty: an empty array
+    # means segments were deliberately cleared and must not be resurrected from
+    # the legacy singular ref_segment (otherwise the last segment is undeletable).
+    if isinstance(raw, list):
         normalized: list[dict[str, Any]] = []
         for item in raw:
             if not isinstance(item, dict):
@@ -577,6 +649,8 @@ def apply_ref_segment_to_boards(
     video_seg = find_ref_segment(project, segment_id) or {}
     video_rel, video_path = _validate_segment_reference(project, video_seg, "video")
 
+    undo_token = snapshot_boards_for_undo(project, min_index, max_index)
+
     video_duration = get_video_duration(video_path)
     video_mtime = video_path.stat().st_mtime
     segment_offset = 0.0
@@ -660,6 +734,7 @@ def apply_ref_segment_to_boards(
         "segment_duration": round(segment_offset, 3),
         "video_duration": round(video_duration, 3),
         "applied": applied,
+        "undo_token": undo_token,
     }
 
 
@@ -776,6 +851,8 @@ def apply_ref_segment_image_to_boards(
     image_seg = find_ref_segment(project, segment_id) or {}
     image_rel, image_path = _validate_segment_reference(project, image_seg, "image")
 
+    undo_token = snapshot_boards_for_undo(project, min_index, max_index)
+
     image_mtime = image_path.stat().st_mtime
     segment_offset = 0.0
     storyboard_duration = _segment_storyboard_duration(shots, min_index, max_index)
@@ -822,6 +899,7 @@ def apply_ref_segment_image_to_boards(
         "board_count": len(applied),
         "segment_duration": round(segment_offset, 3),
         "applied": applied,
+        "undo_token": undo_token,
     }
 
 
@@ -852,7 +930,13 @@ def delete_ref_segment(project: Project, segment_id: str) -> dict[str, Any]:
             shot.ref_video_path = ""
             shot.ref_video_time = 0.0
             shot.ref_segment_time = 0.0
-            pm.remove_image_for_shot(project, shot)
+            # Removing a reference must not erase the artist's drawing. Boards
+            # backed by a Photoshop canvas keep their illustration (only the
+            # reference background is dropped); pure-reference boards reset.
+            if pm.shot_has_psd_canvas(project, shot):
+                pm.remove_board_background_for_shot(project, shot)
+            else:
+                pm.remove_image_for_shot(project, shot)
             cleared += 1
 
     project.settings["ref_segments"] = [item for item in segments if item.get("id") != seg_id]

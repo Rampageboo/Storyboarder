@@ -167,3 +167,22 @@ function bindFileDrop() {
 }
 
 bindFileDrop();
+
+
+// --- module global bridge (auto) ---
+Object.assign(globalThis, {
+  IMAGE_DROP_EXTENSIONS,
+  dropDepth,
+  fileExtension,
+  isImageDropFile,
+  decodeFileUri,
+  pathsFromDataTransfer,
+  showDropOverlay,
+  hideDropOverlay,
+  hasDropFiles,
+  importDroppedImageFile,
+  importDroppedImagePath,
+  openDroppedProjectPath,
+  handleDroppedFiles,
+  bindFileDrop,
+});

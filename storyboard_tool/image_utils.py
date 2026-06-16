@@ -35,6 +35,8 @@ SUPPORTED_IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".tif", ".tiff", ".webp"}
 PSD_EXTENSIONS = {".psd", ".psb"}
 THUMBNAIL_SIZE = (420, 260)
 SB_BG_LAYER_NAME = "SB bg"
+SB_REF_LAYER_PREFIX = "SB ref:"
+CANVAS_BACKGROUND_LAYER_NAME = "Background"
 
 
 def board_background_filename(shot_id: str) -> str:
@@ -42,8 +44,25 @@ def board_background_filename(shot_id: str) -> str:
 
 
 def preview_export_layer_filter(layer) -> bool:
+    # Mirror the plugin's preview export: drop the board background reference
+    # (`SB bg`), the canvas-color fill (`Background`), and onion-skin overlays
+    # (`SB ref:`) so the storyboard preview is the artist's strokes on transparency.
     name = str(getattr(layer, "name", "") or "")
-    return name != SB_BG_LAYER_NAME
+    return (
+        name != SB_BG_LAYER_NAME
+        and name != CANVAS_BACKGROUND_LAYER_NAME
+        and not name.startswith(SB_REF_LAYER_PREFIX)
+    )
+
+
+REFERENCE_FIT_MODES = frozenset({"fit", "fill", "stretch"})
+
+
+def normalize_reference_fit_mode(value: str) -> str:
+    mode = str(value or "fit").strip().lower()
+    if mode in REFERENCE_FIT_MODES:
+        return mode
+    return "fit"
 
 
 def fit_image_to_canvas(image: Image.Image, width: int, height: int) -> Image.Image:
@@ -60,6 +79,52 @@ def fit_image_to_canvas(image: Image.Image, width: int, height: int) -> Image.Im
     offset_x = (width - fitted_w) // 2
     offset_y = (height - fitted_h) // 2
     canvas.paste(resized, (offset_x, offset_y), resized)
+    return canvas
+
+
+def fill_image_to_canvas(image: Image.Image, width: int, height: int) -> Image.Image:
+    """Scale uniformly to cover the canvas, centered (matches object-fit: cover)."""
+    source = image.convert("RGBA")
+    src_w, src_h = source.size
+    if src_w <= 0 or src_h <= 0:
+        return Image.new("RGBA", (width, height), (0, 0, 0, 0))
+    scale = max(width / src_w, height / src_h)
+    fitted_w = max(1, round(src_w * scale))
+    fitted_h = max(1, round(src_h * scale))
+    resized = source.resize((fitted_w, fitted_h), Image.Resampling.LANCZOS)
+    left = max(0, (fitted_w - width) // 2)
+    top = max(0, (fitted_h - height) // 2)
+    return resized.crop((left, top, left + width, top + height))
+
+
+def stretch_image_to_canvas(image: Image.Image, width: int, height: int) -> Image.Image:
+    """Stretch to exact canvas size (matches object-fit: fill)."""
+    source = image.convert("RGBA")
+    if source.size == (width, height):
+        return source
+    return source.resize((width, height), Image.Resampling.LANCZOS)
+
+
+def compose_image_to_canvas(
+    image: Image.Image,
+    width: int,
+    height: int,
+    fit_mode: str = "fit",
+    background_color: str = DEFAULT_CANVAS_COLOR,
+) -> Image.Image:
+    mode = normalize_reference_fit_mode(fit_mode)
+    if mode == "stretch":
+        layer = stretch_image_to_canvas(image, width, height)
+    elif mode == "fill":
+        layer = fill_image_to_canvas(image, width, height)
+    else:
+        layer = fit_image_to_canvas(image, width, height)
+    bg_rgb = hex_to_rgb(background_color)
+    canvas = Image.new("RGB", (width, height), bg_rgb)
+    if layer.mode == "RGBA":
+        canvas.paste(layer, (0, 0), layer)
+    else:
+        canvas.paste(layer, (0, 0))
     return canvas
 
 
@@ -106,11 +171,10 @@ def is_solid_color_image(path: Path, sample_points: int = 12) -> bool:
         return False
     try:
         with Image.open(path) as image:
-            rgb = image.convert("RGB")
-            width, height = rgb.size
+            rgba = image.convert("RGBA")
+            width, height = rgba.size
             if width <= 0 or height <= 0:
                 return False
-            reference = rgb.getpixel((0, 0))
             points = {
                 (0, 0),
                 (width - 1, 0),
@@ -127,6 +191,12 @@ def is_solid_color_image(path: Path, sample_points: int = 12) -> bool:
                         break
                 if len(points) >= sample_points:
                     break
+            # Transparent/semi-transparent pixels mean this is an artwork export from
+            # Photoshop, not a flat canvas plate.
+            if any(rgba.getpixel(point)[3] < 255 for point in points):
+                return False
+            rgb = rgba.convert("RGB")
+            reference = rgb.getpixel((0, 0))
             return all(rgb.getpixel(point) == reference for point in points)
     except OSError:
         return False

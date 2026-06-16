@@ -152,7 +152,7 @@ function drawArrowHead(ctx, start, end) {
 }
 
 function imageDrawRect() {
-  const image = el.canvasBoard.querySelector("img");
+  const image = el.canvasBoard.querySelector(".canvas-board-art, .canvas-board-stack img, img");
   if (!image) return null;
   const imageRect = image.getBoundingClientRect();
   const boxRect = el.previewBox.getBoundingClientRect();
@@ -234,3 +234,22 @@ window.addEventListener("resize", syncAnnotationLayout);
 if (el.previewBox && typeof ResizeObserver !== "undefined") {
   new ResizeObserver(syncAnnotationLayout).observe(el.previewBox);
 }
+
+
+// --- module global bridge (auto) ---
+Object.assign(globalThis, {
+  annotationCache,
+  layoutAnnotationCanvas,
+  promptAnnotationText,
+  loadAnnotations,
+  saveAnnotations,
+  updateAnnotationControls,
+  resizeCanvas,
+  drawAnnotations,
+  drawAnnotation,
+  drawArrowHead,
+  imageDrawRect,
+  pointerToNormalized,
+  denormalize,
+  syncAnnotationLayout,
+});

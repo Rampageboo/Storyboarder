@@ -77,7 +77,20 @@ function renderPsBridgeState(mode, message) {
   el.psMenuSummary.title = message;
 }
 
+function updateOpenInPsShots(status) {
+  const ids = status?.plugin_linked && Array.isArray(status.plugin_open_shot_ids)
+    ? status.plugin_open_shot_ids.map((id) => String(id))
+    : [];
+  const previous = state.openInPsShotIds || [];
+  const changed = ids.length !== previous.length || ids.some((id, index) => id !== previous[index]);
+  state.openInPsShotIds = ids;
+  if (changed && typeof patchTimelineOpenInPsState === "function") {
+    patchTimelineOpenInPsState();
+  }
+}
+
 function updateBridgeLinkStatus(status) {
+  updateOpenInPsShots(status);
   if (!status?.project_open) {
     renderPsBridgeState("idle", "No project open");
     return;
@@ -111,3 +124,18 @@ function stopBridgeStatusPolling() {
   state.bridgeStatusTimer = null;
   renderPsBridgeState("idle", "No project open");
 }
+
+
+// --- module global bridge (auto) ---
+Object.assign(globalThis, {
+  startSyncPolling,
+  stopSyncPolling,
+  publishLiveBridge,
+  startLiveBridgeHeartbeat,
+  stopLiveBridgeHeartbeat,
+  renderPsBridgeState,
+  updateBridgeLinkStatus,
+  refreshBridgeLinkStatus,
+  startBridgeStatusPolling,
+  stopBridgeStatusPolling,
+});

@@ -3,7 +3,6 @@ from __future__ import annotations
 import contextlib
 import io
 import json
-import re
 import socket
 import sys
 import tempfile
@@ -21,6 +20,7 @@ from storyboard_tool.bridge import DesktopBridge
 from storyboard_tool import desktop, live_bridge, project_manager
 from storyboard_tool import api as api_module
 from storyboard_tool import backend_service as backend_service_module
+from storyboard_tool import service_exports as service_exports_module
 from storyboard_tool import backups as backups_module
 from storyboard_tool import video_utils
 from storyboard_tool.models import Project, Shot
@@ -54,14 +54,14 @@ class StoryboardSmokeTests(unittest.TestCase):
     @unittest.skipIf(find_spec("multipart") is None, "python-multipart is not installed")
     def test_rest_pdf_export_route_reaches_exporter(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            original_export = backend_service_module._export_storyboard_pdf
+            original_export = service_exports_module._export_storyboard_pdf
 
             def fake_export(_project, output_path, *, layout):
                 self.assertEqual(layout, "two_per_page")
                 output_path.parent.mkdir(parents=True, exist_ok=True)
                 output_path.write_bytes(b"%PDF-1.4\n")
 
-            backend_service_module._export_storyboard_pdf = fake_export
+            service_exports_module._export_storyboard_pdf = fake_export
             app = api_module.create_app(Path(tmp))
             client = TestClient(app, raise_server_exceptions=False)
             try:
@@ -82,7 +82,7 @@ class StoryboardSmokeTests(unittest.TestCase):
                 self.assertIn("application/pdf", download.headers.get("content-type", ""))
                 self.assertEqual(download.content, b"%PDF-1.4\n")
             finally:
-                backend_service_module._export_storyboard_pdf = original_export
+                service_exports_module._export_storyboard_pdf = original_export
 
     def test_export_download_returns_404_before_export(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -141,39 +141,36 @@ class StoryboardSmokeTests(unittest.TestCase):
 
             self.assertIn("Reference cleanup failed: cleanup failed", stderr.getvalue())
 
-    def test_dispatch_knows_reference_segment_apply_methods(self) -> None:
+    def test_reference_segment_apply_routes_reach_backend(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             app = api_module.create_app(Path(tmp))
             client = TestClient(app, raise_server_exceptions=False)
+            with contextlib.redirect_stderr(io.StringIO()):
+                client.post("/api/project/new", json={"path": tmp})
             calls = [
-                ("apply_ref_segment", ["shot_a", "shot_b", ""]),
-                ("apply_ref_segment_image", ["shot_a", "shot_b", ""]),
-                ("apply_ref_segment_3d", ["shot_a", "shot_b", "", "Camera"]),
+                ("/api/project/ref-segment/apply", {"anchor_shot_id": "shot_a", "end_shot_id": "shot_b"}),
+                ("/api/project/ref-segment/apply-image", {"anchor_shot_id": "shot_a", "end_shot_id": "shot_b"}),
+                (
+                    "/api/project/ref-segment/apply-3d",
+                    {"anchor_shot_id": "shot_a", "end_shot_id": "shot_b", "camera_name": "Camera"},
+                ),
             ]
 
-            for method, args in calls:
-                with self.subTest(method=method):
-                    response = client.post("/api", json={"method": method, "args": args})
-                    self.assertEqual(response.status_code, 200)
-                    payload = response.json()
-                    self.assertFalse(payload["ok"])
-                    self.assertNotIn("Unknown API method", payload["error"])
-
-    def test_frontend_dispatch_entries_have_backend_methods(self) -> None:
-        dispatch_js = Path("storyboard_tool/web/static/core/dispatch.js").read_text(encoding="utf-8")
-        backend_py = Path("storyboard_tool/backend_service.py").read_text(encoding="utf-8")
-        dispatch_methods = set(re.findall(r'dispatch:\s*"([a-zA-Z0-9_]+)"', dispatch_js))
-        backend_methods = set(re.findall(r"def method_([a-zA-Z0-9_]+)\(", backend_py))
-
-        self.assertTrue(dispatch_methods)
-        self.assertFalse(dispatch_methods - backend_methods)
+            for path, body in calls:
+                with self.subTest(path=path):
+                    with contextlib.redirect_stderr(io.StringIO()):
+                        response = client.post(path, json=body)
+                    # Route is registered and reaches the service: the only failure is
+                    # the missing shot, not an unregistered endpoint.
+                    self.assertEqual(response.status_code, 404)
+                    self.assertIn("Shot not found", response.json()["detail"])
 
     def test_desktop_bridge_exposes_snake_and_camel_case_methods(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             bridge = DesktopBridge(api_module.create_app(Path(tmp)))
 
-            self.assertEqual(bridge.api_call("ping"), "python-backend-ready")
-            self.assertEqual(bridge.apiCall("ping"), "python-backend-ready")
+            self.assertEqual(bridge.ping(), "python-backend-ready")
+            self.assertTrue(callable(bridge.request))
             self.assertTrue(callable(bridge.upload_multipart))
             self.assertTrue(callable(bridge.uploadMultipart))
             self.assertTrue(callable(bridge.open_ref_video_window))
@@ -188,9 +185,6 @@ class StoryboardSmokeTests(unittest.TestCase):
             self.assertIsInstance(status, dict)
             self.assertIn("live", status)
             self.assertFalse(status["project_open"])
-
-            with self.assertRaisesRegex(RuntimeError, "Args must be a JSON array"):
-                bridge.api_call("ping", "{}")
 
             with self.assertRaisesRegex(RuntimeError, "No project opened"):
                 bridge.uploadMultipart("/api/project/references", "ref.png", "image/png", [137, 80, 78, 71])
@@ -237,17 +231,18 @@ class StoryboardSmokeTests(unittest.TestCase):
 
     def test_startup_overlay_timeout_reports_issue_not_ready(self) -> None:
         main_module = Path("storyboard_tool/web/static/app/main_module.js").read_text(encoding="utf-8")
+        startup_overlay = Path("storyboard_tool/web/static/app/startup_overlay.js").read_text(encoding="utf-8")
         app_js = Path("storyboard_tool/web/static/app.js").read_text(encoding="utf-8")
         styles = Path("storyboard_tool/web/static/styles.css").read_text(encoding="utf-8")
 
-        self.assertIn('failStartupOverlay("Initialization timed out")', main_module)
+        self.assertIn('failStartupOverlay("Initialization timed out")', startup_overlay)
         self.assertIn("Could not load ${src}", main_module)
         self.assertIn('window.failStartupOverlay?.("Startup failed")', app_js)
         self.assertIn(".startup-overlay.has-error", styles)
         self.assertIn("--startup-accent: #ff6b5a", styles)
         self.assertNotIn('if (!startupUi.hidden) finishStartupOverlay("Ready");', main_module)
 
-    def test_es_module_bootstrap_loads_migrated_leaf_scripts(self) -> None:
+    def test_es_module_graph_loads_feature_modules(self) -> None:
         index_html = Path("storyboard_tool/web/index.html").read_text(encoding="utf-8")
         main_module = Path("storyboard_tool/web/static/app/main_module.js").read_text(encoding="utf-8")
         init_globals = Path("storyboard_tool/web/static/app/init_globals.js").read_text(encoding="utf-8")
@@ -257,12 +252,15 @@ class StoryboardSmokeTests(unittest.TestCase):
         self.assertNotIn('src="/static/main.js"', index_html)
         self.assertFalse(Path("storyboard_tool/web/static/main.js").exists())
         self.assertFalse(Path("storyboard_tool/web/static/app/bootstrap_module.js").exists())
+        self.assertFalse(Path("storyboard_tool/web/static/core/dispatch.js").exists())
         self.assertIn('"@app/dialogs"', index_html)
-        self.assertIn('import * as dispatch from "../core/dispatch.js"', init_globals)
         self.assertIn('import * as api from "../core/api.js"', init_globals)
-        self.assertIn('import "./init_globals.js"', main_module)
+        self.assertIn("init_globals.js", main_module)
         self.assertIn("APP_SCRIPTS", main_module)
         self.assertIn('"external_tools_ui.js"', main_module)
+        self.assertIn("loadFeatureScript", main_module)
+        self.assertIn("bindSettingsUi", (Path("storyboard_tool/web/static/core/settings.js").read_text(encoding="utf-8")))
+        self.assertIn("globalThis.bindSettingsUi", main_module)
         self.assertNotIn("__bootstrapModuleReady", main_module)
 
     def test_requirements_dev_lists_playwright(self) -> None:
@@ -400,37 +398,7 @@ class StoryboardSmokeTests(unittest.TestCase):
             self.assertIsInstance(payload["dirty"], bool)
             self.assertIsInstance(payload["settings"], dict)
 
-    def test_backend_dispatch_persists_canvas_size(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            app = api_module.create_app(Path(tmp))
-            client = TestClient(app, raise_server_exceptions=False)
-            with contextlib.redirect_stderr(io.StringIO()):
-                created = client.post("/api/project/new", json={"path": tmp, "canvas_width": 1920, "canvas_height": 1080})
-            self.assertEqual(created.status_code, 200)
-
-            with contextlib.redirect_stderr(io.StringIO()):
-                updated = client.post(
-                    "/api",
-                    json={
-                        "method": "update_settings",
-                        "args": [
-                            {
-                                "photoshop_path": "",
-                                "blender_path": "",
-                                "canvas_width": 1600,
-                                "canvas_height": 900,
-                                "apply_canvas_size_to_blank_shots": False,
-                            }
-                        ],
-                    },
-                )
-            self.assertEqual(updated.status_code, 200)
-            payload = updated.json()["result"]
-            self.assertEqual(payload["settings"]["canvas_width"], 1600)
-            self.assertEqual(payload["settings"]["canvas_height"], 900)
-
-
-    def test_update_settings_rest_and_dispatch_share_backend_logic(self) -> None:
+    def test_update_settings_clears_reference_model_mode(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             app = api_module.create_app(Path(tmp))
             client = TestClient(app, raise_server_exceptions=False)
@@ -442,32 +410,14 @@ class StoryboardSmokeTests(unittest.TestCase):
             def read_saved_mode() -> str:
                 return json.loads(settings_json.read_text(encoding="utf-8")).get("reference_segment_mode", "")
 
-            def assert_cleared_model_mode() -> None:
-                self.assertEqual(read_saved_mode(), "video")
-
             with contextlib.redirect_stderr(io.StringIO()):
                 client.patch("/api/project/settings", json={"reference_segment_mode": "model"})
                 rest = client.patch("/api/project/settings", json={"reference_model_path": ""})
             self.assertEqual(rest.status_code, 200, rest.text)
             self.assertEqual(rest.json()["settings"]["reference_segment_mode"], "video")
-            assert_cleared_model_mode()
+            self.assertEqual(read_saved_mode(), "video")
 
-            with contextlib.redirect_stderr(io.StringIO()):
-                client.patch("/api/project/settings", json={"reference_segment_mode": "model"})
-                dispatch = client.post(
-                    "/api",
-                    json={"method": "update_settings", "args": [{"reference_model_path": ""}]},
-                )
-            self.assertEqual(dispatch.status_code, 200, dispatch.text)
-            dispatch_payload = dispatch.json()
-            self.assertTrue(dispatch_payload["ok"], dispatch_payload.get("error"))
-            self.assertEqual(
-                dispatch_payload["result"]["settings"]["reference_segment_mode"],
-                "video",
-            )
-            assert_cleared_model_mode()
-
-    def test_project_lifecycle_rest_and_dispatch_share_backend_logic(self) -> None:
+    def test_project_lifecycle_new_save_open(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             app = api_module.create_app(Path(tmp))
             client = TestClient(app, raise_server_exceptions=False)
@@ -489,30 +439,24 @@ class StoryboardSmokeTests(unittest.TestCase):
             self.assertFalse(rest_saved.json()["dirty"])
 
             with contextlib.redirect_stderr(io.StringIO()):
-                dispatch_created = client.post(
-                    "/api",
+                second_created = client.post(
+                    "/api/project/new",
                     json={
-                        "method": "new_project",
-                        "args": [str(Path(tmp) / "Dispatch_Project"), 1600, 900],
+                        "path": str(Path(tmp) / "Second_Project"),
+                        "canvas_width": 1600,
+                        "canvas_height": 900,
                     },
                 )
-            self.assertEqual(dispatch_created.status_code, 200)
-            dispatch_payload = dispatch_created.json()
-            self.assertTrue(dispatch_payload["ok"], dispatch_payload.get("error"))
-            self.assertEqual(dispatch_payload["result"]["settings"]["canvas_width"], 1600)
+            self.assertEqual(second_created.status_code, 200)
+            self.assertEqual(second_created.json()["settings"]["canvas_width"], 1600)
 
-            project_json = Path(tmp) / "Dispatch_Project" / "Storyboard_Project" / "project.json"
+            project_json = Path(tmp) / "Second_Project" / "Storyboard_Project" / "project.json"
             with contextlib.redirect_stderr(io.StringIO()):
-                dispatch_opened = client.post(
-                    "/api",
-                    json={"method": "open_project", "args": [str(project_json)]},
-                )
-            self.assertEqual(dispatch_opened.status_code, 200)
-            opened_payload = dispatch_opened.json()
-            self.assertTrue(opened_payload["ok"], opened_payload.get("error"))
-            self.assertEqual(opened_payload["result"]["settings"]["canvas_width"], 1600)
+                opened = client.post("/api/project/open", json={"project_json_path": str(project_json)})
+            self.assertEqual(opened.status_code, 200)
+            self.assertEqual(opened.json()["settings"]["canvas_width"], 1600)
 
-    def test_comment_rest_and_dispatch_share_backend_logic(self) -> None:
+    def test_comment_add_and_resolve(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             app = api_module.create_app(Path(tmp))
             client = TestClient(app, raise_server_exceptions=False)
@@ -542,29 +486,25 @@ class StoryboardSmokeTests(unittest.TestCase):
             self.assertTrue(rest_resolved.json()["shots"][0]["comments"][0]["resolved"])
 
             with contextlib.redirect_stderr(io.StringIO()):
-                dispatch_comment = client.post(
-                    "/api",
-                    json={"method": "add_comment", "args": [shot_id, "Check continuity"]},
+                second_comment = client.post(
+                    f"/api/shots/{shot_id}/comments",
+                    json={"text": "Check continuity"},
                 )
-            self.assertEqual(dispatch_comment.status_code, 200)
-            dispatch_payload = dispatch_comment.json()
-            self.assertTrue(dispatch_payload["ok"], dispatch_payload.get("error"))
-            dispatch_comments = dispatch_payload["result"]["shots"][0]["comments"]
-            self.assertEqual(len(dispatch_comments), 2)
-            second_id = max(item["id"] for item in dispatch_comments)
+            self.assertEqual(second_comment.status_code, 200)
+            second_comments = second_comment.json()["shots"][0]["comments"]
+            self.assertEqual(len(second_comments), 2)
+            second_id = max(item["id"] for item in second_comments)
 
             with contextlib.redirect_stderr(io.StringIO()):
-                dispatch_resolved = client.post(
-                    "/api",
-                    json={"method": "resolve_comment", "args": [shot_id, second_id, False]},
+                reopened = client.patch(
+                    f"/api/shots/{shot_id}/comments/{second_id}",
+                    json={"resolved": False},
                 )
-            self.assertEqual(dispatch_resolved.status_code, 200)
-            resolved_payload = dispatch_resolved.json()
-            self.assertTrue(resolved_payload["ok"], resolved_payload.get("error"))
-            resolved_comment = next(
-                item for item in resolved_payload["result"]["shots"][0]["comments"] if item["id"] == second_id
+            self.assertEqual(reopened.status_code, 200)
+            reopened_comment = next(
+                item for item in reopened.json()["shots"][0]["comments"] if item["id"] == second_id
             )
-            self.assertFalse(resolved_comment["resolved"])
+            self.assertFalse(reopened_comment["resolved"])
 
     def test_backup_retention_prunes_oldest_sets(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -588,7 +528,7 @@ class StoryboardSmokeTests(unittest.TestCase):
             self.assertFalse((backups_dir / "project_20260101_000004.json").exists())
 
     @unittest.skipIf(find_spec("multipart") is None, "python-multipart is not installed")
-    def test_upload_project_reference_rest_and_dispatch_share_backend_logic(self) -> None:
+    def test_upload_project_reference_rest(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             app = api_module.create_app(Path(tmp))
             client = TestClient(app, raise_server_exceptions=False)
@@ -607,21 +547,16 @@ class StoryboardSmokeTests(unittest.TestCase):
             self.assertEqual(rest_links[0]["type"], "image")
 
             with contextlib.redirect_stderr(io.StringIO()):
-                dispatch = client.post(
-                    "/api",
-                    json={
-                        "method": "upload_project_reference",
-                        "args": ["ref2.png", list(MINI_PNG)],
-                    },
+                second = client.post(
+                    "/api/project/references",
+                    files={"file": ("ref2.png", MINI_PNG, "image/png")},
                 )
-            self.assertEqual(dispatch.status_code, 200, dispatch.text)
-            dispatch_payload = dispatch.json()
-            self.assertTrue(dispatch_payload["ok"], dispatch_payload.get("error"))
-            dispatch_links = dispatch_payload["result"]["settings"]["reference_links"]
-            self.assertEqual(len(dispatch_links), 2)
+            self.assertEqual(second.status_code, 200, second.text)
+            second_links = second.json()["settings"]["reference_links"]
+            self.assertEqual(len(second_links), 2)
 
     @unittest.skipIf(find_spec("multipart") is None, "python-multipart is not installed")
-    def test_import_shot_image_rest_and_dispatch_share_backend_logic(self) -> None:
+    def test_import_shot_image_rest(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             app = api_module.create_app(Path(tmp))
             client = TestClient(app, raise_server_exceptions=False)
@@ -642,18 +577,15 @@ class StoryboardSmokeTests(unittest.TestCase):
             self.assertTrue(rest_shot.get("preview_image_path") or rest_shot.get("image_path"))
 
             with contextlib.redirect_stderr(io.StringIO()):
-                dispatch = client.post(
-                    "/api",
-                    json={
-                        "method": "import_shot_image",
-                        "args": [shot_id, "board2.png", list(MINI_PNG)],
-                    },
+                second = client.post(
+                    f"/api/shots/{shot_id}/image",
+                    files={"file": ("board2.png", MINI_PNG, "image/png")},
                 )
-            self.assertEqual(dispatch.status_code, 200, dispatch.text)
-            dispatch_payload = dispatch.json()
-            self.assertTrue(dispatch_payload["ok"], dispatch_payload.get("error"))
+            self.assertEqual(second.status_code, 200, second.text)
+            second_shot = second.json()["shots"][0]
+            self.assertTrue(second_shot.get("preview_image_path") or second_shot.get("image_path"))
 
-    def test_canvas_color_rest_and_dispatch_share_backend_logic(self) -> None:
+    def test_canvas_color_rest(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             app = api_module.create_app(Path(tmp))
             client = TestClient(app, raise_server_exceptions=False)
@@ -673,21 +605,9 @@ class StoryboardSmokeTests(unittest.TestCase):
             self.assertEqual(rest_set.json()["settings"]["canvas_background_color"], "#112233")
 
             with contextlib.redirect_stderr(io.StringIO()):
-                dispatch_get = client.post("/api", json={"method": "get_canvas_color", "args": []})
-            self.assertEqual(dispatch_get.status_code, 200)
-            dispatch_get_payload = dispatch_get.json()
-            self.assertTrue(dispatch_get_payload["ok"], dispatch_get_payload.get("error"))
-            self.assertEqual(dispatch_get_payload["result"]["color"], "#112233")
-
-            with contextlib.redirect_stderr(io.StringIO()):
-                dispatch_set = client.post(
-                    "/api",
-                    json={"method": "set_canvas_color", "args": ["#AABBCC"]},
-                )
-            self.assertEqual(dispatch_set.status_code, 200)
-            dispatch_set_payload = dispatch_set.json()
-            self.assertTrue(dispatch_set_payload["ok"], dispatch_set_payload.get("error"))
-            self.assertEqual(dispatch_set_payload["result"]["color"], "#AABBCC")
+                reget = client.get("/api/project/canvas-color")
+            self.assertEqual(reget.status_code, 200)
+            self.assertEqual(reget.json()["color"], "#112233")
 
     def test_update_settings_rejects_invalid_photoshop_path(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -703,19 +623,146 @@ class StoryboardSmokeTests(unittest.TestCase):
                     json={"photoshop_path": str(Path(tmp) / "missing-photoshop.exe")},
                 )
             self.assertEqual(rest.status_code, 400)
+            self.assertIn("missing-photoshop.exe", rest.json()["detail"])
 
-            with contextlib.redirect_stderr(io.StringIO()):
-                dispatch = client.post(
-                    "/api",
-                    json={
-                        "method": "update_settings",
-                        "args": [{"photoshop_path": str(Path(tmp) / "missing-photoshop.exe")}],
-                    },
-                )
-            self.assertEqual(dispatch.status_code, 200)
-            dispatch_payload = dispatch.json()
-            self.assertFalse(dispatch_payload["ok"])
-            self.assertIn("missing-photoshop.exe", dispatch_payload["error"])
+    def test_sync_prefers_fresh_preview_over_psd_recomposite(self) -> None:
+        from PIL import Image
+
+        from storyboard_tool import linked_sync
+        from storyboard_tool.image_utils import create_blank_psd
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            shot_dir = root / "shots" / "shot_001"
+            shot_dir.mkdir(parents=True)
+            preview_path = shot_dir / "shot_001_preview.png"
+            psd_path = shot_dir / "shot_001.psd"
+            Image.new("RGB", (20, 20), (255, 0, 0)).save(preview_path, "PNG")
+            create_blank_psd(psd_path, 100, 100, background_color="#E8E8E8")
+            psd_path.touch()
+
+            shot = Shot(
+                shot_id="shot_001",
+                preview_image_path="shots/shot_001/shot_001_preview.png",
+                image_path="shots/shot_001/shot_001_preview.png",
+                source_file_path="shots/shot_001/shot_001.psd",
+            )
+            project = Project(root_path=root, shots=[shot])
+
+            result = linked_sync.sync_shot_from_linked_files(project, shot, force=True)
+            self.assertTrue(result.get("synced"))
+
+            with Image.open(preview_path) as synced:
+                self.assertEqual(synced.getpixel((10, 10)), (255, 0, 0))
+
+    def test_preview_export_layer_filter_drops_canvas_background(self) -> None:
+        from storyboard_tool.image_utils import preview_export_layer_filter
+
+        class Layer:
+            def __init__(self, name: str):
+                self.name = name
+
+        self.assertFalse(preview_export_layer_filter(Layer("Background")))
+        self.assertFalse(preview_export_layer_filter(Layer("SB bg")))
+        self.assertFalse(preview_export_layer_filter(Layer("SB ref: shot_001")))
+        self.assertTrue(preview_export_layer_filter(Layer("Layer 1")))
+
+    def test_transparent_preview_is_not_solid_color_plate(self) -> None:
+        from PIL import Image
+
+        from storyboard_tool.image_utils import is_solid_color_image
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "preview.png"
+            image = Image.new("RGBA", (64, 64), (0, 0, 0, 0))
+            for x in range(20, 40):
+                image.putpixel((x, 32), (255, 0, 0, 255))
+            image.save(path, "PNG")
+            self.assertFalse(is_solid_color_image(path))
+
+    def test_canvas_color_sync_skips_psd_backed_shots(self) -> None:
+        from storyboard_tool import canvas_settings
+        from storyboard_tool.image_utils import create_blank_psd
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            shot_dir = root / "shots" / "shot_001"
+            shot_dir.mkdir(parents=True)
+            preview_path = shot_dir / "shot_001_preview.png"
+            preview_path.write_bytes(MINI_PNG)
+            create_blank_psd(shot_dir / "shot_001.psd", 100, 100)
+            shot = Shot(
+                shot_id="shot_001",
+                preview_image_path="",
+                image_path="",
+                source_file_path="shots/shot_001/shot_001.psd",
+            )
+            project = Project(root_path=root, shots=[shot])
+            changed = canvas_settings._sync_shot_canvas_color_assets(project, shot, "#AABBCC")
+            self.assertFalse(changed)
+            self.assertFalse(shot.preview_image_path)
+            self.assertTrue(preview_path.is_file())
+
+    def test_resolve_shot_preview_path_falls_back_to_disk(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            shot_dir = root / "shots" / "shot_025"
+            shot_dir.mkdir(parents=True)
+            preview_path = shot_dir / "shot_025_preview.png"
+            preview_path.write_bytes(MINI_PNG)
+            shot = Shot(shot_id="shot_025")
+            project = Project(root_path=root, shots=[shot])
+            resolved = project_manager.resolve_shot_preview_path(project, shot)
+            self.assertEqual(resolved, preview_path)
+
+    def test_delete_ref_segment_keeps_drawing_when_psd_exists_without_link(self) -> None:
+        from storyboard_tool import reference_segments
+        from storyboard_tool.image_utils import board_background_filename, create_blank_psd
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            shot_dir = root / "shots" / "shot_001"
+            shot_dir.mkdir(parents=True)
+            create_blank_psd(shot_dir / "shot_001.psd", 100, 100)
+            preview_path = shot_dir / "shot_001_preview.png"
+            preview_path.write_bytes(MINI_PNG)
+            background_path = shot_dir / board_background_filename("shot_001")
+            background_path.write_bytes(MINI_PNG)
+
+            shot = Shot(
+                shot_id="shot_001",
+                preview_image_path="shots/shot_001/shot_001_preview.png",
+                image_path="shots/shot_001/shot_001_preview.png",
+                ref_video_path="references/ref.mp4",
+            )
+            project = Project(
+                root_path=root,
+                shots=[shot],
+                settings={
+                    "ref_segments": [
+                        {
+                            "id": "seg_test",
+                            "anchor_shot_id": "shot_001",
+                            "end_shot_id": "shot_001",
+                            "source_type": "video",
+                        }
+                    ]
+                },
+            )
+
+            reference_segments.delete_ref_segment(project, "seg_test")
+
+            self.assertTrue(shot.preview_image_path)
+            self.assertTrue(shot.image_path)
+            self.assertFalse(background_path.is_file())
+
+    def test_psd_recovery_skips_plugin_managed_layers(self) -> None:
+        from storyboard_tool import psd_recovery
+
+        self.assertTrue(psd_recovery._is_plugin_managed_layer_name("Background"))
+        self.assertTrue(psd_recovery._is_plugin_managed_layer_name("SB bg"))
+        self.assertTrue(psd_recovery._is_plugin_managed_layer_name("SB ref: shot_001"))
+        self.assertFalse(psd_recovery._is_plugin_managed_layer_name("Layer 1"))
 
 
 if __name__ == "__main__":

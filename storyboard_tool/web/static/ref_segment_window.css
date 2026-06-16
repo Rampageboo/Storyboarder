@@ -150,6 +150,54 @@
   accent-color: var(--rsg-green);
 }
 
+.rsg-fit-mode {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.rsg-fit-mode-label {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-muted, #999);
+  margin-right: 2px;
+}
+
+.rsg-fit-mode-btn {
+  padding: 4px 10px;
+  border: 1px solid var(--border, #333);
+  border-radius: 4px;
+  background: var(--bg-panel, #1a1a1a);
+  color: var(--text-muted, #999);
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.rsg-fit-mode-btn:hover {
+  color: var(--text, #e8e8e8);
+  border-color: color-mix(in srgb, var(--text-muted, #999) 60%, var(--border, #333));
+}
+
+.rsg-fit-mode-btn.is-active {
+  color: var(--text, #e8e8e8);
+  border-color: var(--rsg-green);
+  background: color-mix(in srgb, var(--rsg-green) 14%, var(--bg-panel, #1a1a1a));
+}
+
+.rsg-app[data-mode="model"] .rsg-fit-mode-btn.is-active {
+  border-color: var(--rsg-blue);
+  background: color-mix(in srgb, var(--rsg-blue) 14%, var(--bg-panel, #1a1a1a));
+}
+
+.rsg-app[data-mode="image"] .rsg-fit-mode-btn.is-active {
+  border-color: var(--rsg-orange);
+  background: color-mix(in srgb, var(--rsg-orange) 14%, var(--bg-panel, #1a1a1a));
+}
+
 .rsg-app[data-mode="model"] .rsg-scrubber {
   accent-color: var(--rsg-blue);
 }

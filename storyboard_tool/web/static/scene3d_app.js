@@ -142,6 +142,9 @@ function schedulePersistScene3dSettings(scene3d) {
 
 export async function openScene3dModal() {
   if (!state.project) return;
+  if (typeof abandonPendingRefSegmentAssign === "function") {
+    await abandonPendingRefSegmentAssign();
+  }
   el.canvasArea?.classList.add("scene3d-active");
   if (!state.scene3dEditor) {
     let Scene3DEditor;

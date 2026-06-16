@@ -139,3 +139,14 @@ function bindReferencePreviewInteractions(previewButton, ref, options = {}) {
     options.onPreview?.(ref);
   });
 }
+
+
+// --- module global bridge (auto) ---
+Object.assign(globalThis, {
+  referencePreviewUi,
+  initReferencePreviewModal,
+  openReferencePreview,
+  closeReferencePreview,
+  shouldSuppressReferenceSelect,
+  bindReferencePreviewInteractions,
+});

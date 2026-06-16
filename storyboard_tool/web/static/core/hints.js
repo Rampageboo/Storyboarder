@@ -31,3 +31,15 @@ function bindHintsUi() {
 }
 
 bindHintsUi();
+
+
+// --- module global bridge (auto) ---
+Object.assign(globalThis, {
+  APP_HINTS,
+  hintIndex,
+  hintTimer,
+  currentAppHint,
+  advanceAppHint,
+  startHintRotation,
+  bindHintsUi,
+});

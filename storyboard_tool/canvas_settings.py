@@ -97,6 +97,11 @@ def sync_canvas_color_to_shots(project: Project, color: str) -> bool:
 
 
 def _sync_shot_canvas_color_assets(project: Project, shot: Shot, color: str) -> bool:
+    # Photoshop-backed boards own their preview export — never rewrite or unlink it
+    # when canvas color sync runs (e.g. on project reload after switching boards).
+    if pm.shot_has_psd_canvas(project, shot):
+        return False
+
     shot_dir = pm.get_shot_dir(project, shot)
     shot_dir.mkdir(parents=True, exist_ok=True)
     preview_path = shot_dir / f"{shot.shot_id}_preview.png"

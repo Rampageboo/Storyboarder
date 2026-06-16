@@ -265,3 +265,23 @@ el.projectReferenceFile?.addEventListener("change", async () => {
   }
   el.projectReferenceFile.value = "";
 });
+
+
+// --- module global bridge (auto) ---
+Object.assign(globalThis, {
+  referenceModelPath,
+  referenceSegmentMode,
+  referenceImagePath,
+  selectReferenceImage,
+  selectReferenceModel,
+  openReferenceSegmentWorkspace,
+  bindReferencePanel,
+  projectReferences,
+  refreshAllReferencePanels,
+  importProjectReference,
+  selectReferenceVideo,
+  deleteProjectReference,
+  triggerProjectReferenceImport,
+  renderReferenceLinks,
+  renderRefSegmentRefsPanel,
+});

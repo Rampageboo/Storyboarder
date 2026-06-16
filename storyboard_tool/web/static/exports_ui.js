@@ -26,7 +26,11 @@ async function openShotInPhotoshop() {
   const current = selectedShot();
   if (!current?.source_file_path) return;
   const result = await api(`/api/shots/${current.shot_id}/open-source`, { method: "POST" });
-  showToast(`Opened in Photoshop: ${result.path}`);
+  if (result.switched === "true") {
+    showToast("Switched to the tab already open in Photoshop.");
+  } else {
+    showToast(`Opened in Photoshop: ${result.path}`);
+  }
 }
 
 async function openRelinkPreviewDialog() {
@@ -104,4 +108,12 @@ el.openPreview.addEventListener("click", async () => {
   if (!shot) return;
   const result = await api(`/api/shots/${shot.shot_id}/open-preview`, { method: "POST" });
   showToast(`Opened: ${result.path}`);
+});
+
+
+// --- module global bridge (auto) ---
+Object.assign(globalThis, {
+  runDownloadExport,
+  openShotInPhotoshop,
+  openRelinkPreviewDialog,
 });

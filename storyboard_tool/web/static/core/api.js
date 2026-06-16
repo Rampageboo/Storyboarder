@@ -1,11 +1,13 @@
-import { resolveDispatchRoute, apiDispatch } from "./dispatch.js";
+// Single API contract: REST over HTTP, with the desktop pywebview bridge as a
+// passthrough fallback when the page is not served over http(s). The backend
+// FastAPI routes are the one source of truth; there is no parallel dispatch map.
 
 let desktopBridgeReady = null;
 let desktopBridgeReadyResolved = false;
 
 export function whenDesktopBridgeReady() {
   if (!window.pywebview) return Promise.resolve(null);
-  if (window.pywebview.api?.request || window.pywebview.api?.apiCall || window.pywebview.api?.api_call) {
+  if (window.pywebview.api?.request) {
     return Promise.resolve(window.pywebview.api);
   }
   if (!desktopBridgeReady) {
@@ -14,7 +16,7 @@ export function whenDesktopBridgeReady() {
         if (desktopBridgeReadyResolved) return;
         desktopBridgeReadyResolved = true;
         const api = window.pywebview?.api;
-        resolve(api?.request || api?.apiCall || api?.api_call ? api : null);
+        resolve(api?.request ? api : null);
       };
       window.addEventListener("pywebviewready", finish, { once: true });
       window.setTimeout(finish, 1500);
@@ -72,42 +74,18 @@ export async function bridgeUpload(bridge, url, formData) {
 export async function api(url, options = {}) {
   const { silent = false, headers: customHeaders, bypassBridge, ...fetchOptions } = options;
   const useHttp = bypassBridge !== undefined ? bypassBridge : preferHttpApi();
-  const httpMethod = (fetchOptions.method || "GET").toUpperCase();
-
-  if (!(fetchOptions.body instanceof FormData)) {
-    const resolved = resolveDispatchRoute(httpMethod, url, fetchOptions.body ?? null);
-    if (resolved) {
-      try {
-        return await apiDispatch(resolved.dispatch, resolved.args, { silent, bypassBridge: useHttp });
-      } catch (error) {
-        throw error instanceof Error ? error : new Error(String(error));
-      }
-    }
-  }
 
   if (useHttp) {
     return fetchApiJson(url, { silent, headers: customHeaders, ...fetchOptions });
   }
 
-  if (fetchOptions.body instanceof FormData) {
-    const resolved = resolveDispatchRoute(httpMethod, url, null);
-    if (resolved) {
-      try {
-        return await apiDispatch(resolved.dispatch, resolved.args, { silent, bypassBridge: false });
-      } catch (error) {
-        throw error instanceof Error ? error : new Error(String(error));
-      }
-    }
-  }
-
   const bridge = await whenDesktopBridgeReady();
-
   if (bridge) {
     try {
-      const method = httpMethod;
       if (fetchOptions.body instanceof FormData) {
         return await bridgeUpload(bridge, url, fetchOptions.body);
       }
+      const method = (fetchOptions.method || "GET").toUpperCase();
       const body =
         fetchOptions.body && typeof fetchOptions.body !== "string"
           ? JSON.stringify(fetchOptions.body)
@@ -120,26 +98,7 @@ export async function api(url, options = {}) {
     }
   }
 
-  const headers = customHeaders ?? { "Content-Type": "application/json" };
-  const body =
-    fetchOptions.body &&
-    !(fetchOptions.body instanceof FormData) &&
-    typeof fetchOptions.body !== "string"
-      ? JSON.stringify(fetchOptions.body)
-      : fetchOptions.body;
-  const response = await fetch(url, { ...fetchOptions, headers, body });
-  if (!response.ok) {
-    let message = response.statusText;
-    try {
-      const payload = await response.json();
-      message = payload.detail || message;
-    } catch {
-      // Keep the HTTP status text when the server does not return JSON.
-    }
-    if (!silent) showToast(message);
-    throw new Error(message);
-  }
-  return response.json();
+  return fetchApiJson(url, { silent, headers: customHeaders, ...fetchOptions });
 }
 
 export function showToast(message) {

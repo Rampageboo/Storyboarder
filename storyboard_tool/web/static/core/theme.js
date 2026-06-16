@@ -115,3 +115,17 @@ function bindThemeUi() {
 }
 
 applyUiTheme(getStoredUiTheme(), { persist: false });
+
+
+// --- module global bridge (auto) ---
+Object.assign(globalThis, {
+  UI_THEME_STORAGE_KEY,
+  UI_THEMES,
+  normalizeUiTheme,
+  getStoredUiTheme,
+  applyUiTheme,
+  persistUiThemePreference,
+  refreshThemePicker,
+  renderThemePicker,
+  bindThemeUi,
+});

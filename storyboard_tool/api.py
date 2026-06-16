@@ -1,21 +1,19 @@
 from __future__ import annotations
 
-import json
 import sys
 import time
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI, File, HTTPException, UploadFile
+from fastapi import FastAPI, File, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from . import live_bridge, project_manager, session_store
-from .models import Project, SHOT_STATUSES, Shot
-from .backend_service import ApiCallRequest, StoryboardBackendService, dispatch_api_call
+from . import project_manager
+from .backend_service import StoryboardBackendService
 
 
 class ProjectPathRequest(BaseModel):
@@ -110,6 +108,10 @@ class CanvasColorRequest(BaseModel):
     color: str
 
 
+class RestoreRefApplyRequest(BaseModel):
+    token: str
+
+
 class AppSessionUpdateRequest(BaseModel):
     last_project_json_path: str | None = None
     selected_shot_id: str | None = None
@@ -145,6 +147,10 @@ class LiveBridgeUpdateRequest(BaseModel):
     selected_shot_id: str | None = None
 
 
+class PluginHeartbeatRequest(BaseModel):
+    open_shot_ids: list[str] = Field(default_factory=list)
+
+
 class AddShotRequest(BaseModel):
     after_shot_id: str | None = None
 
@@ -163,6 +169,9 @@ def create_app(base_dir: Path, bridge_port: int = 8000) -> FastAPI:
     app.state.live_selected_shot_id = ""
     app.state.bridge_port = bridge_port
     app.state.plugin_last_seen = 0.0
+    app.state.plugin_open_shot_ids = []
+    app.state.live_focus_shot_id = ""
+    app.state.live_focus_token = 0
 
     def _svc() -> StoryboardBackendService:
         return StoryboardBackendService(app)
@@ -182,6 +191,19 @@ def create_app(base_dir: Path, bridge_port: int = 8000) -> FastAPI:
         allow_methods=["*"],
         allow_headers=["*"],
     )
+
+    @app.middleware("http")
+    async def _no_store_assets(request, call_next):
+        # The desktop app loads the UI through WebView2, which otherwise caches
+        # HTML/JS/CSS and keeps showing stale code after the app is restarted.
+        # Force the embedded browser to re-fetch UI assets every launch.
+        response = await call_next(request)
+        path = request.url.path
+        if path == "/" or path.startswith("/static") or path.startswith("/ref-") or path.endswith(".html"):
+            response.headers["Cache-Control"] = "no-store, must-revalidate"
+            response.headers["Pragma"] = "no-cache"
+            response.headers["Expires"] = "0"
+        return response
 
     web_dir = Path(__file__).parent / "web"
     app.mount("/static", StaticFiles(directory=web_dir / "static"), name="static")
@@ -205,10 +227,6 @@ def create_app(base_dir: Path, bridge_port: int = 8000) -> FastAPI:
     @app.get("/api/project")
     def get_project() -> dict[str, Any]:
         return _svc().method_get_project()
-
-    @app.post("/api")
-    def api_dispatch(request: ApiCallRequest) -> dict[str, Any]:
-        return dispatch_api_call(app, request.method, request.args)
 
     @app.get("/api/app/session")
     def get_app_session() -> dict[str, Any]:
@@ -235,8 +253,10 @@ def create_app(base_dir: Path, bridge_port: int = 8000) -> FastAPI:
         return _svc().method_bridge_status()
 
     @app.post("/api/bridge/plugin-heartbeat")
-    def plugin_heartbeat() -> dict[str, str]:
+    def plugin_heartbeat(payload: PluginHeartbeatRequest | None = None) -> dict[str, str]:
         app.state.plugin_last_seen = time.time()
+        if payload is not None:
+            app.state.plugin_open_shot_ids = [str(item) for item in payload.open_shot_ids if item]
         return {"ok": "true"}
 
     @app.get("/api/project/missing-files")
@@ -335,6 +355,10 @@ def create_app(base_dir: Path, bridge_port: int = 8000) -> FastAPI:
     @app.delete("/api/project/ref-segments/{segment_id}")
     def delete_ref_segment(segment_id: str) -> dict[str, Any]:
         return _svc().method_delete_ref_segment(segment_id)
+
+    @app.post("/api/project/ref-apply/undo")
+    def restore_ref_apply(request: RestoreRefApplyRequest) -> dict[str, Any]:
+        return _svc().method_restore_ref_apply(request.token)
 
     @app.post("/api/project/scene3d/open-blender")
     def open_blender_scene() -> dict[str, Any]:
@@ -457,6 +481,10 @@ def create_app(base_dir: Path, bridge_port: int = 8000) -> FastAPI:
     def open_source(shot_id: str) -> dict[str, str]:
         return _svc().method_open_source(shot_id)
 
+    @app.post("/api/shots/{shot_id}/recover-source")
+    def recover_source(shot_id: str, preserve_layers: bool = True) -> dict[str, Any]:
+        return _svc().method_recover_shot_source(shot_id, preserve_layers)
+
     @app.post("/api/shots/{shot_id}/open-preview")
     def open_preview(shot_id: str) -> dict[str, str]:
         return _svc().method_open_preview(shot_id)
@@ -536,69 +564,6 @@ def create_app(base_dir: Path, bridge_port: int = 8000) -> FastAPI:
     return app
 
 
-def _project_payload(project: Project, dirty: bool) -> dict[str, Any]:
-    return {
-        "project_path": str(project.root_path),
-        "project_json_path": str(project.json_path),
-        "name": project.name,
-        "dirty": dirty,
-        "settings": project.settings,
-        "statuses": list(SHOT_STATUSES),
-        "shots": [shot.to_dict() for shot in project.shots],
-    }
-
-
-def _export_storyboard_pdf(project: Project, output_path: Path, *, layout: str) -> None:
-    from .pdf_exporter import export_storyboard_pdf
-
-    export_storyboard_pdf(project, output_path, layout=layout)
-
-
-def _require_project(app: FastAPI) -> Project:
-    project = app.state.project
-    if project is None:
-        raise HTTPException(status_code=400, detail="No project opened.")
-    return project
-
-
-def _find_shot(project: Project, shot_id: str) -> Shot:
-    return project.shots[_find_shot_index(project, shot_id)]
-
-
-def _find_shot_index(project: Project, shot_id: str) -> int:
-    for index, shot in enumerate(project.shots):
-        if shot.shot_id == shot_id:
-            return index
-    raise HTTPException(status_code=404, detail=f"Shot not found: {shot_id}")
-
-
-def _track_project(app: FastAPI, project: Project) -> None:
-    app.state.project = project
-    app.state.project_disk_mtime = project_manager.project_disk_mtime(project)
-
-
-def _refresh_project_from_disk(app: FastAPI) -> Project:
-    project = _require_project(app)
-    if app.state.dirty:
-        return project
-    refreshed, disk_mtime, changed = project_manager.reload_project_if_changed(
-        project,
-        app.state.project_disk_mtime,
-    )
-    if changed:
-        app.state.project = refreshed
-        app.state.project_disk_mtime = disk_mtime
-        return refreshed
-    return project
-
-
-def _autosave(app: FastAPI) -> None:
-    project = _require_project(app)
-    project_manager.save_project(project)
-    app.state.project_disk_mtime = project_manager.project_disk_mtime(project)
-    app.state.dirty = False
-
-
 def _shutdown_reference_cleanup(app: FastAPI) -> None:
     try:
         project_manager.shutdown_reference_cleanup(
@@ -608,93 +573,3 @@ def _shutdown_reference_cleanup(app: FastAPI) -> None:
         )
     except Exception as exc:
         print(f"Reference cleanup failed: {exc}", file=sys.stderr)
-
-
-def _dialog_initial_dir(app: FastAPI, kind: str) -> str:
-    project = app.state.project
-    if project is None:
-        return str(Path.home())
-
-    if kind == "folder":
-        candidate = project.root_path.parent
-    elif kind == "project-json":
-        candidate = project.root_path
-    elif kind == "blender":
-        current = str(project.settings.get("blender_path", "") or "")
-        candidate = Path(current).parent if current else Path(r"C:\Program Files\Blender Foundation")
-    else:
-        current = str(project.settings.get("photoshop_path", "") or "")
-        candidate = Path(current).parent if current else Path(r"C:\Program Files\Adobe")
-
-    if candidate.is_dir():
-        return str(candidate.resolve())
-    return str(Path.home())
-
-
-def _remember_recent(project: Project) -> None:
-    recent = [str(project.root_path)]
-    for item in project.settings.get("recent_projects", []):
-        if item not in recent:
-            recent.append(item)
-    project.settings["recent_projects"] = recent[:10]
-    project_manager.save_settings(project)
-
-
-def _touch_live_bridge(app: FastAPI, *, selected_shot_id: str | None = None) -> dict[str, Any]:
-    if selected_shot_id is not None:
-        app.state.live_selected_shot_id = selected_shot_id
-    return live_bridge.publish(
-        app.state.base_dir,
-        app.state.project,
-        selected_shot_id=str(app.state.live_selected_shot_id or ""),
-        port=int(app.state.bridge_port),
-    )
-
-
-def _bridge_status_payload(app: FastAPI) -> dict[str, Any]:
-    live = _touch_live_bridge(app)
-    project = app.state.project
-    http_seen = float(getattr(app.state, "plugin_last_seen", 0.0) or 0.0)
-    file_seen = live_bridge.read_plugin_heartbeat_mtime()
-    last_seen = max(http_seen, file_seen)
-    age = round(time.time() - last_seen, 1) if last_seen else None
-    plugin_linked = age is not None and age <= 12.0
-    return {
-        "app_running": True,
-        "project_open": project is not None,
-        "plugin_linked": plugin_linked,
-        "plugin_last_seen_seconds_ago": age,
-        "bridge_url": live.get("bridge_url", f"http://127.0.0.1:{app.state.bridge_port}/api/bridge/live"),
-        "global_bridge_path": live.get("global_bridge_path", str(live_bridge.global_bridge_file_path())),
-        "shared_bridge_path": live.get("shared_bridge_path", str(live_bridge.shared_bridge_file_path())),
-        "plugin_heartbeat_path": live.get("plugin_heartbeat_path", str(live_bridge.plugin_heartbeat_file_path())),
-        "server_port": int(app.state.bridge_port),
-        "live": live,
-    }
-
-
-def _persist_app_session(app: FastAPI, *, selected_shot_id: str | None = None) -> None:
-    project = app.state.project
-    if project is None:
-        return
-    session_store.update_session(
-        app.state.base_dir,
-        last_project_json_path=str(project.json_path),
-        selected_shot_id=selected_shot_id,
-        recent_projects=[str(item) for item in project.settings.get("recent_projects", [])],
-    )
-
-
-def _annotation_path(project: Project, shot: Shot) -> Path:
-    if not shot.annotation_path:
-        project_manager.get_shot_dir(project, shot).mkdir(parents=True, exist_ok=True)
-        path = project_manager.get_shot_dir(project, shot) / f"{shot.shot_id}_annotations.json"
-        path.write_text("[]", encoding="utf-8")
-        shot.annotation_path = path.relative_to(project.root_path).as_posix()
-        project_manager.save_project(project)
-        return path
-    path = project.root_path / shot.annotation_path
-    if not path.exists():
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text("[]", encoding="utf-8")
-    return path

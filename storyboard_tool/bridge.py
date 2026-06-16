@@ -2,9 +2,12 @@ from __future__ import annotations
 
 import json
 import logging
+import warnings
 from typing import Any
 
-from starlette.testclient import TestClient
+with warnings.catch_warnings():
+    warnings.filterwarnings("ignore", message="Using `httpx` with `starlette.testclient` is deprecated")
+    from starlette.testclient import TestClient
 
 logger = logging.getLogger(__name__)
 
@@ -19,24 +22,6 @@ class DesktopBridge:
 
     def ping(self) -> str:
         return "python-backend-ready"
-
-    def api_call(self, method: str, args_json: str = "[]") -> Any:
-        try:
-            raw_args = json.loads(args_json or "[]")
-            if not isinstance(raw_args, list):
-                raise ValueError("Args must be a JSON array.")
-        except (json.JSONDecodeError, ValueError) as exc:
-            raise RuntimeError(str(exc)) from exc
-        response = self._client.post("/api", json={"method": method, "args": raw_args})
-        payload = self._parse(response)
-        if isinstance(payload, dict) and payload.get("ok") is False:
-            raise RuntimeError(str(payload.get("error") or "API call failed"))
-        if isinstance(payload, dict) and "result" in payload:
-            return payload["result"]
-        return payload
-
-    def apiCall(self, method: str, args_json: str = "[]") -> Any:
-        return self.api_call(method, args_json)
 
     def request(self, method: str, path: str, body: str | None = None) -> Any:
         method = method.upper()

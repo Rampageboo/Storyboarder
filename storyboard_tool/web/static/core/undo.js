@@ -31,6 +31,7 @@ function undoEntryLabel(entry) {
   if (entry.type === "delete_shot") return `Restore ${entry.shot?.shot_id || "board"}`;
   if (entry.type === "reorder") return "Restore board order";
   if (entry.type === "remove_reference") return "Restore reference image";
+  if (entry.type === "apply_reference") return "Undo reference apply";
   return "Undo";
 }
 
@@ -71,6 +72,30 @@ async function performUndo() {
       if (entry.selectedShotId) await selectShot(entry.selectedShotId);
       else renderForShotChange();
       showToast("Restored reference image");
+      return;
+    }
+    if (entry.type === "apply_reference") {
+      await api("/api/project/ref-apply/undo", {
+        method: "POST",
+        body: JSON.stringify({ token: entry.token }),
+      }).then(setProject);
+      if (typeof restoreRefSegmentFromProject === "function") restoreRefSegmentFromProject();
+      // Drop the per-board segments the assign created, then persist.
+      const removeIds = new Set(entry.segmentIds || []);
+      if (removeIds.size && state.refSegment) {
+        state.refSegment.segments = (state.refSegment.segments || []).filter(
+          (segment) => !removeIds.has(segment.id)
+        );
+        if (removeIds.has(state.refSegment.activeId)) {
+          state.refSegment.activeId = state.refSegment.segments[0]?.id || null;
+        }
+        if (typeof saveRefSegmentToProject === "function") await saveRefSegmentToProject();
+      }
+      if (entry.selectedShotId) await selectShot(entry.selectedShotId);
+      else render();
+      if (typeof patchRefSegmentUi === "function") patchRefSegmentUi();
+      const n = entry.boardCount || 0;
+      showToast(n ? `Undid reference apply · ${n} boards restored` : "Undid reference apply");
     }
   } catch (error) {
     undoStack.push(entry);
@@ -99,3 +124,19 @@ function bindUndoUi() {
   });
   refreshUndoUi();
 }
+
+
+// --- module global bridge (auto) ---
+Object.assign(globalThis, {
+  UNDO_LIMIT,
+  undoStack,
+  snapshotShot,
+  pushUndo,
+  clearUndoStack,
+  canUndo,
+  refreshUndoUi,
+  undoEntryLabel,
+  performUndo,
+  shouldIgnoreUndo,
+  bindUndoUi,
+});

@@ -10,10 +10,34 @@ const s = {
   segmentStart: 0,
   segmentDrag: null,
   saveTimer: 0,
+  fitMode: "fit",
   editor: null,
   editorReady: null,
   sceneLoadedPath: "",
+  bootstrapReady: false,
 };
+
+let switchSegmentChain = Promise.resolve();
+let pendingParentMessage = null;
+let saveGeneration = 0;
+
+function handleParentMessage(data) {
+  if (!data || data.source !== "storyboard-ref-parent") return;
+  if (data.type === "overlay-hidden") {
+    saveGeneration += 1;
+    window.clearTimeout(s.saveTimer);
+    s.saveTimer = 0;
+    if (el.video && !el.video.paused) el.video.pause();
+    return;
+  }
+  if (data.type === "switch-segment") {
+    switchToSegment(data.segmentId, data.mode).catch(() => {});
+    return;
+  }
+  if (data.type === "switch-view") {
+    switchToSegment(s.segmentId, data.mode).catch(() => {});
+  }
+}
 
 const el = {
   app: document.querySelector(".rsg-app"),
@@ -36,6 +60,7 @@ const el = {
   apply: document.getElementById("rsgApply"),
   fitBoards: document.getElementById("rsgFitBoards"),
   resetStart: document.getElementById("rsgResetStart"),
+  fitModeGroup: document.querySelector(".rsg-fit-mode"),
   toast: document.getElementById("rsgToast"),
 };
 
@@ -88,6 +113,45 @@ function round3(value) {
   return Math.round((Number(value) || 0) * 1000) / 1000;
 }
 
+const REFERENCE_FIT_MODES = ["fit", "fill", "stretch"];
+
+function normalizeReferenceFitMode(value) {
+  const mode = String(value || "fit").trim().toLowerCase();
+  return REFERENCE_FIT_MODES.includes(mode) ? mode : "fit";
+}
+
+function referenceFitModeToObjectFit(mode) {
+  const normalized = normalizeReferenceFitMode(mode);
+  if (normalized === "fill") return "cover";
+  if (normalized === "stretch") return "fill";
+  return "contain";
+}
+
+function applyReferenceFitPreview(fitMode = s.fitMode) {
+  s.fitMode = normalizeReferenceFitMode(fitMode);
+  const cssFit = referenceFitModeToObjectFit(s.fitMode);
+  if (el.video) el.video.style.objectFit = cssFit;
+  if (el.image) el.image.style.objectFit = cssFit;
+  if (el.app) el.app.dataset.refFit = s.fitMode;
+  el.fitModeGroup?.querySelectorAll("[data-fit-mode]").forEach((btn) => {
+    btn.classList.toggle("is-active", btn.dataset.fitMode === s.fitMode);
+  });
+}
+
+function loadSegmentFitMode() {
+  const saved = currentSavedSegment();
+  s.fitMode = normalizeReferenceFitMode(saved?.fit_mode);
+  applyReferenceFitPreview(s.fitMode);
+}
+
+async function setSegmentFitMode(mode) {
+  const next = normalizeReferenceFitMode(mode);
+  if (s.fitMode === next) return;
+  s.fitMode = next;
+  applyReferenceFitPreview(next);
+  await saveSegmentNow();
+}
+
 function activeReferenceImagePath(project, segment = null) {
   const path = String(segment?.reference_path || "").trim();
   if (path) return path;
@@ -107,13 +171,13 @@ function activeReferenceVideoPathForSegment(project, segment = null) {
 }
 
 function currentSavedSegment(project = s.project) {
-  const queryId = new URLSearchParams(window.location.search).get("segment") || "";
   const segments = Array.isArray(project?.settings?.ref_segments) ? project.settings.ref_segments : [];
-  let saved = queryId ? segments.find((segment) => segment.id === queryId) : null;
-  if (!saved) {
-    const activeId = String(project?.settings?.active_ref_segment_id || "").trim();
-    saved = segments.find((segment) => segment.id === activeId) || segments[0];
-  }
+  const preferredId =
+    String(s.segmentId || "").trim() ||
+    new URLSearchParams(window.location.search).get("segment") ||
+    String(project?.settings?.active_ref_segment_id || "").trim();
+  let saved = preferredId ? segments.find((segment) => segment.id === preferredId) : null;
+  if (!saved) saved = segments[0];
   return saved || null;
 }
 
@@ -162,9 +226,39 @@ function notifyOpener(payload) {
   const target = window.opener && !window.opener.closed ? window.opener : null;
   const parent = window.parent && window.parent !== window ? window.parent : null;
   const receiver = target || parent;
-  if (!receiver) return;
+  if (!receiver) return false;
   receiver.postMessage({ source: "storyboard-ref-scene3d", ...payload }, window.location.origin);
   receiver.postMessage({ source: "storyboard-ref-video", ...payload }, window.location.origin);
+  return true;
+}
+
+function notifyParentSegmentUpdate({ segmentId, patch, setActive = false } = {}) {
+  const id = String(segmentId || "").trim();
+  if (!id || !patch || typeof patch !== "object") return Promise.resolve(false);
+
+  const generation = saveGeneration;
+  const requestId = `segupd_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+  const hasParent = notifyOpener({ type: "ref-segment-update", requestId, segmentId: id, patch, setActive });
+  if (!hasParent) return Promise.resolve(false);
+
+  return new Promise((resolve) => {
+    const timeout = window.setTimeout(() => {
+      window.removeEventListener("message", onAck);
+      resolve(false);
+    }, 5000);
+
+    function onAck(event) {
+      if (event.origin !== window.location.origin) return;
+      if (event.data?.source !== "storyboard-ref-parent") return;
+      if (event.data?.type !== "ref-segment-update-ack") return;
+      if (event.data?.requestId !== requestId) return;
+      window.clearTimeout(timeout);
+      window.removeEventListener("message", onAck);
+      resolve(Boolean(event.data.ok !== false));
+    }
+
+    window.addEventListener("message", onAck);
+  }).then((ok) => ok && generation === saveGeneration);
 }
 
 function resolveBoardRange(project) {
@@ -313,12 +407,78 @@ async function loadModelView() {
   updateScrubber();
 }
 
+function updateSegmentUrl(segmentId, mode) {
+  try {
+    const url = new URL(window.location.href);
+    if (segmentId) url.searchParams.set("segment", segmentId);
+    else url.searchParams.delete("segment");
+    if (mode) url.hash = `#${mode}`;
+    window.history.replaceState(null, "", `${url.pathname}${url.search}${url.hash}`);
+  } catch {
+    // keep current URL
+  }
+}
+
+async function switchToSegment(segmentId, mode) {
+  const targetId = String(segmentId || "").trim();
+  const nextMode = mode === "model" || mode === "image" ? mode : "video";
+  if (!targetId) return;
+
+  switchSegmentChain = switchSegmentChain.then(async () => {
+    window.clearTimeout(s.saveTimer);
+    s.saveTimer = 0;
+    try {
+      await saveSegmentNow();
+    } catch {
+      // keep switching even if save fails
+    }
+
+    const sameSegment = s.segmentId === targetId;
+    s.segmentId = targetId;
+    updateSegmentUrl(targetId, nextMode);
+
+    try {
+      s.project = await api("/api/project");
+    } catch (error) {
+      showToast(error.message || "Failed to refresh project.");
+      return;
+    }
+
+    s.boardRange = resolveBoardRange(s.project);
+    if (!s.boardRange) {
+      showToast("Segment boards not found.");
+      return;
+    }
+    s.boardDuration = boardDurationSeconds(s.project, s.boardRange);
+    el.boardMeta.textContent = `Reference segment ${s.boardDuration.toFixed(1)}s · boards #${s.boardRange.min + 1}–#${s.boardRange.max + 1}`;
+
+    s.sceneLoadedPath = "";
+    loadSegmentFitMode();
+    if (sameSegment && s.mode === nextMode) {
+      await switchView(nextMode, { notify: false });
+      loadSegmentFromSettings();
+      renderSegment();
+      renderReferencesPanel();
+      return;
+    }
+    const prevMode = s.mode;
+    s.mode = prevMode === nextMode ? "" : prevMode;
+    await switchView(nextMode, { notify: false });
+    loadSegmentFromSettings();
+    renderSegment();
+    renderReferencesPanel();
+  });
+
+  return switchSegmentChain.catch(() => {});
+}
+
 async function switchView(mode, { notify = true } = {}) {
   const next = mode === "model" || mode === "image" ? mode : "video";
   if (s.mode === next && s.project) {
     if (next === "video") await loadVideoView();
     else if (next === "image") await loadImageView();
     else await loadModelView();
+    applyReferenceFitPreview(s.fitMode);
     return;
   }
   s.mode = next;
@@ -330,8 +490,8 @@ async function switchView(mode, { notify = true } = {}) {
     s.segmentStart = 0;
     await loadImageView();
   } else await loadModelView();
+  applyReferenceFitPreview(s.fitMode);
   renderReferencesPanel();
-  if (notify) notifyOpener({ type: "ref-segment-saved" });
 }
 
 window.switchRefSegmentView = (mode) => switchView(mode);
@@ -342,19 +502,19 @@ async function patchReferenceMode(type, path, referenceId = "") {
   else if (type === "model") body.reference_model_path = path;
   else body.reference_image_path = path;
   s.project = await api("/api/project/settings", { method: "PATCH", body });
-  const segments = Array.isArray(s.project?.settings?.ref_segments)
-    ? s.project.settings.ref_segments.map((segment) => ({ ...segment }))
-    : [];
-  const index = segments.findIndex((segment) => segment.id === s.segmentId);
-  if (index >= 0) {
-    segments[index].source_type = type;
-    segments[index].reference_path = path;
-    segments[index].reference_id = referenceId || segments[index].reference_id || "";
-    await api("/api/project/settings", {
-      method: "PATCH",
-      body: { ref_segments: segments, active_ref_segment_id: s.segmentId || "" },
-    });
+  await notifyParentSegmentUpdate({
+    segmentId: s.segmentId,
+    patch: {
+      source_type: type,
+      reference_path: path,
+      reference_id: referenceId || "",
+    },
+    setActive: true,
+  });
+  try {
     s.project = await api("/api/project");
+  } catch {
+    // keep current project snapshot
   }
 }
 
@@ -363,7 +523,10 @@ async function selectReference(ref) {
   const path = ref.path;
   if (!path) return;
   await patchReferenceMode(type, path, ref.id || "");
-  await switchView(type, { notify: true });
+  await switchView(type, { notify: false });
+  renderReferencesPanel();
+  notifyOpener({ type: "ref-segment-saved" });
+  showToast("Reference 已绑定，可调整起始点与 Fit，然后点击 Apply to boards");
 }
 
 function renderReferencesPanel() {
@@ -378,7 +541,7 @@ function renderReferencesPanel() {
     boundReferencePath: String(saved?.reference_path || "").trim(),
     boundReferenceType: String(saved?.source_type || s.mode || "").trim(),
     compact: true,
-    hint: "单击绑定到当前 Segment · 双击打开工作台",
+    hint: "单击绑定到当前 Segment · 调整参数后点 Apply to boards",
     onImportClick: () => el.referenceFile?.click(),
     onSelect: (ref) => selectReference(ref),
     onPreview: (ref) => selectReference(ref),
@@ -387,7 +550,8 @@ function renderReferencesPanel() {
       try {
         s.project = await api(`/api/project/references/${encodeURIComponent(ref.id)}`, { method: "DELETE" });
         renderReferencesPanel();
-        await switchView(s.mode, { notify: true });
+        await switchView(s.mode, { notify: false });
+        notifyOpener({ type: "ref-segment-saved" });
         showToast("Reference removed.");
       } catch (error) {
         showToast(error.message || "Could not remove reference.");
@@ -426,39 +590,26 @@ function loadSegmentFromSettings() {
 
 function saveSegmentSoon() {
   window.clearTimeout(s.saveTimer);
-  s.saveTimer = window.setTimeout(() => saveSegmentNow({ notify: true }).catch(() => {}), 350);
+  s.saveTimer = window.setTimeout(() => saveSegmentNow().catch(() => {}), 350);
 }
 
-async function saveSegmentNow({ notify = false } = {}) {
-  const segments = Array.isArray(s.project?.settings?.ref_segments)
-    ? s.project.settings.ref_segments.map((segment) => ({ ...segment }))
-    : [];
-  const index = segments.findIndex((segment) => segment.id === s.segmentId);
-  if (index >= 0) {
-    segments[index].video_start = round3(s.segmentStart);
-    segments[index].source_type = s.mode;
-    if (!segments[index].reference_path) {
-      const saved = currentSavedSegment(s.project);
-      if (saved?.reference_path) {
-        segments[index].reference_path = saved.reference_path;
-        segments[index].reference_id = saved.reference_id || "";
-      }
-    }
+async function saveSegmentNow() {
+  if (!s.segmentId) return;
+  const saved = currentSavedSegment();
+  const patch = {
+    video_start: round3(s.segmentStart),
+    source_type: s.mode,
+    fit_mode: s.fitMode,
+  };
+  if (saved?.reference_path) {
+    patch.reference_path = saved.reference_path;
+    patch.reference_id = saved.reference_id || "";
   }
-  s.project = await api("/api/project/settings", {
-    method: "PATCH",
-    body: {
-      ref_segments: segments,
-      active_ref_segment_id: s.segmentId || s.project?.settings?.active_ref_segment_id || "",
-      reference_segment_mode: s.mode,
-      ref_segment_video: {
-        start: round3(s.segmentStart),
-        board_duration: round3(fixedSegmentLength()),
-        segment_id: s.segmentId,
-      },
-    },
+  await notifyParentSegmentUpdate({
+    segmentId: s.segmentId,
+    patch,
+    setActive: true,
   });
-  if (notify) notifyOpener({ type: "ref-segment-saved" });
 }
 
 function renderSegment() {
@@ -562,7 +713,7 @@ async function applyToBoards() {
   const saved = currentSavedSegment();
   if (!range || !shots.length) {
     showToast("Select boards on the filmstrip first.");
-    return;
+    return null;
   }
   el.apply.disabled = true;
   try {
@@ -579,7 +730,7 @@ async function applyToBoards() {
       });
       notifyOpener({ type: "ref-segment-applied", result });
       showToast(`Applied to ${result.board_count || 0} boards.`);
-      return;
+      return result;
     }
     if (s.mode === "video") {
       if (!activeReferenceVideoPathForSegment(s.project, saved)) throw new Error("Bind a reference video to this segment first.");
@@ -593,7 +744,7 @@ async function applyToBoards() {
       });
       notifyOpener({ type: "ref-segment-applied", result });
       showToast(`Applied to ${result.board_count || 0} boards.`);
-      return;
+      return result;
     }
     if (!activeReferenceModelPath(s.project, saved)) throw new Error("Bind a reference GLB to this segment first.");
     const editor = await ensureSceneEditor();
@@ -627,8 +778,10 @@ async function applyToBoards() {
     });
     notifyOpener({ type: "ref-segment-applied", result });
     showToast(`Applied to ${result.board_count || 0} boards.`);
+    return result;
   } catch (error) {
     showToast(error.message || "Apply failed.");
+    throw error;
   } finally {
     el.apply.disabled = false;
   }
@@ -671,13 +824,6 @@ async function bootstrap() {
   s.boardDuration = boardDurationSeconds(s.project, s.boardRange);
   el.boardMeta.textContent = `Reference segment ${s.boardDuration.toFixed(1)}s · boards #${s.boardRange.min + 1}–#${s.boardRange.max + 1}`;
 
-  const saved = currentSavedSegment(s.project);
-  const refPath = String(saved?.reference_path || "").trim();
-  const refType = String(saved?.source_type || "").toLowerCase();
-  if (refPath && (refType === "video" || refType === "model" || refType === "image")) {
-    await patchReferenceMode(refType, refPath, saved.reference_id || "");
-  }
-
   el.video.addEventListener("loadedmetadata", () => {
     s.mediaDuration = Number.isFinite(el.video.duration) ? el.video.duration : 0;
     loadSegmentFromSettings();
@@ -702,7 +848,14 @@ async function bootstrap() {
     seekMedia(0);
     saveSegmentSoon();
   });
-  el.apply.addEventListener("click", applyToBoards);
+  el.fitModeGroup?.querySelectorAll("[data-fit-mode]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      setSegmentFitMode(btn.dataset.fitMode).catch(() => {});
+    });
+  });
+  el.apply.addEventListener("click", () => {
+    applyToBoards().catch(() => {});
+  });
   el.referenceFile?.addEventListener("change", async () => {
     const file = el.referenceFile.files?.[0];
     if (!file) return;
@@ -721,21 +874,27 @@ async function bootstrap() {
     if (s.mode === "model" && s.editor?.isPlaying) updateScrubber();
   }, 100);
 
-  window.addEventListener("message", async (event) => {
+  window.addEventListener("message", (event) => {
     if (event.origin !== window.location.origin) return;
-    if (event.data?.source !== "storyboard-ref-parent" || event.data?.type !== "switch-view") return;
-    try {
-      s.project = await api("/api/project");
-      renderReferencesPanel();
-    } catch {
-      // keep current project
+    if (event.data?.source !== "storyboard-ref-parent") return;
+    if (!s.bootstrapReady) {
+      pendingParentMessage = event.data;
+      return;
     }
-    switchView(event.data.mode, { notify: true }).catch(() => {});
+    handleParentMessage(event.data);
   });
 
   const mode = initialMode(s.project);
+  loadSegmentFitMode();
   await switchView(mode, { notify: false });
+  applyReferenceFitPreview(s.fitMode);
   renderReferencesPanel();
+  s.bootstrapReady = true;
+  if (pendingParentMessage) {
+    const queued = pendingParentMessage;
+    pendingParentMessage = null;
+    handleParentMessage(queued);
+  }
 }
 
 bootstrap();

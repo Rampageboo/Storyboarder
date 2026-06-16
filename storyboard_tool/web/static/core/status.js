@@ -71,3 +71,16 @@ async function runWithProgress(label, task, { successMessage, temporary = true }
     hideTopbarProgress();
   }
 }
+
+
+// --- module global bridge (auto) ---
+Object.assign(globalThis, {
+  statusOverride,
+  statusOverrideTimer,
+  buildDefaultAppStatus,
+  setAppStatus,
+  refreshAppStatus,
+  showTopbarProgress,
+  hideTopbarProgress,
+  runWithProgress,
+});

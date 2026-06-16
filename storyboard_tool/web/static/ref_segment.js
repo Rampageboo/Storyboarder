@@ -1,6 +1,10 @@
 let refSegmentDrag = null;
 let refSegmentPreviewTimer = null;
 let refSegmentPopup = null;
+// Tracks ref-segment-update requestIds already handled, so the duplicate
+// message the workbench iframe posts (once as "video", once as "scene3d")
+// does not trigger a second persist while still being acked.
+const handledRefSegmentUpdates = new Set();
 
 function newRefSegmentId() {
   return `seg_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}`;
@@ -48,10 +52,34 @@ function refSegmentDurationSeconds(segment = refSegmentActive(), shots = state.p
 }
 
 function findSegmentAtIndex(index) {
-  return refSegmentList().find((segment) => {
+  return (
+    refSegmentList().find((segment) => {
+      const range = segmentIndices(segment);
+      return range && index >= range.min && index <= range.max;
+    }) || null
+  );
+}
+
+function isPlaceholderSegment(segment) {
+  if (!segment || segment.id === state.refSegment.pendingAssignId) return false;
+  return isEmptySegment(segment) && segment.explicitReference !== true;
+}
+
+function segmentAtIndexForDrag(index) {
+  const segment = findSegmentAtIndex(index);
+  if (!segment || isPlaceholderSegment(segment) || isGhostInheritedSegment(segment)) return null;
+  return segment;
+}
+
+function removePlaceholderSegmentsInRange(min, max) {
+  const list = refSegmentList();
+  for (let i = list.length - 1; i >= 0; i -= 1) {
+    const segment = list[i];
+    if (!isPlaceholderSegment(segment)) continue;
     const range = segmentIndices(segment);
-    return range && index >= range.min && index <= range.max;
-  });
+    if (!range) continue;
+    if (range.min >= min && range.max <= max) list.splice(i, 1);
+  }
 }
 
 function shotIndexFromId(shotId) {
@@ -67,6 +95,7 @@ function segmentFromSavedEntry(entry) {
     raw === "model" || raw === "image" || raw === "video" || raw === "none" ? raw : "none";
   let referenceId = String(entry.reference_id || "").trim();
   let referencePath = String(entry.reference_path || "").trim();
+  const explicitReference = Boolean(referenceId || referencePath);
   if (!referencePath && sourceType !== "none") {
     const settings = state.project?.settings;
     if (sourceType === "video") referencePath = String(settings?.reference_video_path || "").trim();
@@ -86,6 +115,7 @@ function segmentFromSavedEntry(entry) {
     sourceType,
     referenceId,
     referencePath,
+    explicitReference,
   };
 }
 
@@ -94,11 +124,15 @@ function restoreRefSegmentFromProject() {
   if (!settings) {
     state.refSegment.segments = [];
     state.refSegment.activeId = null;
+    state.refSegment.pendingAssignId = null;
     return;
   }
 
   let segments = [];
-  if (Array.isArray(settings.ref_segments) && settings.ref_segments.length) {
+  // Only fall back to the legacy singular ref_segment when the ref_segments key
+  // is entirely absent. An empty array means segments were deliberately cleared
+  // (e.g. a delete) and must not be resurrected from the legacy field.
+  if (Array.isArray(settings.ref_segments)) {
     segments = settings.ref_segments.map(segmentFromSavedEntry).filter(Boolean);
   } else if (settings.ref_segment && typeof settings.ref_segment === "object") {
     const legacy = segmentFromSavedEntry({
@@ -110,12 +144,137 @@ function restoreRefSegmentFromProject() {
     if (legacy) segments = [legacy];
   }
 
-  if (!segments.length && refSegmentList().length) return;
+  // Segments are always per-board. Split any multi-board entry (legacy data or a
+  // stray long segment) into individual single-board segments so long bars never
+  // persist. Persist once when a split actually happens so the backend agrees.
+  const expanded = expandToPerBoardSegments(segments, state.refSegment.pendingAssignId);
+  const didSplit = expanded.length !== segments.length;
+  segments = expanded;
+
+  // Only preserve client-only segments while a range assignment is in flight.
+  // Otherwise an empty backend list must clear the UI (fixes undeletable ghosts).
+  if (!segments.length && refSegmentList().length && state.refSegment.pendingAssignId) return;
+
+  const pendingId = state.refSegment.pendingAssignId;
+  const pendingClient = pendingId ? refSegmentById(pendingId) : null;
+  const pendingClientRange = pendingClient ? segmentIndices(pendingClient) : null;
 
   state.refSegment.segments = segments;
   const activeId = String(settings.active_ref_segment_id || "").trim();
   state.refSegment.activeId =
     activeId && segments.some((segment) => segment.id === activeId) ? activeId : segments[0]?.id || null;
+
+  // If the backend still has a collapsed range for the in-flight assign segment,
+  // keep the wider client selection so the workbench can bind across boards.
+  if (pendingId && pendingClientRange && pendingClientRange.min !== pendingClientRange.max) {
+    const restoredPending = refSegmentById(pendingId);
+    const restoredRange = restoredPending ? segmentIndices(restoredPending) : null;
+    if (
+      restoredPending &&
+      restoredRange &&
+      restoredRange.min === restoredRange.max &&
+      (restoredRange.min !== pendingClientRange.min || restoredRange.max !== pendingClientRange.max)
+    ) {
+      restoredPending.anchorIndex = pendingClientRange.min;
+      restoredPending.endIndex = pendingClientRange.max;
+      state.refSegment.activeId = pendingId;
+    }
+  }
+
+  if (didSplit) saveRefSegmentToProject().catch(() => {});
+  if (sanitizeRefSegmentList()) saveRefSegmentToProject().catch(() => {});
+}
+
+// Drop invalid / duplicate per-board segments so pills and dots stay aligned.
+function sanitizeRefSegmentList() {
+  const shots = state.project?.shots || [];
+  const list = refSegmentList();
+  if (!shots.length) {
+    if (!list.length) return false;
+    state.refSegment.segments = [];
+    state.refSegment.activeId = null;
+    state.refSegment.pendingAssignId = null;
+    return true;
+  }
+  const maxIndex = shots.length - 1;
+  let changed = false;
+  const occupied = new Set();
+  for (let i = list.length - 1; i >= 0; i -= 1) {
+    const segment = list[i];
+    if (isPlaceholderSegment(segment)) {
+      list.splice(i, 1);
+      changed = true;
+      continue;
+    }
+    const min = Math.min(Number(segment.anchorIndex), Number(segment.endIndex));
+    const max = Math.max(Number(segment.anchorIndex), Number(segment.endIndex));
+    if (!Number.isFinite(min) || !Number.isFinite(max) || min < 0 || max > maxIndex) {
+      list.splice(i, 1);
+      changed = true;
+      continue;
+    }
+    segment.anchorIndex = min;
+    segment.endIndex = max;
+    if (segment.id !== state.refSegment.pendingAssignId && min === max) {
+      if (occupied.has(min)) {
+        list.splice(i, 1);
+        changed = true;
+        continue;
+      }
+      occupied.add(min);
+    }
+    if (min === max && isGhostInheritedSegment(segment)) {
+      list.splice(i, 1);
+      changed = true;
+    }
+  }
+  if (changed) {
+    if (state.refSegment.activeId && !list.some((segment) => segment.id === state.refSegment.activeId)) {
+      state.refSegment.activeId = list[0]?.id || null;
+    }
+    if (
+      state.refSegment.pendingAssignId &&
+      !list.some((segment) => segment.id === state.refSegment.pendingAssignId)
+    ) {
+      state.refSegment.pendingAssignId = null;
+    }
+  }
+  return changed;
+}
+
+function isAbandonedMultiBoardSegment(segment, skipId = null) {
+  const min = Math.min(segment.anchorIndex, segment.endIndex);
+  const max = Math.max(segment.anchorIndex, segment.endIndex);
+  if (min < 0 || max < 0 || min === max) return false;
+  if (segment.id === skipId) return false;
+  return !segment.explicitReference;
+}
+
+// Expand any multi-board segment into one segment per board, preserving the
+// reference data. The first board keeps the original id so an active selection
+// stays stable; the rest get fresh ids.
+function expandToPerBoardSegments(segments, skipId = null) {
+  const out = [];
+  segments.forEach((segment) => {
+    const min = Math.min(segment.anchorIndex, segment.endIndex);
+    const max = Math.max(segment.anchorIndex, segment.endIndex);
+    // Leave the in-progress transient selection intact; it is split on assign.
+    if (segment.id === skipId || !(min >= 0) || !(max >= 0) || min === max) {
+      out.push(segment);
+      return;
+    }
+    // Never split an unassigned multi-board drag — that creates ghost pills on restore.
+    if (isAbandonedMultiBoardSegment(segment, skipId)) return;
+    for (let index = min; index <= max; index += 1) {
+      out.push({
+        ...segment,
+        id: index === min ? segment.id : newRefSegmentId(),
+        anchorIndex: index,
+        endIndex: index,
+      });
+    }
+  });
+  return out;
 }
 
 function saveRefSegmentSoon() {
@@ -148,11 +307,30 @@ async function saveRefSegmentToProject() {
         }
       : {},
   };
-  await api("/api/project/settings", {
+  const project = await api("/api/project/settings", {
     method: "PATCH",
     body: JSON.stringify(payload),
     silent: true,
   });
+  // Keep local project settings in sync so restoreRefSegmentFromProject does not
+  // resurrect stale ref_segments while a multi-board assign is in flight.
+  if (project?.settings && state.project?.settings) {
+    const keys = [
+      "ref_segments",
+      "active_ref_segment_id",
+      "ref_segment",
+      "ref_segment_video",
+      "reference_segment_mode",
+      "reference_video_path",
+      "reference_model_path",
+      "reference_image_path",
+    ];
+    keys.forEach((key) => {
+      if (Object.prototype.hasOwnProperty.call(project.settings, key)) {
+        state.project.settings[key] = project.settings[key];
+      }
+    });
+  }
 }
 
 function findProjectReferenceById(id) {
@@ -251,6 +429,12 @@ function segmentHasReference(segment = refSegmentActive()) {
   return Boolean(segmentReferencePath(segment));
 }
 
+function isGhostInheritedSegment(segment) {
+  if (!segment || segment.id === state.refSegment.pendingAssignId) return false;
+  if (segmentSourceType(segment) === "none") return false;
+  return segment.explicitReference === false;
+}
+
 function segmentDisplayType(segment = refSegmentActive()) {
   return segmentHasReference(segment) ? segmentSourceType(segment) : "none";
 }
@@ -297,9 +481,10 @@ function ensureSegmentLayer() {
   return layer;
 }
 
-function segmentsOverlap(min, max, excludeId = null) {
+function segmentsOverlap(min, max, excludeId = null, { ignorePlaceholders = false } = {}) {
   return refSegmentList().some((segment) => {
     if (excludeId && segment.id === excludeId) return false;
+    if (ignorePlaceholders && isPlaceholderSegment(segment)) return false;
     const range = segmentIndices(segment);
     return range && min <= range.max && max >= range.min;
   });
@@ -345,21 +530,21 @@ function refSegmentIndexFromEvent(event) {
   return refSegmentIndexFromPointerX(event.clientX);
 }
 
-function syncSegmentBarGeometry(bar, segment, { preview = false } = {}) {
-  const range = segmentIndices(segment);
-  if (!range || !timelineVirtual?.layout) return false;
-  const startItem = refSegmentLayoutShot(range.min);
-  const endItem = refSegmentLayoutShot(range.max);
-  if (!startItem || !endItem) return false;
+function segmentSlotForIndex(index) {
+  return (
+    el.timelineStrip?.querySelector(`.timeline-segment-slot[data-index="${index}"]`) || null
+  );
+}
 
-  const pad = 12;
-  const barLeft = startItem.left + pad;
-  const barWidth =
-    range.min === range.max
-      ? Math.max(36, startItem.width - pad * 2)
-      : Math.max(36, endItem.left + endItem.width - startItem.left - pad * 2);
-  bar.style.left = `${barLeft}px`;
-  bar.style.width = `${barWidth}px`;
+function clearSegmentSlots() {
+  el.timelineStrip?.querySelectorAll("[data-segment-slot]").forEach((slot) => {
+    slot.replaceChildren();
+  });
+}
+
+function syncSegmentBarContent(bar, segment, { preview = false } = {}) {
+  const range = segmentIndices(segment);
+  if (!range) return;
   const displayType = preview ? "none" : segmentDisplayType(segment);
   const duration = refSegmentDurationSeconds(segment).toFixed(1);
   const refTitle = segmentReferenceTitle(segment);
@@ -380,7 +565,61 @@ function syncSegmentBarGeometry(bar, segment, { preview = false } = {}) {
     displayType === "none"
       ? "未绑定 Reference · 单击选择 Reference"
       : `${refTitle || displayType} · 单击切换 · 双击编辑 · 拖拽边缘调整范围 · Delete 删除`;
+}
+
+function syncSegmentBarGeometry(bar, segment, { preview = false } = {}) {
+  const range = segmentIndices(segment);
+  if (!range || !timelineVirtual?.layout) return false;
+  const startItem = refSegmentLayoutShot(range.min);
+  const endItem = refSegmentLayoutShot(range.max);
+  if (!startItem || !endItem) return false;
+
+  const pad = 12;
+  let barLeft = startItem.left + pad;
+  let barWidth =
+    range.min === range.max
+      ? Math.max(36, startItem.width - pad * 2)
+      : Math.max(36, endItem.left + endItem.width - startItem.left - pad * 2);
+  if (range.min === range.max) {
+    const boardLeft = startItem.left;
+    const boardRight = startItem.left + startItem.width;
+    barWidth = Math.min(barWidth, Math.max(36, startItem.width - pad * 2));
+    barLeft = Math.max(boardLeft + pad, Math.min(barLeft, boardRight - pad - barWidth));
+  } else {
+    const spanRight = endItem.left + endItem.width;
+    barWidth = Math.min(barWidth, Math.max(36, spanRight - barLeft - pad));
+  }
+  bar.style.left = `${barLeft}px`;
+  bar.style.width = `${barWidth}px`;
+  syncSegmentBarContent(bar, segment, { preview });
   return true;
+}
+
+function createSegmentBarElement(segment, { preview = false } = {}) {
+  const bar = document.createElement("span");
+  bar.className = "timeline-segment-bar";
+  bar.dataset.segmentId = preview ? "__preview__" : segment.id;
+  bar.setAttribute("role", "button");
+  bar.tabIndex = -1;
+  if (!preview) bindSegmentBarEvents(bar);
+  syncSegmentBarContent(bar, segment, { preview });
+  return bar;
+}
+
+function renderSegmentBarInSlot(slot, segment, { preview = false } = {}) {
+  const range = segmentIndices(segment);
+  if (!range || range.min !== range.max) return;
+
+  const barId = preview ? "__preview__" : segment.id;
+  let bar = slot.querySelector(`.timeline-segment-bar[data-segment-id="${barId}"]`);
+  if (!bar) {
+    bar = createSegmentBarElement(segment, { preview });
+    slot.appendChild(bar);
+  } else {
+    syncSegmentBarContent(bar, segment, { preview });
+  }
+  bar.style.left = "";
+  bar.style.width = "";
 }
 
 function upsertSegmentBar(layer, segment, { preview = false } = {}) {
@@ -390,15 +629,20 @@ function upsertSegmentBar(layer, segment, { preview = false } = {}) {
   const barId = preview ? "__preview__" : segment.id;
   let bar = layer.querySelector(`.timeline-segment-bar[data-segment-id="${barId}"]`);
   if (!bar) {
-    bar = document.createElement("span");
-    bar.className = "timeline-segment-bar";
-    bar.dataset.segmentId = barId;
-    bar.setAttribute("role", "button");
-    bar.tabIndex = -1;
-    if (!preview) bindSegmentBarEvents(bar);
+    bar = createSegmentBarElement(segment, { preview });
     layer.appendChild(bar);
   }
-  syncSegmentBarGeometry(bar, segment, { preview });
+  const ok = syncSegmentBarGeometry(bar, segment, { preview });
+  if (!ok) bar.remove();
+}
+
+function patchRefSegmentBoardChrome(coveredIndices) {
+  el.timelineStrip?.querySelectorAll(".timeline-shot-wrap").forEach((wrap) => {
+    const slot = wrap.querySelector("[data-segment-slot]");
+    const hasPill = Boolean(slot?.querySelector(".timeline-segment-bar:not(.is-preview)"));
+    wrap.classList.toggle("has-segment-pill", hasPill);
+  });
+  patchRefSegmentDotClasses(coveredIndices);
 }
 
 function patchRefSegmentDotClasses(coveredIndices) {
@@ -418,6 +662,7 @@ function patchRefSegmentDotClasses(coveredIndices) {
 function collectCoveredIndices(extraPreview = null) {
   const coveredIndices = new Set();
   refSegmentList().forEach((segment) => {
+    if (isPlaceholderSegment(segment)) return;
     const range = segmentIndices(segment);
     if (!range) return;
     for (let index = range.min; index <= range.max; index += 1) coveredIndices.add(index);
@@ -448,11 +693,48 @@ function restoreSegmentDragSnapshot(drag) {
   segment.endIndex = drag.snapshot.endIndex;
 }
 
+function refSegmentDragThresholdMet(event, drag) {
+  const dx = Math.abs(event.clientX - drag.startX);
+  const dy = Math.abs(event.clientY - drag.startY);
+  if (drag.isNew) return dx >= 4 || Math.hypot(dx, dy) >= 5;
+  return Math.hypot(dx, dy) >= 5;
+}
+
+function autoScrollTimelineForSegmentDrag(clientX) {
+  const strip = el.timelineStrip;
+  if (!strip) return;
+  const rect = strip.getBoundingClientRect();
+  const edge = 52;
+  const step = 20;
+  if (clientX < rect.left + edge) {
+    strip.scrollLeft = Math.max(0, strip.scrollLeft - step);
+  } else if (clientX > rect.right - edge) {
+    strip.scrollLeft = Math.min(strip.scrollWidth - strip.clientWidth, strip.scrollLeft + step);
+  }
+}
+
 function beginRefSegmentDrag() {
   const drag = refSegmentDrag;
   if (!drag || drag.dragging) return;
   drag.dragging = true;
-  if (drag.captureTarget && !drag.captureStarted) {
+  setRefSegmentDragTrackState(true);
+  const track = typeof ensureTimelineTrack === "function" ? ensureTimelineTrack() : null;
+  if (track && drag.pointerId != null) {
+    if (drag.captureStarted && drag.captureTarget !== track) {
+      try {
+        drag.captureTarget?.releasePointerCapture(drag.pointerId);
+      } catch {
+        // ignore
+      }
+    }
+    try {
+      track.setPointerCapture(drag.pointerId);
+      drag.captureTarget = track;
+      drag.captureStarted = true;
+    } catch {
+      // ignore
+    }
+  } else if (drag.captureTarget && !drag.captureStarted) {
     try {
       drag.captureTarget.setPointerCapture(drag.pointerId);
       drag.captureStarted = true;
@@ -461,7 +743,7 @@ function beginRefSegmentDrag() {
     }
   }
   if (drag.isNew) {
-    drag.previewEnd = drag.anchor;
+    drag.previewEnd = drag.previewEnd ?? drag.anchor;
   }
   patchRefSegmentUi();
 }
@@ -496,7 +778,7 @@ function applyRefSegmentDragIndex(index) {
   nextMin = Math.max(0, nextMin);
   nextMax = Math.min(shots.length - 1, nextMax);
   if (nextMax < nextMin) return;
-  if (segmentsOverlap(nextMin, nextMax, segment.id)) return;
+  if (segmentsOverlap(nextMin, nextMax, segment.id, { ignorePlaceholders: true })) return;
 
   segment.anchorIndex = nextMin;
   segment.endIndex = nextMax;
@@ -504,12 +786,27 @@ function applyRefSegmentDragIndex(index) {
   patchRefSegmentUi();
 }
 
+function setRefSegmentDragTrackState(active) {
+  const track = typeof ensureTimelineTrack === "function" ? ensureTimelineTrack() : null;
+  track?.classList.toggle("is-segment-dragging", Boolean(active));
+}
+
 function startRefSegmentDrag(event, anchorIndex, options = {}) {
-  const { segmentId = null, isNew = false, mode = "", snapshot = null } = options;
+  const {
+    segmentId = null,
+    isNew = false,
+    mode = "",
+    snapshot = null,
+    captureTarget = null,
+    captureStarted = false,
+  } = options;
   event.stopPropagation();
   if (Number.isNaN(anchorIndex) || anchorIndex < 0) return;
 
-  if (segmentId) setActiveRefSegment(segmentId);
+  // Avoid syncProject here: syncing kicks off an async setProject ->
+  // restoreRefSegmentFromProject that rebuilds segment state from saved data
+  // mid-drag, clobbering the range the resize is actively mutating.
+  if (segmentId) setActiveRefSegment(segmentId, { syncProject: false });
 
   refSegmentDrag = {
     anchor: anchorIndex,
@@ -522,18 +819,28 @@ function startRefSegmentDrag(event, anchorIndex, options = {}) {
     startY: event.clientY,
     dragging: false,
     previewEnd: anchorIndex,
-    captureTarget: ensureTimelineTrack() || event.currentTarget,
-    captureStarted: false,
+    captureTarget: captureTarget || ensureTimelineTrack() || event.currentTarget,
+    captureStarted: Boolean(captureStarted),
   };
   attachRefSegmentDragListeners();
 }
 
 function onRefSegmentDotPointerDown(event) {
   if (event.button !== 0) return;
+  event.preventDefault();
+  event.stopPropagation();
   const index = Number(event.currentTarget.dataset.index);
   if (Number.isNaN(index) || index < 0) return;
-  if (findSegmentAtIndex(index)) return;
-  startRefSegmentDrag(event, index, { isNew: true });
+  if (segmentAtIndexForDrag(index)) return;
+  const dot = event.currentTarget;
+  let captureStarted = false;
+  try {
+    dot.setPointerCapture(event.pointerId);
+    captureStarted = true;
+  } catch {
+    // ignore
+  }
+  startRefSegmentDrag(event, index, { isNew: true, captureTarget: dot, captureStarted });
 }
 
 function onRefSegmentBarPointerDown(event) {
@@ -546,7 +853,10 @@ function onRefSegmentBarPointerDown(event) {
   const range = segmentIndices(segment);
   if (!range) return;
 
-  setActiveRefSegment(segmentId);
+  // syncProject:false — a project round-trip while the pointer is down races
+  // with the drag (see startRefSegmentDrag). A plain click still syncs via the
+  // bar click handler; drag-end persists through saveRefSegmentSoon().
+  setActiveRefSegment(segmentId, { syncProject: false });
   const rect = bar.getBoundingClientRect();
   const ratio = rect.width > 0 ? (event.clientX - rect.left) / rect.width : 0.5;
   const mode = ratio <= 0.5 ? "resize-start" : "resize-end";
@@ -570,6 +880,11 @@ function onRefSegmentBarPointerDown(event) {
     bar.removeEventListener("pointermove", onBarMove);
     bar.removeEventListener("pointerup", onBarUp);
     bar.removeEventListener("pointercancel", onBarUp);
+    try {
+      bar.releasePointerCapture(pending.pointerId);
+    } catch {
+      // capture may already be released or transferred to the timeline track
+    }
   };
 
   const onBarMove = (moveEvent) => {
@@ -590,22 +905,39 @@ function onRefSegmentBarPointerDown(event) {
   const onBarUp = (upEvent) => {
     if (upEvent.pointerId !== pending.pointerId) return;
     cleanup();
+    if (!refSegmentDrag) setRefSegmentDragTrackState(false);
   };
 
   bar.addEventListener("pointermove", onBarMove);
   bar.addEventListener("pointerup", onBarUp);
   bar.addEventListener("pointercancel", onBarUp);
+  // Capture the pointer on the bar so drag-threshold detection keeps receiving
+  // pointermove even after the cursor leaves the bar (e.g. dragging an edge
+  // outward to extend the range). Without this the resize never starts and the
+  // gesture falls through to a click that opens the full-screen segment overlay.
+  try {
+    bar.setPointerCapture(event.pointerId);
+  } catch {
+    // setPointerCapture unavailable in some environments; drag still works when
+    // the cursor stays over the bar
+  }
 }
 
 function onRefSegmentPointerMove(event) {
   if (!refSegmentDrag || event.pointerId !== refSegmentDrag.pointerId) return;
+  const index = refSegmentIndexFromEvent(event);
   if (!refSegmentDrag.dragging) {
-    const moved = Math.hypot(event.clientX - refSegmentDrag.startX, event.clientY - refSegmentDrag.startY);
-    if (moved < 5) return;
+    if (refSegmentDrag.isNew && index >= 0 && index !== refSegmentDrag.anchor) {
+      refSegmentDrag.previewEnd = index;
+      patchRefSegmentUi();
+    }
+    if (!refSegmentDragThresholdMet(event, refSegmentDrag)) return;
     event.preventDefault();
     beginRefSegmentDrag();
+  } else {
+    event.preventDefault();
+    if (refSegmentDrag.isNew) autoScrollTimelineForSegmentDrag(event.clientX);
   }
-  const index = refSegmentIndexFromEvent(event);
   if (index < 0) return;
   applyRefSegmentDragIndex(index);
 }
@@ -614,6 +946,7 @@ function onRefSegmentPointerUp(event) {
   if (!refSegmentDrag || event.pointerId !== refSegmentDrag.pointerId) return;
   const drag = refSegmentDrag;
   refSegmentDrag = null;
+  setRefSegmentDragTrackState(false);
   detachRefSegmentDragListeners();
   try {
     if (drag.captureStarted) {
@@ -623,36 +956,40 @@ function onRefSegmentPointerUp(event) {
     // ignore
   }
 
-  if (drag.dragging && drag.isNew) {
-    const endIndex = drag.previewEnd ?? drag.anchor;
+  if (drag.isNew) {
+    const releaseIndex = refSegmentIndexFromEvent(event);
+    const endIndex = releaseIndex >= 0 ? releaseIndex : (drag.previewEnd ?? drag.anchor);
     const { min, max } = normalizeSegmentEndpoints(drag.anchor, endIndex);
-    if (segmentsOverlap(min, max)) {
+    if (segmentsOverlap(min, max, null, { ignorePlaceholders: true })) {
       showToast("Segment overlaps an existing range.");
       patchRefSegmentUi();
+      refreshTimelineAfterSegmentGesture();
       return;
     }
-    addRefSegment(drag.anchor, endIndex);
-    return;
-  }
-
-  if (!drag.dragging && drag.isNew) {
-    if (!segmentsOverlap(drag.anchor, drag.anchor)) {
-      addRefSegment(drag.anchor, drag.anchor);
-    }
-    patchRefSegmentUi();
+    removePlaceholderSegmentsInRange(min, max);
+    // Any new selection (single board or a range) is transient: pop up the
+    // assign workbench, and on assignment split it into per-board segments (see
+    // beginRangeReferenceAssign / splitPendingRangeSegment on apply).
+    beginRangeReferenceAssign(min, max);
+    refreshTimelineAfterSegmentGesture();
     return;
   }
 
   if (drag.dragging && !drag.isNew) {
     const segment = refSegmentById(drag.segmentId);
     const range = segmentIndices(segment);
-    if (!segment || !range || segmentsOverlap(range.min, range.max, segment.id)) {
+    if (
+      !segment ||
+      !range ||
+      segmentsOverlap(range.min, range.max, segment.id, { ignorePlaceholders: true })
+    ) {
       restoreSegmentDragSnapshot(drag);
     }
     saveRefSegmentSoon();
   }
 
   patchRefSegmentUi();
+  refreshTimelineAfterSegmentGesture();
 }
 
 function bindSegmentBarEvents(bar) {
@@ -672,7 +1009,9 @@ function bindSegmentBarEvents(bar) {
     openRefSegmentWindow();
   });
   bar.addEventListener("click", (event) => {
-    if (refSegmentDrag) return;
+    event.preventDefault();
+    event.stopPropagation();
+    if (refSegmentDrag?.dragging) return;
     const id = bar.dataset.segmentId;
     if (!id) return;
 
@@ -687,13 +1026,9 @@ function bindSegmentBarEvents(bar) {
 
     pendingClickTimer = window.setTimeout(() => {
       pendingClickTimer = null;
-      if (refSegmentDrag) return;
+      if (refSegmentDrag?.dragging) return;
       setActiveRefSegment(id);
       patchRefSegmentUi();
-      const segment = refSegmentById(id);
-      if (segment && !segmentHasReference(segment)) {
-        openRefSegmentWorkbench();
-      }
     }, 260);
   });
 }
@@ -764,50 +1099,56 @@ function patchRefSegmentUi() {
   const layer = ensureSegmentLayer();
   if (!layer) return;
 
+  if (!refSegmentDrag && sanitizeRefSegmentList()) {
+    saveRefSegmentToProject().catch(() => {});
+  }
+
   let previewRange = null;
-  if (refSegmentDrag?.dragging && refSegmentDrag.isNew) {
+  if (refSegmentDrag?.isNew) {
     const previewEnd = refSegmentDrag.previewEnd ?? refSegmentDrag.anchor;
-    const preview = normalizeSegmentEndpoints(refSegmentDrag.anchor, previewEnd);
-    if (preview.max >= preview.min && !segmentsOverlap(preview.min, preview.max)) {
-      previewRange = preview;
+    if (refSegmentDrag.dragging || previewEnd !== refSegmentDrag.anchor) {
+      const preview = normalizeSegmentEndpoints(refSegmentDrag.anchor, previewEnd);
+      if (preview.max >= preview.min && !segmentsOverlap(preview.min, preview.max, null, { ignorePlaceholders: true })) {
+        previewRange = preview;
+      }
     }
   }
 
-  if (refSegmentDrag?.dragging) {
-    refSegmentList().forEach((segment) => upsertSegmentBar(layer, segment));
-    layer.querySelector(".timeline-segment-bar[data-segment-id='__preview__']")?.remove();
-    if (previewRange) {
-      upsertSegmentBar(
-        layer,
-        {
-          id: "__preview__",
-          anchorIndex: previewRange.anchorIndex,
-          endIndex: previewRange.endIndex,
-          sourceType: "none",
-        },
-        { preview: true }
-      );
+  clearSegmentSlots();
+  layer.innerHTML = "";
+
+  refSegmentList().forEach((segment) => {
+    const range = segmentIndices(segment);
+    if (!range || isPlaceholderSegment(segment)) return;
+    if (range.min === range.max) {
+      const slot = segmentSlotForIndex(range.min);
+      if (slot) renderSegmentBarInSlot(slot, segment);
+      else upsertSegmentBar(layer, segment);
+      return;
     }
-    patchRefSegmentDotClasses(collectCoveredIndices(previewRange));
-  } else {
-    layer.innerHTML = "";
-    refSegmentList().forEach((segment) => renderSegmentBar(layer, segment));
-    if (previewRange) {
-      renderSegmentBar(
-        layer,
-        {
-          id: "__preview__",
-          anchorIndex: previewRange.anchorIndex,
-          endIndex: previewRange.endIndex,
-          sourceType: "none",
-        },
-        { preview: true }
-      );
-    }
-    patchRefSegmentDotClasses(collectCoveredIndices(previewRange));
+    upsertSegmentBar(layer, segment);
+  });
+
+  if (previewRange) {
+    upsertSegmentBar(
+      layer,
+      {
+        id: "__preview__",
+        anchorIndex: previewRange.anchorIndex,
+        endIndex: previewRange.endIndex,
+        sourceType: "none",
+      },
+      { preview: true }
+    );
   }
 
-  const hasSegmentBar = refSegmentList().some((segment) => Boolean(segmentIndices(segment)));
+  const coveredIndices = collectCoveredIndices(previewRange);
+  patchRefSegmentBoardChrome(coveredIndices);
+
+  const hasSegmentBar =
+    refSegmentList().some((segment) => Boolean(segmentIndices(segment))) ||
+    Boolean(previewRange) ||
+    Boolean(refSegmentDrag);
   layer.closest(".timeline-track")?.classList.toggle("has-segment-bar", hasSegmentBar);
 
   if (el.refSegmentSummary) {
@@ -910,8 +1251,114 @@ function addRefSegment(anchorIndex, endIndex) {
   state.refSegment.activeId = id;
   patchRefSegmentUi();
   saveRefSegmentSoon();
-  window.requestAnimationFrame(() => openRefSegmentWorkbench());
+  showToast("双击 Segment 条可打开编辑器绑定 Reference");
   return id;
+}
+
+// A multi-board selection is held as a transient segment (pendingAssignId) while
+// the workbench is open. The user binds a reference, adjusts settings, then
+// clicks Apply in the workbench. On apply the range is split into per-board
+// segments. If the popup is dismissed without applying, the transient segment
+// is discarded. expandToPerBoardSegments skips the pending id mid-flow.
+async function beginRangeReferenceAssign(minIndex, maxIndex) {
+  const id = newRefSegmentId();
+  state.refSegment.segments.push({
+    id,
+    anchorIndex: minIndex,
+    endIndex: maxIndex,
+    videoStart: 0,
+    sourceType: "none",
+    referenceId: "",
+    referencePath: "",
+    explicitReference: false,
+    pendingAssign: true,
+  });
+  state.refSegment.activeId = id;
+  state.refSegment.pendingAssignId = id;
+  patchRefSegmentUi();
+  refreshTimelineAfterSegmentGesture();
+  // Persist before opening so the workbench can resolve the board range and
+  // render the reference list (otherwise it shows "Select a board range first").
+  await saveRefSegmentToProject().catch(() => {});
+  showToast("选择 Reference 绑定，调整参数后点击 Apply to boards");
+  openRefSegmentWorkbench();
+}
+
+async function discardPendingRangeAssign() {
+  const id = state.refSegment.pendingAssignId;
+  if (!id) return;
+  const list = refSegmentList();
+  const idx = list.findIndex((segment) => segment.id === id);
+  const removed = idx >= 0;
+  if (removed) list.splice(idx, 1);
+  state.refSegment.pendingAssignId = null;
+  if (state.refSegment.activeId === id) {
+    state.refSegment.activeId = list[0]?.id || null;
+  }
+  // Drop the transient segment from the backend too, so it cannot linger.
+  if (removed) await saveRefSegmentToProject().catch(() => {});
+  patchRefSegmentUi();
+  refreshTimelineAfterSegmentGesture();
+}
+
+async function abandonPendingRefSegmentAssign() {
+  if (!state.refSegment.pendingAssignId) return;
+  if (isRefSegmentOverlayOpen()) {
+    await closeRefVideoOverlay();
+    return;
+  }
+  await discardPendingRangeAssign();
+}
+
+// Split a transient multi-board selection into one segment per board after the
+// user applies from the workbench. Does not bake frames — apply already ran.
+function splitPendingRangeSegment(tempSegment) {
+  const range = segmentIndices(tempSegment);
+  if (!range) return [];
+
+  const ref = {
+    sourceType: tempSegment.sourceType,
+    referenceId: tempSegment.referenceId || "",
+    referencePath: tempSegment.referencePath || "",
+    videoStart: Number(tempSegment.videoStart) || 0,
+  };
+
+  const list = refSegmentList();
+  const tempIdx = list.findIndex((segment) => segment.id === tempSegment.id);
+  if (tempIdx >= 0) list.splice(tempIdx, 1);
+
+  const createdIds = [];
+  for (let index = range.min; index <= range.max; index += 1) {
+    const id = newRefSegmentId();
+    createdIds.push(id);
+    list.push({
+      id,
+      anchorIndex: index,
+      endIndex: index,
+      videoStart: ref.videoStart,
+      sourceType: ref.sourceType,
+      referenceId: ref.referenceId,
+      referencePath: ref.referencePath,
+      explicitReference: Boolean(ref.referenceId || ref.referencePath),
+    });
+  }
+  state.refSegment.activeId = createdIds[0] || null;
+  return createdIds;
+}
+
+// Push an undo entry for a reference bake. The backend returns an undo_token
+// referencing the pre-bake board snapshot; performUndo restores from it. If the
+// backend hasn't supplied a token yet, baking is simply not undoable.
+function recordReferenceApplyUndo(result, shots, range, segmentIds = []) {
+  const token = result?.undo_token;
+  if (!token || typeof pushUndo !== "function") return;
+  pushUndo({
+    type: "apply_reference",
+    token,
+    segmentIds: [...segmentIds],
+    selectedShotId: shots[range.min]?.shot_id || state.selectedShotId || null,
+    boardCount: range.max - range.min + 1,
+  });
 }
 
 async function applyRefSegmentToBoards() {
@@ -1340,8 +1787,21 @@ function ensureRefVideoOverlay() {
 }
 
 function closeRefVideoOverlay() {
+  try {
+    el.refVideoFrame?.contentWindow?.postMessage(
+      { source: "storyboard-ref-parent", type: "overlay-hidden" },
+      window.location.origin
+    );
+  } catch {
+    // iframe may already be gone
+  }
   if (el.refVideoFrame) el.refVideoFrame.src = "about:blank";
   if (el.refVideoOverlay) el.refVideoOverlay.hidden = true;
+  // Closing the popup without assigning a reference discards the transient
+  // range selection (no per-board segments are created).
+  return discardPendingRangeAssign().then(() => {
+    patchRefSegmentUi();
+  });
 }
 
 function refSegmentOverlayTitle(mode) {
@@ -1441,13 +1901,31 @@ function shouldIgnoreRefSegmentShortcut(event) {
   return false;
 }
 
+function removeRefSegmentLocal(segmentId) {
+  const id = String(segmentId || "").trim();
+  if (!id) return false;
+  const list = refSegmentList();
+  const index = list.findIndex((item) => item.id === id);
+  if (index < 0) return false;
+  list.splice(index, 1);
+  if (state.refSegment.pendingAssignId === id) {
+    state.refSegment.pendingAssignId = null;
+  }
+  if (state.refSegment.activeId === id) {
+    state.refSegment.activeId = list[0]?.id || null;
+  }
+  saveRefSegmentToProject().catch(() => {});
+  return true;
+}
+
 async function deleteActiveRefSegment() {
   const segment = refSegmentActive();
   if (!segment?.id || !state.project) return;
+  const segmentId = segment.id;
   const range = segmentIndices(segment);
   const count = range ? range.max - range.min + 1 : 0;
   try {
-    const result = await api(`/api/project/ref-segments/${encodeURIComponent(segment.id)}`, {
+    const result = await api(`/api/project/ref-segments/${encodeURIComponent(segmentId)}`, {
       method: "DELETE",
     });
     setProject(result);
@@ -1455,8 +1933,15 @@ async function deleteActiveRefSegment() {
     patchRefSegmentUi();
     render();
     showToast(count > 1 ? `Segment removed · ${count} boards cleared` : "Segment removed · board cleared");
-  } catch {
-    // api() already toasts
+  } catch (error) {
+    const detail = String(error?.message || error || "");
+    if (/segment not found/i.test(detail) && removeRefSegmentLocal(segmentId)) {
+      patchRefSegmentUi();
+      render();
+      showToast("Segment removed.");
+      return;
+    }
+    // api() already toasts for other failures
   }
 }
 
@@ -1517,15 +2002,92 @@ function bindRefSegmentUi() {
     if (event.origin !== window.location.origin) return;
     const source = event.data?.source;
     if (source !== "storyboard-ref-video" && source !== "storyboard-ref-scene3d") return;
+    if (event.data.type === "ref-segment-update") {
+      const { requestId, segmentId, patch, setActive } = event.data;
+      const sendAck = (ok) => {
+        try {
+          event.source?.postMessage(
+            { source: "storyboard-ref-parent", type: "ref-segment-update-ack", requestId, ok },
+            event.origin
+          );
+        } catch {
+          // receiver may be gone
+        }
+      };
+      if (requestId && handledRefSegmentUpdates.has(requestId)) {
+        sendAck(true);
+        return;
+      }
+      if (requestId) {
+        handledRefSegmentUpdates.add(requestId);
+        window.setTimeout(() => handledRefSegmentUpdates.delete(requestId), 10000);
+      }
+      const segment = refSegmentById(segmentId);
+      if (!segment) {
+        sendAck(false);
+        return;
+      }
+      if (patch && typeof patch === "object") {
+        if (Object.prototype.hasOwnProperty.call(patch, "video_start")) {
+          segment.videoStart = Number(patch.video_start) || 0;
+        }
+        if (Object.prototype.hasOwnProperty.call(patch, "source_type")) {
+          const raw = String(patch.source_type || "").toLowerCase();
+          if (raw === "model" || raw === "image" || raw === "video" || raw === "none") {
+            segment.sourceType = raw;
+            if (!String(segment.referencePath || "").trim() && !String(segment.referenceId || "").trim()) {
+              segment.explicitReference = false;
+            }
+          }
+        }
+        if (Object.prototype.hasOwnProperty.call(patch, "reference_path")) {
+          segment.referencePath = String(patch.reference_path || "").trim();
+          segment.explicitReference = Boolean(segment.referencePath || segment.referenceId);
+        }
+        if (Object.prototype.hasOwnProperty.call(patch, "reference_id")) {
+          segment.referenceId = String(patch.reference_id || "").trim();
+          segment.explicitReference = Boolean(segment.referencePath || segment.referenceId);
+        }
+      }
+      if (setActive) state.refSegment.activeId = segment.id;
+      saveRefSegmentToProject()
+        .then(() => {
+          patchRefSegmentUi();
+          sendAck(true);
+        })
+        .catch(() => sendAck(false));
+      return;
+    }
     if (event.data.type === "ref-segment-applied" && event.data.result) {
+      const pendingId = state.refSegment.pendingAssignId;
+      const pendingSegment = pendingId ? refSegmentById(pendingId) : null;
+      const pendingRange = pendingSegment ? segmentIndices(pendingSegment) : null;
       setProject(event.data.result);
-      restoreRefSegmentFromProject();
+      if (pendingSegment && pendingRange) {
+        const createdIds = splitPendingRangeSegment(pendingSegment);
+        state.refSegment.pendingAssignId = null;
+        recordReferenceApplyUndo(event.data.result, state.project?.shots || [], pendingRange, createdIds);
+        saveRefSegmentToProject()
+          .then(() => {
+            patchRefSegmentUi();
+            render();
+            closeRefVideoOverlay();
+          })
+          .catch(() => {
+            patchRefSegmentUi();
+            render();
+            closeRefVideoOverlay();
+          });
+        return;
+      }
       patchRefSegmentUi();
       render();
       closeRefVideoOverlay();
       return;
     }
     if (event.data.type === "ref-segment-saved") {
+      // While the assign workbench is open, avoid reloading segment state mid-edit.
+      if (state.refSegment.pendingAssignId) return;
       api("/api/project", { silent: true }).then((project) => {
         if (project) {
           state.project = project;
@@ -1539,3 +2101,117 @@ function bindRefSegmentUi() {
 }
 
 bindRefSegmentUi();
+
+
+// --- module global bridge (auto) ---
+Object.assign(globalThis, {
+  refSegmentDrag,
+  refSegmentPreviewTimer,
+  refSegmentPopup,
+  handledRefSegmentUpdates,
+  newRefSegmentId,
+  refSegmentList,
+  refSegmentById,
+  refSegmentActive,
+  segmentIndices,
+  refSegmentRange,
+  refSegmentDurationSeconds,
+  findSegmentAtIndex,
+  shotIndexFromId,
+  segmentFromSavedEntry,
+  restoreRefSegmentFromProject,
+  expandToPerBoardSegments,
+  sanitizeRefSegmentList,
+  saveRefSegmentSoon,
+  saveRefSegmentToProject,
+  findProjectReferenceById,
+  findProjectReferenceByPath,
+  segmentReferenceEntry,
+  segmentReferencePath,
+  segmentReferenceTitle,
+  referenceVideoPath,
+  referenceModelPathForSegment,
+  referenceImagePathForSegment,
+  segmentSourceType,
+  segmentHasReference,
+  segmentDisplayType,
+  isModelSegment,
+  isImageSegment,
+  isEmptySegment,
+  referenceImageUrl,
+  referenceVideoUrl,
+  ensureSegmentLayer,
+  segmentsOverlap,
+  normalizeSegmentEndpoints,
+  refSegmentLayoutShot,
+  refSegmentIndexFromPointerX,
+  refSegmentIndexFromEvent,
+  syncSegmentBarGeometry,
+  upsertSegmentBar,
+  patchRefSegmentDotClasses,
+  collectCoveredIndices,
+  attachRefSegmentDragListeners,
+  detachRefSegmentDragListeners,
+  restoreSegmentDragSnapshot,
+  beginRefSegmentDrag,
+  applyRefSegmentDragIndex,
+  startRefSegmentDrag,
+  onRefSegmentDotPointerDown,
+  onRefSegmentBarPointerDown,
+  onRefSegmentPointerMove,
+  onRefSegmentPointerUp,
+  bindSegmentBarEvents,
+  refSegmentApplyMeta,
+  isRefSegmentApplyStale,
+  roundRefSegmentTime,
+  refSegmentSummaryLabel,
+  renderSegmentBar,
+  patchRefSegmentUi,
+  updateRefSegment,
+  refSegmentOverlayUrl,
+  isRefSegmentOverlayOpen,
+  openRefSegmentWorkbench,
+  clearRefSegmentBindingMode,
+  openRefSegmentReferenceFlow,
+  jumpToReferencePicker,
+  addRefSegment,
+  beginRangeReferenceAssign,
+  splitPendingRangeSegment,
+  discardPendingRangeAssign,
+  abandonPendingRefSegmentAssign,
+  recordReferenceApplyUndo,
+  applyRefSegmentToBoards,
+  bindRefSegmentDot,
+  refSegmentSceneState,
+  refSegmentUsesModelView,
+  refSegmentUsesImageView,
+  setActiveRefSegment,
+  syncActiveSegmentToProjectSettings,
+  bindReferenceToActiveSegment,
+  activeSegmentReferenceBinding,
+  syncActiveSegmentSourceType,
+  ensureRefSegmentScene3d,
+  loadRefSegmentScene3d,
+  patchRefSegmentPlayerMode,
+  loadRefSegmentImagePreview,
+  stopRefSegmentPreview,
+  stopRefSegmentVideoPreview,
+  syncRefSegmentFreezeFrame,
+  playRefSegmentPreview,
+  playRefSegmentModelPreview,
+  ensureRefVideoOverlay,
+  closeRefVideoOverlay,
+  refSegmentOverlayTitle,
+  openRefSegmentOverlay,
+  openRefVideoOverlay,
+  openRefScene3dOverlay,
+  navigateOpenRefSegmentOverlay,
+  openRefSegmentWindow,
+  applyRefSegment3dToBoards,
+  shouldIgnoreRefSegmentShortcut,
+  deleteActiveRefSegment,
+  openRefSegmentModal,
+  closeRefSegmentModal,
+  uploadReferenceVideo,
+  bindRefSegmentUi,
+});

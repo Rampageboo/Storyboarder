@@ -406,6 +406,29 @@ select:disabled {
   object-fit: contain;
 }
 
+.canvas-board-stack {
+  position: relative;
+  width: 100%;
+  height: 100%;
+}
+
+.canvas-board-layer {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  pointer-events: none;
+}
+
+.canvas-board-art {
+  z-index: 1;
+}
+
+.canvas-board-bg {
+  z-index: 0;
+}
+
 .canvas-placeholder {
   padding: 12px;
   text-align: center;
@@ -773,6 +796,20 @@ textarea {
   gap: 10px;
   width: 100%;
   min-height: 186px;
+  --timeline-segment-gap: 6px;
+  --timeline-segment-slot-height: 18px;
+  --timeline-segment-dot-height: 18px;
+  --timeline-meta-band: 30px;
+  --timeline-thumb-band: 84px;
+  --timeline-board-band: calc(var(--timeline-thumb-band) + var(--timeline-meta-band));
+  --timeline-track-height-compact: calc(
+    var(--timeline-board-band) + var(--timeline-segment-gap) + var(--timeline-segment-dot-height)
+  );
+  --timeline-track-height-expanded: calc(
+    var(--timeline-board-band) + var(--timeline-segment-gap) + var(--timeline-segment-slot-height) +
+      var(--timeline-segment-gap) + var(--timeline-segment-dot-height)
+  );
+  --timeline-track-height: var(--timeline-track-height-compact);
 }
 
 .timeline-strip {
@@ -813,10 +850,7 @@ textarea {
 
 .timeline-track {
   position: relative;
-  --timeline-segment-gap: 6px;
-  --timeline-segment-dot-height: 18px;
-  --timeline-board-band: calc(100% - var(--timeline-segment-gap) - var(--timeline-segment-dot-height));
-  height: 138px;
+  height: var(--timeline-track-height);
   min-width: 100%;
 }
 
@@ -828,7 +862,12 @@ textarea {
 }
 
 .timeline-track .timeline-shot-wrap {
-  height: 100%;
+  height: auto;
+  z-index: 2;
+}
+
+.timeline-track .timeline-insert-shot {
+  z-index: 1;
 }
 
 .timeline-track .timeline-insert-shot {
@@ -847,10 +886,10 @@ textarea {
   position: relative;
   top: auto;
   left: auto;
-  flex: 1 1 auto;
+  flex: 0 0 auto;
   width: 100%;
-  min-height: 0;
-  height: auto;
+  height: var(--timeline-board-band);
+  min-height: var(--timeline-board-band);
 }
 
 .timeline-shot {
@@ -859,6 +898,7 @@ textarea {
   flex: 0 0 auto;
   min-width: 0;
   width: 100%;
+  height: 100%;
   position: relative;
   padding: 0;
   border: 2px solid var(--border);
@@ -914,7 +954,7 @@ textarea {
   flex: 0 0 auto;
   align-self: stretch;
   width: 72px;
-  min-height: 138px;
+  min-height: var(--timeline-board-band);
   height: auto;
   padding: 0;
   border: 2px dashed var(--border);
@@ -974,15 +1014,64 @@ textarea {
   border-radius: 4px;
 }
 
-/* ── Reference segment: dot below card + v1 pill bar on drag ── */
+.timeline-track.has-segment-bar {
+  --timeline-track-height: var(--timeline-track-height-expanded);
+}
+
+.timeline-track.is-segment-dragging {
+  --timeline-track-height: var(--timeline-track-height-expanded);
+}
+
+.timeline-row:has(.timeline-track.has-segment-bar),
+.timeline-row:has(.timeline-track.is-segment-dragging) {
+  min-height: 210px;
+}
+
+.timeline-row:has(.timeline-track.has-segment-bar) .timeline-strip,
+.timeline-row:has(.timeline-track.is-segment-dragging) .timeline-strip {
+  height: 210px;
+}
+
+.timeline-track:not(.has-segment-bar):not(.is-segment-dragging) .timeline-segment-slot {
+  display: none;
+}
+
+.timeline-track.is-segment-dragging .timeline-segment-slot {
+  display: flex;
+}
+
+.timeline-shot-wrap > .timeline-segment-slot {
+  flex: 0 0 var(--timeline-segment-slot-height);
+  min-height: var(--timeline-segment-slot-height);
+  display: flex;
+  align-items: center;
+  width: 100%;
+  min-width: 0;
+}
+
+.timeline-shot-wrap > .timeline-segment-slot .timeline-segment-bar {
+  position: relative;
+  top: auto;
+  left: auto !important;
+  width: 100% !important;
+  max-width: 100%;
+  min-width: 0;
+}
+
+.timeline-shot-wrap.has-segment-pill .timeline-segment-dot {
+  visibility: hidden;
+  pointer-events: none;
+}
+
+/* ── Reference segment: spanning pill bar + per-board slots ── */
 .timeline-segment-layer {
   position: absolute;
   left: 0;
   right: 0;
-  bottom: 0;
-  height: 22px;
+  bottom: calc(var(--timeline-segment-dot-height) + var(--timeline-segment-gap));
+  height: var(--timeline-segment-slot-height);
   pointer-events: none;
-  z-index: 2;
+  z-index: 3;
 }
 
 .timeline-segment-bar {
@@ -1004,7 +1093,7 @@ textarea {
   text-overflow: ellipsis;
   box-sizing: border-box;
   pointer-events: auto;
-  cursor: grab;
+  cursor: pointer;
   touch-action: none;
 }
 
@@ -1064,9 +1153,9 @@ textarea {
   display: flex;
   align-items: center;
   justify-content: center;
-  flex: 0 0 18px;
+  flex: 0 0 var(--timeline-segment-dot-height);
   width: 100%;
-  height: 18px;
+  height: var(--timeline-segment-dot-height);
   margin: 0;
   padding: 0;
   border: none;
@@ -1074,7 +1163,11 @@ textarea {
   cursor: grab;
   touch-action: none;
   position: relative;
-  z-index: 3;
+  z-index: 4;
+}
+
+.timeline-segment-dot:not(.in-range) {
+  pointer-events: auto;
 }
 
 .timeline-segment-dot::before {
@@ -1374,11 +1467,11 @@ textarea {
 
 .timeline-thumb {
   position: relative;
-  flex: 0 0 auto;
+  flex: 0 0 var(--timeline-thumb-band);
   width: 100%;
-  aspect-ratio: var(--canvas-aspect-w, 16) / var(--canvas-aspect-h, 9);
-  max-height: 96px;
-  min-height: 34px;
+  height: var(--timeline-thumb-band);
+  margin-top: auto;
+  min-height: 0;
   background-color: var(--canvas-color, #e8e8e8);
   background-size: cover;
   background-position: center;
@@ -1418,21 +1511,51 @@ textarea {
   color: #fff;
 }
 
+.timeline-ps-badge {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  z-index: 1;
+  display: none;
+  align-items: center;
+  padding: 2px 6px;
+  border-radius: 3px;
+  background: #2d7d46;
+  color: #fff;
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.4px;
+  line-height: 1.2;
+  pointer-events: none;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.35);
+}
+
+.timeline-shot.is-open-in-ps .timeline-ps-badge {
+  display: inline-flex;
+}
+
 .timeline-meta {
-  flex: 1 1 auto;
-  min-height: 0;
-  padding: 4px 6px 5px;
-  display: grid;
-  gap: 2px;
+  flex: 0 0 var(--timeline-meta-band);
+  height: var(--timeline-meta-band);
+  min-height: var(--timeline-meta-band);
+  box-sizing: border-box;
+  padding: 2px 6px 3px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 1px;
+  overflow: hidden;
 }
 
 .timeline-shot-name {
   display: none;
+  flex: 0 0 auto;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: 11px;
+  font-size: 10px;
   font-weight: 600;
+  line-height: 1.2;
 }
 
 html[data-timeline-selected-name="1"] .timeline-shot.active .timeline-shot-name {
@@ -1455,21 +1578,40 @@ html[data-timeline-selected-name="1"] .timeline-shot.active .timeline-shot-name 
 }
 
 .timeline-duration-row {
-  display: grid;
-  grid-template-columns: 1fr auto;
-  gap: 3px;
+  display: flex;
+  flex: 0 0 auto;
   align-items: center;
+  gap: 4px;
+  min-width: 0;
 }
 
 .timeline-duration {
-  min-height: 22px;
-  padding: 2px 4px;
+  flex: 0 1 52px;
+  width: 52px;
+  min-width: 0;
+  height: 20px;
+  min-height: 20px;
+  padding: 1px 4px;
   font-size: 11px;
+  line-height: 1.2;
+}
+
+.timeline-duration-unit {
+  flex: 0 0 auto;
+  font-size: 10px;
+  color: var(--text-muted);
 }
 
 .timeline-range {
-  font-size: 10px;
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: 9px;
+  line-height: 1.2;
   color: var(--text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  text-align: right;
 }
 
 /* ── Modal ── */
@@ -1871,10 +2013,26 @@ body.scene3d-active #openScene3d {
   flex: 1;
   min-height: 0;
   position: relative;
-  background: var(--bg-elevated);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--canvas-well, var(--bg-elevated));
+  container-type: size;
+  overflow: hidden;
 }
 
-.scene3d-viewport canvas {
+.scene3d-format-frame {
+  position: relative;
+  aspect-ratio: var(--canvas-aspect-w, 16) / var(--canvas-aspect-h, 9);
+  width: min(100cqw, calc(100cqh * var(--canvas-aspect-w, 16) / var(--canvas-aspect-h, 9)));
+  height: auto;
+  max-width: 100cqw;
+  max-height: 100cqh;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.35);
+  background: #0d1014;
+}
+
+.scene3d-format-frame canvas {
   display: block;
   width: 100%;
   height: 100%;

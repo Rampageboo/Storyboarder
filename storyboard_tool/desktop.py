@@ -52,16 +52,58 @@ def _configure_windows_asyncio_noise() -> None:
     if sys.platform != "win32":
         return
     import asyncio
+    import asyncio.proactor_events
+
+    def _ignore_connection_reset(loop, context) -> None:
+        exc = context.get("exception")
+        if isinstance(exc, (ConnectionResetError, BrokenPipeError)):
+            return
+        if isinstance(exc, OSError) and getattr(exc, "winerror", None) in (10053, 10054):
+            return
+        message = str(context.get("message", ""))
+        if "_call_connection_lost" in message:
+            return
+        loop.default_exception_handler(context)
 
     try:
         asyncio.get_event_loop().set_exception_handler(_ignore_connection_reset)
     except RuntimeError:
         pass
 
+    if getattr(asyncio.proactor_events._ProactorBasePipeTransport, "_storyboard_patched", False):
+        return
+
+    _orig_call_connection_lost = asyncio.proactor_events._ProactorBasePipeTransport._call_connection_lost
+
+    def _quiet_call_connection_lost(self, exc):
+        try:
+            _orig_call_connection_lost(self, exc)
+        except ConnectionResetError:
+            pass
+        except OSError as os_err:
+            if os_err.winerror in (10053, 10054):
+                pass
+            else:
+                raise
+        except Exception as inner_exc:
+            if isinstance(inner_exc, ConnectionResetError):
+                return
+            if isinstance(inner_exc, OSError) and getattr(inner_exc, "winerror", None) in (10053, 10054):
+                return
+            raise
+
+    asyncio.proactor_events._ProactorBasePipeTransport._call_connection_lost = _quiet_call_connection_lost
+    asyncio.proactor_events._ProactorBasePipeTransport._storyboard_patched = True
+
 
 def _ignore_connection_reset(loop, context) -> None:
     exc = context.get("exception")
-    if isinstance(exc, ConnectionResetError):
+    if isinstance(exc, (ConnectionResetError, BrokenPipeError)):
+        return
+    if isinstance(exc, OSError) and getattr(exc, "winerror", None) in (10053, 10054):
+        return
+    message = str(context.get("message", ""))
+    if "_call_connection_lost" in message:
         return
     loop.default_exception_handler(context)
 
@@ -74,6 +116,7 @@ def start_server(app, host: str = HOST, port: int = PORT) -> tuple[threading.Thr
     server = uvicorn.Server(config)
 
     def run() -> None:
+        _configure_windows_asyncio_noise()
         if sys.platform == "win32":
             import asyncio
 

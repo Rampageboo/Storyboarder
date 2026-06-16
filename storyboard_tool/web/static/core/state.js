@@ -17,6 +17,7 @@ export const state = {
   liveBridgeTimer: null,
   bridgeStatusTimer: null,
   isSyncing: false,
+  openInPsShotIds: [],
   scene3dEditor: null,
   scene3dLoadedKey: null,
   timelineScrollLeft: 0,
@@ -24,6 +25,8 @@ export const state = {
   refSegment: {
     segments: [],
     activeId: null,
+    // Id of a transient multi-board selection awaiting a reference assignment.
+    pendingAssignId: null,
   },
 };
 

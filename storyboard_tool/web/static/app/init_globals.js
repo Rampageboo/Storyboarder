@@ -7,10 +7,13 @@ import { buildEl } from "../core/dom.js";
 
 const el = buildEl();
 Object.assign(globalThis, utils, { state, dialogState, contextMenuState, canvasColorState, el });
+// Classic scripts use bare `el`; ensure it exists on the window object (pywebview).
+if (typeof globalThis.window !== "undefined") {
+  globalThis.window.el = el;
+}
 
-import * as dispatch from "../core/dispatch.js";
 import * as api from "../core/api.js";
-Object.assign(globalThis, dispatch, api);
+Object.assign(globalThis, api);
 
 const [dialogs, canvasColor, scene3dApp] = await Promise.all([
   import("../dialogs.js"),

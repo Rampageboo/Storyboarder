@@ -180,3 +180,13 @@ async function openPhotoshopSettingsDialog() {
 el.linkPhotoshop?.addEventListener("click", () => relinkPhotoshopBridge());
 el.openBlender?.addEventListener("click", () => openProjectInBlender());
 el.openBlenderScene?.addEventListener("click", () => openProjectInBlender());
+
+
+// --- module global bridge (auto) ---
+Object.assign(globalThis, {
+  relinkPhotoshopBridge,
+  openBlenderSettingsDialog,
+  openProjectInBlender,
+  renderBlenderMenuStatus,
+  openPhotoshopSettingsDialog,
+});
