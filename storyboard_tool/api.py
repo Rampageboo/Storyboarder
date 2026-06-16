@@ -6,7 +6,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI, File, UploadFile
+from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
@@ -199,7 +199,13 @@ def create_app(base_dir: Path, bridge_port: int = 8000) -> FastAPI:
         # Force the embedded browser to re-fetch UI assets every launch.
         response = await call_next(request)
         path = request.url.path
-        if path == "/" or path.startswith("/static") or path.startswith("/ref-") or path.endswith(".html"):
+        if (
+            path == "/"
+            or path.startswith("/static")
+            or path.startswith("/react")
+            or path.startswith("/ref-")
+            or path.endswith(".html")
+        ):
             response.headers["Cache-Control"] = "no-store, must-revalidate"
             response.headers["Pragma"] = "no-cache"
             response.headers["Expires"] = "0"
@@ -223,6 +229,37 @@ def create_app(base_dir: Path, bridge_port: int = 8000) -> FastAPI:
     @app.get("/ref-video")
     def ref_video_window() -> FileResponse:
         return FileResponse(web_dir / "ref_segment.html")
+
+    # React frontend (parallel UI candidate). Built by `cd frontend && npm run build` into web/dist.
+    # Guarded FileResponse routes (not a StaticFiles mount) so a missing build can't crash startup,
+    # and the SPA fallback stays scoped to /react/... only — never shadowing /static, /ref-*, or /api/*.
+    react_dist = web_dir / "dist"
+
+    @app.get("/react")
+    def react_index() -> FileResponse:
+        index_file = react_dist / "index.html"
+        if not index_file.is_file():
+            raise HTTPException(
+                status_code=404,
+                detail="React build not found. Run: cd frontend && npm run build",
+            )
+        return FileResponse(index_file)
+
+    @app.get("/react/{asset_path:path}")
+    def react_asset(asset_path: str) -> FileResponse:
+        index_file = react_dist / "index.html"
+        # Serve a real built file (asset, favicon) when it exists and resolves inside web/dist;
+        # otherwise fall back to index.html for client-side routing.
+        resolved = (react_dist / asset_path).resolve()
+        dist_root = react_dist.resolve()
+        if resolved.is_file() and (resolved == dist_root or dist_root in resolved.parents):
+            return FileResponse(resolved)
+        if not index_file.is_file():
+            raise HTTPException(
+                status_code=404,
+                detail="React build not found. Run: cd frontend && npm run build",
+            )
+        return FileResponse(index_file)
 
     @app.get("/api/project")
     def get_project() -> dict[str, Any]:

@@ -216,9 +216,12 @@ export function getAnnotations(shotId: string): Promise<Record<string, unknown>>
 export function saveAnnotations(
   shotId: string,
   body: AnnotationSaveRequest,
-): Promise<ProjectPayload> {
-  return requestJson<ProjectPayload>(`/api/shots/${encodeURIComponent(shotId)}/annotations`, {
-    method: 'PUT',
-    body,
-  })
+): Promise<{ annotations: Record<string, unknown>[] }> {
+  return requestJson<{ annotations: Record<string, unknown>[] }>(
+    `/api/shots/${encodeURIComponent(shotId)}/annotations`,
+    {
+      method: 'PUT',
+      body,
+    },
+  )
 }

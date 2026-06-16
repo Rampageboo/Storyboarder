@@ -59,7 +59,7 @@ function computeVisibleTimelineItems(layout: TimelineItem[], scrollLeft: number,
 }
 
 export function Timeline() {
-  const { project, selectedShotId, setSelectedShotId, setProject } = useProject()
+  const { project, selectedShotId, setSelectedShotId, setProject, flushDirtyShots } = useProject()
   const [busy, setBusy] = useState(false)
   const stripRef = useRef<HTMLDivElement | null>(null)
   const [scrollLeft, setScrollLeft] = useState(0)
@@ -99,70 +99,85 @@ export function Timeline() {
     if (!project) return
     setBusy(true)
     try {
+      await flushDirtyShots()
       const afterId = selectedShotId || undefined
       const payload = await addShot(afterId ? { after_shot_id: afterId } : {})
       setProject(payload)
       const nextId = payload.shots[Math.min(Math.max(selectedIndex + 1, 0), payload.shots.length - 1)]?.shot_id
       if (nextId) setSelectedShotId(nextId)
+    } catch {
+      // Aborted (flush failure already surfaced) or structural op failed; leave state unchanged.
     } finally {
       setBusy(false)
     }
-  }, [project, selectedShotId, selectedIndex, setProject, setSelectedShotId])
+  }, [project, selectedShotId, selectedIndex, setProject, setSelectedShotId, flushDirtyShots])
 
   const handleInsertAfter = useCallback(
     async (afterShotId: string) => {
       if (!project) return
       setBusy(true)
       try {
+        await flushDirtyShots()
         const payload = await addShot({ after_shot_id: afterShotId })
         setProject(payload)
         const idx = payload.shots.findIndex((s) => s.shot_id === afterShotId)
         const nextId = payload.shots[Math.min(idx + 1, payload.shots.length - 1)]?.shot_id
         if (nextId) setSelectedShotId(nextId)
+      } catch {
+        // Aborted (flush failure already surfaced) or structural op failed; leave state unchanged.
       } finally {
         setBusy(false)
       }
     },
-    [project, setProject, setSelectedShotId],
+    [project, setProject, setSelectedShotId, flushDirtyShots],
   )
 
   const handleDelete = useCallback(async () => {
     if (!project || !selectedShotId) return
     setBusy(true)
     try {
+      await flushDirtyShots()
       const payload = await deleteShot(selectedShotId)
       setProject(payload)
       const nextIndex = Math.min(selectedIndex, payload.shots.length - 1)
       const nextId = payload.shots[nextIndex]?.shot_id ?? null
       setSelectedShotId(nextId)
+    } catch {
+      // Aborted (flush failure already surfaced) or structural op failed; leave state unchanged.
     } finally {
       setBusy(false)
     }
-  }, [project, selectedShotId, selectedIndex, setProject, setSelectedShotId])
+  }, [project, selectedShotId, selectedIndex, setProject, setSelectedShotId, flushDirtyShots])
 
   const handleMoveUp = useCallback(async () => {
     if (!project || !selectedShotId) return
     setBusy(true)
     try {
+      await flushDirtyShots()
       const payload = await moveShotUp(selectedShotId)
       setProject(payload)
       setSelectedShotId(selectedShotId)
+    } catch {
+      // Aborted (flush failure already surfaced) or structural op failed; leave state unchanged.
     } finally {
       setBusy(false)
     }
-  }, [project, selectedShotId, setProject, setSelectedShotId])
+  }, [project, selectedShotId, setProject, setSelectedShotId, flushDirtyShots])
 
   const handleMoveDown = useCallback(async () => {
     if (!project || !selectedShotId) return
     setBusy(true)
     try {
+      await flushDirtyShots()
       const payload = await moveShotDown(selectedShotId)
       setProject(payload)
       setSelectedShotId(selectedShotId)
+    } catch {
+      // Aborted (flush failure already surfaced) or structural op failed; leave state unchanged.
     } finally {
       setBusy(false)
     }
-  }, [project, selectedShotId, setProject, setSelectedShotId])
+  }, [project, selectedShotId, setProject, setSelectedShotId, flushDirtyShots])
 
   return (
     <div className="timeline">

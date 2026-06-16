@@ -1,10 +1,12 @@
 import { useCallback } from 'react'
+import { browseProjectJson } from '../api'
 import { useProject } from '../state/ProjectContext'
 import type { ProjectPathRequest } from '../types'
 import './Topbar.css'
 
 export function Topbar() {
-  const { project, newProject, openProject, saveProject, lastError, clearError } = useProject()
+  const { project, newProject, openProject, saveProject, flushDirtyShots, dirtyShotIds, lastError, clearError } =
+    useProject()
 
   const handleNew = useCallback(async () => {
     const body: ProjectPathRequest = {
@@ -12,22 +14,45 @@ export function Topbar() {
       canvas_width: 1920,
       canvas_height: 1080,
     }
-    await newProject(body)
+    try {
+      await newProject(body)
+    } catch {
+      // Flush/create failed — error already surfaced via lastError; keep current state.
+    }
   }, [newProject])
 
   const handleOpen = useCallback(async () => {
-    const projectJsonPath = window.prompt(
-      '请输入 project.json 的完整路径：\n例如 D:\\\\MyProject\\\\Storyboard_Project\\\\project.json',
-    )
-    if (!projectJsonPath) return
-    await openProject({ project_json_path: projectJsonPath })
-  }, [openProject])
+    // Flush unsaved edits before discarding the current project. Abort if it fails.
+    try {
+      await flushDirtyShots()
+    } catch {
+      return
+    }
+    let result
+    try {
+      result = await browseProjectJson()
+    } catch (error) {
+      window.alert(error instanceof Error ? error.message : String(error))
+      return
+    }
+    if (result.cancelled || !result.path) return
+    try {
+      await openProject({ project_json_path: result.path })
+    } catch {
+      // error already surfaced via lastError
+    }
+  }, [flushDirtyShots, openProject])
 
   const handleSave = useCallback(async () => {
-    await saveProject()
+    try {
+      await saveProject()
+    } catch {
+      // error already surfaced via lastError
+    }
   }, [saveProject])
 
-  const projectLabel = project ? `${project.name}${project.dirty ? ' *' : ''}` : 'No project open'
+  const hasUnsaved = !!project && (project.dirty || dirtyShotIds.length > 0)
+  const projectLabel = project ? `${project.name}${hasUnsaved ? ' *' : ''}` : 'No project open'
 
   return (
     <header className="topbar">
@@ -39,7 +64,7 @@ export function Topbar() {
           <button type="button" onClick={handleOpen}>
             Open
           </button>
-          <button type="button" onClick={handleSave} disabled={!project || !project.dirty}>
+          <button type="button" onClick={handleSave} disabled={!project || !hasUnsaved}>
             Save
           </button>
         </div>
@@ -61,4 +86,3 @@ export function Topbar() {
     </header>
   )
 }
-

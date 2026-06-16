@@ -1,14 +1,23 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
-import { getAnnotations, getBridgeStatus, openBlenderScene, saveAnnotations } from '../api'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import {
+  getAnnotations,
+  getBridgeStatus,
+  openBlenderScene,
+  saveAnnotations,
+  uploadShotReference,
+  uploadShotSource,
+} from '../api'
 import { useProject } from '../state/ProjectContext'
 import './AdvancedPanel.css'
 
 export function AdvancedPanel() {
-  const { project, selectedShotId, setProject } = useProject()
+  const { project, selectedShotId, setProject, flushDirtyShots } = useProject()
   const [annotationsJson, setAnnotationsJson] = useState('')
   const [bridgeJson, setBridgeJson] = useState('')
   const [scene3dJson, setScene3dJson] = useState('')
   const [busy, setBusy] = useState(false)
+  const sourceInputRef = useRef<HTMLInputElement | null>(null)
+  const referenceInputRef = useRef<HTMLInputElement | null>(null)
 
   const hasShot = Boolean(project && selectedShotId)
 
@@ -48,12 +57,12 @@ export function AdvancedPanel() {
     }
     setBusy(true)
     try {
-      const payload = await saveAnnotations(selectedShotId, { annotations: annotations as Record<string, unknown>[] })
-      setProject(payload)
+      const saved = await saveAnnotations(selectedShotId, { annotations: annotations as Record<string, unknown>[] })
+      setAnnotationsJson(JSON.stringify(saved, null, 2))
     } finally {
       setBusy(false)
     }
-  }, [selectedShotId, annotationsJson, setProject])
+  }, [selectedShotId, annotationsJson])
 
   const refreshBridge = useCallback(async () => {
     setBusy(true)
@@ -75,6 +84,40 @@ export function AdvancedPanel() {
     }
   }, [])
 
+  const uploadSource = useCallback(
+    async (file?: File) => {
+      if (!selectedShotId || !file) return
+      setBusy(true)
+      try {
+        await flushDirtyShots()
+        const payload = await uploadShotSource(selectedShotId, file)
+        setProject(payload)
+      } catch (error) {
+        window.alert(error instanceof Error ? error.message : String(error))
+      } finally {
+        setBusy(false)
+      }
+    },
+    [selectedShotId, setProject, flushDirtyShots],
+  )
+
+  const uploadReference = useCallback(
+    async (file?: File) => {
+      if (!selectedShotId || !file) return
+      setBusy(true)
+      try {
+        await flushDirtyShots()
+        const payload = await uploadShotReference(selectedShotId, file)
+        setProject(payload)
+      } catch (error) {
+        window.alert(error instanceof Error ? error.message : String(error))
+      } finally {
+        setBusy(false)
+      }
+    },
+    [selectedShotId, setProject, flushDirtyShots],
+  )
+
   return (
     <section className="advanced">
       <div className="advanced-header">
@@ -82,6 +125,39 @@ export function AdvancedPanel() {
       </div>
 
       <div className="advanced-body">
+        <div className="advanced-section">
+          <div className="advanced-section-title">Shot files</div>
+          <div className="advanced-actions">
+            <button type="button" onClick={() => sourceInputRef.current?.click()} disabled={!hasShot || busy}>
+              Upload source (PSD)
+            </button>
+            <button type="button" onClick={() => referenceInputRef.current?.click()} disabled={!hasShot || busy}>
+              Add reference image
+            </button>
+          </div>
+          <input
+            ref={sourceInputRef}
+            type="file"
+            style={{ display: 'none' }}
+            onChange={(e) => {
+              const file = e.target.files?.[0]
+              void uploadSource(file ?? undefined)
+              e.target.value = ''
+            }}
+          />
+          <input
+            ref={referenceInputRef}
+            type="file"
+            accept="image/*"
+            style={{ display: 'none' }}
+            onChange={(e) => {
+              const file = e.target.files?.[0]
+              void uploadReference(file ?? undefined)
+              e.target.value = ''
+            }}
+          />
+        </div>
+
         <div className="advanced-section">
           <div className="advanced-section-title">Annotations (basic JSON)</div>
           <div className="advanced-actions">
