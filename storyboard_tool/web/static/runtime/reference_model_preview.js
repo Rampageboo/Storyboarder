@@ -126,12 +126,37 @@ function applyClipPlanesFromBounds(camera, object) {
   return box.getCenter(new THREE.Vector3());
 }
 
-// Apply a supplied view to the preview camera. Returns true if a usable view was applied; false
-// means the caller should fall back to generic frameObject() framing (never black-screens).
+function copySceneCameraToPreviewCamera(sourceCamera, previewCamera) {
+  sourceCamera.updateWorldMatrix(true, false);
+  const pos = new THREE.Vector3();
+  const quat = new THREE.Quaternion();
+  const scl = new THREE.Vector3();
+  sourceCamera.matrixWorld.decompose(pos, quat, scl);
+  previewCamera.position.copy(pos);
+  previewCamera.quaternion.copy(quat);
+  if (sourceCamera.isPerspectiveCamera && Number.isFinite(sourceCamera.fov)) {
+    previewCamera.fov = sourceCamera.fov;
+  }
+  previewCamera.updateProjectionMatrix();
+}
+
+// Apply a supplied view to the preview camera. Returns a diagnostic label if a usable view was
+// applied, or an empty string when the caller should fall back to generic framing.
 function applySuppliedView(state, view) {
-  if (!view || !state.root) return false;
+  if (!view || !state.root) return "";
   const camera = state.camera;
   const center = applyClipPlanesFromBounds(camera, state.root);
+
+  const mode = typeof view.mode === "string" ? view.mode : "";
+  const name = typeof view.camera_name === "string" ? view.camera_name.trim() : "";
+  if (mode === "scene_camera" && name) {
+    const cam = findNamedCamera(state.root, name);
+    if (cam) {
+      copySceneCameraToPreviewCamera(cam, camera);
+      applyClipPlanesFromBounds(camera, state.root);
+      return `scene-camera:${name}`;
+    }
+  }
 
   const position = parseTriple(view.position);
   if (position) {
@@ -152,50 +177,44 @@ function applySuppliedView(state, view) {
     } else {
       camera.lookAt(center);
     }
-    return true;
+    return mode === "scene_camera" && name ? `saved-camera-transform:${name}` : "free-view-transform";
   }
 
-  // No numeric position — try resolving a scene camera by name inside the GLB.
-  const name = typeof view.camera_name === "string" ? view.camera_name : "";
-  const cam = findNamedCamera(state.root, name);
-  if (cam) {
-    cam.updateWorldMatrix(true, false);
-    const pos = new THREE.Vector3();
-    const quat = new THREE.Quaternion();
-    const scl = new THREE.Vector3();
-    cam.matrixWorld.decompose(pos, quat, scl);
-    camera.position.copy(pos);
-    camera.quaternion.copy(quat);
-    if (cam.isPerspectiveCamera && Number.isFinite(cam.fov)) {
-      camera.fov = cam.fov;
-      camera.updateProjectionMatrix();
+  if (name) {
+    const cam = findNamedCamera(state.root, name);
+    if (cam) {
+      copySceneCameraToPreviewCamera(cam, camera);
+      applyClipPlanesFromBounds(camera, state.root);
+      return `named-camera:${name}`;
     }
-    return true;
   }
 
-  return false;
+  return "";
 }
 
 // Frame the model with the supplied view if present/usable, else the default orbit framing.
 // Records whether a view drove the camera (state.hasView) so the render loop can skip the
 // idle auto-rotate when reproducing a specific camera.
 function applyViewOrFrame(state) {
-  let applied = false;
+  let path = "";
   const view = parseView(state.canvas);
   if (view) {
     try {
-      applied = applySuppliedView(state, view);
+      path = applySuppliedView(state, view);
     } catch (error) {
       console.warn("Reference 3D preview view apply failed:", error);
-      applied = false;
+      path = "";
     }
   }
-  if (!applied) {
+  if (!path) {
+    state.root.rotation.set(0, 0, 0);
     const center = frameObject(state.camera, state.root);
     if (center) state.center.copy(center);
+    path = "generic-frame";
   }
-  state.hasView = applied;
+  state.hasView = path !== "generic-frame";
   state.viewKey = state.canvas.dataset.refModelView || "";
+  state.viewPath = path;
 }
 
 function safeRender(state) {
@@ -207,6 +226,37 @@ function safeRender(state) {
     markCanvasFailed(state.canvas, state.url);
     disposePreview(state.canvas);
   }
+}
+
+function isProbablyBlankFrame(canvas) {
+  const width = canvas.width || 0;
+  const height = canvas.height || 0;
+  if (width <= 1 || height <= 1) return true;
+  const sample = document.createElement("canvas");
+  sample.width = 32;
+  sample.height = 32;
+  const ctx = sample.getContext("2d", { willReadFrequently: true });
+  if (!ctx) return false;
+  ctx.drawImage(canvas, 0, 0, sample.width, sample.height);
+  const pixels = ctx.getImageData(0, 0, sample.width, sample.height).data;
+  let min = 255;
+  let max = 0;
+  let transparent = 0;
+  let brightness = 0;
+  const count = sample.width * sample.height;
+  for (let i = 0; i < pixels.length; i += 4) {
+    const r = pixels[i];
+    const g = pixels[i + 1];
+    const b = pixels[i + 2];
+    const a = pixels[i + 3];
+    if (a < 8) transparent += 1;
+    min = Math.min(min, r, g, b);
+    max = Math.max(max, r, g, b);
+    brightness += (r + g + b) / 3;
+  }
+  const avg = brightness / count;
+  if (transparent / count > 0.8) return true;
+  return max - min < 3 && (avg < 8 || avg > 247);
 }
 
 async function mountPreview(canvas) {
@@ -227,6 +277,7 @@ async function mountPreview(canvas) {
       canvas,
       antialias: true,
       alpha: true,
+      preserveDrawingBuffer: true,
       powerPreference: "low-power",
     });
   } catch (error) {
@@ -253,9 +304,12 @@ async function mountPreview(canvas) {
     scene,
     camera,
     root: null,
+    mixer: null,
+    actions: [],
     center: new THREE.Vector3(),
     hasView: false,
     viewKey: "",
+    viewPath: "",
     rafId: 0,
     visible: false,
     observer: null,
@@ -327,6 +381,15 @@ async function mountPreview(canvas) {
       return;
     }
     state.root = gltf.scene;
+    if (Array.isArray(gltf.animations) && gltf.animations.length > 0) {
+      state.mixer = new THREE.AnimationMixer(state.root);
+      state.actions = gltf.animations.map((clip) => {
+        const action = state.mixer.clipAction(clip);
+        action.play();
+        return action;
+      });
+      state.mixer.setTime(0);
+    }
     scene.add(state.root);
     applyViewOrFrame(state);
     canvas.dataset.refModelStatus = "ready";
@@ -338,6 +401,98 @@ async function mountPreview(canvas) {
     console.warn("Reference 3D preview failed:", error);
     markCanvasFailed(canvas, url);
     disposePreview(canvas);
+  }
+}
+
+function canvasFromRoot(root = document) {
+  if (root instanceof HTMLCanvasElement && root.matches("[data-ref-model-preview]")) return root;
+  return root.querySelector?.("[data-ref-model-preview]") || null;
+}
+
+async function waitForReady(canvas, timeoutMs = 10000) {
+  if (!previewState.has(canvas)) mountPreview(canvas);
+  const start = performance.now();
+  while (performance.now() - start < timeoutMs) {
+    const state = previewState.get(canvas);
+    if (state?.root && !state.disposed && canvas.dataset.refModelStatus === "ready") return state;
+    if (canvas.dataset.refModelStatus === "failed") throw new Error("3D preview failed to load.");
+    await new Promise((resolve) => requestAnimationFrame(resolve));
+  }
+  throw new Error("Timed out waiting for 3D preview to load.");
+}
+
+export async function captureReferenceModelFrame(root = document, options = {}) {
+  const canvas = canvasFromRoot(root);
+  if (!canvas) throw new Error("3D preview canvas not found.");
+  const state = await waitForReady(canvas);
+  if (!state.root || state.disposed) throw new Error("3D preview is not ready.");
+
+  const wasAnimating = state.rafId;
+  if (wasAnimating) {
+    cancelAnimationFrame(state.rafId);
+    state.rafId = 0;
+  }
+
+  const previousPixelRatio = state.renderer.getPixelRatio();
+  const previousSize = state.renderer.getSize(new THREE.Vector2());
+  const previousAspect = state.camera.aspect;
+  const previousRootRotation = state.root.rotation.clone();
+  const previousViewKey = state.viewKey;
+  const previousHasView = state.hasView;
+  const previousViewPath = state.viewPath;
+
+  const width = Math.max(1, Math.floor(Number(options.width) || canvas.width || canvas.clientWidth || 1920));
+  const height = Math.max(1, Math.floor(Number(options.height) || canvas.height || canvas.clientHeight || 1080));
+  const time = Math.max(0, Number(options.time) || 0);
+  const view = options.view && typeof options.view === "object" ? options.view : parseView(canvas);
+
+  try {
+    state.renderer.setPixelRatio(1);
+    state.renderer.setSize(width, height, false);
+    state.camera.aspect = width / height;
+    state.camera.updateProjectionMatrix();
+
+    if (state.mixer) state.mixer.setTime(time);
+
+    let path = "";
+    if (view) {
+      path = applySuppliedView(state, view);
+    }
+    if (!path) {
+      state.root.rotation.set(0, 0, 0);
+      const center = frameObject(state.camera, state.root);
+      if (center) state.center.copy(center);
+      path = "generic-frame";
+    }
+    state.hasView = path !== "generic-frame";
+
+    safeRender(state);
+    if (isProbablyBlankFrame(canvas)) {
+      throw new Error("3D capture produced a blank frame; refusing to overwrite boards.");
+    }
+    const dataUrl = canvas.toDataURL("image/png");
+    console.debug?.("[ref3d] capture", { path, time, width, height, camera: view?.camera_name || "" });
+    return dataUrl;
+  } finally {
+    state.renderer.setPixelRatio(previousPixelRatio);
+    state.renderer.setSize(previousSize.x, previousSize.y, false);
+    state.camera.aspect = previousAspect;
+    state.camera.updateProjectionMatrix();
+    state.root.rotation.copy(previousRootRotation);
+    state.viewKey = previousViewKey;
+    state.hasView = previousHasView;
+    state.viewPath = previousViewPath;
+    applyViewOrFrame(state);
+    safeRender(state);
+    if (wasAnimating && state.visible && !state.disposed) {
+      const tick = (tickTime) => {
+        if (!previewState.has(canvas) || state.disposed) return;
+        if (state.root && !state.hasView) state.root.rotation.y = tickTime * 0.00035;
+        safeRender(state);
+        state.rafId = requestAnimationFrame(tick);
+      };
+      state.rafId = requestAnimationFrame(tick);
+    }
   }
 }
 
@@ -363,5 +518,6 @@ export function applyReferenceModelView(root = document) {
 window.disposeReferenceModelPreviews = disposeReferenceModelPreviews;
 window.hydrateReferenceModelPreviews = hydrateReferenceModelPreviews;
 window.applyReferenceModelView = applyReferenceModelView;
+window.captureReferenceModelFrame = captureReferenceModelFrame;
 window.dispatchEvent(new Event("reference-model-preview-ready"));
 document.querySelectorAll(".reference-media-panel").forEach((panel) => hydrateReferenceModelPreviews(panel));
