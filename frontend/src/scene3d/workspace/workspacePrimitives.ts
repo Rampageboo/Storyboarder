@@ -73,6 +73,30 @@ export function defaultBuiltinSceneData(): WorkspaceSceneData {
   }
 }
 
+export function defaultAddObjectSpec(
+  type: WorkspacePrimitiveType,
+  objectCount: number,
+  colorHex: string,
+): WorkspaceObjectSpec {
+  const labels: Record<WorkspacePrimitiveType, string> = {
+    cube: 'Cube',
+    sphere: 'Sphere',
+    plane: 'Plane',
+    cylinder: 'Cylinder',
+    cone: 'Cone',
+  }
+  const name = `${labels[type] || 'Object'} ${objectCount + 1}`
+  return {
+    id: makeWorkspaceObjectId(),
+    name,
+    type,
+    position: [0, type === 'plane' ? 0 : 0.5, 0],
+    rotation: type === 'plane' ? [-Math.PI / 2, 0, 0] : [0, 0, 0],
+    scale: type === 'plane' ? [4, 4, 1] : [1, 1, 1],
+    color: colorHex,
+  }
+}
+
 export function createPrimitiveMesh(THREE: ThreeModule, spec: WorkspaceObjectSpec): ThreeObject {
   const material = new THREE.MeshStandardMaterial({
     color: colorFrom(THREE, spec.color),

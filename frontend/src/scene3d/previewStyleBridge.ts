@@ -54,3 +54,55 @@ export function loadPreviewStyle(): Promise<PreviewStyleModule> {
   }
   return previewStylePromise
 }
+
+export function createWireframeResources(previewStyle: PreviewStyleModule): WireframeOverlayResources {
+  return previewStyle.createWireframeResources()
+}
+
+export function applyObjectColorPreview(
+  previewStyle: PreviewStyleModule,
+  THREE: ThreeModule,
+  root: unknown,
+  rootRef: unknown,
+  previewMaterials: unknown[] | Set<unknown>,
+  enabled: boolean,
+): void {
+  previewStyle.applyObjectColorPreview(THREE, root, rootRef, previewMaterials, enabled)
+}
+
+export function applyWireframeModeToRoots(
+  previewStyle: PreviewStyleModule,
+  THREE: ThreeModule,
+  roots: unknown[] | unknown,
+  mode: Scene3dWireframeMode,
+  resources: WireframeOverlayResources,
+): void {
+  previewStyle.applyWireframeModeToRoots(THREE, roots, mode, resources)
+}
+
+export function clearWireframeOverlays(
+  previewStyle: PreviewStyleModule,
+  roots: unknown[] | unknown,
+  resources: WireframeOverlayResources,
+): void {
+  previewStyle.clearWireframeOverlays(roots, resources)
+}
+
+export function normalizeWireframeMode(previewStyle: PreviewStyleModule, mode: unknown): Scene3dWireframeMode {
+  return previewStyle.normalizeWireframeMode(mode)
+}
+
+export function generateObjectColor(previewStyle: PreviewStyleModule, THREE: ThreeModule, seed: string): unknown {
+  return previewStyle.generateObjectColor(THREE, seed)
+}
+
+export function objectColorKey(previewStyle: PreviewStyleModule, mesh: unknown, root: unknown): string {
+  return previewStyle.objectColorKey(mesh, root)
+}
+
+export function disposePreviewMaterials(
+  previewStyle: PreviewStyleModule,
+  previewMaterials: unknown[] | Set<unknown>,
+): void {
+  previewStyle.disposePreviewMaterials(previewMaterials)
+}

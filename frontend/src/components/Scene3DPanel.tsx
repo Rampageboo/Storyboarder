@@ -3,33 +3,14 @@ import { importScene3d, openBlenderScene, updateSettings, updateShot, uploadShot
 import { useProject } from '../state/ProjectContext'
 import type { ProjectPayload, Shot, ShotUpdate } from '../types'
 import { shotDisplayLabel } from '../utils/shotDisplay'
-import type { Scene3dReferenceView } from '../utils/scene3dView'
+import {
+  loadScene3DEditorClass,
+  type Scene3DEditorInstance,
+} from '../scene3d/workspace/loadScene3DEditor'
 import './Scene3DPanel.css'
 import './Scene3DPanel.tune.css'
 
 type Scene3DSettings = Record<string, unknown>
-
-type Scene3DEditorInstance = {
-  loadSceneData: (settings: Scene3DSettings | null) => Promise<void>
-  applyDisplaySettings?: (settings: Scene3DSettings | null) => void
-  setBlendFilePath?: (path?: unknown) => void
-  setAnimationTime?: (time: number) => void
-  refreshBoardPreview?: () => void
-  reloadBlenderScene?: () => Promise<void>
-  captureFrameDataUrl?: () => string
-  getAnimationState?: () => { time?: number; camera_name?: string }
-  getViewState?: () => Scene3dReferenceView | null
-  exportSceneData?: () => Scene3DSettings
-  pauseAnimation?: () => void
-  setFollowCamera?: (enabled: boolean, options?: Record<string, unknown>) => void
-  setActiveCamera?: (cameraId: string, showMessage?: boolean) => void
-  _resize?: () => void
-}
-
-type Scene3DEditorConstructor = new (
-  rootEl: HTMLElement,
-  callbacks: Record<string, unknown>,
-) => Scene3DEditorInstance
 
 type CameraState = {
   position?: unknown
@@ -108,14 +89,6 @@ function getShotCamera(shot: Shot | null): Record<string, unknown> | null {
 async function dataUrlToFile(dataUrl: string, name: string): Promise<File> {
   const blob = await (await fetch(dataUrl)).blob()
   return new File([blob], name, { type: blob.type || 'image/png' })
-}
-
-async function loadScene3DEditorClass(): Promise<Scene3DEditorConstructor> {
-  const module = (await import(/* @vite-ignore */ `/static/runtime/scene3d.js?v=${Date.now()}`)) as {
-    Scene3DEditor?: Scene3DEditorConstructor
-  }
-  if (!module.Scene3DEditor) throw new Error('Scene3DEditor export not found in /static/runtime/scene3d.js')
-  return module.Scene3DEditor
 }
 
 export function Scene3DPanel() {

@@ -11,11 +11,13 @@ import {
   applyWireframeModeToRoots,
   clearWireframeOverlays,
   createWireframeResources,
+  disposePreviewMaterials,
 } from "./scene3d_preview_style.js";
 import {
   makeId,
   vec3From,
   defaultSceneData,
+  defaultAddObjectSpec,
   createMeshFromSpec,
   PRIMITIVE_TYPES,
   captureRendererPng,
@@ -32,6 +34,37 @@ import {
   loadShotCameraIntoEditor,
   applyFollowCameraToEditor,
   initWorkspaceEditorThree,
+  countImportedLights,
+  calibrateImportedLights,
+  isNodeInSceneGraph,
+  collectImportedCameras,
+  diagnoseMissingCameras,
+  scoreCameraForAnimation,
+  pickBestCameraId,
+  frameImportedScene,
+  cameraMovesOverTime,
+  resolveViewNode,
+  setImportedLightsVisible,
+  prepareImportedMaterials,
+  normalizeProgramLightingMode,
+  shouldUseProgramIbl,
+  shouldUseProgramFill,
+  shouldUseProgramWeakFill,
+  getEnvMapIntensity,
+  programLightingReason,
+  programLightingModeLabel,
+  buildLightStatusText,
+  applyWorkspaceProgramLighting,
+  createBlenderEnvMap,
+  trackNodeName,
+  collectAnimatedNodeNames,
+  computeClipDuration,
+  selectAnimationClips,
+  clampAnimationTime,
+  syncMixerActionsTime,
+  buildTimelineUiState,
+  buildAnimationHint,
+  advancePlaybackTime,
 } from "./scene3d_workspace.js";
 
 function formatTime(seconds) {
@@ -557,243 +590,116 @@ export class Scene3DEditor {
     }
   }
 
+  _programLightingContext() {
+    return {
+      mode: this.programLightingMode,
+      workspaceMode: this.mode,
+      importedLightCount: this.importedLightCount,
+      objectColorPreview: this.objectColorPreview,
+    };
+  }
+
+  _cameraMotionProbe() {
+    return {
+      animationDuration: this.animationDuration,
+      animationTime: this.animationTime,
+      probeA: this._probePosA,
+      probeB: this._probePosB,
+      setMixerTime: (time) => this._syncMixerTime(time),
+    };
+  }
+
   _trackNodeName(trackName) {
-    const dot = String(trackName || "").lastIndexOf(".");
-    return dot > 0 ? trackName.slice(0, dot) : trackName;
+    return trackNodeName(trackName);
   }
 
   _collectAnimatedNodeNames(animations) {
-    const names = new Set();
-    for (const clip of animations || []) {
-      for (const track of clip.tracks || []) {
-        const nodeName = this._trackNodeName(track.name);
-        if (nodeName) names.add(nodeName);
-      }
-    }
-    return names;
+    return collectAnimatedNodeNames(animations);
   }
 
   _isNodeInSceneGraph(root, node) {
-    let current = node;
-    while (current) {
-      if (current === root) return true;
-      current = current.parent;
-    }
-    return false;
+    return isNodeInSceneGraph(root, node);
   }
 
   _collectImportedCameras(gltf) {
-    const cameras = [];
-    const seen = new Set();
-    const root = gltf.scene;
-
-    const addCamera = (node, meta = {}) => {
-      if (!node?.isCamera || seen.has(node.uuid)) return;
-      seen.add(node.uuid);
-      const name = String(node.name || node.userData?.name || "").trim() || `Camera ${cameras.length + 1}`;
-      cameras.push({
-        id: node.uuid,
-        name,
-        object3d: node,
-        ...meta,
-      });
-    };
-
-    const sceneRoots = gltf.scenes?.length ? gltf.scenes : [root];
-    for (const sceneRoot of sceneRoots) {
-      sceneRoot?.traverse((node) => addCamera(node, { source: "scene" }));
-    }
-
-    if (gltf.parser?.associations) {
-      for (const [object3d] of gltf.parser.associations.entries()) {
-        addCamera(object3d, { source: "parser" });
-      }
-    }
-
-    for (const cam of gltf.cameras || []) {
-      addCamera(cam, { source: "gltf.cameras" });
-    }
-
-    for (const item of cameras) {
-      if (!this._isNodeInSceneGraph(root, item.object3d)) {
-        root.add(item.object3d);
-        item.orphan = true;
-      }
-    }
-
-    return cameras.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
+    return collectImportedCameras(gltf);
   }
 
   _diagnoseMissingCameras(gltf) {
-    const json = gltf.parser?.json || {};
-    const nodeCameraCount = (json.nodes || []).filter((node) => node.camera !== undefined).length;
-    const gltfCameraCount = gltf.cameras?.length || 0;
-    if (gltfCameraCount > 0 || nodeCameraCount > 0) {
-      return (
-        `GLB 元数据含 ${Math.max(gltfCameraCount, nodeCameraCount)} 个相机，但未能正确挂到场景。` +
-        " 请检查 Blender：相机不要隐藏（眼睛图标），Limit to 不要勾选 Visible/Active Collection，或把相机放进导出集合。"
-      );
-    }
-    return (
-      "GLB 内完全没有相机数据（不是勾选 Cameras 就行）。" +
-      " 请确认场景里有 Camera 对象、导出时 Limit to 留空、相机可见，并重新导出。"
-    );
+    return diagnoseMissingCameras(gltf);
   }
 
   _scoreCameraForAnimation(item) {
-    let score = 0;
-    let node = item.object3d;
-    while (node) {
-      if (node.name && this.animatedNodeNames.has(node.name)) score += 10;
-      node = node.parent;
-    }
-    return score;
+    return scoreCameraForAnimation(item, this.animatedNodeNames);
   }
 
   _pickBestCameraId(preferredName) {
-    if (!this.importedCameras.length) return "";
-    if (preferredName) {
-      const match = this.importedCameras.find((item) => item.name === preferredName);
-      if (match) return match.id;
-    }
-    let best = this.importedCameras[0];
-    let bestScore = this._scoreCameraForAnimation(best);
-    for (const item of this.importedCameras.slice(1)) {
-      const score = this._scoreCameraForAnimation(item);
-      if (score > bestScore) {
-        best = item;
-        bestScore = score;
-      }
-    }
-    return best.id;
+    return pickBestCameraId(this.importedCameras, this.animatedNodeNames, preferredName);
   }
 
   _computeClipDuration(clips) {
-    let duration = 0;
-    for (const clip of clips || []) {
-      duration = Math.max(duration, Number(clip.duration) || 0);
-      for (const track of clip.tracks || []) {
-        const times = track.times;
-        if (times?.length) duration = Math.max(duration, times[times.length - 1]);
-      }
-    }
-    return duration;
+    return computeClipDuration(clips);
   }
 
   _selectAnimationClips(animations) {
-    return animations || [];
+    return selectAnimationClips(animations);
   }
 
   _cameraMovesOverTime(object3d) {
     if (!this.mixer || !object3d || this.animationDuration <= 0) return false;
-    const saved = this.animationTime;
-    this._syncMixerTime(0);
-    object3d.getWorldPosition(this._probePosA);
-    const probeTime = Math.min(Math.max(this.animationDuration * 0.25, 0.1), this.animationDuration);
-    this._syncMixerTime(probeTime);
-    object3d.getWorldPosition(this._probePosB);
-    this._syncMixerTime(saved);
-    return this._probePosA.distanceToSquared(this._probePosB) > 1e-10;
+    return cameraMovesOverTime(object3d, this._cameraMotionProbe());
   }
 
   _resolveViewNode(item) {
-    if (this._cameraMovesOverTime(item.object3d)) return item.object3d;
-    let node = item.object3d.parent;
-    while (node && node !== this.blenderRoot) {
-      if (node.name && this.animatedNodeNames.has(node.name) && this._cameraMovesOverTime(node)) {
-        return item.object3d;
-      }
-      node = node.parent;
-    }
-    return item.object3d;
+    return resolveViewNode(item, this.blenderRoot, this.animatedNodeNames, this._cameraMotionProbe());
   }
 
   _updateAnimationHint() {
     if (!this.hintEl) return;
-    const duration = this.animationDuration || 0;
     const active = this.importedCameras.find((item) => item.id === this.activeCameraId);
     const moves = active?.object3d ? this._cameraMovesOverTime(active.object3d) : false;
-    if (!duration) {
-      this.hintEl.textContent =
-        "未检测到 GLB 动画。Blender 导出请勾选 Animation，Animation mode 建议选 Scene，并勾选 Bake All Objects Animations。";
-      return;
-    }
-    if (!active) {
-      this.hintEl.textContent = `动画 ${formatTime(duration)} · 请在左侧选择相机`;
-      return;
-    }
-    if (!moves) {
-      this.hintEl.textContent =
-        `动画 ${formatTime(duration)} · 当前相机「${active.name}」未随时间变化。请换其他相机，或在 Blender 给该相机（或其父级）打关键帧后重新导出。`;
-      return;
-    }
-    this.hintEl.textContent =
-      "拖动时间条或点 ▶ 播放 · 跟随相机视角 · 「印到当前分镜」保存当前画面";
+    this.hintEl.textContent = buildAnimationHint({
+      animationDuration: this.animationDuration,
+      activeCameraName: active?.name || "",
+      cameraMoves: moves,
+      formatTime,
+    });
   }
 
   _countImportedLights(root) {
-    let count = 0;
-    root?.traverse((node) => {
-      if (node.isLight) count += 1;
-    });
-    return count;
+    return countImportedLights(root);
   }
 
   _shouldUseProgramIbl() {
-    if (this.mode !== "blender") return false;
-    if (this.programLightingMode === "off") return false;
-    return true;
+    return shouldUseProgramIbl(this._programLightingContext());
   }
 
   _shouldUseProgramFill() {
-    if (this.mode !== "blender") return false;
-    if (this.programLightingMode === "off") return false;
-    if (this.programLightingMode === "on") return this.importedLightCount === 0;
-    return this.importedLightCount === 0;
+    return shouldUseProgramFill(this._programLightingContext());
   }
 
   _shouldUseProgramWeakFill() {
-    if (this.mode !== "blender") return false;
-    if (this.programLightingMode === "off") return false;
-    if (this.objectColorPreview) return false;
-    if (this.programLightingMode === "on") return this.importedLightCount > 0;
-    return this.importedLightCount > 0;
+    return shouldUseProgramWeakFill(this._programLightingContext());
   }
 
   _getEnvMapIntensity() {
-    if (!this._shouldUseProgramIbl()) return 0;
-    if (this.importedLightCount > 0) return 0.35;
-    return 1.0;
+    return getEnvMapIntensity(this._programLightingContext());
   }
 
   _calibrateImportedLights(root) {
-    root?.traverse((node) => {
-      if (!node.isLight || typeof node.intensity !== "number") return;
-      if (node.isDirectionalLight) {
-        node.intensity = Math.min(node.intensity * Math.PI * 0.35, 4);
-      } else if (node.isPointLight || node.isSpotLight) {
-        if (node.intensity > 0 && node.intensity < 800) {
-          node.intensity = Math.min(node.intensity * 1.5, 600);
-        }
-      }
-    });
+    calibrateImportedLights(root);
   }
 
   _setImportedLightsVisible(visible) {
-    this.blenderRoot?.traverse((node) => {
-      if (node.isLight) node.visible = visible;
-    });
+    setImportedLightsVisible(this.blenderRoot, visible);
   }
 
   _programLightingReason() {
-    if (this.programLightingMode === "on") return "手动：环境 + 柔光";
-    if (this.programLightingMode === "off") return "手动：仅 GLB 灯光";
-    if (this.importedLightCount > 0) return `自动：GLB ${this.importedLightCount} 盏灯 + 弱环境反射`;
-    return "自动：GLB 无灯，全程序补光";
+    return programLightingReason(this._programLightingContext());
   }
 
   setProgramLightingMode(mode, { persist = true, notify = true } = {}) {
-    const next = mode === "on" || mode === "off" ? mode : "auto";
+    const next = normalizeProgramLightingMode(mode);
     this.programLightingMode = next;
     if (this.programLightingEl) this.programLightingEl.value = next;
     if (persist) {
@@ -814,47 +720,25 @@ export class Scene3DEditor {
       this.lightStatusEl.textContent = "—";
       return;
     }
-    const exported =
-      this.importedLightCount > 0
-        ? `GLB 已导出 ${this.importedLightCount} 盏灯`
-        : "GLB 未导出灯光（导出时请勾选 Punctual Lights）";
-    const ibl = this._shouldUseProgramIbl() && !this.objectColorPreview ? "环境反射：开" : "环境反射：关";
-    const fill = this._shouldUseProgramFill()
-      ? "柔光补光：开"
-      : this._shouldUseProgramWeakFill()
-        ? "柔光补光：弱"
-        : "柔光补光：关";
-    const colors = this.objectColorPreview ? "对象色：开（不受灯光影响）" : "对象色：关";
-    this.lightStatusEl.textContent = `${exported} · ${this._programLightingModeLabel()} · ${ibl} · ${fill} · ${colors}`;
+    this.lightStatusEl.textContent = buildLightStatusText(this._programLightingContext());
   }
 
   _ensureBlenderEnvMap() {
     if (this.blenderEnvMap) return this.blenderEnvMap;
-    const room = new RoomEnvironment();
-    this.blenderEnvMap = this.pmremGenerator.fromScene(room, 0.04).texture;
-    room.dispose();
+    this.blenderEnvMap = createBlenderEnvMap(RoomEnvironment, this.pmremGenerator);
     return this.blenderEnvMap;
   }
 
   _applyProgramLighting() {
-    if (this.mode !== "blender") return;
-    const useIbl = this._shouldUseProgramIbl() && !this.objectColorPreview;
-    const useFill = this._shouldUseProgramFill();
-    const useWeakFill = this._shouldUseProgramWeakFill();
-    if (useIbl) {
-      this.scene.environment = this._ensureBlenderEnvMap();
-      this.scene.background = new THREE.Color(0x303030);
-    } else if (this.objectColorPreview) {
-      this.scene.environment = null;
-      this.scene.background = new THREE.Color(0x3a3a3a);
-    } else {
-      this.scene.environment = null;
-      this.scene.background = this.builtinBackground.clone();
-    }
-    this.programAmbient.intensity = useFill ? 0.1 : 0.22;
-    this.programAmbient.visible = useFill || useWeakFill;
-    this.programHemisphere.visible = useFill;
-    this._setImportedLightsVisible(!this.objectColorPreview);
+    applyWorkspaceProgramLighting(THREE, this._programLightingContext(), {
+      scene: this.scene,
+      programAmbient: this.programAmbient,
+      programHemisphere: this.programHemisphere,
+      builtinBackground: this.builtinBackground,
+      blenderEnvMap: this.blenderEnvMap,
+      ensureBlenderEnvMap: () => this._ensureBlenderEnvMap(),
+      setImportedLightsVisible: (visible) => this._setImportedLightsVisible(visible),
+    });
     this._updateLightStatusUi();
   }
 
@@ -889,10 +773,7 @@ export class Scene3DEditor {
   }
 
   _disposePreviewMaterials() {
-    for (const material of this.previewMaterials) {
-      material.dispose();
-    }
-    this.previewMaterials.clear();
+    disposePreviewMaterials(this.previewMaterials);
   }
 
   setObjectColorPreview(enabled, { persist = true, notify = false } = {}) {
@@ -927,16 +808,7 @@ export class Scene3DEditor {
 
   _prepareImportedMaterials(root) {
     if (this.objectColorPreview) return;
-    const envIntensity = this._getEnvMapIntensity();
-    root?.traverse((node) => {
-      if (!node.isMesh) return;
-      const materials = Array.isArray(node.material) ? node.material : [node.material];
-      for (const mat of materials) {
-        if (!mat?.isMeshStandardMaterial) continue;
-        mat.envMapIntensity = envIntensity;
-        mat.needsUpdate = true;
-      }
-    });
+    prepareImportedMaterials(root, this._getEnvMapIntensity());
   }
 
   async _loadBlenderUrl(url, label) {
@@ -1010,29 +882,12 @@ export class Scene3DEditor {
   }
 
   _programLightingModeLabel() {
-    switch (this.programLightingMode) {
-      case "on":
-        return "始终开启";
-      case "off":
-        return "关闭";
-      default:
-        return "自动";
-    }
+    return programLightingModeLabel(this.programLightingMode);
   }
 
   _frameImportedScene() {
     if (!this.blenderRoot) return;
-    const box = new THREE.Box3().setFromObject(this.blenderRoot);
-    if (box.isEmpty()) return;
-    const size = box.getSize(new THREE.Vector3());
-    const center = box.getCenter(new THREE.Vector3());
-    const radius = Math.max(size.x, size.y, size.z) * 0.6 || 4;
-    this.orbit.target.copy(center);
-    this.camera.position.copy(center.clone().add(new THREE.Vector3(radius, radius * 0.7, radius)));
-    this.camera.near = Math.max(0.01, radius / 100);
-    this.camera.far = Math.max(100, radius * 40);
-    this.camera.updateProjectionMatrix();
-    this.orbit.update();
+    frameImportedScene(THREE, this.blenderRoot, this.camera, this.orbit);
   }
 
   _populateCameraSelect() {
@@ -1178,27 +1033,17 @@ export class Scene3DEditor {
   }
 
   _addMeshFromSpec(spec) {
-    const mesh = createMeshFromSpec(spec);
+    const mesh = createMeshFromSpec(THREE, spec);
     this.objects.set(spec.id, mesh);
     this.scene.add(mesh);
     return mesh;
   }
 
   addObject(type) {
-    const labels = { cube: "Cube", sphere: "Sphere", plane: "Plane", cylinder: "Cylinder", cone: "Cone" };
-    const id = makeId();
-    const name = `${labels[type] || "Object"} ${this.objects.size + 1}`;
-    const spec = {
-      id,
-      name,
-      type,
-      position: [0, type === "plane" ? 0 : 0.5, 0],
-      rotation: type === "plane" ? [-Math.PI / 2, 0, 0] : [0, 0, 0],
-      scale: type === "plane" ? [4, 4, 1] : [1, 1, 1],
-      color: `#${this._generateBlenderObjectColor(name).getHexString()}`,
-    };
+    const spec = defaultAddObjectSpec(type, this.objects.size, "");
+    spec.color = `#${this._generateBlenderObjectColor(spec.name).getHexString()}`;
     this._addMeshFromSpec(spec);
-    this.selectObject(id);
+    this.selectObject(spec.id);
     this._renderOutliner();
     this._applyWireframeMode();
   }
@@ -1375,20 +1220,12 @@ export class Scene3DEditor {
 
   _syncMixerTime(seconds) {
     if (!this.mixer || !this.mixerActions.length) return;
-    const time = Math.max(0, Number(seconds) || 0);
-    for (const action of this.mixerActions) {
-      action.enabled = true;
-      action.paused = false;
-      action.time = time;
-    }
-    this.mixer.update(0);
-    this.animationTime = time;
+    this.animationTime = syncMixerActionsTime(this.mixerActions, this.mixer, seconds);
     this.blenderRoot?.updateMatrixWorld(true);
   }
 
   setAnimationTime(seconds) {
-    const duration = this.animationDuration || 0;
-    const clamped = duration > 0 ? Math.min(Math.max(0, seconds), duration) : Math.max(0, seconds);
+    const clamped = clampAnimationTime(seconds, this.animationDuration || 0);
     this._syncMixerTime(clamped);
     this._updateTimelineUi();
     if (this.followCamera) {
@@ -1463,11 +1300,11 @@ export class Scene3DEditor {
   }
 
   _updateTimelineUi() {
-    const duration = this.animationDuration || 0;
-    this.timeSliderEl.max = duration.toFixed(2);
-    this.timeSliderEl.value = this.animationTime.toFixed(2);
-    this.timeSliderEl.disabled = duration <= 0;
-    this.timeDisplayEl.textContent = `${formatTime(this.animationTime)} / ${formatTime(duration)}`;
+    const ui = buildTimelineUiState(this.animationTime, this.animationDuration, formatTime);
+    this.timeSliderEl.max = ui.max;
+    this.timeSliderEl.value = ui.value;
+    this.timeSliderEl.disabled = ui.disabled;
+    this.timeDisplayEl.textContent = ui.displayText;
   }
 
   _applyFollowCamera() {
@@ -1498,14 +1335,12 @@ export class Scene3DEditor {
     const delta = this.clock.getDelta();
     if (this.mode === "blender" && this.mixer && this.isPlaying) {
       const duration = this.animationDuration || 0;
-      let nextTime = this.animationTime + delta;
-      if (duration > 0 && nextTime >= duration) {
-        nextTime = duration;
+      const { nextTime, reachedEnd } = advancePlaybackTime(this.animationTime, delta, duration);
+      if (reachedEnd) {
         this.isPlaying = false;
         this._updatePlayButton();
       }
       this._syncMixerTime(nextTime);
-      this.blenderRoot?.updateMatrixWorld(true);
       this._updateTimelineUi();
     }
     if (this.followCamera && this.mode === "blender") {

@@ -1,65 +1,15 @@
 /**
- * Canvas capture helpers for the Scene3D workspace.
- * No board writes — callers upload captures to the backend apply endpoint.
+ * Canvas capture helpers for the Scene3D workspace static bundle.
+ * Core implementation lives in ../capture.ts (shared with reference GLB renderer).
  */
 
-import type { WorkspaceCaptureOptions, WorkspaceCaptureResult } from './workspaceTypes'
-
-export function isBlankCanvas(canvas: HTMLCanvasElement): boolean {
-  if (canvas.width <= 1 || canvas.height <= 1) return true
-  const probe = document.createElement('canvas')
-  probe.width = 32
-  probe.height = 32
-  const ctx = probe.getContext('2d', { willReadFrequently: true })
-  if (!ctx) return false
-  ctx.drawImage(canvas, 0, 0, probe.width, probe.height)
-  const pixels = ctx.getImageData(0, 0, probe.width, probe.height).data
-  let min = 255
-  let max = 0
-  let transparent = 0
-  let brightness = 0
-  const count = probe.width * probe.height
-  for (let i = 0; i < pixels.length; i += 4) {
-    const r = pixels[i]
-    const g = pixels[i + 1]
-    const b = pixels[i + 2]
-    const a = pixels[i + 3]
-    if (a < 8) transparent += 1
-    min = Math.min(min, r, g, b)
-    max = Math.max(max, r, g, b)
-    brightness += (r + g + b) / 3
-  }
-  const avg = brightness / count
-  if (transparent / count > 0.8) return true
-  return max - min < 3 && (avg < 8 || avg > 247)
-}
-
-export type CaptureCanvasPngOptions = WorkspaceCaptureOptions & {
-  /** Optional render callback invoked after resize, before readback. */
-  render?: () => void
-}
-
-/**
- * Read a PNG data URL from a canvas. Optionally resizes via width/height on the source canvas
- * dimensions used for export (caller should set renderer size before calling render).
- */
-export function captureCanvasPng(
-  canvas: HTMLCanvasElement,
-  options: CaptureCanvasPngOptions = {},
-): WorkspaceCaptureResult {
-  const width = Math.max(1, Math.floor(options.width ?? canvas.width ?? 1))
-  const height = Math.max(1, Math.floor(options.height ?? canvas.height ?? 1))
-  const mimeType = options.mimeType ?? 'image/png'
-
-  options.render?.()
-
-  if (options.rejectBlank && isBlankCanvas(canvas)) {
-    throw new Error('3D capture produced a blank frame; refusing to export.')
-  }
-
-  const dataUrl = canvas.toDataURL(mimeType)
-  return { dataUrl, width, height }
-}
+export {
+  captureCanvasPng,
+  isBlankCanvas,
+  type CaptureCanvasPngOptions,
+  type Scene3dCaptureOptions,
+  type Scene3dCaptureResult,
+} from '../capture'
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type ThreeModule = Record<string, any>

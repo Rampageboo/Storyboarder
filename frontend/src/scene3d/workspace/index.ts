@@ -75,23 +75,26 @@ export {
 } from './workspaceBridge'
 
 export {
-  WORKSPACE_PRIMITIVE_TYPE_SET,
   applyWorkspaceObjectColorPreview,
   applyWorkspaceWireframeMode,
   clearWorkspaceWireframeOverlays,
-  createPrimitiveMesh,
   createWorkspaceWireframeResources,
-  defaultAddObjectSpec,
-  defaultBuiltinSceneData,
-  eulerFrom,
-  colorFrom,
   generateWorkspaceObjectColor,
   isWorkspacePrimitiveType,
   loadWorkspacePreviewStyle,
-  makeWorkspaceObjectId,
   normalizeWorkspaceWireframeMode,
-  vec3From,
 } from './workspaceObjects'
+
+export {
+  WORKSPACE_PRIMITIVE_TYPE_SET,
+  colorFrom,
+  createPrimitiveMesh,
+  defaultAddObjectSpec,
+  defaultBuiltinSceneData,
+  eulerFrom,
+  makeWorkspaceObjectId,
+  vec3From,
+} from './workspacePrimitives'
 
 export {
   captureCanvasPng,
@@ -110,3 +113,9 @@ export {
   disposePrimitiveMesh,
   disposeWorkspaceWireframe,
 } from './workspaceDispose'
+
+export {
+  loadScene3DEditorClass,
+  type Scene3DEditorConstructor,
+  type Scene3DEditorInstance,
+} from './loadScene3DEditor'

@@ -1,5 +1,7 @@
 import { loadGlbScene } from './glbScene'
+import { isBlankCanvas } from './capture'
 import {
+  clearWireframeOverlays,
   loadPreviewStyle,
   SCENE3D_WORKSPACE_BACKGROUND,
   type PreviewStyleModule,
@@ -19,35 +21,6 @@ function triple(value: unknown): [number, number, number] | null {
   if (!Array.isArray(value) || value.length < 3) return null
   const out: [number, number, number] = [Number(value[0]), Number(value[1]), Number(value[2])]
   return out.every((n) => Number.isFinite(n)) ? out : null
-}
-
-function isBlankCanvas(canvas: HTMLCanvasElement): boolean {
-  if (canvas.width <= 1 || canvas.height <= 1) return true
-  const probe = document.createElement('canvas')
-  probe.width = 32
-  probe.height = 32
-  const ctx = probe.getContext('2d', { willReadFrequently: true })
-  if (!ctx) return false
-  ctx.drawImage(canvas, 0, 0, probe.width, probe.height)
-  const pixels = ctx.getImageData(0, 0, probe.width, probe.height).data
-  let min = 255
-  let max = 0
-  let transparent = 0
-  let brightness = 0
-  const count = probe.width * probe.height
-  for (let i = 0; i < pixels.length; i += 4) {
-    const r = pixels[i]
-    const g = pixels[i + 1]
-    const b = pixels[i + 2]
-    const a = pixels[i + 3]
-    if (a < 8) transparent += 1
-    min = Math.min(min, r, g, b)
-    max = Math.max(max, r, g, b)
-    brightness += (r + g + b) / 3
-  }
-  const avg = brightness / count
-  if (transparent / count > 0.8) return true
-  return max - min < 3 && (avg < 8 || avg > 247)
 }
 
 export class ReferenceGlbRenderer {
@@ -365,7 +338,7 @@ export class ReferenceGlbRenderer {
     this.resizeObserver?.disconnect()
     this.intersectionObserver?.disconnect()
     if (this.previewStyle && this.wireframeResources) {
-      this.previewStyle.clearWireframeOverlays(this.root, this.wireframeResources)
+      clearWireframeOverlays(this.previewStyle, this.root, this.wireframeResources)
     }
     this.glbSceneDispose?.()
     this.glbSceneDispose = null

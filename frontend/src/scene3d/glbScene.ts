@@ -1,36 +1,16 @@
 import type { PreviewStyleModule } from './previewStyleBridge'
 import type { ThreeRuntime } from './threeRuntime'
-import { loadPreviewStyle } from './previewStyleBridge'
+import {
+  applyObjectColorPreview,
+  loadPreviewStyle,
+} from './previewStyleBridge'
+import { disposeGlbObject } from './dispose'
 import { loadThreeRuntime } from './threeRuntime'
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type ThreeObject = any
 
-function disposeMaterial(material: unknown) {
-  const materials = Array.isArray(material) ? material : [material]
-  for (const item of materials) {
-    if (!item || typeof item !== 'object') continue
-    const mat = item as Record<string, unknown>
-    for (const key of Object.keys(mat)) {
-      const value = mat[key]
-      if (value && typeof value === 'object' && typeof (value as { dispose?: () => void }).dispose === 'function') {
-        try { (value as { dispose: () => void }).dispose() } catch { /* best effort */ }
-      }
-    }
-    try { (mat.dispose as (() => void) | undefined)?.() } catch { /* best effort */ }
-  }
-}
-
-export function disposeGlbObject(root: ThreeObject | null | undefined) {
-  root?.traverse?.((node: ThreeObject) => {
-    try {
-      node.geometry?.dispose?.()
-      disposeMaterial(node.material)
-    } catch {
-      // best effort
-    }
-  })
-}
+export { disposeGlbObject } from './dispose'
 
 export type LoadedGlbScene = {
   runtime: ThreeRuntime
@@ -61,7 +41,7 @@ export async function loadGlbScene(
   const objectColorPreview = options.objectColorPreview !== false
 
   const applyObjectColors = (enabled: boolean) => {
-    resolvedStyle.applyObjectColorPreview(resolvedRuntime.THREE, root, root, previewMaterials, enabled)
+    applyObjectColorPreview(resolvedStyle, resolvedRuntime.THREE, root, root, previewMaterials, enabled)
   }
   applyObjectColors(objectColorPreview)
 
@@ -83,7 +63,7 @@ export async function loadGlbScene(
     previewMaterials,
     setObjectColorPreview: applyObjectColors,
     dispose() {
-      resolvedStyle.applyObjectColorPreview(resolvedRuntime.THREE, root, root, previewMaterials, false)
+      applyObjectColorPreview(resolvedStyle, resolvedRuntime.THREE, root, root, previewMaterials, false)
       disposeGlbObject(root)
     },
   }
