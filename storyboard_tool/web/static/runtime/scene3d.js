@@ -309,6 +309,12 @@ export class Scene3DEditor {
     this.orbit = new OrbitControls(this.camera, this.renderer.domElement);
     this.orbit.enableDamping = true;
     this.orbit.target.set(0, 0.5, 0);
+    // Persist free-orbit view changes (React debounces). Only for a loaded GLB scene and only when
+    // not following a scene camera; suppressed during programmatic scene loads. This also covers
+    // resetView()/focusSelected(), which change the view via orbit.update().
+    this.orbit.addEventListener("change", () => {
+      if (this.mode === "blender" && !this.followCamera) this._notifyViewChange();
+    });
 
     this.transform = new TransformControls(this.camera, this.renderer.domElement);
     this.transform.setMode(this.transformMode);
@@ -652,6 +658,10 @@ export class Scene3DEditor {
 
   async loadBlenderFromProject(meta) {
     this.setMode("blender");
+    // Suppress reference-view persistence while restoring the saved camera/time/framing below so a
+    // scene load never overwrites settings.scene3d.reference_view.
+    this._suppressViewChange = true;
+    try {
     this.sceneMeta = { ...meta };
     this.followCamera = meta.follow_camera !== false;
     this.followCameraEl.checked = this.followCamera;
@@ -677,6 +687,9 @@ export class Scene3DEditor {
     }
     this._updateFileName();
     this._updateAnimationHint();
+    } finally {
+      this._suppressViewChange = false;
+    }
   }
 
   async reloadBlenderScene() {
@@ -691,6 +704,8 @@ export class Scene3DEditor {
       "";
     this.isPlaying = false;
     this._updatePlayButton();
+    // Suppress reference-view persistence while restoring the saved camera/time on reload.
+    this._suppressViewChange = true;
     try {
       const url = `/api/project/scene3d/file?t=${Date.now()}`;
       await this._loadBlenderUrl(url, this.sceneMeta.file_name || this.sceneMeta.file_path);
@@ -703,6 +718,8 @@ export class Scene3DEditor {
       this.callbacks.onMessage?.("已刷新 GLB（保留时间与显示设置）");
     } catch (error) {
       this.callbacks.onMessage?.(`刷新 GLB 失败：${error?.message || error}`);
+    } finally {
+      this._suppressViewChange = false;
     }
   }
 
@@ -1243,6 +1260,9 @@ export class Scene3DEditor {
       this._applyFollowCamera();
     }
     this._updateAnimationHint();
+    // Notify after _applyFollowCamera so getViewState() reads the new camera transform.
+    // showMessage is false for programmatic load restores, true for user camera switches.
+    if (showMessage) this._notifyViewChange();
   }
 
   setFollowCamera(enabled, { persist = true } = {}) {
@@ -1256,8 +1276,16 @@ export class Scene3DEditor {
       this.sceneMeta = { ...(this.sceneMeta || {}), follow_camera: this.followCamera };
       this._scheduleSceneSettingsSave();
       // User toggled follow/free view — let React persist it as the reference view.
-      this.callbacks.onViewChange?.();
+      this._notifyViewChange();
     }
+  }
+
+  // Tell React the workspace view changed so it can persist settings.scene3d.reference_view.
+  // Event-driven only (never per animation frame); suppressed while a scene is loading so the
+  // restored camera/time don't clobber a saved reference view.
+  _notifyViewChange() {
+    if (this._suppressViewChange) return;
+    this.callbacks.onViewChange?.();
   }
 
   setMode(mode) {
@@ -1619,6 +1647,9 @@ export class Scene3DEditor {
     if (this.followCamera) {
       this._applyFollowCamera();
     }
+    // Persist the new time as part of the reference view (suppressed during scene load; playback
+    // advances time via _syncMixerTime, not this method, so this is not per-frame).
+    this._notifyViewChange();
   }
 
   toggleAnimationPlayback() {

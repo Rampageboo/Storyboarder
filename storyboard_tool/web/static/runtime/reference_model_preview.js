@@ -2,6 +2,7 @@ import * as THREE from "three";
 // Absolute path so this module resolves the loader regardless of where it lives
 // (it now lives under /static/runtime/, the vendor bundle stays under /static/vendor/).
 import { GLTFLoader } from "/static/vendor/three/GLTFLoader.js";
+import { RoomEnvironment } from "/static/vendor/three/RoomEnvironment.js";
 
 const previewState = new WeakMap();
 
@@ -56,6 +57,20 @@ function disposePreview(canvas) {
   state.observer?.disconnect();
   state.resizeObserver?.disconnect();
   canvas.removeEventListener("webglcontextlost", state.onContextLost);
+  try {
+    state.mixer?.stopAllAction?.();
+  } catch {
+    // best effort
+  }
+  state.mixer = null;
+  state.actions = [];
+  if (state.scene) state.scene.environment = null;
+  try {
+    state.envMap?.dispose?.();
+  } catch {
+    // best effort
+  }
+  state.envMap = null;
   disposeObject3D(state.root);
   try {
     state.renderer?.dispose?.();
@@ -83,6 +98,50 @@ function frameObject(camera, object, offset = 1.35) {
   return center;
 }
 
+function isNodeInGraph(root, node) {
+  let current = node;
+  while (current) {
+    if (current === root) return true;
+    current = current.parent;
+  }
+  return false;
+}
+
+// Collect every camera in the GLB the way the Scene3D workspace does: from all scenes, the active
+// root, and gltf.cameras (some exporters leave cameras out of the scene graph). Orphan cameras are
+// attached to root so their world matrices resolve. Returns the camera list for name lookup.
+function collectGltfCameras(root, gltf) {
+  const cameras = [];
+  const seen = new Set();
+  const addCamera = (node) => {
+    if (!node?.isCamera || seen.has(node.uuid)) return;
+    seen.add(node.uuid);
+    cameras.push(node);
+  };
+  for (const scene of gltf?.scenes || []) scene?.traverse?.(addCamera);
+  root?.traverse?.(addCamera);
+  for (const cam of gltf?.cameras || []) addCamera(cam);
+  for (const cam of cameras) {
+    if (!isNodeInGraph(root, cam)) root?.add?.(cam);
+  }
+  return cameras;
+}
+
+// Evaluate GLB animation clips at the requested time so the model pose (and any animated camera)
+// matches the Scene3D workspace instead of staying at frame 0.
+function syncAnimationTime(state, seconds) {
+  if (!state.mixer || !state.actions?.length) return;
+  const time = Math.max(0, Number(seconds) || 0);
+  for (const action of state.actions) {
+    action.enabled = true;
+    action.paused = false;
+    action.play();
+    action.time = time;
+  }
+  state.mixer.update(0);
+  state.root?.updateMatrixWorld(true);
+}
+
 function parseTriple(value) {
   if (Array.isArray(value) && value.length >= 3) {
     const out = [Number(value[0]), Number(value[1]), Number(value[2])];
@@ -103,10 +162,14 @@ function parseView(canvas) {
   }
 }
 
-function findNamedCamera(root, name) {
-  if (!root || !name) return null;
+// Find a GLB camera by name, searching the collected camera list first (covers cameras outside the
+// scene graph) then the root traversal as a fallback.
+function findNamedCamera(state, name) {
+  if (!name) return null;
+  const collected = (state.cameras || []).find((cam) => cam?.isCamera && cam.name === name);
+  if (collected) return collected;
   let found = null;
-  root.traverse?.((node) => {
+  state.root?.traverse?.((node) => {
     if (found) return;
     if (node?.isCamera && node.name === name) found = node;
   });
@@ -157,7 +220,7 @@ function applySuppliedView(state, view) {
 
   // No numeric position — try resolving a scene camera by name inside the GLB.
   const name = typeof view.camera_name === "string" ? view.camera_name : "";
-  const cam = findNamedCamera(state.root, name);
+  const cam = findNamedCamera(state, name);
   if (cam) {
     cam.updateWorldMatrix(true, false);
     const pos = new THREE.Vector3();
@@ -182,6 +245,9 @@ function applySuppliedView(state, view) {
 function applyViewOrFrame(state) {
   let applied = false;
   const view = parseView(state.canvas);
+  // Pose the model (and any animated camera) at the view's time before reading camera transforms,
+  // so the preview matches the Scene3D workspace at that animation time.
+  syncAnimationTime(state, view?.time ?? 0);
   if (view) {
     try {
       applied = applySuppliedView(state, view);
@@ -237,14 +303,32 @@ async function mountPreview(canvas) {
 
   renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.5));
   renderer.outputColorSpace = THREE.SRGBColorSpace;
+  // Match the Scene3D workspace renderer so a head-on scene camera doesn't blow out to white:
+  // tone mapping compresses bright PBR highlights instead of hard-clipping them.
+  renderer.toneMapping = THREE.AgXToneMapping ?? THREE.ACESFilmicToneMapping;
+  renderer.toneMappingExposure = 1.0;
 
   const scene = new THREE.Scene();
   scene.background = new THREE.Color(0x111827);
   const camera = new THREE.PerspectiveCamera(42, 1, 0.01, 500);
-  scene.add(new THREE.AmbientLight(0xffffff, 0.65));
+  scene.add(new THREE.AmbientLight(0xffffff, 0.45));
   const sun = new THREE.DirectionalLight(0xffffff, 1.1);
   sun.position.set(4, 8, 6);
   scene.add(sun);
+
+  // Image-based lighting (same RoomEnvironment the workspace uses) so PBR materials shade like the
+  // workspace rather than rendering flat/over-bright. Best-effort: tone mapping alone still helps.
+  let envMap = null;
+  try {
+    const pmrem = new THREE.PMREMGenerator(renderer);
+    const room = new RoomEnvironment();
+    envMap = pmrem.fromScene(room, 0.04).texture;
+    room.dispose?.();
+    pmrem.dispose?.(); // generator scratch no longer needed; the env texture stands alone
+    scene.environment = envMap;
+  } catch (error) {
+    console.warn("Reference 3D preview environment unavailable:", error);
+  }
 
   const state = {
     url,
@@ -254,6 +338,10 @@ async function mountPreview(canvas) {
     camera,
     root: null,
     center: new THREE.Vector3(),
+    cameras: [],
+    mixer: null,
+    actions: [],
+    envMap,
     hasView: false,
     viewKey: "",
     rafId: 0,
@@ -328,6 +416,11 @@ async function mountPreview(canvas) {
     }
     state.root = gltf.scene;
     scene.add(state.root);
+    state.cameras = collectGltfCameras(state.root, gltf);
+    if (gltf.animations && gltf.animations.length) {
+      state.mixer = new THREE.AnimationMixer(state.root);
+      state.actions = gltf.animations.map((clip) => state.mixer.clipAction(clip));
+    }
     applyViewOrFrame(state);
     canvas.dataset.refModelStatus = "ready";
     resize();

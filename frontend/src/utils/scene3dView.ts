@@ -56,8 +56,8 @@ function normalizeView(raw: Record<string, unknown>, source: Scene3dViewSource):
   }
 }
 
-// Priority 1: the shot's own saved 3D view. Prefer an explicit scene3d_view object, then fall back
-// to the legacy split fields (position/target/rotation/fov + scene3d_camera + scene3d_time).
+// The shot's own saved 3D view. Prefer an explicit scene3d_view object, then fall back to the
+// legacy split fields (position/target/rotation/fov + scene3d_camera + scene3d_time).
 function viewFromShotCameraData(cam: Record<string, unknown>): Scene3dReferenceView | null {
   const stored = cam.scene3d_view
   if (stored && typeof stored === 'object') {
@@ -81,11 +81,13 @@ function viewFromShotCameraData(cam: Record<string, unknown>): Scene3dReferenceV
 
 /**
  * Resolve which Scene3D view a model reference should preview/apply with, in priority order:
- *   1. the anchor shot's saved view (camera_data.scene3d_view, or legacy position/scene3d_camera);
- *   2. the workspace view persisted at settings.scene3d.reference_view;
+ *   1. the current workspace view persisted at settings.scene3d.reference_view;
+ *   2. the anchor shot's saved view (camera_data.scene3d_view, or legacy position/scene3d_camera);
  *   3. the saved scene camera name at settings.scene3d.camera_name (resolved by name in the GLB);
  *   4. null → caller uses the generic framed GLB preview.
- * Never silently uses the generic preview when a saved Scene3D camera/view exists.
+ * Workspace-first: assigning a new segment should follow the current Scene3D workspace camera/free
+ * view, not be overridden by a stale per-board view. Never silently uses the generic preview when a
+ * saved Scene3D camera/view exists.
  */
 export function resolveScene3dReferenceView(opts: {
   shot?: Shot | null
@@ -94,14 +96,14 @@ export function resolveScene3dReferenceView(opts: {
   const cam = (opts.shot?.camera_data ?? null) as Record<string, unknown> | null
   const scene3d = (opts.settings?.scene3d ?? {}) as Record<string, unknown>
 
-  const fromShot = cam ? viewFromShotCameraData(cam) : null
-  if (fromShot) return fromShot
-
   const referenceView = scene3d.reference_view
   if (referenceView && typeof referenceView === 'object') {
     const v = normalizeView(referenceView as Record<string, unknown>, 'workspace')
     if (v) return v
   }
+
+  const fromShot = cam ? viewFromShotCameraData(cam) : null
+  if (fromShot) return fromShot
 
   const sceneCameraName = String(scene3d.camera_name || '').trim()
   if (sceneCameraName) return { mode: 'scene_camera', camera_name: sceneCameraName, source: 'scene_camera' }
