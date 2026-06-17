@@ -371,13 +371,18 @@ export class Scene3DEditor {
       input.addEventListener("input", () => this._applyTransformInputs(key));
     });
     this.outlinerEl.addEventListener("click", (event) => {
-      const item = event.target.closest("[data-object-id]");
+      const item = event.target.closest("[data-camera-id], [data-object-id]");
       if (!item) return;
+
       if (item.dataset.cameraId) {
-        this.setActiveCamera(item.dataset.cameraId);
+        this.setFollowCamera(true, { persist: false });
+        this.setActiveCamera(item.dataset.cameraId, true);
         return;
       }
-      this.selectObject(item.dataset.objectId);
+
+      if (item.dataset.objectId) {
+        this.selectObject(item.dataset.objectId);
+      }
     });
     this.followCameraEl.addEventListener("change", () => {
       this.setFollowCamera(this.followCameraEl.checked);
