@@ -1,4 +1,4 @@
-import { disposeGlbObject, loadGlbScene } from './glbScene'
+import { loadGlbScene } from './glbScene'
 import {
   loadPreviewStyle,
   SCENE3D_WORKSPACE_BACKGROUND,
@@ -369,8 +369,8 @@ export class ReferenceGlbRenderer {
     }
     this.glbSceneDispose?.()
     this.glbSceneDispose = null
-    disposeGlbObject(this.root)
     this.root = null
     this.renderer?.dispose?.()
+    this.renderer = null
   }
 }

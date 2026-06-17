@@ -53,12 +53,6 @@ export function deleteRefSegment(segmentId: string): Promise<ProjectPayload> {
   })
 }
 
-/** Snapshot a board range for undo BEFORE a destructive bake (3D apply overwrites previews client-
- * side before the backend runs). Returns an undo token usable with restoreRefApply. */
-export function snapshotRefBoards(body: { anchor_shot_id: string; end_shot_id: string }): Promise<{ undo_token: string }> {
-  return requestJson<{ undo_token: string }>('/api/project/ref-segments/snapshot', { method: 'POST', body })
-}
-
 /** Undo the most recent reference-segment apply using the token returned by the apply call. */
 export function restoreRefApply(token: string): Promise<ProjectPayload> {
   return requestJson<ProjectPayload>('/api/project/ref-apply/undo', {

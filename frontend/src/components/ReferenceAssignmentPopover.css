@@ -242,8 +242,9 @@
   font-family: var(--font-mono);
 }
 
-/* Which Scene3D view the GLB preview/apply is using (scene camera / free view / generic),
-   plus a note that 3D apply is metadata-only (the board image comes from Scene3D capture). */
+/* Which Scene3D view the GLB preview/apply is using (scene camera / free view / generic).
+   3D Apply renders browser-side GLB captures; the backend snapshots boards, saves images,
+   and stamps provenance. */
 .ref-assign-3d-info {
   display: flex;
   flex-direction: column;

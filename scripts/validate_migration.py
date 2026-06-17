@@ -18,7 +18,6 @@ STATIC = ROOT / "storyboard_tool" / "web" / "static"
 REQUIRED_STATIC = {
     STATIC / "runtime" / "scene3d.js",
     STATIC / "runtime" / "scene3d_preview_style.js",
-    STATIC / "runtime" / "reference_model_preview.js",
     STATIC / "vendor" / "three" / "three.module.js",
     STATIC / "favicon.svg",
 }

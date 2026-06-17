@@ -12,6 +12,7 @@ from .image_utils import (
     board_background_filename,
     copy_and_convert_image_stream,
     normalize_reference_fit_mode,
+    save_png_data_url,
 )
 from .models import Project, Shot
 from .shot_store import save_shots
@@ -1071,6 +1072,126 @@ def apply_ref_segment_3d_to_boards(
         "board_count": len(applied),
         "segment_duration": round(segment_offset, 3),
         "applied": applied,
+    }
+
+
+def apply_model_captures_to_boards(
+    project: Project,
+    anchor_shot_id: str,
+    end_shot_id: str,
+    segment_id: str,
+    camera_name: str,
+    captures: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Finalize browser-rendered GLB captures: snapshot, save board images, stamp provenance."""
+    from datetime import datetime, timezone
+
+    shots = project.shots
+    min_index, max_index = _segment_board_range_by_shot_id(shots, anchor_shot_id, end_shot_id)
+
+    if not captures:
+        raise ValueError("3D captures are required.")
+    capture_by_shot: dict[str, dict[str, Any]] = {}
+    for capture in captures:
+        shot_id = str(capture.get("shot_id") or "").strip()
+        if not shot_id:
+            raise ValueError("Capture shot_id is required.")
+        if shot_id in capture_by_shot:
+            raise ValueError(f"Duplicate 3D capture for board: {shot_id}")
+        data_url = str(capture.get("data_url") or "")
+        if not data_url.startswith("data:image/png;base64,"):
+            raise ValueError(f"Invalid PNG data URL for board: {shot_id}")
+        capture_by_shot[shot_id] = capture
+
+    range_shots = shots[min_index : max_index + 1]
+    missing = [shot.shot_id for shot in range_shots if shot.shot_id not in capture_by_shot]
+    if missing:
+        raise ValueError(f"Missing 3D captures for board(s): {', '.join(missing)}")
+
+    model_seg = find_ref_segment(project, segment_id or None) or {}
+    model_rel, model_path = _validate_segment_reference(project, model_seg, "model")
+
+    fit_mode = normalize_reference_fit_mode(str(model_seg.get("fit_mode", "") or "fit"))
+    seg_id = str(model_seg.get("id", segment_id or "") or "").strip()
+    undo_token = snapshot_boards_for_undo(project, min_index, max_index)
+    model_mtime = model_path.stat().st_mtime
+    storyboard_duration = _segment_storyboard_duration(shots, min_index, max_index)
+    applied_at = datetime.now(timezone.utc).isoformat()
+    applied: list[dict[str, Any]] = []
+    segment_offset = 0.0
+    camera_name = str(camera_name or "").strip()
+
+    try:
+        video_start = max(0.0, float(model_seg.get("video_start", 0.0) or 0.0))
+    except (TypeError, ValueError):
+        video_start = 0.0
+
+    for index in range(min_index, max_index + 1):
+        shot = shots[index]
+        capture = capture_by_shot[shot.shot_id]
+        animation_time = capture.get("animation_time")
+        if animation_time is None:
+            anim_time = segment_offset
+        else:
+            anim_time = max(0.0, float(animation_time))
+        shot_dir = pm.get_shot_dir(project, shot)
+        raw_path = shot_dir / f"{shot.shot_id}_ref_raw.png"
+        try:
+            save_png_data_url(str(capture.get("data_url") or ""), raw_path)
+            preview_path = pm._apply_model_capture_to_shot(project, shot, raw_path, fit_mode)
+        finally:
+            raw_path.unlink(missing_ok=True)
+        shot.source_sync_mtime = preview_path.stat().st_mtime
+        shot.ref_video_path = model_rel
+        shot.ref_video_time = round(anim_time, 3)
+        shot.ref_segment_time = round(segment_offset, 3)
+        camera_data = dict(shot.camera_data or {})
+        camera_data["scene3d_time"] = round(anim_time, 3)
+        if camera_name:
+            camera_data["scene3d_camera"] = camera_name
+        shot.camera_data = camera_data
+        _stamp_ref_segment_provenance(
+            shot,
+            seg_id,
+            "model",
+            frame_time=anim_time,
+            applied_at=applied_at,
+        )
+        applied.append(
+            {
+                "shot_id": shot.shot_id,
+                "board_index": index,
+                "segment_time": round(segment_offset, 3),
+                "animation_time": round(anim_time, 3),
+            }
+        )
+        segment_offset += max(0.1, float(shot.duration_seconds or 3))
+
+    _persist_ref_segment_apply(
+        project,
+        seg=model_seg,
+        segment_id=segment_id or None,
+        min_index=min_index,
+        max_index=max_index,
+        apply_meta={
+            "segment_id": seg_id,
+            "anchor_shot_id": shots[min_index].shot_id,
+            "end_shot_id": shots[max_index].shot_id,
+            "source_type": "model",
+            "reference_model_path": model_rel,
+            "model_mtime": model_mtime,
+            "video_start": round(video_start, 3),
+            "storyboard_duration": round(storyboard_duration, 3),
+            "fit_mode": fit_mode,
+            "applied_at": applied_at,
+        },
+        segment_patch={"video_start": round(video_start, 3), "source_type": "model"},
+    )
+    return {
+        "board_count": len(applied),
+        "segment_duration": round(segment_offset, 3),
+        "applied": applied,
+        "undo_token": undo_token,
     }
 
 

@@ -7,7 +7,7 @@ from typing import Any, BinaryIO
 
 from fastapi import FastAPI, HTTPException
 
-from . import app_state, project_manager, session_store
+from . import app_state, project_manager, reference_segments, session_store
 from .export_utils import missing_files
 from .linked_sync import sync_project
 from .models import SHOT_STATUSES, Shot
@@ -277,10 +277,33 @@ class StoryboardBackendService(ExportServiceMixin):
         app_state._autosave(self.app)
         return {**result, **app_state._project_payload(project, self.app.state.dirty)}
 
+    def method_apply_ref_segment_model_captures(
+        self,
+        anchor_shot_id: str,
+        end_shot_id: str,
+        segment_id: str,
+        camera_name: str,
+        captures: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        project = app_state._require_project(self.app)
+        try:
+            result = reference_segments.apply_model_captures_to_boards(
+                project,
+                anchor_shot_id,
+                end_shot_id,
+                segment_id,
+                camera_name,
+                captures,
+            )
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        app_state._autosave(self.app)
+        return {**result, **app_state._project_payload(project, self.app.state.dirty)}
+
     def method_snapshot_ref_boards(self, anchor_shot_id: str, end_shot_id: str) -> dict[str, Any]:
-        # Back up the boards in a range before a destructive bake (used by the React 3D apply, which
-        # overwrites board previews client-side before calling apply). Returns an undo token usable
-        # with method_restore_ref_apply / restore_boards_from_undo.
+        # Manual snapshot of a board range before a destructive bake. Returns an undo token usable
+        # with method_restore_ref_apply / restore_boards_from_undo. Browser 3D apply snapshots
+        # inside apply_model_captures_to_boards before writing board images.
         project = app_state._require_project(self.app)
         anchor = app_state._find_shot_index(project, anchor_shot_id)
         end = app_state._find_shot_index(project, end_shot_id)

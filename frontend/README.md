@@ -21,5 +21,5 @@ Shared 3D/GLB runtime modules remain JavaScript under `storyboard_tool/web/stati
 | React component | Runtime module |
 | --- | --- |
 | `Scene3DPanel.tsx` | `/static/runtime/scene3d.js` |
-| `ReferenceModelPreview.tsx` | `/static/runtime/reference_model_preview.js` |
+| `ReferenceModelPreview.tsx` | `frontend/src/scene3d/` + shared `/static/runtime/scene3d_preview_style.js` |
 | `index.html` import map | `/static/vendor/three/three.module.js` |
