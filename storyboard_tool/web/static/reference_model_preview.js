@@ -3,13 +3,62 @@ import { GLTFLoader } from "./vendor/three/GLTFLoader.js";
 
 const previewState = new WeakMap();
 
+function disposeMaterial(material) {
+  if (!material) return;
+  const materials = Array.isArray(material) ? material : [material];
+  for (const item of materials) {
+    if (!item) continue;
+    for (const key of Object.keys(item)) {
+      const value = item[key];
+      if (value && typeof value === "object" && typeof value.dispose === "function") {
+        try {
+          value.dispose();
+        } catch {
+          // best effort
+        }
+      }
+    }
+    try {
+      item.dispose?.();
+    } catch {
+      // best effort
+    }
+  }
+}
+
+function disposeObject3D(root) {
+  if (!root) return;
+  root.traverse?.((node) => {
+    try {
+      node.geometry?.dispose?.();
+      disposeMaterial(node.material);
+    } catch {
+      // best effort
+    }
+  });
+}
+
+function markCanvasFailed(canvas) {
+  canvas.dataset.refModelFailed = "true";
+  canvas.dataset.refModelStatus = "failed";
+  canvas.setAttribute("aria-label", "3D preview unavailable");
+}
+
 function disposePreview(canvas) {
   const state = previewState.get(canvas);
   if (!state) return;
+  state.disposed = true;
   if (state.rafId) cancelAnimationFrame(state.rafId);
+  state.rafId = 0;
   state.observer?.disconnect();
   state.resizeObserver?.disconnect();
-  state.renderer?.dispose();
+  canvas.removeEventListener("webglcontextlost", state.onContextLost);
+  disposeObject3D(state.root);
+  try {
+    state.renderer?.dispose?.();
+  } catch {
+    // best effort
+  }
   previewState.delete(canvas);
 }
 
@@ -19,7 +68,7 @@ export function disposeReferenceModelPreviews(root = document) {
 
 function frameObject(camera, object, offset = 1.35) {
   const box = new THREE.Box3().setFromObject(object);
-  if (box.isEmpty()) return;
+  if (box.isEmpty()) return null;
   const size = box.getSize(new THREE.Vector3());
   const center = box.getCenter(new THREE.Vector3());
   const radius = Math.max(size.x, size.y, size.z) * offset || 2;
@@ -31,17 +80,42 @@ function frameObject(camera, object, offset = 1.35) {
   return center;
 }
 
+function safeRender(state) {
+  if (!state || state.disposed || !state.renderer) return;
+  try {
+    state.renderer.render(state.scene, state.camera);
+  } catch (error) {
+    console.warn("Reference 3D preview render failed:", error);
+    markCanvasFailed(state.canvas);
+    disposePreview(state.canvas);
+  }
+}
+
 async function mountPreview(canvas) {
   const url = canvas.dataset.refModelPreview;
-  if (!url || previewState.has(canvas)) return;
+  if (!url) return;
+  const existing = previewState.get(canvas);
+  if (existing?.url === url) return;
+  if (existing) disposePreview(canvas);
 
-  const renderer = new THREE.WebGLRenderer({
-    canvas,
-    antialias: true,
-    alpha: true,
-    powerPreference: "low-power",
-  });
-  renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5));
+  canvas.dataset.refModelStatus = "loading";
+  delete canvas.dataset.refModelFailed;
+
+  let renderer;
+  try {
+    renderer = new THREE.WebGLRenderer({
+      canvas,
+      antialias: true,
+      alpha: true,
+      powerPreference: "low-power",
+    });
+  } catch (error) {
+    console.warn("Reference 3D preview WebGL unavailable:", error);
+    markCanvasFailed(canvas);
+    return;
+  }
+
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.5));
   renderer.outputColorSpace = THREE.SRGBColorSpace;
 
   const scene = new THREE.Scene();
@@ -53,6 +127,8 @@ async function mountPreview(canvas) {
   scene.add(sun);
 
   const state = {
+    url,
+    canvas,
     renderer,
     scene,
     camera,
@@ -61,12 +137,22 @@ async function mountPreview(canvas) {
     rafId: 0,
     visible: false,
     observer: null,
+    resizeObserver: null,
+    disposed: false,
+    onContextLost: (event) => {
+      event.preventDefault?.();
+      markCanvasFailed(canvas);
+      disposePreview(canvas);
+    },
   };
   previewState.set(canvas, state);
+  canvas.addEventListener("webglcontextlost", state.onContextLost, false);
 
   const resize = () => {
-    const width = Math.max(1, canvas.clientWidth);
-    const height = Math.max(1, canvas.clientHeight);
+    if (state.disposed) return;
+    const rect = canvas.getBoundingClientRect();
+    const width = Math.max(1, Math.floor(rect.width || canvas.clientWidth || 1));
+    const height = Math.max(1, Math.floor(rect.height || canvas.clientHeight || 1));
     renderer.setSize(width, height, false);
     camera.aspect = width / height;
     camera.updateProjectionMatrix();
@@ -74,16 +160,15 @@ async function mountPreview(canvas) {
   resize();
 
   const renderFrame = (time = 0) => {
-    if (state.root) {
-      state.root.rotation.y = time * 0.00035;
-    }
-    renderer.render(scene, camera);
+    if (state.disposed) return;
+    if (state.root) state.root.rotation.y = time * 0.00035;
+    safeRender(state);
   };
 
   const startLoop = () => {
-    if (state.rafId) return;
+    if (state.disposed || state.rafId) return;
     const tick = (time) => {
-      if (!previewState.has(canvas)) return;
+      if (!previewState.has(canvas) || state.disposed) return;
       renderFrame(time);
       state.rafId = requestAnimationFrame(tick);
     };
@@ -108,27 +193,30 @@ async function mountPreview(canvas) {
   );
   state.observer.observe(canvas);
 
+  const ro = new ResizeObserver(resize);
+  ro.observe(canvas);
+  state.resizeObserver = ro;
+
   try {
     const gltf = await new GLTFLoader().loadAsync(url);
+    if (state.disposed || !previewState.has(canvas)) {
+      disposeObject3D(gltf.scene);
+      return;
+    }
     state.root = gltf.scene;
     scene.add(state.root);
     const center = frameObject(camera, state.root);
     if (center) state.center.copy(center);
+    canvas.dataset.refModelStatus = "ready";
     resize();
     renderFrame();
     if (state.visible) startLoop();
   } catch (error) {
+    if (state.disposed) return;
     console.warn("Reference 3D preview failed:", error);
-    const fallback = document.createElement("div");
-    fallback.className = "reference-media-model-fallback";
-    fallback.textContent = "3D";
-    if (canvas.parentNode) canvas.replaceWith(fallback);
-    previewState.delete(canvas);
+    markCanvasFailed(canvas);
+    disposePreview(canvas);
   }
-
-  const ro = new ResizeObserver(resize);
-  ro.observe(canvas);
-  state.resizeObserver = ro;
 }
 
 export function hydrateReferenceModelPreviews(root = document) {
