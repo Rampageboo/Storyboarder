@@ -4,6 +4,7 @@ import { useProject } from '../state/ProjectContext'
 import type { ProjectPayload, Shot, ShotUpdate } from '../types'
 import { shotDisplayLabel } from '../utils/shotDisplay'
 import './Scene3DPanel.css'
+import './Scene3DPanel.tune.css'
 
 type Scene3DSettings = Record<string, unknown>
 
@@ -18,6 +19,8 @@ type Scene3DEditorInstance = {
   getAnimationState?: () => { time?: number; camera_name?: string }
   exportSceneData?: () => Scene3DSettings
   pauseAnimation?: () => void
+  setFollowCamera?: (enabled: boolean, options?: Record<string, unknown>) => void
+  setActiveCamera?: (cameraId: string, showMessage?: boolean) => void
   _resize?: () => void
 }
 
@@ -45,12 +48,7 @@ function sceneSettings(project: ProjectPayload | null): Scene3DSettings {
 
 function sceneKey(project: ProjectPayload | null): string {
   const scene = sceneSettings(project)
-  return [
-    project?.project_json_path || '',
-    scene.source || 'builtin',
-    scene.file_path || '',
-    scene.file_name || '',
-  ].join(':')
+  return [project?.project_json_path || '', scene.source || 'builtin', scene.file_path || '', scene.file_name || ''].join(':')
 }
 
 function numericTriple(value: unknown): [number, number, number] | null {
@@ -213,6 +211,7 @@ export function Scene3DPanel() {
         const editor = editorRef.current
         if (editor) {
           await editor.loadSceneData(sceneSettings(payload))
+          editor.setFollowCamera?.(true, { persist: false })
           loadedSceneKeyRef.current = sceneKey(payload)
           requestAnimationFrame(() => editor._resize?.())
         }
@@ -301,7 +300,8 @@ export function Scene3DPanel() {
     if (editorRef.current) return editorRef.current
     if (!editorRootRef.current) throw new Error('3D editor root is not mounted.')
     const Scene3DEditor = await loadScene3DEditorClass()
-    const editor = new Scene3DEditor(editorRootRef.current, {
+    const root = editorRootRef.current
+    const editor = new Scene3DEditor(root, {
       getShotCamera: () => getShotCamera(currentShot()),
       getShotScene3dTime,
       getBoardPreviewUrl,
@@ -312,6 +312,14 @@ export function Scene3DPanel() {
       onCaptureToBoard: () => void captureToBoard(),
       onMessage: (message: string) => setNote(message),
       onSceneSettingsChange: (nextScene: Scene3DSettings) => schedulePersistSceneSettings(nextScene),
+    })
+    const cameraSelect = root.querySelector<HTMLSelectElement>('[data-camera-select]')
+    cameraSelect?.addEventListener('change', () => {
+      const cameraId = cameraSelect.value
+      if (!cameraId) return
+      editor.setFollowCamera?.(true, { persist: false })
+      editor.setActiveCamera?.(cameraId, true)
+      setNote(`Camera view: ${cameraSelect.selectedOptions[0]?.textContent || cameraId}`)
     })
     editorRef.current = editor
     setEditorReady(true)
@@ -330,6 +338,7 @@ export function Scene3DPanel() {
       editor.applyDisplaySettings?.(nextScene)
     }
     editor.setBlendFilePath?.(nextScene.blend_file_path)
+    editor.setFollowCamera?.(true, { persist: false })
     const shotTime = getShotScene3dTime()
     if (shotTime != null && Number.isFinite(shotTime)) editor.setAnimationTime?.(shotTime)
     editor.refreshBoardPreview?.()
@@ -421,9 +430,7 @@ export function Scene3DPanel() {
               External viewer
             </button>
           </div>
-          <div className="scene3d-help">
-            Open workspace for viewport, reload, animation controls, camera save, and capture-to-board.
-          </div>
+          <div className="scene3d-help">Open workspace for viewport, camera switching, reload, and capture-to-board.</div>
           {note ? <div className="scene3d-note">{note}</div> : null}
         </div>
       ) : null}
