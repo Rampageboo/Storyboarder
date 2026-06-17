@@ -14,6 +14,17 @@ export type GlbCaptureOptions = {
   height?: number
 }
 
+const OBJECT_PALETTE = [
+  0x9cc9ff,
+  0xb8e986,
+  0xf8d57e,
+  0xffa8a8,
+  0xcdb4ff,
+  0x8fd3ff,
+  0xffc08a,
+  0xa7f3d0,
+]
+
 let runtimePromise: Promise<Runtime> | null = null
 
 function loadRuntime(): Promise<Runtime> {
@@ -32,6 +43,15 @@ function triple(value: unknown): [number, number, number] | null {
   if (!Array.isArray(value) || value.length < 3) return null
   const out: [number, number, number] = [Number(value[0]), Number(value[1]), Number(value[2])]
   return out.every((n) => Number.isFinite(n)) ? out : null
+}
+
+function hashString(value: string): number {
+  let hash = 2166136261
+  for (let i = 0; i < value.length; i += 1) {
+    hash ^= value.charCodeAt(i)
+    hash = Math.imul(hash, 16777619)
+  }
+  return hash >>> 0
 }
 
 function disposeMaterial(material: any) {
@@ -113,6 +133,7 @@ export class ReferenceGlbRenderer {
   disposed = false
   currentView: Scene3dReferenceView | null = null
   readyPromise: Promise<void> | null = null
+  previewMaterials: any[] = []
 
   constructor(canvas: HTMLCanvasElement, url: string) {
     this.canvas = canvas
@@ -133,18 +154,20 @@ export class ReferenceGlbRenderer {
     this.renderer = new THREE.WebGLRenderer({
       canvas: this.canvas,
       antialias: true,
-      alpha: true,
+      alpha: false,
       preserveDrawingBuffer: true,
       powerPreference: 'high-performance',
     })
-    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.5))
+    this.renderer.setPixelRatio(1)
     this.renderer.outputColorSpace = THREE.SRGBColorSpace
+    if ('toneMapping' in this.renderer) this.renderer.toneMapping = THREE.AgXToneMapping ?? THREE.ACESFilmicToneMapping
+    if ('toneMappingExposure' in this.renderer) this.renderer.toneMappingExposure = 1
 
     this.scene = new THREE.Scene()
-    this.scene.background = new THREE.Color(0x111827)
+    this.scene.background = new THREE.Color(0x1a1d21)
     this.camera = new THREE.PerspectiveCamera(42, 1, 0.01, 500)
     this.center = new THREE.Vector3()
-    this.scene.add(new THREE.AmbientLight(0xffffff, 0.65))
+    this.scene.add(new THREE.AmbientLight(0xffffff, 0.75))
     const sun = new THREE.DirectionalLight(0xffffff, 1.1)
     sun.position.set(4, 8, 6)
     this.scene.add(sun)
@@ -168,6 +191,7 @@ export class ReferenceGlbRenderer {
       return
     }
     this.root = gltf.scene
+    this.preparePreviewMaterials()
     this.scene.add(this.root)
     if (Array.isArray(gltf.animations) && gltf.animations.length > 0) {
       this.mixer = new THREE.AnimationMixer(this.root)
@@ -177,6 +201,22 @@ export class ReferenceGlbRenderer {
     this.applyViewOrFrame(view)
     this.render()
     if (this.visible) this.start()
+  }
+
+  preparePreviewMaterials() {
+    if (!this.runtime || !this.root) return
+    const { THREE } = this.runtime
+    let meshIndex = 0
+    this.root.traverse((node: any) => {
+      if (!node?.isMesh) return
+      const key = node.name || node.uuid || String(meshIndex)
+      const color = OBJECT_PALETTE[hashString(`${key}:${meshIndex}`) % OBJECT_PALETTE.length]
+      const material = new THREE.MeshBasicMaterial({ color, side: THREE.DoubleSide })
+      this.previewMaterials.push(material)
+      node.material = material
+      node.frustumCulled = false
+      meshIndex += 1
+    })
   }
 
   setView(view: Scene3dReferenceView | null) {
@@ -353,6 +393,8 @@ export class ReferenceGlbRenderer {
     this.resizeObserver?.disconnect()
     this.intersectionObserver?.disconnect()
     disposeObject(this.root)
+    for (const material of this.previewMaterials) disposeMaterial(material)
+    this.previewMaterials = []
     this.renderer?.dispose?.()
   }
 }
