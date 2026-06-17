@@ -59,14 +59,126 @@
   scrollbar-gutter: stable;
 }
 
+.board-strip-scroller {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: max-content;
+}
+
 .board-strip-track {
   display: inline-flex;
   flex-direction: row;
   flex-wrap: nowrap;
   align-items: flex-start;
   gap: 10px;
-  height: 100%;
   vertical-align: top;
+}
+
+/* Reference-segment dot rail, aligned 1:1 under the cards. */
+.board-strip-dotrail {
+  display: flex;
+  flex-direction: row;
+  flex-wrap: nowrap;
+  gap: 10px;
+  align-items: center;
+}
+
+.board-strip-dotcell {
+  position: relative;
+  flex: 0 0 var(--board-strip-card-width);
+  width: var(--board-strip-card-width);
+  height: 18px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* Connecting line behind the dots; extends into the 10px gap to bridge neighbours. */
+.board-strip-dotcell.in-range::before {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: -5px;
+  right: -5px;
+  height: 3px;
+  transform: translateY(-50%);
+  background: var(--color-accent);
+  border-radius: 2px;
+  z-index: 0;
+}
+
+.board-strip-dotcell.range-start::before {
+  left: 50%;
+}
+
+.board-strip-dotcell.range-end::before {
+  right: 50%;
+}
+
+.board-strip-dotcell.range-single::before {
+  display: none;
+}
+
+.board-strip-dot {
+  position: relative;
+  z-index: 1;
+  width: 12px;
+  height: 12px;
+  padding: 0;
+  border-radius: 50%;
+  border: 2px solid var(--color-muted);
+  background: var(--color-surface);
+  cursor: pointer;
+}
+
+.board-strip-dot:hover {
+  border-color: var(--color-accent);
+}
+
+.board-strip-dot.in-range {
+  border-color: var(--color-accent);
+}
+
+.board-strip-dot.anchor-only {
+  border-color: var(--color-accent);
+  background: var(--color-accent-soft);
+}
+
+.board-strip-dot.endpoint {
+  background: var(--color-accent);
+  border-color: var(--color-accent);
+}
+
+/* Distinguish the start endpoint with an extra ring. */
+.board-strip-dot.start {
+  box-shadow: 0 0 0 2px var(--color-accent-soft);
+}
+
+.board-strip-segment {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--color-accent);
+  white-space: nowrap;
+  overflow: hidden;
+}
+
+.board-strip-segment-clear {
+  flex-shrink: 0;
+  padding: 2px 6px;
+  border-radius: 6px;
+  border: 1px solid var(--color-border);
+  background: #fff;
+  font-size: 10px;
+  font-weight: 500;
+  color: var(--color-muted);
+  cursor: pointer;
 }
 
 .board-strip-card {

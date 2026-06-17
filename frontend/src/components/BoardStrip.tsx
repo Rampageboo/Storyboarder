@@ -31,6 +31,9 @@ export function BoardStrip() {
     initialLoading,
     projectActionBusy,
     visualEpoch,
+    segmentRange,
+    pickSegmentShot,
+    clearSegmentRange,
   } = useProject()
   const [busy, setBusy] = useState(false)
   const [missingShots, setMissingShots] = useState<Set<string>>(new Set())
@@ -39,6 +42,18 @@ export function BoardStrip() {
   const shots = project?.shots ?? []
   const selectedIndex = useMemo(() => shots.findIndex((s) => s.shot_id === selectedShotId), [shots, selectedShotId])
   const disabled = busy || projectActionBusy || initialLoading
+
+  // Reference-segment range (normalized by board order for display + the connecting line).
+  const anchorIdx = segmentRange.anchorShotId ? shots.findIndex((s) => s.shot_id === segmentRange.anchorShotId) : -1
+  const endIdx = segmentRange.endShotId ? shots.findIndex((s) => s.shot_id === segmentRange.endShotId) : -1
+  const bothSet = anchorIdx >= 0 && endIdx >= 0
+  const lo = bothSet ? Math.min(anchorIdx, endIdx) : -1
+  const hi = bothSet ? Math.max(anchorIdx, endIdx) : -1
+  const rangeLabel = bothSet
+    ? `Reference range: #${lo + 1} → #${hi + 1}`
+    : anchorIdx >= 0
+      ? `Reference start: #${anchorIdx + 1} (pick an end board)`
+      : ''
 
   useEffect(() => {
     if (!selectedShotId || !viewportRef.current) return
@@ -142,9 +157,18 @@ export function BoardStrip() {
         <span className="board-strip-title">
           Boards <span className="board-strip-count">({shots.length})</span>
         </span>
-        <span className="board-strip-hint" title="Keyboard shortcuts">
-          ←/→ select · N add · Del delete · R sync · O open PS · ⌘/Ctrl+S save
-        </span>
+        {rangeLabel ? (
+          <span className="board-strip-segment">
+            {rangeLabel}
+            <button type="button" className="board-strip-segment-clear" onClick={() => clearSegmentRange()}>
+              clear
+            </button>
+          </span>
+        ) : (
+          <span className="board-strip-hint" title="Keyboard shortcuts">
+            ←/→ select · dots set ref range · N add · R sync · O open PS · ⌘/Ctrl+S save
+          </span>
+        )}
         <div className="board-strip-actions">
           <button type="button" onClick={() => void handleAdd()} disabled={disabled} title="Add board">
             + Add
@@ -185,7 +209,8 @@ export function BoardStrip() {
             </button>
           </div>
         ) : (
-          <div className="board-strip-track" role="list">
+          <div className="board-strip-scroller">
+            <div className="board-strip-track" role="list">
             {shots.map((shot, index) => {
               const isSelected = selectedShotId === shot.shot_id
               const label = shotDisplayLabel(shot)
@@ -245,6 +270,45 @@ export function BoardStrip() {
                 </button>
               )
             })}
+            </div>
+            <div className="board-strip-dotrail" aria-label="Reference segment range">
+              {shots.map((shot, index) => {
+                const inRange = bothSet && index >= lo && index <= hi
+                const isStart = bothSet && index === lo
+                const isEnd = bothSet && index === hi
+                const isAnchorOnly = !bothSet && index === anchorIdx
+                const cellClass = [
+                  'board-strip-dotcell',
+                  inRange ? 'in-range' : '',
+                  isStart ? 'range-start' : '',
+                  isEnd ? 'range-end' : '',
+                  bothSet && lo === hi ? 'range-single' : '',
+                ]
+                  .filter(Boolean)
+                  .join(' ')
+                const dotClass = [
+                  'board-strip-dot',
+                  inRange ? 'in-range' : '',
+                  isStart || isEnd ? 'endpoint' : '',
+                  isStart ? 'start' : '',
+                  isEnd ? 'end' : '',
+                  isAnchorOnly ? 'anchor-only' : '',
+                ]
+                  .filter(Boolean)
+                  .join(' ')
+                return (
+                  <div className={cellClass} key={shot.shot_id}>
+                    <button
+                      type="button"
+                      className={dotClass}
+                      onClick={() => pickSegmentShot(shot.shot_id)}
+                      title={`Board #${index + 1} — click to set reference range start/end`}
+                      aria-label={`Set reference range at board ${index + 1}`}
+                    />
+                  </div>
+                )
+              })}
+            </div>
           </div>
         )}
       </div>

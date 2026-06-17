@@ -61,15 +61,23 @@ function RefPreview({ link }: { link: ReferenceLink }) {
 }
 
 export function ReferenceSidebar() {
-  const { project, selectedShotId, setProject, flushDirtyShots, projectActionBusy, reportError } = useProject()
+  const {
+    project,
+    selectedShotId,
+    setProject,
+    flushDirtyShots,
+    projectActionBusy,
+    reportError,
+    segmentRange,
+    setSegmentAnchor,
+    setSegmentEnd,
+  } = useProject()
   const [busy, setBusy] = useState(false)
   const [note, setNote] = useState('')
   const [lightbox, setLightbox] = useState<ReferenceLink | null>(null)
   const importRef = useRef<HTMLInputElement | null>(null)
 
   const [refId, setRefId] = useState('')
-  const [startShot, setStartShot] = useState('')
-  const [endShot, setEndShot] = useState('')
   const [startTime, setStartTime] = useState('0')
   const [undoToken, setUndoToken] = useState('')
 
@@ -79,16 +87,21 @@ export function ReferenceSidebar() {
     [project?.settings?.ref_segments],
   )
   const shots = project?.shots ?? []
+  // Start/end boards are the shared segment range (kept in sync with the filmstrip dots).
+  const startShot = segmentRange.anchorShotId ?? ''
+  const endShot = segmentRange.endShotId ?? ''
 
   useEffect(() => {
     setRefId((cur) => (cur && links.some((l) => l.id === cur) ? cur : links[0]?.id ?? ''))
   }, [links])
 
+  // Seed the range to the selected board only when it is empty, so it never clobbers dot picks.
   useEffect(() => {
-    if (selectedShotId) {
-      setStartShot(selectedShotId)
-      setEndShot(selectedShotId)
+    if (selectedShotId && !segmentRange.anchorShotId && !segmentRange.endShotId) {
+      setSegmentAnchor(selectedShotId)
+      setSegmentEnd(selectedShotId)
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedShotId])
 
   if (!project) return null
@@ -284,7 +297,7 @@ export function ReferenceSidebar() {
           </label>
           <label className="ref-segment-field">
             <span>Start board</span>
-            <select value={startShot} onChange={(e) => setStartShot(e.target.value)}>
+            <select value={startShot} onChange={(e) => setSegmentAnchor(e.target.value || null)}>
               {shots.map((s) => (
                 <option key={s.shot_id} value={s.shot_id}>
                   {shotLabel(s.shot_id)}
@@ -294,7 +307,7 @@ export function ReferenceSidebar() {
           </label>
           <label className="ref-segment-field">
             <span>End board</span>
-            <select value={endShot} onChange={(e) => setEndShot(e.target.value)}>
+            <select value={endShot} onChange={(e) => setSegmentEnd(e.target.value || null)}>
               {shots.map((s) => (
                 <option key={s.shot_id} value={s.shot_id}>
                   {shotLabel(s.shot_id)}
