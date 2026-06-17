@@ -150,6 +150,59 @@ def _clear_ref_segment_provenance(shot: Shot, segment_id: str | None = None) -> 
     shot.camera_data = camera_data
 
 
+def _strip_ref_segment_provenance(shot: Shot) -> None:
+    """Remove all reference-segment provenance keys from a board being cleared."""
+    camera_data = dict(shot.camera_data or {})
+    for key in _REF_SEGMENT_CAMERA_KEYS:
+        camera_data.pop(key, None)
+    shot.camera_data = camera_data
+
+
+def _shot_needs_legacy_range_bake_cleanup(
+    project: Project,
+    shot: Shot,
+    seg_id: str,
+    segment_ref_path: str,
+) -> bool:
+    """Catch legacy boards in a segment range that still carry bake artefacts."""
+    camera_data = shot.camera_data or {}
+    provenance_id = str(camera_data.get("ref_segment_id", "") or "").strip()
+    if provenance_id and provenance_id != seg_id:
+        return False
+    if provenance_id == seg_id:
+        return True
+    if segment_ref_path and pm._normalize_rel_path(shot.ref_video_path or "") == pm._normalize_rel_path(
+        segment_ref_path
+    ):
+        return True
+    if pm.get_shot_board_background_path(project, shot) is not None:
+        return True
+    return bool(
+        shot.ref_video_path
+        and (
+            shot.preview_image_path
+            or shot.image_path
+            or (shot.ref_segment_time or 0) > 0
+            or (shot.ref_video_time or 0) > 0
+        )
+    )
+
+
+def _shot_should_clear_segment_bake(
+    project: Project,
+    shot: Shot,
+    seg_id: str,
+    segment_ref_path: str,
+    *,
+    in_segment_range: bool,
+) -> bool:
+    if _shot_matches_segment_bake(shot, segment_ref_path, seg_id):
+        return True
+    if not in_segment_range:
+        return False
+    return _shot_needs_legacy_range_bake_cleanup(project, shot, seg_id, segment_ref_path)
+
+
 def _shot_matches_segment_bake(shot: Shot, segment_ref_path: str, seg_id: str) -> bool:
     camera_data = shot.camera_data or {}
     if str(camera_data.get("ref_segment_id", "") or "").strip() == seg_id:
@@ -189,20 +242,69 @@ def _refresh_shot_preview_from_psd(project: Project, shot: Shot) -> None:
     pm._set_shot_preview_paths(project, shot, preview_path)
 
 
-def _clear_ref_segment_bake_for_shot(project: Project, shot: Shot, seg_id: str) -> None:
-    _clear_ref_segment_provenance(shot, seg_id)
+def _segment_index_range_from_record(project: Project, segment: dict[str, Any]) -> tuple[int, int] | None:
+    anchor = str(segment.get("anchor_shot_id", "") or "").strip()
+    end = str(segment.get("end_shot_id", "") or "").strip()
+    if not anchor or not end:
+        return None
+    try:
+        return _segment_board_range_by_shot_id(project.shots, anchor, end)
+    except ValueError:
+        return None
+
+
+def _segments_overlap_records(project: Project, left: dict[str, Any], right: dict[str, Any]) -> bool:
+    left_range = _segment_index_range_from_record(project, left)
+    right_range = _segment_index_range_from_record(project, right)
+    if left_range is None or right_range is None:
+        return False
+    return left_range[0] <= right_range[1] and right_range[0] <= left_range[1]
+
+
+def _restore_blank_canvas_preview(project: Project, shot: Shot) -> None:
+    from .canvas_settings import get_canvas_color, get_canvas_size
+    from .image_utils import create_solid_preview_png
+
+    width, height = get_canvas_size(project)
+    color = get_canvas_color(project)
+    shot_dir = pm.get_shot_dir(project, shot)
+    preview_path = shot_dir / f"{shot.shot_id}_preview.png"
+    create_solid_preview_png(preview_path, width, height, color)
+    pm._set_shot_preview_paths(project, shot, preview_path)
+
+
+def _clear_shot_preview_paths(shot: Shot) -> None:
+    shot.preview_image_path = ""
+    shot.image_path = ""
+    shot.thumbnail_path = ""
+    shot.source_sync_mtime = 0.0
+
+
+def _clear_ref_segment_bake_for_shot(
+    project: Project,
+    shot: Shot,
+    seg_id: str,
+    segment_ref_path: str,
+) -> None:
+    del seg_id, segment_ref_path  # matching is done by callers before this runs
+    _strip_ref_segment_provenance(shot)
+
     shot.ref_video_path = ""
     shot.ref_video_time = 0.0
     shot.ref_segment_time = 0.0
+
     shot_dir = pm.get_shot_dir(project, shot)
     for name in _board_bake_filenames(shot):
         (shot_dir / name).unlink(missing_ok=True)
+    (shot_dir / f"{shot.shot_id}_ref_raw.png").unlink(missing_ok=True)
+
     if pm.shot_has_psd_canvas(project, shot):
         _refresh_shot_preview_from_psd(project, shot)
-    else:
-        shot.preview_image_path = ""
-        shot.image_path = ""
-        shot.thumbnail_path = ""
+        return
+
+    # For non-PSD boards, do not recreate a per-shot solid preview; the canvas
+    # background is a global UI backdrop.
+    _clear_shot_preview_paths(shot)
 
 
 def normalize_ref_segments(settings: dict[str, Any]) -> list[dict[str, Any]]:
@@ -847,6 +949,7 @@ def apply_ref_segment_3d_to_boards(
     camera_name: str = "",
 ) -> dict[str, Any]:
     from datetime import datetime, timezone
+    from .image_utils import is_solid_color_image
 
     shots = project.shots
     min_index, max_index = _segment_board_range(shots, anchor_index, end_index)
@@ -872,6 +975,22 @@ def apply_ref_segment_3d_to_boards(
     anim_span = max(0.001, storyboard_duration)
     fit_mode = normalize_reference_fit_mode(str(model_seg.get("fit_mode", "") or "fit"))
     applied: list[dict[str, Any]] = []
+
+    eligible_preview_indices: set[int] = set()
+    for index in range(min_index, max_index + 1):
+        shot = shots[index]
+        preview_rel = str(shot.preview_image_path or shot.image_path or "").strip()
+        if not preview_rel:
+            continue
+        preview_path = (project.root_path / preview_rel).resolve()
+        if not preview_path.is_file() or is_solid_color_image(preview_path):
+            continue
+        eligible_preview_indices.add(index)
+    if not eligible_preview_indices:
+        raise ValueError(
+            "3D reference apply needs existing non-empty board previews in range. "
+            "Capture a board preview first (Scene3D/Photoshop), or use image/video reference apply."
+        )
 
     for index in range(min_index, max_index + 1):
         shot = shots[index]
@@ -912,9 +1031,12 @@ def apply_ref_segment_3d_to_boards(
         if not preview_rel:
             continue
         preview_path = (project.root_path / preview_rel).resolve()
-        if preview_path.is_file():
-            composed = pm._apply_reference_frame_to_shot(project, shot, preview_path, fit_mode)
-            shot.source_sync_mtime = composed.stat().st_mtime
+        if not preview_path.is_file():
+            continue
+        if index not in eligible_preview_indices:
+            continue
+        composed = pm._apply_reference_frame_to_shot(project, shot, preview_path, fit_mode)
+        shot.source_sync_mtime = composed.stat().st_mtime
 
     _persist_ref_segment_apply(
         project,
@@ -1015,17 +1137,6 @@ def apply_ref_segment_image_to_boards(
     }
 
 
-def _shot_has_segment_bake_artifacts(shot: Shot, seg_id: str) -> bool:
-    camera_data = shot.camera_data or {}
-    if str(camera_data.get("ref_segment_id", "") or "").strip() == seg_id:
-        return True
-    return bool(
-        shot.ref_video_path
-        or shot.preview_image_path
-        or shot.image_path
-        or (shot.ref_segment_time or 0) > 0
-        or (shot.ref_video_time or 0) > 0
-    )
 
 
 def delete_ref_segment(project: Project, segment_id: str) -> dict[str, Any]:
@@ -1047,25 +1158,38 @@ def delete_ref_segment(project: Project, segment_id: str) -> dict[str, Any]:
     except ValueError:
         min_index = max_index = -1
 
-    cleared_ids: set[str] = set()
-    for shot in project.shots:
-        if not _shot_matches_segment_bake(shot, segment_ref_path, seg_id):
-            continue
-        _clear_ref_segment_bake_for_shot(project, shot, seg_id)
-        cleared_ids.add(shot.shot_id)
-
+    range_shot_ids: set[str] = set()
     if min_index >= 0:
         for index in range(min_index, max_index + 1):
-            shot = project.shots[index]
-            if shot.shot_id in cleared_ids:
-                continue
-            if _shot_has_segment_bake_artifacts(shot, seg_id):
-                _clear_ref_segment_bake_for_shot(project, shot, seg_id)
-                cleared_ids.add(shot.shot_id)
+            range_shot_ids.add(project.shots[index].shot_id)
+
+    cleared_ids: set[str] = set()
+    for shot in project.shots:
+        in_range = shot.shot_id in range_shot_ids
+        if not _shot_should_clear_segment_bake(
+            project,
+            shot,
+            seg_id,
+            segment_ref_path,
+            in_segment_range=in_range,
+        ):
+            continue
+        _clear_ref_segment_bake_for_shot(project, shot, seg_id, segment_ref_path)
+        cleared_ids.add(shot.shot_id)
 
     cleared = len(cleared_ids)
 
-    project.settings["ref_segments"] = [item for item in segments if item.get("id") != seg_id]
+    ids_to_remove = {seg_id}
+    for item in segments:
+        item_id = str(item.get("id", "") or "").strip()
+        if not item_id or item_id == seg_id:
+            continue
+        if _segments_overlap_records(project, segment, item):
+            ids_to_remove.add(item_id)
+
+    project.settings["ref_segments"] = [
+        item for item in segments if str(item.get("id", "") or "").strip() not in ids_to_remove
+    ]
 
     apply_meta = project.settings.get("ref_segment_apply") or {}
     if str(apply_meta.get("segment_id", "") or "").strip() == seg_id:

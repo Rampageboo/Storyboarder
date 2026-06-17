@@ -10,6 +10,7 @@
   --board-strip-card-width: 148px;
   --board-strip-card-height: 132px;
   --board-strip-thumb-height: 84px;
+  --thumb-empty-bg: var(--canvas-well);
   --workspace-gap: 8px;
   --panel-padding: 14px;
 

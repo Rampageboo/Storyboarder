@@ -76,7 +76,6 @@ def persist_canvas_color(project: Project, color: str, shot: Shot | None = None)
     project.settings["canvas_background_color"] = normalized
     pm.save_settings(project)
     write_canvas_color_files(project, normalized, shot)
-    sync_canvas_color_to_shots(project, normalized)
     return normalized
 
 
@@ -85,7 +84,12 @@ def shot_has_artwork_preview(shot: Shot) -> bool:
 
 
 def sync_canvas_color_to_shots(project: Project, color: str) -> bool:
-    """Keep blank-canvas shots aligned with the global canvas color."""
+    """Legacy helper: previously generated per-shot solid previews.
+
+    The React UI now treats the canvas background as a global, non-destructive UI
+    backdrop. We avoid generating per-shot "default background" PNGs so deleting
+    a preview never removes the canvas background.
+    """
     normalized = normalize_hex_color(color)
     changed = False
     for shot in project.shots:
@@ -106,22 +110,27 @@ def _sync_shot_canvas_color_assets(project: Project, shot: Shot, color: str) -> 
     shot_dir.mkdir(parents=True, exist_ok=True)
     preview_path = shot_dir / f"{shot.shot_id}_preview.png"
     thumb_path = shot_dir / f"{shot.shot_id}_thumb.png"
-    width, height = get_canvas_size(project)
 
     if not shot_has_artwork_preview(shot):
-        create_solid_preview_png(preview_path, width, height, color)
-        created_thumb = create_thumbnail(preview_path, thumb_path)
-        shot.thumbnail_path = created_thumb.relative_to(project.root_path).as_posix()
-        return True
+        # Do not generate per-shot default preview/thumbnail files. If old solid
+        # placeholders exist on disk from a previous version, clean them up.
+        changed = False
+        if preview_path.is_file() and is_solid_color_image(preview_path):
+            preview_path.unlink(missing_ok=True)
+            changed = True
+        if thumb_path.is_file() and is_solid_color_image(thumb_path):
+            thumb_path.unlink(missing_ok=True)
+            changed = True
+        if shot.thumbnail_path:
+            shot.thumbnail_path = ""
+            changed = True
+        return changed
 
     linked_preview = project.root_path / (shot.preview_image_path or shot.image_path)
     if linked_preview.is_file() and is_solid_color_image(linked_preview):
-        create_solid_preview_png(linked_preview, width, height, color)
-        created_thumb = create_thumbnail(linked_preview, thumb_path)
-        shot.thumbnail_path = created_thumb.relative_to(project.root_path).as_posix()
-        shot.preview_image_path = ""
-        shot.image_path = ""
-        return True
+        # Avoid rewriting the shot's preview fields; the UI will render the global
+        # canvas background when no artwork exists.
+        return False
 
     return False
 
@@ -184,8 +193,11 @@ def create_canvas_for_shot(
                 shutil.copy2(source, preview_path)
         pm._set_shot_preview_paths(project, shot, preview_path)
     else:
-        preview_path = create_solid_preview_png(preview_path, canvas_width, canvas_height, color)
-        _set_shot_canvas_thumbnail(project, shot, preview_path)
+        # No per-shot default background PNG; the canvas background is a UI backdrop.
+        # The PSD already contains the background color layer.
+        shot.thumbnail_path = ""
+        shot.preview_image_path = ""
+        shot.image_path = ""
     shot.source_file_path = psd_path.relative_to(project.root_path).as_posix()
     shot.source_sync_mtime = linked_mtime(project, shot)
     write_canvas_color_files(project, color, shot)

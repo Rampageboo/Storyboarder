@@ -46,6 +46,7 @@ export interface Shot {
   preview_disk_mtime?: number
   thumbnail_disk_mtime?: number
   has_board_background?: boolean
+  has_artwork_preview?: boolean
 }
 
 export interface ShotUpdate {

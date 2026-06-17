@@ -268,6 +268,42 @@ export function findRefSegment(
   return segments.find((s) => s.id === segmentId) ?? null
 }
 
+export function segmentBoardIndexRange(
+  segment: Pick<RefSegmentRecord, 'anchor_shot_id' | 'end_shot_id'>,
+  shots: Pick<Shot, 'shot_id'>[],
+): { lo: number; hi: number } | null {
+  const anchor = segment.anchor_shot_id ? String(segment.anchor_shot_id) : ''
+  const end = segment.end_shot_id ? String(segment.end_shot_id) : ''
+  const anchorIdx = shots.findIndex((shot) => shot.shot_id === anchor)
+  const endIdx = shots.findIndex((shot) => shot.shot_id === end)
+  if (anchorIdx < 0 || endIdx < 0) return null
+  return { lo: Math.min(anchorIdx, endIdx), hi: Math.max(anchorIdx, endIdx) }
+}
+
+export function segmentsOverlapBoardRange(
+  left: Pick<RefSegmentRecord, 'anchor_shot_id' | 'end_shot_id'>,
+  right: Pick<RefSegmentRecord, 'anchor_shot_id' | 'end_shot_id'>,
+  shots: Pick<Shot, 'shot_id'>[],
+): boolean {
+  const leftRange = segmentBoardIndexRange(left, shots)
+  const rightRange = segmentBoardIndexRange(right, shots)
+  if (!leftRange || !rightRange) return false
+  return leftRange.lo <= rightRange.hi && rightRange.lo <= leftRange.hi
+}
+
+/** Drop older segments that overlap a new apply range so markers do not stack. */
+export function refSegmentsWithoutOverlap(
+  segments: RefSegmentRecord[],
+  nextSegment: Pick<RefSegmentRecord, 'id' | 'anchor_shot_id' | 'end_shot_id'>,
+  shots: Pick<Shot, 'shot_id'>[],
+): RefSegmentRecord[] {
+  const nextId = nextSegment.id ? String(nextSegment.id) : ''
+  return segments.filter((segment) => {
+    if (!segment.id || String(segment.id) === nextId) return false
+    return !segmentsOverlapBoardRange(segment, nextSegment, shots)
+  })
+}
+
 export function segmentHasPendingBoards(
   segment: RefSegmentRecord,
   shots: Shot[],

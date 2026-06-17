@@ -371,13 +371,15 @@ export class Scene3DEditor {
       input.addEventListener("input", () => this._applyTransformInputs(key));
     });
     this.outlinerEl.addEventListener("click", (event) => {
-      const item = event.target.closest("[data-object-id]");
-      if (!item) return;
-      if (item.dataset.cameraId) {
-        this.setActiveCamera(item.dataset.cameraId);
+      const cameraItem = event.target.closest("[data-camera-id]");
+      if (cameraItem) {
+        this.setFollowCamera(true, { persist: false });
+        this.setActiveCamera(cameraItem.dataset.cameraId);
         return;
       }
-      this.selectObject(item.dataset.objectId);
+      const objectItem = event.target.closest("[data-object-id]");
+      if (!objectItem) return;
+      this.selectObject(objectItem.dataset.objectId);
     });
     this.followCameraEl.addEventListener("change", () => {
       this.setFollowCamera(this.followCameraEl.checked);
@@ -1253,6 +1255,8 @@ export class Scene3DEditor {
     if (persist) {
       this.sceneMeta = { ...(this.sceneMeta || {}), follow_camera: this.followCamera };
       this._scheduleSceneSettingsSave();
+      // User toggled follow/free view — let React persist it as the reference view.
+      this.callbacks.onViewChange?.();
     }
   }
 
@@ -1440,6 +1444,30 @@ export class Scene3DEditor {
       rotation: this.camera.rotation.toArray().slice(0, 3),
       fov: this.camera.fov,
       focal_length: Math.round(this._fovToFocalLength(this.camera.fov)),
+    };
+  }
+
+  // A reproducible snapshot of the current viewport for the GLB reference preview / apply.
+  // Unlike getCameraState (whose `target` is the stale orbit pivot when following a scene camera),
+  // this recomputes `target` along the actual view direction so a preview can always lookAt(target)
+  // and match the orientation in both free-orbit and follow-camera modes.
+  getViewState() {
+    const base = this.getCameraState();
+    const forward = this.camera.getWorldDirection(new THREE.Vector3());
+    const distance = Math.max(0.001, this.camera.position.distanceTo(this.orbit.target)) || 1;
+    const target = this.camera.position.clone().add(forward.multiplyScalar(distance));
+    const active = this.importedCameras.find((item) => item.id === this.activeCameraId) || null;
+    const usingSceneCamera = !!(this.followCamera && active);
+    return {
+      mode: usingSceneCamera ? "scene_camera" : "free_view",
+      // Only a scene_camera view names a camera; a free-orbit view must not leak the dropdown's
+      // still-selected camera (otherwise apply would stamp scene3d_camera for a "Free view").
+      camera_name: usingSceneCamera ? active?.name || "" : "",
+      time: Number(this.animationTime) || 0,
+      position: base.position,
+      target: target.toArray(),
+      rotation: base.rotation,
+      fov: base.fov,
     };
   }
 

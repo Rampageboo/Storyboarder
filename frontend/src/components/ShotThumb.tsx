@@ -4,7 +4,7 @@ import './ShotThumb.css'
 
 type ThumbStage = 'thumb' | 'image' | 'failed'
 
-/** Thumbnail with silent fallback: thumbnail → full image → placeholder. */
+/** Thumbnail with silent fallback: thumbnail → full image → empty placeholder. */
 export function ShotThumb({
   shotId,
   version,
@@ -15,24 +15,36 @@ export function ShotThumb({
   hasImage: boolean
 }) {
   const [stage, setStage] = useState<ThumbStage>(hasImage ? 'thumb' : 'failed')
+  const [loaded, setLoaded] = useState(false)
 
   useEffect(() => {
     setStage(hasImage ? 'thumb' : 'failed')
+    setLoaded(false)
   }, [shotId, version, hasImage])
 
-  if (stage === 'failed') {
-    return <div className="shot-thumb-empty">No image</div>
-  }
+  const showImage = hasImage && stage !== 'failed'
+  const imageSrc = showImage
+    ? `${stage === 'thumb' ? shotThumbnailUrl(shotId) : shotImageUrl(shotId)}?v=${encodeURIComponent(String(version))}`
+    : ''
 
-  const base = stage === 'thumb' ? shotThumbnailUrl(shotId) : shotImageUrl(shotId)
   return (
-    <img
-      className="shot-thumb-img"
-      src={`${base}?v=${encodeURIComponent(String(version))}`}
-      alt=""
-      loading="lazy"
-      draggable={false}
-      onError={() => setStage((s) => (s === 'thumb' ? 'image' : 'failed'))}
-    />
+    <div className="shot-thumb" data-stage={showImage ? stage : 'empty'}>
+      <div className="shot-thumb-placeholder" aria-hidden="true" />
+      {showImage ? (
+        <img
+          className={`shot-thumb-img ${loaded ? 'is-loaded' : 'is-loading'}`}
+          src={imageSrc}
+          alt=""
+          loading="lazy"
+          decoding="async"
+          draggable={false}
+          onLoad={() => setLoaded(true)}
+          onError={() => {
+            setLoaded(false)
+            setStage((current) => (current === 'thumb' ? 'image' : 'failed'))
+          }}
+        />
+      ) : null}
+    </div>
   )
 }

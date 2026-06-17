@@ -290,6 +290,7 @@
 }
 
 .scene3d-editor-root .scene3d-outliner li,
+.scene3d-editor-root .scene3d-outliner [data-camera-id],
 .scene3d-editor-root .scene3d-outliner [data-object-id] {
   padding: 5px 7px;
   border-radius: 7px;

@@ -83,6 +83,121 @@ function frameObject(camera, object, offset = 1.35) {
   return center;
 }
 
+function parseTriple(value) {
+  if (Array.isArray(value) && value.length >= 3) {
+    const out = [Number(value[0]), Number(value[1]), Number(value[2])];
+    if (out.every((n) => Number.isFinite(n))) return out;
+  }
+  return null;
+}
+
+// Parse the optional view descriptor serialized onto the canvas by ReferenceModelPreview.
+function parseView(canvas) {
+  const raw = canvas.dataset.refModelView;
+  if (!raw) return null;
+  try {
+    const data = JSON.parse(raw);
+    return data && typeof data === "object" ? data : null;
+  } catch {
+    return null;
+  }
+}
+
+function findNamedCamera(root, name) {
+  if (!root || !name) return null;
+  let found = null;
+  root.traverse?.((node) => {
+    if (found) return;
+    if (node?.isCamera && node.name === name) found = node;
+  });
+  return found;
+}
+
+// Set sane near/far from the model bounds so a supplied camera view never clips the model away.
+// Returns the model center for use as a lookAt fallback.
+function applyClipPlanesFromBounds(camera, object) {
+  const box = new THREE.Box3().setFromObject(object);
+  if (box.isEmpty()) return new THREE.Vector3();
+  const size = box.getSize(new THREE.Vector3());
+  const radius = Math.max(size.x, size.y, size.z) || 2;
+  camera.near = Math.max(0.001, radius / 500);
+  camera.far = Math.max(200, radius * 60);
+  camera.updateProjectionMatrix();
+  return box.getCenter(new THREE.Vector3());
+}
+
+// Apply a supplied view to the preview camera. Returns true if a usable view was applied; false
+// means the caller should fall back to generic frameObject() framing (never black-screens).
+function applySuppliedView(state, view) {
+  if (!view || !state.root) return false;
+  const camera = state.camera;
+  const center = applyClipPlanesFromBounds(camera, state.root);
+
+  const position = parseTriple(view.position);
+  if (position) {
+    camera.position.set(position[0], position[1], position[2]);
+    const fov = Number(view.fov);
+    if (Number.isFinite(fov) && fov > 0) {
+      camera.fov = fov;
+      camera.updateProjectionMatrix();
+    }
+    const target = parseTriple(view.target);
+    const rotation = parseTriple(view.rotation);
+    if (rotation) {
+      // Euler from the workspace camera — reproduces orientation including roll/banking, which a
+      // lookAt(target) with world-up would silently drop for a rolled scene camera.
+      camera.rotation.set(rotation[0], rotation[1], rotation[2]);
+    } else if (target) {
+      camera.lookAt(target[0], target[1], target[2]);
+    } else {
+      camera.lookAt(center);
+    }
+    return true;
+  }
+
+  // No numeric position — try resolving a scene camera by name inside the GLB.
+  const name = typeof view.camera_name === "string" ? view.camera_name : "";
+  const cam = findNamedCamera(state.root, name);
+  if (cam) {
+    cam.updateWorldMatrix(true, false);
+    const pos = new THREE.Vector3();
+    const quat = new THREE.Quaternion();
+    const scl = new THREE.Vector3();
+    cam.matrixWorld.decompose(pos, quat, scl);
+    camera.position.copy(pos);
+    camera.quaternion.copy(quat);
+    if (cam.isPerspectiveCamera && Number.isFinite(cam.fov)) {
+      camera.fov = cam.fov;
+      camera.updateProjectionMatrix();
+    }
+    return true;
+  }
+
+  return false;
+}
+
+// Frame the model with the supplied view if present/usable, else the default orbit framing.
+// Records whether a view drove the camera (state.hasView) so the render loop can skip the
+// idle auto-rotate when reproducing a specific camera.
+function applyViewOrFrame(state) {
+  let applied = false;
+  const view = parseView(state.canvas);
+  if (view) {
+    try {
+      applied = applySuppliedView(state, view);
+    } catch (error) {
+      console.warn("Reference 3D preview view apply failed:", error);
+      applied = false;
+    }
+  }
+  if (!applied) {
+    const center = frameObject(state.camera, state.root);
+    if (center) state.center.copy(center);
+  }
+  state.hasView = applied;
+  state.viewKey = state.canvas.dataset.refModelView || "";
+}
+
 function safeRender(state) {
   if (!state || state.disposed || !state.renderer) return;
   try {
@@ -139,6 +254,8 @@ async function mountPreview(canvas) {
     camera,
     root: null,
     center: new THREE.Vector3(),
+    hasView: false,
+    viewKey: "",
     rafId: 0,
     visible: false,
     observer: null,
@@ -166,7 +283,8 @@ async function mountPreview(canvas) {
 
   const renderFrame = (time = 0) => {
     if (state.disposed) return;
-    if (state.root) state.root.rotation.y = time * 0.00035;
+    // Idle spin for generic library thumbnails; hold still when reproducing a specific camera.
+    if (state.root && !state.hasView) state.root.rotation.y = time * 0.00035;
     safeRender(state);
   };
 
@@ -210,8 +328,7 @@ async function mountPreview(canvas) {
     }
     state.root = gltf.scene;
     scene.add(state.root);
-    const center = frameObject(camera, state.root);
-    if (center) state.center.copy(center);
+    applyViewOrFrame(state);
     canvas.dataset.refModelStatus = "ready";
     resize();
     renderFrame();
@@ -230,7 +347,21 @@ export function hydrateReferenceModelPreviews(root = document) {
   });
 }
 
+// Re-apply the camera/view to an already-mounted preview when its data-ref-model-view changes,
+// without recreating the WebGL context. Previews still loading are skipped — mountPreview reads
+// the latest view attribute when its model finishes loading.
+export function applyReferenceModelView(root = document) {
+  root.querySelectorAll("[data-ref-model-preview]").forEach((canvas) => {
+    const state = previewState.get(canvas);
+    if (!state || state.disposed || !state.root) return;
+    if ((canvas.dataset.refModelView || "") === state.viewKey) return;
+    applyViewOrFrame(state);
+    safeRender(state);
+  });
+}
+
 window.disposeReferenceModelPreviews = disposeReferenceModelPreviews;
 window.hydrateReferenceModelPreviews = hydrateReferenceModelPreviews;
+window.applyReferenceModelView = applyReferenceModelView;
 window.dispatchEvent(new Event("reference-model-preview-ready"));
 document.querySelectorAll(".reference-media-panel").forEach((panel) => hydrateReferenceModelPreviews(panel));

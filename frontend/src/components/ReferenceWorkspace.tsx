@@ -14,6 +14,7 @@ import {
 import type { ProjectPayload, ReferenceLink } from '../types'
 import { useProject } from '../state/ProjectContext'
 import { shotDisplayLabel } from '../utils/shotDisplay'
+import { refSegmentsWithoutOverlap } from '../utils/refSegmentDisplay'
 import './ReferenceWorkspace.css'
 
 // A persisted reference segment (loose shape — the backend normalizes it on save/load).
@@ -142,7 +143,7 @@ export function ReferenceWorkspace() {
     void (async () => {
       try {
         await flushDirtyShots()
-        const existing = segments.filter((s) => s.id && s.id !== segId)
+        const existing = refSegmentsWithoutOverlap(segments, seg, shots)
         await updateSettings({ ref_segments: [...existing, seg], active_ref_segment_id: segId })
         const body: ApplyRefSegmentRequest = { anchor_shot_id: startShot, end_shot_id: endShot, segment_id: segId }
         let payload: ProjectPayload

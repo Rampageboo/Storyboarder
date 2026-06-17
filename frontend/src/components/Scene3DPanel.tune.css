@@ -95,6 +95,7 @@
 }
 
 .scene3d-editor-root .scene3d-outliner li.active,
+.scene3d-editor-root .scene3d-outliner [data-camera-id].active,
 .scene3d-editor-root .scene3d-outliner [data-object-id].active {
   border-color: #8ea2ff;
   background: rgba(111, 140, 255, 0.18);
@@ -102,6 +103,7 @@
 }
 
 .scene3d-editor-root .scene3d-outliner li:hover,
+.scene3d-editor-root .scene3d-outliner [data-camera-id]:hover,
 .scene3d-editor-root .scene3d-outliner [data-object-id]:hover {
   border-color: rgba(142, 162, 255, 0.8);
   background: rgba(111, 140, 255, 0.12);

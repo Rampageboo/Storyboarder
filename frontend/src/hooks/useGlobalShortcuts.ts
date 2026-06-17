@@ -91,9 +91,10 @@ export function useGlobalShortcuts() {
           event.preventDefault()
           if (activeAppliedSegmentId) {
             if (!window.confirm('Delete this applied reference segment and clear its generated board backgrounds/previews?')) break
+            const segmentId = activeAppliedSegmentId
+            dismissRefSegmentUi()
             void run(async () => {
-              setProject(await deleteRefSegment(activeAppliedSegmentId))
-              dismissRefSegmentUi()
+              setProject(await deleteRefSegment(segmentId))
             })
             break
           }

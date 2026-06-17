@@ -3,6 +3,7 @@ import { importScene3d, openBlenderScene, updateSettings, updateShot, uploadShot
 import { useProject } from '../state/ProjectContext'
 import type { ProjectPayload, Shot, ShotUpdate } from '../types'
 import { shotDisplayLabel } from '../utils/shotDisplay'
+import type { Scene3dReferenceView } from '../utils/scene3dView'
 import './Scene3DPanel.css'
 import './Scene3DPanel.tune.css'
 
@@ -17,6 +18,7 @@ type Scene3DEditorInstance = {
   reloadBlenderScene?: () => Promise<void>
   captureFrameDataUrl?: () => string
   getAnimationState?: () => { time?: number; camera_name?: string }
+  getViewState?: () => Scene3dReferenceView | null
   exportSceneData?: () => Scene3DSettings
   pauseAnimation?: () => void
   setFollowCamera?: (enabled: boolean, options?: Record<string, unknown>) => void
@@ -128,6 +130,7 @@ export function Scene3DPanel() {
   const editorRef = useRef<Scene3DEditorInstance | null>(null)
   const loadedSceneKeyRef = useRef('')
   const persistTimerRef = useRef<number | null>(null)
+  const refViewTimerRef = useRef<number | null>(null)
   const projectRef = useRef<ProjectPayload | null>(null)
   const selectedShotIdRef = useRef<string | null>(null)
 
@@ -170,12 +173,36 @@ export function Scene3DPanel() {
   const persistSceneSettings = useCallback(
     async (nextScene: Scene3DSettings) => {
       await flushDirtyShots()
-      const payload = await updateSettings({ scene3d: nextScene })
+      // exportSceneData() doesn't carry the React-managed reference view; preserve any existing one
+      // so saving the scene (or an object edit) never wipes settings.scene3d.reference_view.
+      const prev = sceneSettings(projectRef.current)
+      const merged: Scene3DSettings = { ...nextScene }
+      if (merged.reference_view == null && prev.reference_view != null) merged.reference_view = prev.reference_view
+      const payload = await updateSettings({ scene3d: merged })
       setProject(payload)
       setNote('3D scene settings saved.')
     },
     [flushDirtyShots, setProject],
   )
+
+  // Persist the current workspace view to settings.scene3d.reference_view so the GLB reference
+  // assignment preview/apply can reuse it. Silent + debounced so camera tweaks don't spam saves.
+  const persistReferenceView = useCallback(() => {
+    const view = editorRef.current?.getViewState?.()
+    if (!view) return
+    if (refViewTimerRef.current) window.clearTimeout(refViewTimerRef.current)
+    refViewTimerRef.current = window.setTimeout(() => {
+      void (async () => {
+        try {
+          await flushDirtyShots()
+          const merged: Scene3DSettings = { ...sceneSettings(projectRef.current), reference_view: view }
+          setProject(await updateSettings({ scene3d: merged }))
+        } catch (error) {
+          reportError(error)
+        }
+      })()
+    }, 400)
+  }, [flushDirtyShots, reportError, setProject])
 
   const schedulePersistSceneSettings = useCallback(
     (nextScene: Scene3DSettings) => {
@@ -280,10 +307,13 @@ export function Scene3DPanel() {
       const imagePayload = await uploadShotImage(shot.shot_id, file)
       const savedShot = imagePayload.shots.find((item) => item.shot_id === shot.shot_id) ?? shot
       const anim = editor.getAnimationState?.() ?? {}
+      const view = editor.getViewState?.() ?? null
       const cameraData = {
         ...(savedShot.camera_data || {}),
         scene3d_time: Number(anim.time ?? 0),
         scene3d_camera: String(anim.camera_name ?? ''),
+        // Full reproducible view so the GLB reference preview can match this captured board exactly.
+        ...(view ? { scene3d_view: view } : {}),
       }
       const payload = await updateShot(savedShot.shot_id, { ...shotToUpdate(savedShot), camera_data: cameraData })
       setProject(payload)
@@ -312,6 +342,7 @@ export function Scene3DPanel() {
       onCaptureToBoard: () => void captureToBoard(),
       onMessage: (message: string) => setNote(message),
       onSceneSettingsChange: (nextScene: Scene3DSettings) => schedulePersistSceneSettings(nextScene),
+      onViewChange: () => persistReferenceView(),
     })
     const cameraSelect = root.querySelector<HTMLSelectElement>('[data-camera-select]')
     cameraSelect?.addEventListener('change', () => {
@@ -320,11 +351,13 @@ export function Scene3DPanel() {
       editor.setFollowCamera?.(true, { persist: false })
       editor.setActiveCamera?.(cameraId, true)
       setNote(`Camera view: ${cameraSelect.selectedOptions[0]?.textContent || cameraId}`)
+      // Let the editor settle on the new camera, then snapshot it as the reference view.
+      requestAnimationFrame(() => persistReferenceView())
     })
     editorRef.current = editor
     setEditorReady(true)
     return editor
-  }, [applyCameraFromEditor, captureToBoard, currentShot, getBoardLabel, getBoardPreviewUrl, getShotScene3dTime, openBlender, schedulePersistSceneSettings])
+  }, [applyCameraFromEditor, captureToBoard, currentShot, getBoardLabel, getBoardPreviewUrl, getShotScene3dTime, openBlender, persistReferenceView, schedulePersistSceneSettings])
 
   const loadEditorScene = useCallback(async () => {
     if (!projectRef.current) return
@@ -352,9 +385,11 @@ export function Scene3DPanel() {
   }, [loadEditorScene, reportError])
 
   const closeWorkspace = useCallback(() => {
+    // Capture whatever view (incl. free-orbit) the user left the workspace at.
+    persistReferenceView()
     editorRef.current?.pauseAnimation?.()
     setWorkspaceOpen(false)
-  }, [])
+  }, [persistReferenceView])
 
   const reloadGlb = useCallback(async () => {
     if (!editorRef.current?.reloadBlenderScene) {
@@ -388,6 +423,7 @@ export function Scene3DPanel() {
   useEffect(
     () => () => {
       if (persistTimerRef.current) window.clearTimeout(persistTimerRef.current)
+      if (refViewTimerRef.current) window.clearTimeout(refViewTimerRef.current)
       editorRef.current?.pauseAnimation?.()
     },
     [],

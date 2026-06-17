@@ -1,4 +1,4 @@
-import { useCallback, useEffect } from 'react'
+import { useCallback, useEffect, type CSSProperties } from 'react'
 import { Topbar } from './components/Topbar'
 import { ShotInspector } from './components/ShotInspector'
 import { BoardStrip } from './components/BoardStrip'
@@ -55,12 +55,17 @@ function AppInner() {
   const { project, initialLoading, lastError, clearError, reloadProject } = useProject()
   useGlobalShortcuts()
 
+  const themeVars: CSSProperties = {
+    '--thumb-empty-bg': project?.settings?.canvas_background_color || undefined,
+    '--canvas-empty-bg': project?.settings?.canvas_background_color || undefined,
+  } as CSSProperties
+
   useEffect(() => {
     void reloadProject()
   }, [reloadProject])
 
   return (
-    <div className="app-root">
+    <div className="app-root" style={themeVars}>
       <Topbar />
       {lastError ? (
         <div className="app-banner" role="alert">

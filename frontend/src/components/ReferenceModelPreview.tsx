@@ -1,11 +1,13 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { projectFileUrl } from '../api'
+import type { Scene3dReferenceView } from '../utils/scene3dView'
 import './ReferenceModelPreview.css'
 
 declare global {
   interface Window {
     hydrateReferenceModelPreviews?: (root?: ParentNode) => void
     disposeReferenceModelPreviews?: (root?: ParentNode) => void
+    applyReferenceModelView?: (root?: ParentNode) => void
   }
 }
 
@@ -29,14 +31,19 @@ export function ReferenceModelPreview({
   path,
   label,
   compact = false,
+  view = null,
 }: {
   path: string
   label: string
   compact?: boolean
+  /** Optional Scene3D view to reproduce instead of the generic framed orbit preview. */
+  view?: Scene3dReferenceView | null
 }) {
   const rootRef = useRef<HTMLDivElement | null>(null)
   const [moduleFailed, setModuleFailed] = useState(false)
   const previewUrl = useMemo(() => `${projectFileUrl(path)}&preview=model`, [path])
+  // Empty string (not undefined) so the canvas attribute clears cleanly when there is no view.
+  const viewJson = useMemo(() => (view ? JSON.stringify(view) : ''), [view])
 
   useEffect(() => {
     const root = rootRef.current
@@ -68,6 +75,27 @@ export function ReferenceModelPreview({
     }
   }, [path, previewUrl])
 
+  // Re-apply the camera/view when it changes for an already-mounted preview (no remount, so the
+  // WebGL context is reused). Runs for both directions — setting a view AND clearing it back to ''
+  // (the runtime then falls back to frameObject + resumes auto-rotate). On first mount the runtime
+  // reads the view attribute itself.
+  useEffect(() => {
+    const root = rootRef.current
+    if (!root) return
+    let cancelled = false
+    void loadReferenceModelPreviewModule()
+      .then(() => {
+        if (cancelled) return
+        requestAnimationFrame(() => {
+          if (!cancelled) window.applyReferenceModelView?.(root)
+        })
+      })
+      .catch(() => {})
+    return () => {
+      cancelled = true
+    }
+  }, [viewJson])
+
   return (
     <div className={`ref-model-preview ${compact ? 'is-compact' : ''}`} ref={rootRef} title={label}>
       {moduleFailed ? (
@@ -75,7 +103,12 @@ export function ReferenceModelPreview({
           3D
         </div>
       ) : (
-        <canvas key={previewUrl} data-ref-model-preview={previewUrl} aria-label={`3D preview: ${label}`} />
+        <canvas
+          key={previewUrl}
+          data-ref-model-preview={previewUrl}
+          data-ref-model-view={viewJson}
+          aria-label={`3D preview: ${label}`}
+        />
       )}
       <div className="ref-model-preview-badge">3D</div>
     </div>

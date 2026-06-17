@@ -229,6 +229,32 @@
   font-family: var(--font-mono);
 }
 
+/* Which Scene3D view the GLB preview/apply is using (scene camera / free view / generic),
+   plus a note that 3D apply is metadata-only (the board image comes from Scene3D capture). */
+.ref-assign-3d-info {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-top: 4px;
+}
+
+.ref-assign-3d-view {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--color-accent, #4c7dff);
+}
+
+.ref-assign-3d-view.is-generic {
+  font-weight: 500;
+  color: var(--color-muted);
+}
+
+.ref-assign-3d-note {
+  font-size: 10px;
+  line-height: 1.35;
+  color: var(--color-muted);
+}
+
 .ref-assign-player {
   position: relative;
   aspect-ratio: 16 / 9;

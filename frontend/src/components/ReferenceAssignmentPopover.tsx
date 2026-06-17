@@ -13,7 +13,8 @@ import {
 import type { ProjectPayload, ReferenceLink } from '../types'
 import { useProject } from '../state/ProjectContext'
 import { shotDisplayLabel } from '../utils/shotDisplay'
-import { findRefSegment, segmentHasPendingBoards } from '../utils/refSegmentDisplay'
+import { findRefSegment, refSegmentsWithoutOverlap, segmentHasPendingBoards } from '../utils/refSegmentDisplay'
+import { describeScene3dView, resolveScene3dReferenceView } from '../utils/scene3dView'
 import { ReferenceModelPreview } from './ReferenceModelPreview'
 import './ReferenceAssignmentPopover.css'
 
@@ -281,6 +282,14 @@ export function ReferenceAssignmentPopover() {
     return segmentHasPendingBoards(seg, shots, links)
   }, [isInspectMode, inspectSegment, shots, links])
 
+  // For GLB/model references, resolve which Scene3D view to preview/apply with (anchor shot's saved
+  // view → workspace reference_view → scene camera name → generic). Null ⇒ generic framed preview.
+  const anchorShot = useMemo(() => shots.find((s) => s.shot_id === startShot) ?? null, [shots, startShot])
+  const scene3dView = useMemo(
+    () => (refMode === 'model' ? resolveScene3dReferenceView({ shot: anchorShot, settings: project?.settings ?? null }) : null),
+    [refMode, anchorShot, project?.settings],
+  )
+
   useEffect(() => {
     if (!isInspectMode || !inspectSegment) return
     const ref = inspectSegment.reference_id
@@ -415,12 +424,17 @@ export function ReferenceAssignmentPopover() {
     void (async () => {
       try {
         await flushDirtyShots()
-        const existing = segments.filter((s) => s.id && s.id !== segId)
+        const existing = refSegmentsWithoutOverlap(segments, seg, shots)
         await updateSettings({ ref_segments: [...existing, seg], active_ref_segment_id: segId })
         const body: ApplyRefSegmentRequest = { anchor_shot_id: startShot, end_shot_id: endShot, segment_id: segId }
         let payload: ProjectPayload
         if (selectedRef.type === 'image') payload = await applyRefSegmentImage(body)
-        else if (selectedRef.type === 'model') payload = await applyRefSegment3d({ ...body, camera_name: '' })
+        else if (selectedRef.type === 'model')
+          payload = await applyRefSegment3d({
+            // Only a scene-camera view stamps a camera name; a free view records time only.
+            ...body,
+            camera_name: scene3dView?.mode === 'scene_camera' ? scene3dView.camera_name || '' : '',
+          })
         else payload = await applyRefSegment(body)
         setProject(payload)
         const result = payload as unknown as { board_count?: number; undo_token?: string }
@@ -444,12 +458,13 @@ export function ReferenceAssignmentPopover() {
   const deleteSegment = () => {
     if (!activeAppliedSegmentId) return
     if (!window.confirm('Delete this applied reference segment and clear its generated board backgrounds/previews?')) return
+    const segmentId = activeAppliedSegmentId
+    dismissRefSegmentUi()
     setBusy(true)
     void (async () => {
       try {
         await flushDirtyShots()
-        setProject(await deleteRefSegment(activeAppliedSegmentId))
-        dismissRefSegmentUi()
+        setProject(await deleteRefSegment(segmentId))
         setToast('Reference segment deleted.')
       } catch (error) {
         reportError(error)
@@ -555,12 +570,24 @@ export function ReferenceAssignmentPopover() {
               <span className="ref-assign-section-label">{segmentTypeLabel} segment</span>
               <span className="ref-assign-preview-meta">{previewLabel}</span>
             </div>
+            {refMode === 'model' ? (
+              <div className="ref-assign-3d-info">
+                <span className={`ref-assign-3d-view ${scene3dView ? '' : 'is-generic'}`}>
+                  3D view: {describeScene3dView(scene3dView)}
+                </span>
+                <span className="ref-assign-3d-note">
+                  {scene3dView?.mode === 'scene_camera'
+                    ? 'Apply tags these boards with this model, animation time, and camera. The board image is captured from the Scene3D workspace.'
+                    : 'Preview-only orientation — apply tags the model and animation time only (no camera). Capture the rendered image from the Scene3D workspace.'}
+                </span>
+              </div>
+            ) : null}
 
             <div className="ref-assign-player">
               {!selectedRef ? (
                 <div className="ref-assign-player-empty">Select a reference on the left</div>
               ) : selectedRef.type === 'model' ? (
-                <ReferenceModelPreview path={selectedRef.path} label={previewLabel} />
+                <ReferenceModelPreview path={selectedRef.path} label={previewLabel} view={scene3dView} />
               ) : previewFailed ? (
                 <div className="ref-assign-player-empty">Preview unavailable</div>
               ) : selectedRef.type === 'video' ? (

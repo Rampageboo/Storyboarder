@@ -48,6 +48,7 @@ export function BoardStrip() {
     reportError,
   } = useProject()
   const [busy, setBusy] = useState(false)
+  const [segmentDeleting, setSegmentDeleting] = useState(false)
   const [missingShots, setMissingShots] = useState<Set<string>>(new Set())
   const viewportRef = useRef<HTMLDivElement | null>(null)
   const markerClickTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -121,14 +122,17 @@ export function BoardStrip() {
   const handleDeleteSegment = useCallback(async () => {
     if (!activeAppliedSegmentId || !project) return
     if (!window.confirm('Delete this applied reference segment and clear its generated board backgrounds/previews?')) return
+    const segmentId = activeAppliedSegmentId
+    dismissRefSegmentUi()
+    setSegmentDeleting(true)
     setBusy(true)
     try {
       await flushDirtyShots()
-      setProject(await deleteRefSegment(activeAppliedSegmentId))
-      dismissRefSegmentUi()
+      setProject(await deleteRefSegment(segmentId))
     } catch (error) {
       reportError(error)
     } finally {
+      setSegmentDeleting(false)
       setBusy(false)
     }
   }, [activeAppliedSegmentId, project, flushDirtyShots, setProject, dismissRefSegmentUi, reportError])
@@ -235,9 +239,9 @@ export function BoardStrip() {
         <span className="board-strip-title">
           Boards <span className="board-strip-count">({shots.length})</span>
         </span>
-        {rangeLabel ? (
+        {rangeLabel || segmentDeleting ? (
           <span className="board-strip-segment">
-            {rangeLabel}
+            {segmentDeleting ? 'Deleting segment…' : rangeLabel}
             {activeAppliedSegmentId ? (
               <button
                 type="button"
@@ -402,9 +406,8 @@ export function BoardStrip() {
                 )
               })}
             </div>
-            {visibleMarkers.length > 0 ? (
-              <div className="board-strip-segment-layer" aria-label="Applied reference segments">
-                {visibleMarkers.map((seg) => {
+            <div className="board-strip-segment-layer" aria-label="Applied reference segments">
+              {visibleMarkers.map((seg) => {
                   const span = seg.hi - seg.lo + 1
                   const cssType = segmentCssType(seg.sourceType)
                   const tooltip = segmentMarkerTooltip(seg)
@@ -444,8 +447,7 @@ export function BoardStrip() {
                     </button>
                   )
                 })}
-              </div>
-            ) : null}
+            </div>
             </div>
           </div>
         )}
