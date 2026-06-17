@@ -9,7 +9,7 @@ from typing import Any
 
 from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
@@ -159,6 +159,16 @@ class AddShotRequest(BaseModel):
     after_shot_id: str | None = None
 
 
+_REACT_BUILD_HINT = "React build not found. Run: cd frontend && npm run build"
+
+
+def _react_index_response(react_dist: Path) -> FileResponse:
+    index_file = react_dist / "index.html"
+    if not index_file.is_file():
+        raise HTTPException(status_code=404, detail=_REACT_BUILD_HINT)
+    return FileResponse(index_file)
+
+
 def create_app(base_dir: Path, bridge_port: int = 8000) -> FastAPI:
     @asynccontextmanager
     async def lifespan(app: FastAPI):
@@ -238,38 +248,26 @@ def create_app(base_dir: Path, bridge_port: int = 8000) -> FastAPI:
         return response
 
     web_dir = Path(__file__).parent / "web"
+    react_dist = web_dir / "dist"
     app.mount("/static", StaticFiles(directory=web_dir / "static"), name="static")
 
     @app.get("/")
     def index() -> FileResponse:
-        return FileResponse(web_dir / "index.html")
+        return _react_index_response(react_dist)
 
+    # Compatibility redirects for retired standalone reference windows (workflows live in React).
     @app.get("/ref-segment")
-    def ref_segment_window() -> FileResponse:
-        return FileResponse(web_dir / "ref_segment.html")
-
     @app.get("/ref-scene3d")
-    def ref_scene3d_window() -> FileResponse:
-        return FileResponse(web_dir / "ref_segment.html")
-
     @app.get("/ref-video")
-    def ref_video_window() -> FileResponse:
-        return FileResponse(web_dir / "ref_segment.html")
+    def ref_window_redirect() -> RedirectResponse:
+        return RedirectResponse(url="/", status_code=302)
 
-    # React frontend (parallel UI candidate). Built by `cd frontend && npm run build` into web/dist.
+    # React frontend. Built by `cd frontend && npm run build` into web/dist.
     # Guarded FileResponse routes (not a StaticFiles mount) so a missing build can't crash startup,
     # and the SPA fallback stays scoped to /react/... only — never shadowing /static, /ref-*, or /api/*.
-    react_dist = web_dir / "dist"
-
     @app.get("/react")
     def react_index() -> FileResponse:
-        index_file = react_dist / "index.html"
-        if not index_file.is_file():
-            raise HTTPException(
-                status_code=404,
-                detail="React build not found. Run: cd frontend && npm run build",
-            )
-        return FileResponse(index_file)
+        return _react_index_response(react_dist)
 
     @app.get("/react/{asset_path:path}")
     def react_asset(asset_path: str) -> FileResponse:
@@ -281,10 +279,7 @@ def create_app(base_dir: Path, bridge_port: int = 8000) -> FastAPI:
         if resolved.is_file() and (resolved == dist_root or dist_root in resolved.parents):
             return FileResponse(resolved)
         if not index_file.is_file():
-            raise HTTPException(
-                status_code=404,
-                detail="React build not found. Run: cd frontend && npm run build",
-            )
+            raise HTTPException(status_code=404, detail=_REACT_BUILD_HINT)
         return FileResponse(index_file)
 
     @app.get("/api/project")

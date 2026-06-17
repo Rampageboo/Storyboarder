@@ -109,10 +109,10 @@ async function dataUrlToFile(dataUrl: string, name: string): Promise<File> {
 }
 
 async function loadScene3DEditorClass(): Promise<Scene3DEditorConstructor> {
-  const module = (await import(/* @vite-ignore */ `/static/scene3d.js?v=${Date.now()}`)) as {
+  const module = (await import(/* @vite-ignore */ `/static/runtime/scene3d.js?v=${Date.now()}`)) as {
     Scene3DEditor?: Scene3DEditorConstructor
   }
-  if (!module.Scene3DEditor) throw new Error('Scene3DEditor export not found in /static/scene3d.js')
+  if (!module.Scene3DEditor) throw new Error('Scene3DEditor export not found in /static/runtime/scene3d.js')
   return module.Scene3DEditor
 }
 
@@ -425,9 +425,6 @@ export function Scene3DPanel() {
             </button>
             <button type="button" onClick={() => void openBlender()} disabled={disabled} title="Open the project's Blender scene">
               Open Blender
-            </button>
-            <button type="button" onClick={() => window.open('/ref-scene3d', '_blank', 'noopener')} disabled={!hasLinkedGlb}>
-              External viewer
             </button>
           </div>
           <div className="scene3d-help">Open workspace for viewport, camera switching, reload, and capture-to-board.</div>

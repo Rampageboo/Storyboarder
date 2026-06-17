@@ -41,15 +41,51 @@ class StoryboardSmokeTests(unittest.TestCase):
         live_bridge._BRIDGE_WRITE_WARNED_PATHS.clear()
 
     def test_public_window_routes_and_bridge_status_load(self) -> None:
+        react_index = Path("storyboard_tool/web/dist/index.html")
         with tempfile.TemporaryDirectory() as tmp:
             app = api_module.create_app(Path(tmp))
             client = TestClient(app, raise_server_exceptions=False)
 
             with contextlib.redirect_stderr(io.StringIO()):
-                for route in ("/", "/ref-segment", "/ref-scene3d", "/ref-video", "/api/bridge/status"):
+                response = client.get("/api/bridge/status")
+                self.assertEqual(response.status_code, 200)
+
+            with contextlib.redirect_stderr(io.StringIO()):
+                response = client.get("/legacy")
+                self.assertEqual(response.status_code, 404)
+
+            # Phase 5: retired standalone reference windows redirect to the main React UI.
+            with contextlib.redirect_stderr(io.StringIO()):
+                for route in ("/ref-segment", "/ref-scene3d", "/ref-video"):
                     with self.subTest(route=route):
-                        response = client.get(route)
-                        self.assertEqual(response.status_code, 200)
+                        response = client.get(route, follow_redirects=False)
+                        self.assertEqual(response.status_code, 302)
+                        self.assertEqual(response.headers.get("location"), "/")
+
+            if react_index.is_file():
+                with contextlib.redirect_stderr(io.StringIO()):
+                    for route in ("/", "/react"):
+                        with self.subTest(route=route):
+                            response = client.get(route)
+                            self.assertEqual(response.status_code, 200)
+            else:
+                with contextlib.redirect_stderr(io.StringIO()):
+                    for route in ("/", "/react"):
+                        with self.subTest(route=route):
+                            response = client.get(route)
+                            self.assertEqual(response.status_code, 404)
+
+    def test_runtime_modules_served(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            app = api_module.create_app(Path(tmp))
+            client = TestClient(app, raise_server_exceptions=False)
+            for route in (
+                "/static/runtime/scene3d.js",
+                "/static/runtime/reference_model_preview.js",
+            ):
+                with self.subTest(route=route):
+                    response = client.get(route)
+                    self.assertEqual(response.status_code, 200)
 
     @unittest.skipIf(find_spec("multipart") is None, "python-multipart is not installed")
     def test_rest_pdf_export_route_reaches_exporter(self) -> None:
@@ -229,49 +265,9 @@ class StoryboardSmokeTests(unittest.TestCase):
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
             sock.bind(("127.0.0.1", port))
 
-    def test_startup_overlay_timeout_reports_issue_not_ready(self) -> None:
-        main_module = Path("storyboard_tool/web/static/app/main_module.js").read_text(encoding="utf-8")
-        startup_overlay = Path("storyboard_tool/web/static/app/startup_overlay.js").read_text(encoding="utf-8")
-        app_js = Path("storyboard_tool/web/static/app.js").read_text(encoding="utf-8")
-        styles = Path("storyboard_tool/web/static/styles.css").read_text(encoding="utf-8")
-
-        self.assertIn('failStartupOverlay("Initialization timed out")', startup_overlay)
-        self.assertIn("Could not load ${src}", main_module)
-        self.assertIn('window.failStartupOverlay?.("Startup failed")', app_js)
-        self.assertIn(".startup-overlay.has-error", styles)
-        self.assertIn("--startup-accent: #ff6b5a", styles)
-        self.assertNotIn('if (!startupUi.hidden) finishStartupOverlay("Ready");', main_module)
-
-    def test_es_module_graph_loads_feature_modules(self) -> None:
-        index_html = Path("storyboard_tool/web/index.html").read_text(encoding="utf-8")
-        main_module = Path("storyboard_tool/web/static/app/main_module.js").read_text(encoding="utf-8")
-        init_globals = Path("storyboard_tool/web/static/app/init_globals.js").read_text(encoding="utf-8")
-
-        self.assertIn('src="/static/app/main_module.js"', index_html)
-        self.assertNotIn('src="/static/app/bootstrap_module.js"', index_html)
-        self.assertNotIn('src="/static/main.js"', index_html)
-        self.assertFalse(Path("storyboard_tool/web/static/main.js").exists())
-        self.assertFalse(Path("storyboard_tool/web/static/app/bootstrap_module.js").exists())
-        self.assertFalse(Path("storyboard_tool/web/static/core/dispatch.js").exists())
-        self.assertIn('"@app/dialogs"', index_html)
-        self.assertIn('import * as api from "../core/api.js"', init_globals)
-        self.assertIn("init_globals.js", main_module)
-        self.assertIn("APP_SCRIPTS", main_module)
-        self.assertIn('"external_tools_ui.js"', main_module)
-        self.assertIn("loadFeatureScript", main_module)
-        self.assertIn("bindSettingsUi", (Path("storyboard_tool/web/static/core/settings.js").read_text(encoding="utf-8")))
-        self.assertIn("globalThis.bindSettingsUi", main_module)
-        self.assertNotIn("__bootstrapModuleReady", main_module)
-
     def test_requirements_dev_lists_playwright(self) -> None:
         text = Path("requirements-dev.txt").read_text(encoding="utf-8")
         self.assertIn("playwright", text.lower())
-
-    def test_core_api_serializes_object_body_on_all_fetch_paths(self) -> None:
-        api_js = Path("storyboard_tool/web/static/core/api.js").read_text(encoding="utf-8")
-
-        self.assertGreaterEqual(api_js.count("JSON.stringify(fetchOptions.body)"), 2)
-        self.assertIn("bridge.upload_multipart || bridge.uploadMultipart", api_js)
 
     def test_bridge_write_warning_is_emitted_once_per_path(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

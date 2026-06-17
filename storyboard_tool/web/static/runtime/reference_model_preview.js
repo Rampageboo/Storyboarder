@@ -1,5 +1,7 @@
 import * as THREE from "three";
-import { GLTFLoader } from "./vendor/three/GLTFLoader.js";
+// Absolute path so this module resolves the loader regardless of where it lives
+// (it now lives under /static/runtime/, the vendor bundle stays under /static/vendor/).
+import { GLTFLoader } from "/static/vendor/three/GLTFLoader.js";
 
 const previewState = new WeakMap();
 

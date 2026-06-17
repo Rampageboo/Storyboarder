@@ -1,6 +1,6 @@
 # Storyboard Tool
 
-A minimal local storyboard planning app built with an HTML/CSS/JavaScript frontend and a Python FastAPI backend.
+A minimal local storyboard planning app with a React + Vite frontend and a Python FastAPI backend.
 
 ## Features
 

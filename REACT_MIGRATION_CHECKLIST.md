@@ -1,26 +1,20 @@
 # React Frontend Migration Checklist
 
-The React + Vite frontend under `frontend/` is being introduced as a **parallel** UI candidate served at
-`/react`, alongside the existing legacy frontend at `/`. The legacy frontend is **not** removed — `/` is
-only switched to React after this checklist passes.
+**Migration complete (Phase 6).** React is the only UI. See [docs/typescript_policy.md](docs/typescript_policy.md) for the TypeScript policy.
 
-## What changed
+## Architecture
 
-- **Build output:** `npm run build` (run from `frontend/`) now writes to **`storyboard_tool/web/dist/`**
-  with Vite `base: '/react/'` (see [frontend/vite.config.ts](frontend/vite.config.ts)). Built asset URLs
-  therefore start with `/react/assets/...`. This directory is git-ignored.
-- **Serving:** FastAPI serves the build via guarded routes `GET /react` and `GET /react/{asset_path:path}`
-  (SPA fallback scoped to `/react/...` only), added in [storyboard_tool/api.py](storyboard_tool/api.py).
-  A missing build returns a 404 with a "run npm run build" hint instead of crashing. The existing
-  no-store cache policy now also covers `/react` (avoids stale WebView2 assets).
-- **Unchanged:** `/`, `/static`, `/ref-segment`, `/ref-scene3d`, `/ref-video`, and all `/api/*` routes.
-  No backend business logic or API response shapes were modified.
+- **Build output:** `npm run build` (from `frontend/`) writes to `storyboard_tool/web/dist/` with Vite
+  `base: '/react/'` (see [frontend/vite.config.ts](frontend/vite.config.ts)).
+- **Serving:** FastAPI serves the React build at `GET /` and `GET /react` via `_react_index_response()`,
+  and assets via `GET /react/{asset_path:path}` in [storyboard_tool/api.py](storyboard_tool/api.py).
+- **Reference windows:** workflows live in React (References drawer + assignment modal + 3D Scene panel).
+  `/ref-segment`, `/ref-scene3d`, `/ref-video` redirect (302) to `/` for bookmark/bridge compatibility.
+- **Shared runtime:** `static/runtime/scene3d.js` and `static/runtime/reference_model_preview.js`;
+  `static/vendor/three/*` unchanged.
+- **Removed:** legacy HTML (`index.html`, `ref_segment.html`), `GET /legacy`, and all legacy static JS/CSS.
 
-## New config paths
-
-| Path | Purpose |
-| --- | --- |
-| `storyboard_tool/web/dist/` | React production build output (served at `/react`). Git-ignored. |
+See [docs/react_migration_cleanup_plan.md](docs/react_migration_cleanup_plan.md) for the final file tree.
 
 ## How to run
 
@@ -30,65 +24,47 @@ npm install        # first time only
 npm run build      # builds into ../storyboard_tool/web/dist with base /react/
 cd ..
 python main.py
-# then open http://127.0.0.1:8000/react
+# then open http://127.0.0.1:8000/
 ```
 
-For React dev mode with hot reload (legacy backend must be running on :8000 for the `/api` proxy):
+For React dev mode with hot reload (backend must be running on :8000 for the `/api` proxy):
 
 ```bash
 cd frontend
-npm run dev        # http://localhost:5173/react/  (API calls proxy to :8000)
+npm run dev        # http://localhost:5173/react/
 ```
 
 ## Manual test checklist
 
-Run after `npm run build` + `python main.py`, in the WebView2 app or a browser at the URLs below.
+Run after `npm run build` + `python main.py`.
 
-### Serving / regression
-- [ ] `http://127.0.0.1:8000/` → **legacy** frontend loads and works (regression check).
+### Serving
+- [ ] `http://127.0.0.1:8000/` → React app loads.
 - [ ] `http://127.0.0.1:8000/react` → React app loads; assets return 200 under `/react/assets/...`.
-- [ ] `/ref-segment`, `/ref-scene3d`, `/ref-video` still return the legacy reference window.
+- [ ] `http://127.0.0.1:8000/legacy` → 404.
+- [ ] `/ref-segment`, `/ref-scene3d`, `/ref-video` → 302 redirect to `/`.
+- [ ] `/static/runtime/scene3d.js` and `/static/runtime/reference_model_preview.js` return 200.
 
-### Core data flow (in `/react`)
-- [ ] Create a new project (New).
-- [ ] Add 3 shots (timeline **+ Add** and the between-shot insert **+** buttons).
-- [ ] Edit a shot's **title**, **description**, and **duration**; click **Save** (button enables only when dirty).
-- [ ] **Rapidly switch between shots after editing**: edit Shot A, switch to B and edit B, switch back to A —
-      *both shots keep their unsaved edits* (no loss, no cross-shot overwrite).
-- [ ] Click **Save** on a shot, then keep typing in the same shot before the response returns —
-      the in-flight response does **not** revert your newer text (stale-response guard).
-- [ ] Save the project (topbar **Save**; enabled when the project or any shot has unsaved changes).
-- [ ] Reopen the project (see file picker below) and confirm edits persisted.
+### Reference segments (in React — no standalone windows)
+- [ ] Import image, video, and GLB references; assign to board range; Apply / Reapply / Undo / Delete.
+- [ ] GLB preview, video scrubber, applied/pending markers work.
+- [ ] Delete segment clears generated board background/preview.
+- [ ] Scene3D panel: import GLB, capture to board.
 
-### Files / uploads
-- [ ] Import image (Canvas **Upload image**) → preview updates (cache-bust via `preview_disk_mtime`).
-- [ ] Import PSD/source (Advanced **Upload source (PSD)**).
-- [ ] Add reference image (Advanced **Add reference image**).
-- [ ] Delete preview image (Canvas **Delete image**) → placeholder shows.
-- [ ] Refresh preview (Canvas **Refresh**) → re-fetches the image (no project-state replacement).
-
-### Open via backend file picker
-- [ ] Topbar **Open** launches the native file picker (no `prompt()` dialog).
-- [ ] Cancelling the picker does nothing (no error, no state change).
-- [ ] Choosing a `project.json` opens it and selects a sensible shot.
-
-### Dirty / flush safety
-- [ ] With an unsaved shot edit pending, trigger a structural action (Save project / Open another project /
-      Delete a shot / Move a shot / Upload a file). The pending edit is flushed first.
-- [ ] If a flush fails (e.g., backend stopped), the action is aborted and an error is shown; the local edit
-      is **not** discarded.
+### Core workflow
+- [ ] Create/open project; add/delete/reorder boards; edit and save shot metadata.
+- [ ] Photoshop source / sync preview; image/PSD import; `flushDirtyShots()` before structural actions.
+- [ ] No console errors; no missing static files in network tab.
 
 ## Validation commands
 
+Run these before release or after backend/frontend changes:
+
 ```bash
-python -m py_compile storyboard_tool/api.py storyboard_tool/models.py storyboard_tool/backups.py
-cd frontend && npm run build && cd ..
+python -m py_compile storyboard_tool/api.py storyboard_tool/backend_service.py storyboard_tool/project_manager.py storyboard_tool/reference_segments.py
+cd frontend; npm run build
+python scripts/validate_migration.py
+$env:PYTHONPATH='d:\Storyboarder'; python tests/test_smoke.py
 ```
 
-## Known limitations / TODO
-
-- No debounced autosave — saves are explicit (Save) or flushed before structural actions; the per-shot
-  version guard protects against late/stale responses regardless of trigger.
-- `/react` assets are served `no-store` (consistent with the legacy WebView2 policy) — slightly less
-  cache-efficient than Vite's content-hashed assets, but avoids stale-asset bugs during migration.
-- `/` is **not** switched to React in this task. Do that only after this checklist passes.
+Automated checks cover route serving, runtime static files, API smoke paths, and reference-segment delete behavior. Manual checklist items above still require a running app (`python main.py`).

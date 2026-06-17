@@ -173,13 +173,13 @@ def open_desktop_window(app, title: str = "Storyboard Tool") -> int:
     _configure_windows_asyncio_noise()
     start_server(app, HOST, port)
     react_index = Path(__file__).resolve().parent / "web" / "dist" / "index.html"
-    app_path = "/react" if react_index.is_file() else "/"
-    if app_path == "/":
+    if not react_index.is_file():
         print(
-            "React build not found; opening legacy UI. Run: cd frontend && npm run build",
+            "React build not found. Run: cd frontend && npm run build",
             file=sys.stderr,
         )
-    app_url = f"http://{HOST}:{port}{app_path}"
+        return 1
+    app_url = f"http://{HOST}:{port}/"
     _configure_windows_taskbar_identity()
     webview.create_window(
         title,

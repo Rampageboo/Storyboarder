@@ -17,7 +17,7 @@ function importRuntimeModule<T = unknown>(url: string): Promise<T> {
 
 function loadReferenceModelPreviewModule() {
   if (!referenceModelPreviewModule) {
-    referenceModelPreviewModule = importRuntimeModule('/static/reference_model_preview.js').catch((error) => {
+    referenceModelPreviewModule = importRuntimeModule('/static/runtime/reference_model_preview.js').catch((error) => {
       referenceModelPreviewModule = null
       throw error
     })

@@ -36,6 +36,13 @@ def _segment_board_range(shots: list[Shot], anchor_index: int, end_index: int) -
     return min_index, max_index
 
 
+def _segment_board_range_by_shot_id(shots: list[Shot], anchor_id: str, end_id: str) -> tuple[int, int]:
+    id_to_index = {shot.shot_id: index for index, shot in enumerate(shots)}
+    if anchor_id not in id_to_index or end_id not in id_to_index:
+        raise ValueError("Invalid board range.")
+    return _segment_board_range(shots, id_to_index[anchor_id], id_to_index[end_id])
+
+
 def _undo_root(project: Project) -> Path:
     return project.root_path / "backups" / "ref_undo"
 
@@ -1008,6 +1015,19 @@ def apply_ref_segment_image_to_boards(
     }
 
 
+def _shot_has_segment_bake_artifacts(shot: Shot, seg_id: str) -> bool:
+    camera_data = shot.camera_data or {}
+    if str(camera_data.get("ref_segment_id", "") or "").strip() == seg_id:
+        return True
+    return bool(
+        shot.ref_video_path
+        or shot.preview_image_path
+        or shot.image_path
+        or (shot.ref_segment_time or 0) > 0
+        or (shot.ref_video_time or 0) > 0
+    )
+
+
 def delete_ref_segment(project: Project, segment_id: str) -> dict[str, Any]:
     seg_id = str(segment_id or "").strip()
     if not seg_id:
@@ -1020,12 +1040,30 @@ def delete_ref_segment(project: Project, segment_id: str) -> dict[str, Any]:
 
     segment_ref_path, _ = resolve_segment_reference(project, segment)
 
-    cleared = 0
+    anchor = str(segment.get("anchor_shot_id", "") or "").strip()
+    end = str(segment.get("end_shot_id", "") or "").strip()
+    try:
+        min_index, max_index = _segment_board_range_by_shot_id(project.shots, anchor, end)
+    except ValueError:
+        min_index = max_index = -1
+
+    cleared_ids: set[str] = set()
     for shot in project.shots:
         if not _shot_matches_segment_bake(shot, segment_ref_path, seg_id):
             continue
         _clear_ref_segment_bake_for_shot(project, shot, seg_id)
-        cleared += 1
+        cleared_ids.add(shot.shot_id)
+
+    if min_index >= 0:
+        for index in range(min_index, max_index + 1):
+            shot = project.shots[index]
+            if shot.shot_id in cleared_ids:
+                continue
+            if _shot_has_segment_bake_artifacts(shot, seg_id):
+                _clear_ref_segment_bake_for_shot(project, shot, seg_id)
+                cleared_ids.add(shot.shot_id)
+
+    cleared = len(cleared_ids)
 
     project.settings["ref_segments"] = [item for item in segments if item.get("id") != seg_id]
 
