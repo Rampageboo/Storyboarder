@@ -48,7 +48,7 @@ export function Topbar() {
   const hasUnsaved = !!project && (project.dirty || dirtyShotIds.length > 0)
   const projectLabel = project ? `${project.name}${hasUnsaved ? ' *' : ''}` : 'No project open'
 
-  let subtitle = 'Open or create a project to begin.'
+  let subtitle = 'Open a project folder or create a new project folder.'
   if (initialLoading) {
     subtitle = 'Loading…'
   } else if (project) {
@@ -68,7 +68,7 @@ export function Topbar() {
             New
           </button>
           <button type="button" onClick={() => void handleOpen()} disabled={projectActionBusy || initialLoading}>
-            Open
+            Open Folder
           </button>
           <button
             type="button"
