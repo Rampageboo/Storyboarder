@@ -414,6 +414,10 @@ def create_app(base_dir: Path, bridge_port: int = 8000) -> FastAPI:
     def delete_ref_segment(segment_id: str) -> dict[str, Any]:
         return _svc().method_delete_ref_segment(segment_id)
 
+    @app.post("/api/project/ref-segments/snapshot")
+    def snapshot_ref_boards(request: ApplyRefSegmentRequest) -> dict[str, Any]:
+        return _svc().method_snapshot_ref_boards(request.anchor_shot_id, request.end_shot_id)
+
     @app.post("/api/project/ref-apply/undo")
     def restore_ref_apply(request: RestoreRefApplyRequest) -> dict[str, Any]:
         return _svc().method_restore_ref_apply(request.token)

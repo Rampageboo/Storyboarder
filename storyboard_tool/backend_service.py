@@ -277,6 +277,20 @@ class StoryboardBackendService(ExportServiceMixin):
         app_state._autosave(self.app)
         return {**result, **app_state._project_payload(project, self.app.state.dirty)}
 
+    def method_snapshot_ref_boards(self, anchor_shot_id: str, end_shot_id: str) -> dict[str, Any]:
+        # Back up the boards in a range before a destructive bake (used by the React 3D apply, which
+        # overwrites board previews client-side before calling apply). Returns an undo token usable
+        # with method_restore_ref_apply / restore_boards_from_undo.
+        project = app_state._require_project(self.app)
+        anchor = app_state._find_shot_index(project, anchor_shot_id)
+        end = app_state._find_shot_index(project, end_shot_id)
+        lo, hi = (anchor, end) if anchor <= end else (end, anchor)
+        try:
+            token = project_manager.snapshot_boards_for_undo(project, lo, hi)
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {"undo_token": token}
+
     def method_restore_ref_apply(self, token: str) -> dict[str, Any]:
         project = app_state._require_project(self.app)
         try:

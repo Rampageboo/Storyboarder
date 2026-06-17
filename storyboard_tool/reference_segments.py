@@ -948,6 +948,15 @@ def apply_ref_segment_3d_to_boards(
     *,
     camera_name: str = "",
 ) -> dict[str, Any]:
+    """Finalize a 3D reference segment: composite each board's existing preview into a board
+    background and stamp per-shot metadata/provenance + persist the segment (with an undo token).
+
+    This is NOT a GLB renderer. It requires each board to already have a non-empty, non-solid
+    preview. The React UI renders one GLB frame per board browser-side (see
+    ``captureReferenceModelFrame`` in ``web/static/runtime/reference_model_preview.js``) and uploads
+    it as the board image before calling this, so the composited background is the rendered GLB view.
+    Legacy/fallback callers may instead rely on a prior Scene3D capture-to-board.
+    """
     from datetime import datetime, timezone
     from .image_utils import is_solid_color_image
 

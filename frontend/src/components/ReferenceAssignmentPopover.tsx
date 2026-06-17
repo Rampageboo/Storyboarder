@@ -6,8 +6,10 @@ import {
   deleteRefSegment,
   projectFileUrl,
   restoreRefApply,
+  snapshotRefBoards,
   updateSettings,
   uploadProjectReference,
+  uploadShotImage,
   type ApplyRefSegmentRequest,
 } from '../api'
 import type { ProjectPayload, ReferenceLink } from '../types'
@@ -15,7 +17,7 @@ import { useProject } from '../state/ProjectContext'
 import { shotDisplayLabel } from '../utils/shotDisplay'
 import { findRefSegment, refSegmentsWithoutOverlap, segmentHasPendingBoards } from '../utils/refSegmentDisplay'
 import { describeScene3dView, resolveScene3dReferenceView } from '../utils/scene3dView'
-import { ReferenceModelPreview } from './ReferenceModelPreview'
+import { ReferenceModelPreview, type ReferenceModelPreviewHandle } from './ReferenceModelPreview'
 import './ReferenceAssignmentPopover.css'
 
 type Segment = {
@@ -37,6 +39,11 @@ function newSegmentId(): string {
 
 function fileName(path: string) {
   return path.split(/[/\\]/).pop() || path
+}
+
+async function dataUrlToFile(dataUrl: string, name: string): Promise<File> {
+  const blob = await (await fetch(dataUrl)).blob()
+  return new File([blob], name, { type: blob.type || 'image/png' })
 }
 
 function segmentDurationSeconds(shots: { duration_seconds?: number }[], lo: number, hi: number) {
@@ -247,8 +254,10 @@ export function ReferenceAssignmentPopover() {
   const [playheadTime, setPlayheadTime] = useState(0)
   const [toast, setToast] = useState('')
   const [previewFailed, setPreviewFailed] = useState(false)
+  const [renderProgress, setRenderProgress] = useState('')
   const importRef = useRef<HTMLInputElement | null>(null)
   const previewVideoRef = useRef<HTMLVideoElement | null>(null)
+  const previewHandleRef = useRef<ReferenceModelPreviewHandle | null>(null)
 
   const links = useMemo(() => project?.settings?.reference_links ?? [], [project?.settings?.reference_links])
   const segments = useMemo(
@@ -403,6 +412,43 @@ export function ReferenceAssignmentPopover() {
     })()
   }
 
+  // 3D apply renders one GLB frame per board (browser-side), uploads each as that board's image, then
+  // calls the backend to composite those frames into board backgrounds + stamp metadata/provenance.
+  const applyModelSegment = async (
+    _segId: string,
+    seg: Segment,
+    body: ApplyRefSegmentRequest,
+  ): Promise<ProjectPayload> => {
+    const handle = previewHandleRef.current
+    if (!handle) throw new Error('3D preview is not ready yet — wait for the model to load, then Apply.')
+    const canvasW = Number(project?.settings?.canvas_width) || 1920
+    const canvasH = Number(project?.settings?.canvas_height) || 1080
+    const animStart = typeof seg.video_start === 'number' ? seg.video_start : 0
+    let segmentOffset = 0
+    for (let i = lo; i <= hi; i += 1) {
+      const shot = shots[i]
+      if (!shot) continue
+      setRenderProgress(`Rendering 3D board ${i - lo + 1} / ${boardCount}…`)
+      // Same per-board time mapping the backend uses (anim_start + cumulative board durations).
+      const animationTime = animStart + segmentOffset
+      const dataUrl = await handle.captureFrame({
+        time: animationTime,
+        view: scene3dView,
+        width: canvasW,
+        height: canvasH,
+      })
+      const file = await dataUrlToFile(dataUrl, `${shot.shot_id}_3d_${Math.round(animationTime * 1000)}.png`)
+      await uploadShotImage(shot.shot_id, file)
+      segmentOffset += Math.max(0.1, shot.duration_seconds ?? 3)
+    }
+    setRenderProgress('Finalizing 3D segment…')
+    return applyRefSegment3d({
+      // Only a scene-camera view stamps a camera name; a free view records time only.
+      ...body,
+      camera_name: scene3dView?.mode === 'scene_camera' ? scene3dView.camera_name || '' : '',
+    })
+  }
+
   const applySegment = () => {
     if (!selectedRef) {
       window.alert('Choose a source reference first.')
@@ -429,12 +475,7 @@ export function ReferenceAssignmentPopover() {
         const body: ApplyRefSegmentRequest = { anchor_shot_id: startShot, end_shot_id: endShot, segment_id: segId }
         let payload: ProjectPayload
         if (selectedRef.type === 'image') payload = await applyRefSegmentImage(body)
-        else if (selectedRef.type === 'model')
-          payload = await applyRefSegment3d({
-            // Only a scene-camera view stamps a camera name; a free view records time only.
-            ...body,
-            camera_name: scene3dView?.mode === 'scene_camera' ? scene3dView.camera_name || '' : '',
-          })
+        else if (selectedRef.type === 'model') payload = await applyModelSegment(segId, seg, body)
         else payload = await applyRefSegment(body)
         setProject(payload)
         const result = payload as unknown as { board_count?: number; undo_token?: string }
@@ -451,6 +492,7 @@ export function ReferenceAssignmentPopover() {
         reportError(error)
       } finally {
         setBusy(false)
+        setRenderProgress('')
       }
     })()
   }
@@ -577,17 +619,29 @@ export function ReferenceAssignmentPopover() {
                 </span>
                 <span className="ref-assign-3d-note">
                   {scene3dView?.mode === 'scene_camera'
-                    ? 'Apply tags these boards with this model, animation time, and camera. The board image is captured from the Scene3D workspace.'
-                    : 'Preview-only orientation — apply tags the model and animation time only (no camera). Capture the rendered image from the Scene3D workspace.'}
+                    ? 'Apply renders each board from this scene camera at its animation time and tags it with the model + camera.'
+                    : scene3dView
+                      ? 'Apply renders each board from this view at its animation time and tags it with the model (no camera).'
+                      : 'Apply renders each board from a generic framed view at its animation time and tags it with the model.'}
                 </span>
               </div>
             ) : null}
 
             <div className="ref-assign-player">
+              {renderProgress ? (
+                <div className="ref-assign-render-progress" role="status">
+                  {renderProgress}
+                </div>
+              ) : null}
               {!selectedRef ? (
                 <div className="ref-assign-player-empty">Select a reference on the left</div>
               ) : selectedRef.type === 'model' ? (
-                <ReferenceModelPreview path={selectedRef.path} label={previewLabel} view={scene3dView} />
+                <ReferenceModelPreview
+                  ref={previewHandleRef}
+                  path={selectedRef.path}
+                  label={previewLabel}
+                  view={scene3dView}
+                />
               ) : previewFailed ? (
                 <div className="ref-assign-player-empty">Preview unavailable</div>
               ) : selectedRef.type === 'video' ? (

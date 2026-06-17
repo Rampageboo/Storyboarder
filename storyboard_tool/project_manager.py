@@ -665,6 +665,7 @@ from .reference_segments import (  # noqa: E402
     remove_project_reference,
     resolve_segment_reference,
     restore_boards_from_undo,
+    snapshot_boards_for_undo,
     set_active_reference_image,
     set_active_reference_model,
     set_active_reference_video,

@@ -255,6 +255,22 @@
   color: var(--color-muted);
 }
 
+/* Overlay shown while Apply renders board frames from the GLB. */
+.ref-assign-render-progress {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  display: grid;
+  place-items: center;
+  padding: 12px;
+  text-align: center;
+  background: rgba(10, 12, 16, 0.62);
+  color: #e7e9ee;
+  font-size: 13px;
+  font-weight: 600;
+  pointer-events: none;
+}
+
 .ref-assign-player {
   position: relative;
   aspect-ratio: 16 / 9;
