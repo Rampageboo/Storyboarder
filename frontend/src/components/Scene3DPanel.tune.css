@@ -1,0 +1,98 @@
+.scene3d-workspace-overlay {
+  inset: 34px 12px 12px;
+  padding: 10px;
+}
+
+.scene3d-workspace-card {
+  border-radius: 12px;
+}
+
+.scene3d-workspace-header {
+  padding: 12px 14px;
+}
+
+.scene3d-workspace-title {
+  font-size: 16px;
+}
+
+.scene3d-workspace-subtitle {
+  font-size: 13px;
+}
+
+.scene3d-workspace-actions button,
+.scene3d-editor-root button {
+  min-height: 34px;
+  padding: 7px 11px;
+  font-size: 13px;
+}
+
+.scene3d-editor-root .scene3d-layout {
+  grid-template-columns: minmax(300px, 360px) minmax(0, 1fr);
+  font-size: 14px;
+}
+
+.scene3d-editor-root .scene3d-sidebar {
+  padding: 14px;
+}
+
+.scene3d-editor-root .scene3d-panel-title {
+  margin: 14px 0 8px;
+  font-size: 13px;
+}
+
+.scene3d-editor-root .scene3d-board-preview {
+  min-height: 138px;
+}
+
+.scene3d-editor-root .scene3d-board-preview-empty,
+.scene3d-editor-root .scene3d-board-label,
+.scene3d-editor-root .scene3d-file-name,
+.scene3d-editor-root .scene3d-light-status,
+.scene3d-editor-root .scene3d-hint,
+.scene3d-editor-root .scene3d-check,
+.scene3d-editor-root .scene3d-field,
+.scene3d-editor-root .scene3d-transform-fields label,
+.scene3d-editor-root .scene3d-outliner li,
+.scene3d-editor-root .scene3d-outliner [data-object-id] {
+  font-size: 13px;
+}
+
+.scene3d-editor-root input,
+.scene3d-editor-root select {
+  min-height: 34px;
+  padding: 7px 9px;
+  font-size: 13px;
+}
+
+.scene3d-editor-root .scene3d-toolbar {
+  padding: 10px;
+  gap: 8px;
+}
+
+.scene3d-editor-root .scene3d-outliner {
+  max-height: 210px;
+}
+
+.scene3d-editor-root [hidden] {
+  display: none !important;
+}
+
+.scene3d-editor-root .scene3d-builtin-only,
+.scene3d-editor-root .scene3d-transform-fields {
+  display: none !important;
+}
+
+.scene3d-editor-root .scene3d-blender-only:not([hidden]) {
+  display: flex;
+}
+
+.scene3d-editor-root .scene3d-timeline.scene3d-blender-only:not([hidden]) {
+  display: flex;
+}
+
+.scene3d-editor-root .scene3d-outliner li.active,
+.scene3d-editor-root .scene3d-outliner [data-object-id].active {
+  border-color: #8ea2ff;
+  background: rgba(111, 140, 255, 0.18);
+  color: #fff;
+}
