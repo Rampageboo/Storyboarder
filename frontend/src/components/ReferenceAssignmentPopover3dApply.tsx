@@ -217,6 +217,7 @@ export function ReferenceAssignmentPopover() {
   }
 
   async function applyModel(body: ApplyRefSegmentRequest): Promise<ProjectPayload> {
+    if (!project) throw new Error('No project loaded.')
     if (!modelRef.current) throw new Error('3D preview is not ready yet.')
     if (lo < 0 || hi < 0) throw new Error('Select a valid board range first.')
     const width = Math.max(1, Math.floor(Number(project.settings?.canvas_width) || 1920))

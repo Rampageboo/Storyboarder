@@ -4,7 +4,6 @@ import json
 import shutil
 from pathlib import Path
 
-from . import project_manager as pm
 from .image_utils import (
     board_background_filename,
     create_blank_psd,
@@ -15,6 +14,13 @@ from .image_utils import (
 )
 from .linked_sync import linked_mtime
 from .models import Project, Shot
+
+
+def _pm():
+    # Lazy import: project_manager re-exports this module at the end of its load.
+    from . import project_manager
+
+    return project_manager
 
 
 def normalize_canvas_size(width: int, height: int) -> tuple[int, int]:
@@ -53,7 +59,7 @@ def persist_canvas_size(
     canvas_width, canvas_height = normalize_canvas_size(width, height)
     project.settings["canvas_width"] = canvas_width
     project.settings["canvas_height"] = canvas_height
-    pm.save_settings(project)
+    _pm().save_settings(project)
     write_canvas_color_files(project, get_canvas_color(project))
     rebuilt = 0
     if apply_to_blank_shots:
@@ -63,7 +69,7 @@ def persist_canvas_size(
             create_canvas_for_shot(project, shot, canvas_width, canvas_height)
             rebuilt += 1
         if rebuilt:
-            pm.save_project(project)
+            _pm().save_project(project)
     return canvas_width, canvas_height, rebuilt
 
 
@@ -74,7 +80,7 @@ def get_canvas_color(project: Project) -> str:
 def persist_canvas_color(project: Project, color: str, shot: Shot | None = None) -> str:
     normalized = normalize_hex_color(color)
     project.settings["canvas_background_color"] = normalized
-    pm.save_settings(project)
+    _pm().save_settings(project)
     write_canvas_color_files(project, normalized, shot)
     return normalized
 
@@ -96,17 +102,17 @@ def sync_canvas_color_to_shots(project: Project, color: str) -> bool:
         if _sync_shot_canvas_color_assets(project, shot, normalized):
             changed = True
     if changed:
-        pm.save_project(project)
+        _pm().save_project(project)
     return changed
 
 
 def _sync_shot_canvas_color_assets(project: Project, shot: Shot, color: str) -> bool:
     # Photoshop-backed boards own their preview export — never rewrite or unlink it
     # when canvas color sync runs (e.g. on project reload after switching boards).
-    if pm.shot_has_psd_canvas(project, shot):
+    if _pm().shot_has_psd_canvas(project, shot):
         return False
 
-    shot_dir = pm.get_shot_dir(project, shot)
+    shot_dir = _pm().get_shot_dir(project, shot)
     shot_dir.mkdir(parents=True, exist_ok=True)
     preview_path = shot_dir / f"{shot.shot_id}_preview.png"
     thumb_path = shot_dir / f"{shot.shot_id}_thumb.png"
@@ -150,7 +156,7 @@ def write_canvas_color_files(project: Project, color: str, shot: Shot | None = N
 
     targets = [project.root_path]
     if shot is not None:
-        targets.append(pm.get_shot_dir(project, shot))
+        targets.append(_pm().get_shot_dir(project, shot))
 
     for target_dir in targets:
         target_dir.mkdir(parents=True, exist_ok=True)
@@ -170,28 +176,28 @@ def create_canvas_for_shot(
         default_width if width is None else width,
         default_height if height is None else height,
     )
-    shot_dir = pm.get_shot_dir(project, shot)
+    shot_dir = _pm().get_shot_dir(project, shot)
     color = persist_canvas_color(
         project,
         background_color or get_canvas_color(project),
     )
-    background_path = pm.get_shot_board_background_path(project, shot)
+    background_path = _pm().get_shot_board_background_path(project, shot)
     psd_path = create_blank_psd(
         shot_dir / f"{shot.shot_id}.psd",
         canvas_width,
         canvas_height,
         background_color=color,
     )
-    pm.sync_psd_board_background(project, shot, psd_path)
+    _pm().sync_psd_board_background(project, shot, psd_path)
     preview_path = shot_dir / f"{shot.shot_id}_preview.png"
     if background_path is not None:
         bg_dest = shot_dir / board_background_filename(shot.shot_id)
-        pm._save_board_background_copy(background_path, bg_dest)
+        _pm()._save_board_background_copy(background_path, bg_dest)
         if not preview_path.is_file() or is_solid_color_image(preview_path):
             source = bg_dest if bg_dest.is_file() else background_path
             if source.resolve() != preview_path.resolve():
                 shutil.copy2(source, preview_path)
-        pm._set_shot_preview_paths(project, shot, preview_path)
+        _pm()._set_shot_preview_paths(project, shot, preview_path)
     else:
         # No per-shot default background PNG; the canvas background is a UI backdrop.
         # The PSD already contains the background color layer.
@@ -210,7 +216,7 @@ def write_bridge_file(project: Project, shot: Shot | None = None) -> None:
 
 def _set_shot_canvas_thumbnail(project: Project, shot: Shot, preview_path: Path) -> None:
     """Keep the in-app canvas on the configured color until Photoshop sync adds artwork."""
-    thumbnail_path = create_thumbnail(preview_path, pm.get_shot_dir(project, shot) / f"{shot.shot_id}_thumb.png")
+    thumbnail_path = create_thumbnail(preview_path, _pm().get_shot_dir(project, shot) / f"{shot.shot_id}_thumb.png")
     shot.thumbnail_path = thumbnail_path.relative_to(project.root_path).as_posix()
     shot.preview_image_path = ""
     shot.image_path = ""
