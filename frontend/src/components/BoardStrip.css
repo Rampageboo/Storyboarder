@@ -66,6 +66,134 @@
   width: max-content;
 }
 
+.board-strip-dotrail-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+/* Applied reference segments — persistent muted bars under the draft dot rail */
+.board-strip-segment-layer {
+  position: relative;
+  height: 14px;
+  flex: 0 0 14px;
+  min-width: 100%;
+}
+
+.board-strip-segment-bar {
+  position: absolute;
+  top: 1px;
+  height: 12px;
+  left: calc(var(--seg-lo) * (var(--board-strip-card-width) + 10px));
+  width: calc(
+    var(--seg-span) * var(--board-strip-card-width) + max(0, var(--seg-span) - 1) * 10px
+  );
+  padding: 0 6px;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  background: rgba(120, 120, 120, 0.16);
+  color: var(--color-muted);
+  font-size: 8px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  line-height: 10px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  box-sizing: border-box;
+  cursor: pointer;
+  opacity: 0.88;
+  z-index: 0;
+}
+
+.board-strip-segment-bar.is-applied {
+  opacity: 0.88;
+}
+
+.board-strip-segment-bar.is-pending {
+  opacity: 0.95;
+  background: transparent !important;
+  border-style: dashed;
+  border-width: 1.5px;
+  color: var(--color-muted);
+}
+
+.board-strip-segment-bar.is-pending.is-image {
+  border-color: rgba(232, 168, 56, 0.55);
+  color: #a66b12;
+}
+
+.board-strip-segment-bar.is-pending.is-video {
+  border-color: rgba(43, 138, 62, 0.5);
+  color: #2b6b38;
+}
+
+.board-strip-segment-bar.is-pending.is-model {
+  border-color: rgba(61, 139, 253, 0.55);
+  color: #2a5fad;
+}
+
+.board-strip-segment-bar.is-pending .board-strip-segment-bar-label {
+  font-size: 10px;
+  font-weight: 800;
+}
+
+.board-strip-segment-bar:hover {
+  opacity: 1;
+  filter: brightness(1.08);
+}
+
+.board-strip-segment-bar.is-image {
+  border-color: rgba(232, 168, 56, 0.45);
+  background: rgba(232, 168, 56, 0.14);
+  color: #a66b12;
+}
+
+.board-strip-segment-bar.is-video {
+  border-color: rgba(43, 138, 62, 0.4);
+  background: rgba(43, 138, 62, 0.12);
+  color: #2b6b38;
+}
+
+.board-strip-segment-bar.is-model {
+  border-color: rgba(61, 139, 253, 0.45);
+  background: rgba(61, 139, 253, 0.14);
+  color: #2a5fad;
+}
+
+.board-strip-segment-bar.is-other {
+  border-color: rgba(100, 100, 100, 0.4);
+  background: rgba(100, 100, 100, 0.12);
+}
+
+.board-strip-segment-bar.is-selected {
+  opacity: 1;
+  z-index: 2;
+  box-shadow: 0 0 0 2px color-mix(in srgb, currentColor 35%, transparent);
+}
+
+.board-strip-segment-bar.is-image.is-selected {
+  border-color: rgba(232, 168, 56, 0.75);
+  background: rgba(232, 168, 56, 0.28);
+}
+
+.board-strip-segment-bar.is-video.is-selected {
+  border-color: rgba(43, 138, 62, 0.7);
+  background: rgba(43, 138, 62, 0.22);
+}
+
+.board-strip-segment-bar.is-model.is-selected {
+  border-color: rgba(61, 139, 253, 0.75);
+  background: rgba(61, 139, 253, 0.28);
+}
+
+.board-strip-segment-bar-label {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  pointer-events: none;
+}
+
 .board-strip-track {
   display: inline-flex;
   flex-direction: row;
@@ -94,7 +222,7 @@
   justify-content: center;
 }
 
-/* Connecting line behind the dots; extends into the 10px gap to bridge neighbours. */
+/* Temporary draft selection — bright blue line above applied markers */
 .board-strip-dotcell.in-range::before {
   content: '';
   position: absolute;
@@ -103,9 +231,10 @@
   right: -5px;
   height: 3px;
   transform: translateY(-50%);
-  background: var(--color-accent);
+  background: #3b5bdb;
   border-radius: 2px;
-  z-index: 0;
+  z-index: 2;
+  box-shadow: 0 0 0 1px rgba(59, 91, 219, 0.25);
 }
 
 .board-strip-dotcell.range-start::before {
@@ -122,7 +251,7 @@
 
 .board-strip-dot {
   position: relative;
-  z-index: 1;
+  z-index: 3;
   width: 12px;
   height: 12px;
   min-width: 12px;
@@ -140,26 +269,26 @@
 }
 
 .board-strip-dot:hover {
-  border-color: var(--color-accent);
+  border-color: #3b5bdb;
 }
 
 .board-strip-dot.in-range {
-  border-color: var(--color-accent);
+  border-color: #3b5bdb;
 }
 
 .board-strip-dot.anchor-only {
-  border-color: var(--color-accent);
-  background: var(--color-accent-soft);
+  border-color: #3b5bdb;
+  background: rgba(59, 91, 219, 0.15);
 }
 
 .board-strip-dot.endpoint {
-  background: var(--color-accent);
-  border-color: var(--color-accent);
+  background: #3b5bdb;
+  border-color: #3b5bdb;
 }
 
 /* Distinguish the start endpoint with an extra ring. */
 .board-strip-dot.start {
-  box-shadow: 0 0 0 2px var(--color-accent-soft);
+  box-shadow: 0 0 0 2px rgba(59, 91, 219, 0.28);
 }
 
 .board-strip-segment {
@@ -174,6 +303,23 @@
   color: var(--color-accent);
   white-space: nowrap;
   overflow: hidden;
+}
+
+.board-strip-segment-delete {
+  flex-shrink: 0;
+  padding: 2px 8px;
+  border-radius: 6px;
+  border: 1px solid rgba(155, 28, 28, 0.35);
+  background: rgba(155, 28, 28, 0.08);
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--color-danger);
+  cursor: pointer;
+}
+
+.board-strip-segment-delete:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
 }
 
 .board-strip-segment-clear {

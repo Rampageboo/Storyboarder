@@ -1,7 +1,13 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { addShot, deleteShot, getMissingFiles, moveShotDown, moveShotUp } from '../api'
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
+import { addShot, deleteRefSegment, deleteShot, getMissingFiles, moveShotDown, moveShotUp } from '../api'
 import { useProject } from '../state/ProjectContext'
 import { shotDisplayLabel } from '../utils/shotDisplay'
+import {
+  resolveVisibleSegmentMarkerSpans,
+  segmentCssType,
+  segmentMarkerTooltip,
+  type RefSegmentRecord,
+} from '../utils/refSegmentDisplay'
 import { shotHasPreview, shotThumbVersion } from '../utils/shotPreview'
 import { ShotThumb } from './ShotThumb'
 import './BoardStrip.css'
@@ -34,10 +40,17 @@ export function BoardStrip() {
     segmentRange,
     pickSegmentShot,
     clearSegmentRange,
+    activeAppliedSegmentId,
+    setActiveAppliedSegmentId,
+    openRefSegmentInspect,
+    closeRefSegmentInspect,
+    dismissRefSegmentUi,
+    reportError,
   } = useProject()
   const [busy, setBusy] = useState(false)
   const [missingShots, setMissingShots] = useState<Set<string>>(new Set())
   const viewportRef = useRef<HTMLDivElement | null>(null)
+  const markerClickTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   const shots = project?.shots ?? []
   const selectedIndex = useMemo(() => shots.findIndex((s) => s.shot_id === selectedShotId), [shots, selectedShotId])
@@ -49,11 +62,76 @@ export function BoardStrip() {
   const bothSet = anchorIdx >= 0 && endIdx >= 0
   const lo = bothSet ? Math.min(anchorIdx, endIdx) : -1
   const hi = bothSet ? Math.max(anchorIdx, endIdx) : -1
-  const rangeLabel = bothSet
-    ? `Reference range: #${lo + 1} → #${hi + 1}`
-    : anchorIdx >= 0
-      ? `Reference start: #${anchorIdx + 1} (pick an end board)`
-      : ''
+  const showDraftLine = bothSet && !activeAppliedSegmentId
+
+  const referenceLinks = project?.settings?.reference_links ?? []
+  const visibleMarkers = useMemo(
+    () =>
+      resolveVisibleSegmentMarkerSpans(
+        (project?.settings?.ref_segments ?? []) as RefSegmentRecord[],
+        shots,
+        referenceLinks,
+        activeAppliedSegmentId,
+      ),
+    [project?.settings?.ref_segments, shots, referenceLinks, activeAppliedSegmentId],
+  )
+
+  const selectedMarker = useMemo(() => {
+    if (!activeAppliedSegmentId) return null
+    return visibleMarkers.find((m) => m.segmentId === activeAppliedSegmentId) ?? null
+  }, [visibleMarkers, activeAppliedSegmentId])
+  const rangeLabel = showDraftLine
+    ? `Selecting reference: #${lo + 1} → #${hi + 1}`
+    : anchorIdx >= 0 && !segmentRange.endShotId && !activeAppliedSegmentId
+      ? `Reference start: #${anchorIdx + 1} (pick end board)`
+      : selectedMarker
+        ? segmentMarkerTooltip(selectedMarker)
+        : ''
+
+  const selectAppliedSegment = useCallback(
+    (segmentId: string) => {
+      setActiveAppliedSegmentId(segmentId)
+      closeRefSegmentInspect()
+    },
+    [setActiveAppliedSegmentId, closeRefSegmentInspect],
+  )
+
+  const handleMarkerClick = useCallback(
+    (segmentId: string) => {
+      if (markerClickTimerRef.current) clearTimeout(markerClickTimerRef.current)
+      markerClickTimerRef.current = setTimeout(() => {
+        selectAppliedSegment(segmentId)
+        markerClickTimerRef.current = null
+      }, 220)
+    },
+    [selectAppliedSegment],
+  )
+
+  const handleMarkerDoubleClick = useCallback(
+    (segmentId: string) => {
+      if (markerClickTimerRef.current) {
+        clearTimeout(markerClickTimerRef.current)
+        markerClickTimerRef.current = null
+      }
+      openRefSegmentInspect(segmentId)
+    },
+    [openRefSegmentInspect],
+  )
+
+  const handleDeleteSegment = useCallback(async () => {
+    if (!activeAppliedSegmentId || !project) return
+    if (!window.confirm('Delete this applied reference segment?')) return
+    setBusy(true)
+    try {
+      await flushDirtyShots()
+      setProject(await deleteRefSegment(activeAppliedSegmentId))
+      dismissRefSegmentUi()
+    } catch (error) {
+      reportError(error)
+    } finally {
+      setBusy(false)
+    }
+  }, [activeAppliedSegmentId, project, flushDirtyShots, setProject, dismissRefSegmentUi, reportError])
 
   useEffect(() => {
     if (!selectedShotId || !viewportRef.current) return
@@ -160,7 +238,21 @@ export function BoardStrip() {
         {rangeLabel ? (
           <span className="board-strip-segment">
             {rangeLabel}
-            <button type="button" className="board-strip-segment-clear" onClick={() => clearSegmentRange()}>
+            {activeAppliedSegmentId ? (
+              <button
+                type="button"
+                className="board-strip-segment-delete"
+                onClick={() => void handleDeleteSegment()}
+                disabled={disabled}
+              >
+                Delete segment
+              </button>
+            ) : null}
+            <button
+              type="button"
+              className="board-strip-segment-clear"
+              onClick={() => (activeAppliedSegmentId ? dismissRefSegmentUi() : clearSegmentRange())}
+            >
               clear
             </button>
           </span>
@@ -271,18 +363,19 @@ export function BoardStrip() {
               )
             })}
             </div>
+            <div className="board-strip-dotrail-wrap">
             <div className="board-strip-dotrail" aria-label="Reference segment range">
               {shots.map((shot, index) => {
-                const inRange = bothSet && index >= lo && index <= hi
-                const isStart = bothSet && index === lo
-                const isEnd = bothSet && index === hi
-                const isAnchorOnly = !bothSet && index === anchorIdx
+                const inRange = showDraftLine && index >= lo && index <= hi
+                const isStart = showDraftLine && index === lo
+                const isEnd = showDraftLine && index === hi
+                const isAnchorOnly = !showDraftLine && !activeAppliedSegmentId && index === anchorIdx
                 const cellClass = [
                   'board-strip-dotcell',
                   inRange ? 'in-range' : '',
                   isStart ? 'range-start' : '',
                   isEnd ? 'range-end' : '',
-                  bothSet && lo === hi ? 'range-single' : '',
+                  bothSet && lo === hi && showDraftLine ? 'range-single' : '',
                 ]
                   .filter(Boolean)
                   .join(' ')
@@ -308,6 +401,51 @@ export function BoardStrip() {
                   </div>
                 )
               })}
+            </div>
+            {visibleMarkers.length > 0 ? (
+              <div className="board-strip-segment-layer" aria-label="Applied reference segments">
+                {visibleMarkers.map((seg) => {
+                  const span = seg.hi - seg.lo + 1
+                  const cssType = segmentCssType(seg.sourceType)
+                  const tooltip = segmentMarkerTooltip(seg)
+                  return (
+                    <button
+                      key={`${seg.segmentId}-${seg.kind}-${seg.lo}-${seg.hi}`}
+                      type="button"
+                      className={[
+                        'board-strip-segment-bar',
+                        `is-${cssType}`,
+                        seg.kind === 'pending' ? 'is-pending' : 'is-applied',
+                        seg.isSelected ? 'is-selected' : '',
+                      ]
+                        .filter(Boolean)
+                        .join(' ')}
+                      style={
+                        {
+                          '--seg-lo': seg.lo,
+                          '--seg-span': span,
+                        } as CSSProperties
+                      }
+                      title={`${tooltip} — double-click to open`}
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        handleMarkerClick(seg.segmentId)
+                      }}
+                      onDoubleClick={(e) => {
+                        e.stopPropagation()
+                        handleMarkerDoubleClick(seg.segmentId)
+                      }}
+                      aria-label={tooltip}
+                      aria-pressed={seg.isSelected}
+                    >
+                      <span className="board-strip-segment-bar-label">
+                        {seg.kind === 'pending' ? '…' : seg.typeLabel}
+                      </span>
+                    </button>
+                  )
+                })}
+              </div>
+            ) : null}
             </div>
           </div>
         )}

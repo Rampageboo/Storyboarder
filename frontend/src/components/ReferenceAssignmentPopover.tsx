@@ -1,8 +1,9 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   applyRefSegment,
   applyRefSegment3d,
   applyRefSegmentImage,
+  deleteRefSegment,
   projectFileUrl,
   restoreRefApply,
   updateSettings,
@@ -12,6 +13,7 @@ import {
 import type { ProjectPayload, ReferenceLink } from '../types'
 import { useProject } from '../state/ProjectContext'
 import { shotDisplayLabel } from '../utils/shotDisplay'
+import { findRefSegment, segmentHasPendingBoards } from '../utils/refSegmentDisplay'
 import './ReferenceAssignmentPopover.css'
 
 type Segment = {
@@ -66,63 +68,151 @@ function RefThumb({ link, selected }: { link: ReferenceLink; selected: boolean }
   )
 }
 
-function BoardSegmentViz({
-  shotCount,
-  lo,
-  hi,
+type FitMode = 'fit' | 'fill' | 'stretch'
+
+const FIT_MODES: FitMode[] = ['fit', 'fill', 'stretch']
+
+function fitModeToObjectFit(mode: FitMode): 'contain' | 'cover' | 'fill' {
+  if (mode === 'fill') return 'cover'
+  if (mode === 'stretch') return 'fill'
+  return 'contain'
+}
+
+function normalizeFitMode(value: unknown): FitMode {
+  const mode = String(value || 'fit').trim().toLowerCase()
+  return FIT_MODES.includes(mode as FitMode) ? (mode as FitMode) : 'fit'
+}
+
+function formatClock(seconds: number) {
+  const totalMs = Math.max(0, Math.round((Number(seconds) || 0) * 1000))
+  const mins = Math.floor(totalMs / 60000)
+  const secs = Math.floor((totalMs % 60000) / 1000)
+  const ms = totalMs % 1000
+  return `${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}.${String(ms).padStart(3, '0')}`
+}
+
+function maxMediaSegmentStart(mediaDuration: number, boardDuration: number, mode: string) {
+  if (mode === 'image') return 0
+  if (!mediaDuration) return 0
+  const segLen = Math.max(0.001, boardDuration)
+  if (segLen >= mediaDuration) return 0
+  return Math.max(0, mediaDuration - segLen)
+}
+
+function clampMediaSegmentStart(
+  start: number,
+  mediaDuration: number,
+  boardDuration: number,
+  mode: string,
+) {
+  if (mode === 'image') return 0
+  return Math.min(maxMediaSegmentStart(mediaDuration, boardDuration, mode), Math.max(0, Number(start) || 0))
+}
+
+function segmentVisualEnd(start: number, mediaDuration: number, boardDuration: number, mode: string) {
+  const segLen = Math.max(0.001, boardDuration)
+  if (mode === 'image') return segLen
+  if (!mediaDuration) return start + segLen
+  return Math.min(start + segLen, mediaDuration)
+}
+
+const TIMELINE_INSET = 12
+
+function MediaSegmentTimeline({
   mode,
+  mediaDuration,
+  boardDuration,
+  segmentStart,
+  playheadTime,
+  onSegmentStartChange,
 }: {
-  shotCount: number
-  lo: number
-  hi: number
   mode: string
+  mediaDuration: number
+  boardDuration: number
+  segmentStart: number
+  playheadTime: number
+  onSegmentStartChange: (start: number) => void
 }) {
-  const trackRef = useRef<HTMLDivElement | null>(null)
-  const cells = useMemo(() => Array.from({ length: shotCount }, (_, i) => i), [shotCount])
-  const inRange = (i: number) => i >= lo && i <= hi
+  const timelineRef = useRef<HTMLDivElement | null>(null)
+  const dragRef = useRef<{ startX: number; segmentStart: number; pointerId: number } | null>(null)
+  const [dragging, setDragging] = useState(false)
+
+  const segLen = Math.max(0.001, boardDuration)
+  const trackDuration = mode === 'image' ? segLen : mediaDuration
+  const draggable = mode !== 'image' && trackDuration > 0 && boardDuration > 0
+  const start = clampMediaSegmentStart(segmentStart, mediaDuration, boardDuration, mode)
 
   useEffect(() => {
-    const track = trackRef.current
-    if (!track || lo < 0) return
-    const cell = track.querySelector(`[data-board-index="${lo}"]`)
-    if (cell instanceof HTMLElement) {
-      cell.scrollIntoView({ block: 'nearest', inline: 'center', behavior: 'smooth' })
+    const onMove = (event: PointerEvent) => {
+      const drag = dragRef.current
+      const timeline = timelineRef.current
+      if (!drag || !timeline || !draggable) return
+      const rect = timeline.getBoundingClientRect()
+      const innerWidth = Math.max(1, rect.width - TIMELINE_INSET * 2)
+      const deltaSec = ((event.clientX - drag.startX) / innerWidth) * mediaDuration
+      onSegmentStartChange(
+        clampMediaSegmentStart(drag.segmentStart + deltaSec, mediaDuration, boardDuration, mode),
+      )
     }
-  }, [lo, hi])
 
-  if (shotCount === 0 || lo < 0 || hi < 0) {
-    return <div className="ref-assign-seg-viz ref-assign-seg-viz--empty">No boards in range</div>
+    const onUp = (event: PointerEvent) => {
+      if (!dragRef.current) return
+      dragRef.current = null
+      setDragging(false)
+      try {
+        timelineRef.current?.releasePointerCapture(event.pointerId)
+      } catch {
+        // ignore
+      }
+    }
+
+    window.addEventListener('pointermove', onMove)
+    window.addEventListener('pointerup', onUp)
+    window.addEventListener('pointercancel', onUp)
+    return () => {
+      window.removeEventListener('pointermove', onMove)
+      window.removeEventListener('pointerup', onUp)
+      window.removeEventListener('pointercancel', onUp)
+    }
+  }, [boardDuration, draggable, mediaDuration, mode, onSegmentStartChange])
+
+  if (!trackDuration || boardDuration <= 0) {
+    return <div className="ref-assign-seg-viz ref-assign-seg-viz--empty">Select boards on the filmstrip first</div>
   }
 
-  const spanLeft = (lo / shotCount) * 100
-  const spanWidth = ((hi - lo + 1) / shotCount) * 100
+  const startPct = mode === 'image' ? 0 : (100 * start) / trackDuration
+  const widthPct =
+    mode === 'image' ? 100 : Math.min((100 * segLen) / trackDuration, Math.max(0, 100 - startPct))
+  const playheadPct = trackDuration > 0 ? (100 * Math.max(0, playheadTime)) / trackDuration : 0
 
   return (
-    <div className={`ref-assign-seg-viz ref-assign-seg-viz--${mode}`}>
+    <div
+      ref={timelineRef}
+      className={`ref-assign-seg-viz ref-assign-seg-viz--${mode} ${dragging ? 'is-dragging' : ''}`}
+      aria-label="Reference media segment"
+    >
       <div className="ref-assign-seg-rail" aria-hidden="true" />
-      <div
-        className="ref-assign-seg-bar"
-        style={{ left: `${spanLeft}%`, width: `${spanWidth}%` }}
-        title={`Boards #${lo + 1}–#${hi + 1}`}
-      />
-      <div className="ref-assign-seg-track" ref={trackRef}>
-        {cells.map((i) => (
-          <div
-            key={i}
-            data-board-index={i}
-            className={[
-              'ref-assign-seg-cell',
-              inRange(i) ? 'in-range' : '',
-              i === lo ? 'range-start' : '',
-              i === hi ? 'range-end' : '',
-            ]
-              .filter(Boolean)
-              .join(' ')}
-            title={`Board #${i + 1}`}
-          >
-            <span className="ref-assign-seg-dot" />
-          </div>
-        ))}
+      <div className="ref-assign-seg-layer">
+        <div
+          className={`ref-assign-seg-bar ${draggable ? 'is-draggable' : ''}`}
+          style={{ left: `${startPct}%`, width: `${Math.max(mode === 'image' ? 100 : 0.25, widthPct)}%` }}
+          title={draggable ? 'Drag to choose which part of the reference maps to these boards' : undefined}
+          onPointerDown={(event) => {
+            if (!draggable || event.button !== 0) return
+            event.preventDefault()
+            event.stopPropagation()
+            dragRef.current = {
+              startX: event.clientX,
+              segmentStart: start,
+              pointerId: event.pointerId,
+            }
+            setDragging(true)
+            timelineRef.current?.setPointerCapture(event.pointerId)
+          }}
+        />
+        {mode !== 'image' ? (
+          <div className="ref-assign-seg-playhead" style={{ left: `${playheadPct}%` }} aria-hidden="true" />
+        ) : null}
       </div>
     </div>
   )
@@ -138,16 +228,25 @@ export function ReferenceAssignmentPopover() {
     segmentRange,
     setSegmentAnchor,
     setSegmentEnd,
-    clearSegmentRange,
+    activeAppliedSegmentId,
+    dismissRefSegmentUi,
+    refSegmentInspectOpen,
+    closeRefSegmentInspect,
     refApplyUndoToken,
     setRefApplyUndoToken,
   } = useProject()
   const [busy, setBusy] = useState(false)
   const [refId, setRefId] = useState('')
-  const [startTime, setStartTime] = useState('0')
+  const [formAnchorShotId, setFormAnchorShotId] = useState('')
+  const [formEndShotId, setFormEndShotId] = useState('')
+  const [fitMode, setFitMode] = useState<FitMode>('fit')
+  const [segmentStart, setSegmentStart] = useState(0)
+  const [mediaDuration, setMediaDuration] = useState(0)
+  const [playheadTime, setPlayheadTime] = useState(0)
   const [toast, setToast] = useState('')
   const [previewFailed, setPreviewFailed] = useState(false)
   const importRef = useRef<HTMLInputElement | null>(null)
+  const previewVideoRef = useRef<HTMLVideoElement | null>(null)
 
   const links = useMemo(() => project?.settings?.reference_links ?? [], [project?.settings?.reference_links])
   const segments = useMemo(
@@ -156,9 +255,16 @@ export function ReferenceAssignmentPopover() {
   )
   const shots = project?.shots ?? []
 
-  const startShot = segmentRange.anchorShotId ?? ''
-  const endShot = segmentRange.endShotId ?? ''
-  const open = !!(startShot && endShot)
+  const draftComplete = !!(segmentRange.anchorShotId && segmentRange.endShotId)
+  const isInspectMode = refSegmentInspectOpen && !!activeAppliedSegmentId && !draftComplete
+  const open = draftComplete || isInspectMode
+  const inspectSegment = useMemo(
+    () => findRefSegment(segments, activeAppliedSegmentId),
+    [segments, activeAppliedSegmentId],
+  )
+
+  const startShot = isInspectMode ? formAnchorShotId : (segmentRange.anchorShotId ?? '')
+  const endShot = isInspectMode ? formEndShotId : (segmentRange.endShotId ?? '')
 
   const anchorIdx = startShot ? shots.findIndex((s) => s.shot_id === startShot) : -1
   const endIdx = endShot ? shots.findIndex((s) => s.shot_id === endShot) : -1
@@ -166,14 +272,71 @@ export function ReferenceAssignmentPopover() {
   const hi = anchorIdx >= 0 && endIdx >= 0 ? Math.max(anchorIdx, endIdx) : -1
   const boardCount = lo >= 0 && hi >= 0 ? hi - lo + 1 : 0
   const durationSec = lo >= 0 && hi >= 0 ? segmentDurationSeconds(shots, lo, hi) : 0
+  const selectedRef = useMemo(() => links.find((l) => l.id === refId) ?? null, [links, refId])
+  const refMode = selectedRef?.type ?? 'none'
+  const hasPendingBoards = useMemo(() => {
+    const seg = isInspectMode ? inspectSegment : null
+    if (!seg) return false
+    return segmentHasPendingBoards(seg, shots, links)
+  }, [isInspectMode, inspectSegment, shots, links])
 
   useEffect(() => {
-    setRefId((cur) => (cur && links.some((l) => l.id === cur) ? cur : links[0]?.id ?? ''))
-  }, [links])
+    if (!isInspectMode || !inspectSegment) return
+    const ref = inspectSegment.reference_id
+      ? String(inspectSegment.reference_id)
+      : links.find((l) => l.path === inspectSegment.reference_path)?.id ?? ''
+    if (ref) setRefId(ref)
+    setFormAnchorShotId(String(inspectSegment.anchor_shot_id || ''))
+    setFormEndShotId(String(inspectSegment.end_shot_id || ''))
+    setFitMode(normalizeFitMode(inspectSegment.fit_mode))
+    const start = Number(inspectSegment.video_start)
+    setSegmentStart(Number.isFinite(start) && start > 0 ? start : 0)
+    setPreviewFailed(false)
+    setPlayheadTime(0)
+    setMediaDuration(0)
+  }, [isInspectMode, inspectSegment, links])
 
   useEffect(() => {
     setPreviewFailed(false)
-  }, [refId])
+    if (isInspectMode) return
+    setFitMode('fit')
+    setSegmentStart(0)
+    setMediaDuration(0)
+    setPlayheadTime(0)
+  }, [refId, isInspectMode])
+
+  useEffect(() => {
+    if (isInspectMode) return
+    setRefId((cur) => (cur && links.some((l) => l.id === cur) ? cur : links[0]?.id ?? ''))
+  }, [links, isInspectMode])
+
+  useEffect(() => {
+    if (isInspectMode) return
+    setSegmentStart(0)
+  }, [startShot, endShot, isInspectMode])
+
+  useEffect(() => {
+    if (refMode === 'model' && durationSec > 0) {
+      setMediaDuration((cur) => Math.max(cur, Math.max(durationSec * 2, 30)))
+    }
+  }, [refMode, durationSec])
+
+  const updateSegmentStart = useCallback(
+    (next: number) => {
+      const clamped = clampMediaSegmentStart(next, mediaDuration, durationSec, refMode)
+      setSegmentStart(clamped)
+      if (refMode === 'video' && previewVideoRef.current) {
+        previewVideoRef.current.currentTime = clamped
+        setPlayheadTime(clamped)
+      }
+    },
+    [durationSec, mediaDuration, refMode],
+  )
+
+  useEffect(() => {
+    if (!refSegmentInspectOpen || !activeAppliedSegmentId || draftComplete) return
+    if (!findRefSegment(segments, activeAppliedSegmentId)) dismissRefSegmentUi()
+  }, [refSegmentInspectOpen, activeAppliedSegmentId, draftComplete, segments, dismissRefSegmentUi])
 
   useEffect(() => {
     if (!toast) return
@@ -186,8 +349,6 @@ export function ReferenceAssignmentPopover() {
   }
 
   const disabled = busy || projectActionBusy
-  const selectedRef = links.find((l) => l.id === refId) || null
-  const refMode = selectedRef?.type ?? 'none'
   const previewUrl = selectedRef ? projectFileUrl(selectedRef.path) : ''
   const previewLabel = selectedRef ? selectedRef.title || fileName(selectedRef.path) : 'No reference selected'
   const segmentTypeLabel =
@@ -200,7 +361,18 @@ export function ReferenceAssignmentPopover() {
   }
 
   const cancel = () => {
-    clearSegmentRange()
+    if (isInspectMode) closeRefSegmentInspect()
+    else dismissRefSegmentUi()
+  }
+
+  const setFormStartShot = (shotId: string | null) => {
+    if (isInspectMode) setFormAnchorShotId(shotId ?? '')
+    else setSegmentAnchor(shotId)
+  }
+
+  const setFormEndShot = (shotId: string | null) => {
+    if (isInspectMode) setFormEndShotId(shotId ?? '')
+    else setSegmentEnd(shotId)
   }
 
   const importReference = (file: File | undefined) => {
@@ -227,9 +399,7 @@ export function ReferenceAssignmentPopover() {
       return
     }
     if (!startShot || !endShot) return
-    const start = Number(startTime)
-    const videoStart = Number.isFinite(start) && start > 0 ? start : 0
-    const segId = newSegmentId()
+    const segId = isInspectMode && activeAppliedSegmentId ? activeAppliedSegmentId : newSegmentId()
     const seg: Segment = {
       id: segId,
       anchor_shot_id: startShot,
@@ -237,7 +407,8 @@ export function ReferenceAssignmentPopover() {
       source_type: selectedRef.type,
       reference_id: selectedRef.id,
       reference_path: selectedRef.path,
-      video_start: videoStart,
+      video_start: clampMediaSegmentStart(segmentStart, mediaDuration, durationSec, refMode),
+      fit_mode: fitMode,
     }
     setBusy(true)
     void (async () => {
@@ -254,8 +425,31 @@ export function ReferenceAssignmentPopover() {
         const result = payload as unknown as { board_count?: number; undo_token?: string }
         const count = result.board_count ?? boardCount
         setRefApplyUndoToken(typeof result.undo_token === 'string' ? result.undo_token : null)
-        clearSegmentRange()
-        setToast(`Applied to ${count} board${count === 1 ? '' : 's'}`)
+        if (isInspectMode) closeRefSegmentInspect()
+        else dismissRefSegmentUi()
+        setToast(
+          isInspectMode
+            ? `Reapplied to ${count} board${count === 1 ? '' : 's'}`
+            : `Applied to ${count} board${count === 1 ? '' : 's'}`,
+        )
+      } catch (error) {
+        reportError(error)
+      } finally {
+        setBusy(false)
+      }
+    })()
+  }
+
+  const deleteSegment = () => {
+    if (!activeAppliedSegmentId) return
+    if (!window.confirm('Delete this applied reference segment?')) return
+    setBusy(true)
+    void (async () => {
+      try {
+        await flushDirtyShots()
+        setProject(await deleteRefSegment(activeAppliedSegmentId))
+        dismissRefSegmentUi()
+        setToast('Reference segment deleted.')
       } catch (error) {
         reportError(error)
       } finally {
@@ -281,6 +475,16 @@ export function ReferenceAssignmentPopover() {
     })()
   }
 
+  const previewObjectFit = fitModeToObjectFit(fitMode)
+  const visualEnd = segmentVisualEnd(segmentStart, mediaDuration, durationSec, refMode)
+  const segmentSummaryPrimary =
+    refMode === 'image'
+      ? `Image segment: ${durationSec.toFixed(1)}s · boards ${boardLabel}`
+      : refMode === 'model'
+        ? `3D segment: ${formatClock(durationSec)} · anim ${formatClock(segmentStart)} → ${formatClock(visualEnd)} · boards ${boardLabel}`
+        : `Video segment: ${formatClock(durationSec)} · ${formatClock(segmentStart)} → ${formatClock(visualEnd)} · boards ${boardLabel}`
+  const segmentSummarySecondary = `Reference segment: ${durationSec.toFixed(1)}s · boards ${boardLabel}`
+
   return (
     <>
       <div className="ref-assign-backdrop" onClick={cancel} aria-hidden="true" />
@@ -291,7 +495,7 @@ export function ReferenceAssignmentPopover() {
         aria-label="Assign reference to board range"
       >
         <div className="ref-assign-modal-header">
-          <h3>Reference segment</h3>
+          <h3>{isInspectMode ? 'Inspect reference segment' : 'Reference segment'}</h3>
           <button type="button" className="ref-assign-close" onClick={cancel} aria-label="Cancel">
             ×
           </button>
@@ -341,6 +545,11 @@ export function ReferenceAssignmentPopover() {
           </aside>
 
           <main className="ref-assign-main">
+            {hasPendingBoards ? (
+              <div className="ref-assign-pending-note" role="status">
+                Some boards in this segment range have not been applied yet. Reapply to regenerate the full range.
+              </div>
+            ) : null}
             <div className="ref-assign-preview-head">
               <span className="ref-assign-section-label">{segmentTypeLabel} segment</span>
               <span className="ref-assign-preview-meta">{previewLabel}</span>
@@ -355,11 +564,18 @@ export function ReferenceAssignmentPopover() {
                 <div className="ref-assign-player-empty">Preview unavailable</div>
               ) : selectedRef.type === 'video' ? (
                 <video
+                  ref={previewVideoRef}
                   key={selectedRef.id}
                   src={previewUrl}
                   controls
                   preload="metadata"
                   playsInline
+                  style={{ objectFit: previewObjectFit }}
+                  onLoadedMetadata={(event) => {
+                    const duration = event.currentTarget.duration
+                    if (Number.isFinite(duration) && duration > 0) setMediaDuration(duration)
+                  }}
+                  onTimeUpdate={(event) => setPlayheadTime(event.currentTarget.currentTime || 0)}
                   onError={() => setPreviewFailed(true)}
                 />
               ) : (
@@ -367,30 +583,39 @@ export function ReferenceAssignmentPopover() {
                   key={selectedRef.id}
                   src={previewUrl}
                   alt={previewLabel}
+                  style={{ objectFit: previewObjectFit }}
                   onError={() => setPreviewFailed(true)}
                 />
               )}
             </div>
 
-            {selectedRef?.type === 'video' ? (
-              <label className="ref-assign-field ref-assign-field--inline">
-                <span>Start time (s)</span>
-                <input
-                  type="number"
-                  min="0"
-                  step="0.1"
-                  value={startTime}
-                  onChange={(e) => setStartTime(e.target.value)}
+            <div className="ref-assign-fit-mode" role="group" aria-label="Reference fit">
+              <span className="ref-assign-fit-label">Fit</span>
+              {FIT_MODES.map((mode) => (
+                <button
+                  key={mode}
+                  type="button"
+                  className={`ref-assign-fit-btn ${fitMode === mode ? 'is-active' : ''}`}
+                  title={
+                    mode === 'fit'
+                      ? 'Fit inside canvas'
+                      : mode === 'fill'
+                        ? 'Fill canvas, crop edges'
+                        : 'Stretch to canvas'
+                  }
+                  onClick={() => setFitMode(normalizeFitMode(mode))}
                   disabled={disabled}
-                />
-              </label>
-            ) : null}
+                >
+                  {mode === 'fit' ? 'Fit' : mode === 'fill' ? 'Fill' : 'Stretch'}
+                </button>
+              ))}
+            </div>
 
             <section className="ref-assign-segment-box">
               <div className="ref-assign-segment-toolbar">
                 <span className="ref-assign-section-label">Board segment</span>
                 <div className="ref-assign-board-picks">
-                  <select value={startShot} onChange={(e) => setSegmentAnchor(e.target.value || null)} disabled={disabled}>
+                  <select value={startShot} onChange={(e) => setFormStartShot(e.target.value || null)} disabled={disabled}>
                     {shots.map((s) => (
                       <option key={s.shot_id} value={s.shot_id}>
                         {shotLabel(s.shot_id)}
@@ -398,7 +623,7 @@ export function ReferenceAssignmentPopover() {
                     ))}
                   </select>
                   <span>→</span>
-                  <select value={endShot} onChange={(e) => setSegmentEnd(e.target.value || null)} disabled={disabled}>
+                  <select value={endShot} onChange={(e) => setFormEndShot(e.target.value || null)} disabled={disabled}>
                     {shots.map((s) => (
                       <option key={s.shot_id} value={s.shot_id}>
                         {shotLabel(s.shot_id)}
@@ -408,30 +633,51 @@ export function ReferenceAssignmentPopover() {
                 </div>
                 <button
                   type="button"
+                  className="ref-assign-reset-start"
+                  onClick={() => updateSegmentStart(0)}
+                  disabled={disabled || refMode === 'image' || segmentStart <= 0}
+                >
+                  Reset start
+                </button>
+                <button
+                  type="button"
                   className="ref-assign-apply"
                   onClick={() => applySegment()}
                   disabled={disabled || !links.length || shots.length === 0}
                 >
-                  Apply to boards
+                  {isInspectMode ? 'Reapply to boards' : 'Apply to boards'}
                 </button>
+                {isInspectMode ? (
+                  <button type="button" className="ref-assign-delete" onClick={() => deleteSegment()} disabled={disabled}>
+                    Delete segment
+                  </button>
+                ) : null}
               </div>
 
-              <BoardSegmentViz shotCount={shots.length} lo={lo} hi={hi} mode={refMode} />
+              <MediaSegmentTimeline
+                mode={refMode}
+                mediaDuration={mediaDuration}
+                boardDuration={durationSec}
+                segmentStart={segmentStart}
+                playheadTime={playheadTime}
+                onSegmentStartChange={updateSegmentStart}
+              />
 
               <div className="ref-assign-segment-summary">
-                <span>
-                  {segmentTypeLabel.toLowerCase()} segment: {durationSec.toFixed(1)}s · boards {boardLabel}
-                </span>
-                <span>
-                  reference segment: {durationSec.toFixed(1)}s · boards {boardLabel}
-                </span>
+                <span>{segmentSummaryPrimary}</span>
+                <span>{segmentSummarySecondary}</span>
               </div>
             </section>
 
             <div className="ref-assign-footer">
               <button type="button" onClick={cancel} disabled={disabled}>
-                Cancel / clear range
+                {isInspectMode ? 'Close' : 'Cancel / clear range'}
               </button>
+              {isInspectMode ? (
+                <button type="button" className="primary" onClick={() => applySegment()} disabled={disabled || !links.length}>
+                  Reapply
+                </button>
+              ) : null}
               {refApplyUndoToken ? (
                 <button type="button" onClick={() => undoLastApply()} disabled={disabled}>
                   Undo last apply

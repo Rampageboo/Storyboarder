@@ -111,6 +111,38 @@ def _segment_storyboard_duration(shots: list[Shot], min_index: int, max_index: i
     return storyboard_duration
 
 
+_REF_SEGMENT_CAMERA_KEYS = ("ref_segment_id", "ref_source_type", "ref_applied_at", "ref_frame_time")
+
+
+def _stamp_ref_segment_provenance(
+    shot: Shot,
+    segment_id: str,
+    source_type: str,
+    *,
+    frame_time: float | None = None,
+    applied_at: str | None = None,
+) -> None:
+    """Record which reference segment actually generated this board's bake."""
+    from datetime import datetime, timezone
+
+    camera_data = dict(shot.camera_data or {})
+    camera_data["ref_segment_id"] = str(segment_id or "").strip()
+    camera_data["ref_source_type"] = str(source_type or "").strip().lower()
+    camera_data["ref_applied_at"] = applied_at or datetime.now(timezone.utc).isoformat()
+    if frame_time is not None:
+        camera_data["ref_frame_time"] = round(float(frame_time), 3)
+    shot.camera_data = camera_data
+
+
+def _clear_ref_segment_provenance(shot: Shot, segment_id: str | None = None) -> None:
+    camera_data = dict(shot.camera_data or {})
+    if segment_id and str(camera_data.get("ref_segment_id", "") or "").strip() != str(segment_id).strip():
+        return
+    for key in _REF_SEGMENT_CAMERA_KEYS:
+        camera_data.pop(key, None)
+    shot.camera_data = camera_data
+
+
 def normalize_ref_segments(settings: dict[str, Any]) -> list[dict[str, Any]]:
     raw = settings.get("ref_segments")
     # An explicitly-present list is authoritative even when empty: an empty array
@@ -700,6 +732,12 @@ def apply_ref_segment_to_boards(
         shot.ref_video_path = video_rel
         shot.ref_video_time = round(video_time, 3)
         shot.ref_segment_time = round(segment_time, 3)
+        _stamp_ref_segment_provenance(
+            shot,
+            str(video_seg.get("id", segment_id or "") or ""),
+            "video",
+            frame_time=video_time,
+        )
         applied.append(
             {
                 "shot_id": shot.shot_id,
@@ -790,6 +828,12 @@ def apply_ref_segment_3d_to_boards(
         shot.ref_video_path = model_rel
         shot.ref_video_time = round(anim_time, 3)
         shot.ref_segment_time = round(segment_time, 3)
+        _stamp_ref_segment_provenance(
+            shot,
+            str(model_seg.get("id", segment_id or "") or ""),
+            "model",
+            frame_time=anim_time,
+        )
         applied.append(
             {
                 "shot_id": shot.shot_id,
@@ -867,6 +911,12 @@ def apply_ref_segment_image_to_boards(
         shot.ref_video_path = image_rel
         shot.ref_video_time = 0.0
         shot.ref_segment_time = round(segment_time, 3)
+        _stamp_ref_segment_provenance(
+            shot,
+            str(image_seg.get("id", segment_id or "") or ""),
+            "image",
+            frame_time=segment_time,
+        )
         applied.append(
             {
                 "shot_id": shot.shot_id,
@@ -922,17 +972,30 @@ def delete_ref_segment(project: Project, segment_id: str) -> dict[str, Any]:
         -1,
     )
     cleared = 0
+    for shot in project.shots:
+        camera_data = shot.camera_data or {}
+        if str(camera_data.get("ref_segment_id", "") or "").strip() != seg_id:
+            continue
+        _clear_ref_segment_provenance(shot, seg_id)
+        shot.ref_video_path = ""
+        shot.ref_video_time = 0.0
+        shot.ref_segment_time = 0.0
+        if pm.shot_has_psd_canvas(project, shot):
+            pm.remove_board_background_for_shot(project, shot)
+        else:
+            pm.remove_image_for_shot(project, shot)
+        cleared += 1
+
     if anchor_idx >= 0 and end_idx >= 0:
         min_index = min(anchor_idx, end_idx)
         max_index = max(anchor_idx, end_idx)
         for index in range(min_index, max_index + 1):
             shot = project.shots[index]
+            if str((shot.camera_data or {}).get("ref_segment_id", "") or "").strip() == seg_id:
+                continue
             shot.ref_video_path = ""
             shot.ref_video_time = 0.0
             shot.ref_segment_time = 0.0
-            # Removing a reference must not erase the artist's drawing. Boards
-            # backed by a Photoshop canvas keep their illustration (only the
-            # reference background is dropped); pure-reference boards reset.
             if pm.shot_has_psd_canvas(project, shot):
                 pm.remove_board_background_for_shot(project, shot)
             else:

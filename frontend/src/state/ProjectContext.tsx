@@ -38,6 +38,15 @@ interface ProjectContextValue {
   setSegmentEnd: (shotId: string | null) => void
   pickSegmentShot: (shotId: string) => void
   clearSegmentRange: () => void
+  /** Selected persisted segment for inspect/edit (not the temporary dot draft). */
+  activeAppliedSegmentId: string | null
+  setActiveAppliedSegmentId: (segmentId: string | null) => void
+  clearActiveAppliedSegment: () => void
+  /** True when the assignment popover is open for inspect/edit of a persisted segment. */
+  refSegmentInspectOpen: boolean
+  openRefSegmentInspect: (segmentId: string) => void
+  closeRefSegmentInspect: () => void
+  dismissRefSegmentUi: () => void
   refApplyUndoToken: string | null
   setRefApplyUndoToken: (token: string | null) => void
   lastError: string | null
@@ -94,6 +103,8 @@ export function ProjectProvider({ children }: PropsWithChildren) {
     endShotId: null,
   })
   const [refApplyUndoToken, setRefApplyUndoToken] = useState<string | null>(null)
+  const [activeAppliedSegmentId, setActiveAppliedSegmentId] = useState<string | null>(null)
+  const [refSegmentInspectOpen, setRefSegmentInspectOpen] = useState(false)
   const versionsRef = useRef<Record<string, number>>({})
   const projectRef = useRef<ProjectPayload | null>(null)
   const draftsRef = useRef<Record<string, ShotUpdate>>({})
@@ -125,6 +136,8 @@ export function ProjectProvider({ children }: PropsWithChildren) {
     setSavingShots({})
     setSegmentRange({ anchorShotId: null, endShotId: null })
     setRefApplyUndoToken(null)
+    setActiveAppliedSegmentId(null)
+    setRefSegmentInspectOpen(false)
   }, [])
 
   const setSegmentAnchor = useCallback((shotId: string | null) => {
@@ -134,7 +147,23 @@ export function ProjectProvider({ children }: PropsWithChildren) {
     setSegmentRange((range) => ({ ...range, endShotId: shotId }))
   }, [])
   const clearSegmentRange = useCallback(() => setSegmentRange({ anchorShotId: null, endShotId: null }), [])
+  const clearActiveAppliedSegment = useCallback(() => {
+    setActiveAppliedSegmentId(null)
+    setRefSegmentInspectOpen(false)
+  }, [])
+  const closeRefSegmentInspect = useCallback(() => setRefSegmentInspectOpen(false), [])
+  const openRefSegmentInspect = useCallback((segmentId: string) => {
+    setActiveAppliedSegmentId(segmentId)
+    setRefSegmentInspectOpen(true)
+  }, [])
+  const dismissRefSegmentUi = useCallback(() => {
+    setSegmentRange({ anchorShotId: null, endShotId: null })
+    setActiveAppliedSegmentId(null)
+    setRefSegmentInspectOpen(false)
+  }, [])
   const pickSegmentShot = useCallback((shotId: string) => {
+    setActiveAppliedSegmentId(null)
+    setRefSegmentInspectOpen(false)
     setSegmentRange((range) => {
       if (!range.anchorShotId) return { anchorShotId: shotId, endShotId: null }
       if (!range.endShotId) return { anchorShotId: range.anchorShotId, endShotId: shotId }
@@ -329,13 +358,20 @@ export function ProjectProvider({ children }: PropsWithChildren) {
       setSegmentEnd,
       pickSegmentShot,
       clearSegmentRange,
+      activeAppliedSegmentId,
+      setActiveAppliedSegmentId,
+      clearActiveAppliedSegment,
+      refSegmentInspectOpen,
+      openRefSegmentInspect,
+      closeRefSegmentInspect,
+      dismissRefSegmentUi,
       refApplyUndoToken,
       setRefApplyUndoToken,
       lastError,
       clearError,
       reportError,
     }),
-    [project, selectedShotId, reloadProject, newProjectAction, openProjectFromDialog, saveProjectAction, initialLoading, projectActionBusy, getDraft, editShotField, isShotDirty, dirtyShotIds, savingShots, saveShot, flushDirtyShots, visualEpoch, segmentRange, setSegmentAnchor, setSegmentEnd, pickSegmentShot, clearSegmentRange, refApplyUndoToken, lastError, clearError, reportError],
+    [project, selectedShotId, reloadProject, newProjectAction, openProjectFromDialog, saveProjectAction, initialLoading, projectActionBusy, getDraft, editShotField, isShotDirty, dirtyShotIds, savingShots, saveShot, flushDirtyShots, visualEpoch, segmentRange, setSegmentAnchor, setSegmentEnd, pickSegmentShot, clearSegmentRange, activeAppliedSegmentId, setActiveAppliedSegmentId, clearActiveAppliedSegment, refSegmentInspectOpen, openRefSegmentInspect, closeRefSegmentInspect, dismissRefSegmentUi, refApplyUndoToken, lastError, clearError, reportError],
   )
 
   return <ProjectContext.Provider value={value}>{children}</ProjectContext.Provider>

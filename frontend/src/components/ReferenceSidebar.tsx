@@ -55,6 +55,8 @@ export function ReferenceSidebar() {
     reportError,
     refApplyUndoToken,
     setRefApplyUndoToken,
+    activeAppliedSegmentId,
+    dismissRefSegmentUi,
   } = useProject()
   const [drawerOpen, setDrawerOpen] = useState(false)
   const [segmentsOpen, setSegmentsOpen] = useState(false)
@@ -141,6 +143,7 @@ export function ReferenceSidebar() {
       try {
         await flushDirtyShots()
         setProject(await deleteRefSegment(id))
+        if (activeAppliedSegmentId === id) dismissRefSegmentUi()
       } catch (error) {
         reportError(error)
       } finally {
