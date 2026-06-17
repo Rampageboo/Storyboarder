@@ -81,6 +81,7 @@ class StoryboardSmokeTests(unittest.TestCase):
             client = TestClient(app, raise_server_exceptions=False)
             for route in (
                 "/static/runtime/scene3d.js",
+                "/static/runtime/scene3d_workspace.js",
                 "/static/runtime/scene3d_preview_style.js",
             ):
                 with self.subTest(route=route):

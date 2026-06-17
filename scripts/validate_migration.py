@@ -17,6 +17,7 @@ from storyboard_tool import api as api_module  # noqa: E402
 STATIC = ROOT / "storyboard_tool" / "web" / "static"
 REQUIRED_STATIC = {
     STATIC / "runtime" / "scene3d.js",
+    STATIC / "runtime" / "scene3d_workspace.js",
     STATIC / "runtime" / "scene3d_preview_style.js",
     STATIC / "vendor" / "three" / "three.module.js",
     STATIC / "favicon.svg",

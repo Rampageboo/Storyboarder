@@ -12,99 +12,29 @@ import {
   clearWireframeOverlays,
   createWireframeResources,
 } from "./scene3d_preview_style.js";
-
-const PRIMITIVE_TYPES = new Set(["cube", "sphere", "plane", "cylinder", "cone"]);
-
-function makeId() {
-  return crypto.randomUUID().replaceAll("-", "").slice(0, 12);
-}
-
-function vec3From(value, fallback = [0, 0, 0]) {
-  if (Array.isArray(value) && value.length >= 3) {
-    return [Number(value[0]) || 0, Number(value[1]) || 0, Number(value[2]) || 0];
-  }
-  return [...fallback];
-}
-
-function eulerFrom(value) {
-  const [x, y, z] = vec3From(value);
-  return [x, y, z];
-}
-
-function colorFrom(value, fallback = 0x808080) {
-  if (typeof value === "string" && value.startsWith("#")) {
-    return new THREE.Color(value).getHex();
-  }
-  return fallback;
-}
-
-function defaultSceneData() {
-  return {
-    source: "builtin",
-    objects: [
-      {
-        id: "ground",
-        name: "Ground",
-        type: "plane",
-        position: [0, 0, 0],
-        rotation: [-Math.PI / 2, 0, 0],
-        scale: [10, 10, 1],
-        color: "#3a4048",
-      },
-      {
-        id: "cube1",
-        name: "Cube",
-        type: "cube",
-        position: [0, 0.5, 0],
-        rotation: [0, 0, 0],
-        scale: [1, 1, 1],
-        color: "#3d8bfd",
-      },
-    ],
-  };
-}
-
-function createMeshFromSpec(spec) {
-  const color = colorFrom(spec.color);
-  const material = new THREE.MeshStandardMaterial({ color, roughness: 0.55, metalness: 0.05 });
-  let geometry;
-  switch (spec.type) {
-    case "sphere":
-      geometry = new THREE.SphereGeometry(0.5, 32, 24);
-      break;
-    case "plane":
-      geometry = new THREE.PlaneGeometry(1, 1);
-      break;
-    case "cylinder":
-      geometry = new THREE.CylinderGeometry(0.5, 0.5, 1, 32);
-      break;
-    case "cone":
-      geometry = new THREE.ConeGeometry(0.5, 1, 32);
-      break;
-    default:
-      geometry = new THREE.BoxGeometry(1, 1, 1);
-      break;
-  }
-  const mesh = new THREE.Mesh(geometry, material);
-  mesh.castShadow = spec.type !== "plane";
-  mesh.receiveShadow = spec.type === "plane";
-  mesh.userData.objectId = spec.id;
-  mesh.userData.objectName = spec.name || spec.type;
-  mesh.userData.objectType = spec.type;
-  const [px, py, pz] = vec3From(spec.position, [0, 0.5, 0]);
-  const [rx, ry, rz] = eulerFrom(spec.rotation);
-  const [sx, sy, sz] = vec3From(spec.scale, [1, 1, 1]);
-  mesh.position.set(px, py, pz);
-  mesh.rotation.set(rx, ry, rz);
-  mesh.scale.set(sx, sy, sz);
-  return mesh;
-}
+import {
+  makeId,
+  vec3From,
+  eulerFrom,
+  colorFrom,
+  defaultSceneData,
+  createMeshFromSpec,
+  PRIMITIVE_TYPES,
+  captureRendererPng,
+  exportViewState,
+  getCameraStateFromEditor,
+  fovToFocalLength,
+  getProjectCanvasSize,
+  getProjectCanvasAspect,
+  exportBuiltinSceneData,
+  exportBlenderSceneData,
+  formatWorkspaceTime,
+  disposeObject3DRoot,
+  disposePrimitiveMesh,
+} from "./scene3d_workspace.js";
 
 function formatTime(seconds) {
-  const value = Math.max(0, Number(seconds) || 0);
-  const mins = Math.floor(value / 60);
-  const secs = (value % 60).toFixed(1).padStart(mins > 0 ? 4 : 1, "0");
-  return mins > 0 ? `${mins}:${secs}` : `${secs}s`;
+  return formatWorkspaceTime(seconds);
 }
 
 export class Scene3DEditor {
@@ -1233,31 +1163,18 @@ export class Scene3DEditor {
   exportSceneData() {
     if (this.mode === "blender") {
       const active = this.importedCameras.find((item) => item.id === this.activeCameraId);
-      return {
-        ...this.sceneMeta,
-        source: "blender",
-        camera_name: active?.name || this.sceneMeta.camera_name || "",
-        follow_camera: this.followCamera,
-        animation_time: this.animationTime,
-        program_lighting: this.programLightingMode,
-        imported_light_count: this.importedLightCount,
-        object_color_preview: this.objectColorPreview,
-        wireframe_mode: this.wireframeMode,
-      };
-    }
-    const objects = [];
-    for (const [id, mesh] of this.objects.entries()) {
-      objects.push({
-        id,
-        name: mesh.userData.objectName,
-        type: mesh.userData.objectType,
-        position: mesh.position.toArray(),
-        rotation: mesh.rotation.toArray().slice(0, 3),
-        scale: mesh.scale.toArray(),
-        color: `#${mesh.material.color.getHexString()}`,
+      return exportBlenderSceneData({
+        sceneMeta: this.sceneMeta,
+        activeCameraName: active?.name || this.sceneMeta.camera_name || "",
+        followCamera: this.followCamera,
+        animationTime: this.animationTime,
+        programLightingMode: this.programLightingMode,
+        importedLightCount: this.importedLightCount,
+        objectColorPreview: this.objectColorPreview,
+        wireframeMode: this.wireframeMode,
       });
     }
-    return { source: "builtin", objects, wireframe_mode: this.wireframeMode, object_color_preview: this.objectColorPreview };
+    return exportBuiltinSceneData(this.objects.entries(), this.wireframeMode, this.objectColorPreview);
   }
 
   clearBlenderScene() {
@@ -1277,22 +1194,7 @@ export class Scene3DEditor {
       this._restoreImportedMaterials(this.blenderRoot);
       this._disposePreviewMaterials();
       this.scene.remove(this.blenderRoot);
-      this.blenderRoot.traverse((node) => {
-        if (node.geometry) node.geometry.dispose();
-        const original = node.userData?.scene3dOriginalMaterial;
-        const materials = original
-          ? Array.isArray(original)
-            ? original
-            : [original]
-          : node.material
-            ? Array.isArray(node.material)
-              ? node.material
-              : [node.material]
-            : [];
-        for (const item of materials) {
-          item?.dispose?.();
-        }
-      });
+      disposeObject3DRoot(this.blenderRoot);
       this.blenderRoot = null;
     }
     this._populateCameraSelect();
@@ -1302,8 +1204,7 @@ export class Scene3DEditor {
   clearObjects() {
     for (const mesh of this.objects.values()) {
       this.scene.remove(mesh);
-      mesh.geometry.dispose();
-      mesh.material.dispose();
+      disposePrimitiveMesh(mesh);
     }
     this.objects.clear();
     this.transform.detach();
@@ -1354,8 +1255,7 @@ export class Scene3DEditor {
     if (!mesh) return;
     this.transform.detach();
     this.scene.remove(mesh);
-    mesh.geometry.dispose();
-    mesh.material.dispose();
+    disposePrimitiveMesh(mesh);
     this.objects.delete(this.selectedId);
     this.selectedId = null;
     this._renderOutliner();
@@ -1380,38 +1280,19 @@ export class Scene3DEditor {
   }
 
   getCameraState() {
-    const target = this.orbit.target.clone();
-    return {
-      position: this.camera.position.toArray(),
-      target: target.toArray(),
-      rotation: this.camera.rotation.toArray().slice(0, 3),
-      fov: this.camera.fov,
-      focal_length: Math.round(this._fovToFocalLength(this.camera.fov)),
-    };
+    return getCameraStateFromEditor(this.camera, this.orbit);
   }
 
   // A reproducible snapshot of the current viewport for the GLB reference preview / apply.
-  // Unlike getCameraState (whose `target` is the stale orbit pivot when following a scene camera),
-  // this recomputes `target` along the actual view direction so a preview can always lookAt(target)
-  // and match the orientation in both free-orbit and follow-camera modes.
   getViewState() {
-    const base = this.getCameraState();
-    const forward = this.camera.getWorldDirection(new THREE.Vector3());
-    const distance = Math.max(0.001, this.camera.position.distanceTo(this.orbit.target)) || 1;
-    const target = this.camera.position.clone().add(forward.multiplyScalar(distance));
     const active = this.importedCameras.find((item) => item.id === this.activeCameraId) || null;
-    const usingSceneCamera = !!(this.followCamera && active);
-    return {
-      mode: usingSceneCamera ? "scene_camera" : "free_view",
-      // Only a scene_camera view names a camera; a free-orbit view must not leak the dropdown's
-      // still-selected camera (otherwise apply would stamp scene3d_camera for a "Free view").
-      camera_name: usingSceneCamera ? active?.name || "" : "",
-      time: Number(this.animationTime) || 0,
-      position: base.position,
-      target: target.toArray(),
-      rotation: base.rotation,
-      fov: base.fov,
-    };
+    return exportViewState(THREE, {
+      camera: this.camera,
+      orbit: this.orbit,
+      followCamera: this.followCamera,
+      activeCamera: active ? { id: active.id, name: active.name } : null,
+      animationTime: this.animationTime,
+    });
   }
 
   loadShotCamera(cameraData) {
@@ -1438,8 +1319,7 @@ export class Scene3DEditor {
   }
 
   _fovToFocalLength(fov) {
-    const sensor = 36;
-    return sensor / (2 * Math.tan((fov * Math.PI) / 360));
+    return fovToFocalLength(fov);
   }
 
   _syncSelectedFromMesh() {
@@ -1604,39 +1484,17 @@ export class Scene3DEditor {
   }
 
   captureFrameDataUrl() {
-    if (this.followCamera && this.mode === "blender") {
-      this._applyFollowCamera();
-    }
-    const displaySize = new THREE.Vector2();
-    this.renderer.getSize(displaySize);
-    const displayPixelRatio = this.renderer.getPixelRatio();
-    const displayAspect = this.camera.aspect;
-    const projectSize =
-      typeof globalThis.getProjectCanvasSize === "function"
-        ? globalThis.getProjectCanvasSize()
-        : { width: 1920, height: 1080 };
-    const exportWidth = Math.max(1, projectSize.width);
-    const exportHeight = Math.max(1, projectSize.height);
-
-    this.renderer.setPixelRatio(1);
-    this.renderer.setSize(exportWidth, exportHeight, false);
-    this.camera.aspect = exportWidth / exportHeight;
-    this.camera.updateProjectionMatrix();
-    if (this.followCamera && this.mode === "blender") {
-      this._applyFollowCamera();
-    }
-    this.renderer.render(this.scene, this.camera);
-    const url = this.renderer.domElement.toDataURL("image/png");
-
-    this.renderer.setPixelRatio(displayPixelRatio);
-    this.renderer.setSize(displaySize.x, displaySize.y, false);
-    this.camera.aspect = displayAspect;
-    this.camera.updateProjectionMatrix();
-    if (this.followCamera && this.mode === "blender") {
-      this._applyFollowCamera();
-    }
-    this.renderer.render(this.scene, this.camera);
-    return url;
+    const followPrep = () => {
+      if (this.followCamera && this.mode === "blender") this._applyFollowCamera();
+    };
+    return captureRendererPng(THREE, this.renderer, this.camera, this.scene, {
+      getProjectCanvasSize,
+      prepareExport: followPrep,
+      finishDisplay: () => {
+        followPrep();
+        this.renderer.render(this.scene, this.camera);
+      },
+    });
   }
 
   getAnimationState() {
@@ -1679,11 +1537,7 @@ export class Scene3DEditor {
   }
 
   _projectAspect() {
-    const size =
-      typeof globalThis.getProjectCanvasSize === "function"
-        ? globalThis.getProjectCanvasSize()
-        : { width: 1920, height: 1080 };
-    return size.width / Math.max(1, size.height);
+    return getProjectCanvasAspect();
   }
 
   _resize() {

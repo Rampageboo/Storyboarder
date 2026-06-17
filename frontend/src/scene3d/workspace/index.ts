@@ -1,8 +1,8 @@
 /**
- * Scene3D workspace runtime — Phase 1 extraction foundation.
+ * Scene3D workspace runtime — incremental migration from scene3d.js.
  *
- * The React panel still loads `/static/runtime/scene3d.js`; these modules are the
- * typed target for incremental migration.
+ * React still loads `/static/runtime/scene3d.js`; shared helpers are built to
+ * `/static/runtime/scene3d_workspace.js`.
  */
 
 export type {
@@ -27,6 +27,45 @@ export {
 } from './workspaceThreeRuntime'
 
 export {
+  WORKSPACE_BACKGROUND,
+  DEFAULT_CAMERA_FOV,
+  DEFAULT_CAMERA_POSITION,
+  DEFAULT_ORBIT_TARGET,
+  createWorkspacePmremGenerator,
+  createWorkspaceRenderer,
+  createWorkspaceSceneGraph,
+  type WorkspaceSceneGraph,
+} from './workspaceScene'
+
+export {
+  createWorkspaceOrbitControls,
+  createWorkspaceTransformControls,
+  type WorkspaceOrbitControls,
+  type WorkspaceTransformControls,
+} from './workspaceControls'
+
+export {
+  exportViewState,
+  fovToFocalLength,
+  getCameraStateFromEditor,
+  getProjectCanvasAspect,
+  getProjectCanvasSize,
+  loadShotCameraIntoEditor,
+  type WorkspaceCameraState,
+  type WorkspaceImportedCameraRef,
+} from './workspaceCamera'
+
+export {
+  exportBlenderSceneData,
+  exportBuiltinSceneData,
+  exportBuiltinSceneObjects,
+  formatWorkspaceTime,
+  meshToObjectSpec,
+  normalizeWorkspaceSceneMeta,
+  type BlenderSceneExportState,
+} from './workspaceState'
+
+export {
   WORKSPACE_PRIMITIVE_TYPE_SET,
   applyWorkspaceObjectColorPreview,
   applyWorkspaceWireframeMode,
@@ -47,8 +86,10 @@ export {
 
 export {
   captureCanvasPng,
+  captureRendererPng,
   isBlankCanvas,
   type CaptureCanvasPngOptions,
+  type CaptureRendererPngOptions,
 } from './workspaceCapture'
 
 export {

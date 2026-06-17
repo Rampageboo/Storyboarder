@@ -5,7 +5,8 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "tsc -b && vite build",
+    "build": "tsc -b && vite build && npm run build:workspace",
+    "build:workspace": "vite build --config vite.workspace.config.ts",
     "lint": "eslint .",
     "preview": "vite preview"
   },
