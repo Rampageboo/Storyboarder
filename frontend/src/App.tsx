@@ -37,13 +37,13 @@ function WelcomePanel() {
     <div className="welcome-panel">
       <div className="welcome-card">
         <h2>No project open</h2>
-        <p>Create a new storyboard project or open an existing project.json file.</p>
+        <p>Create a new storyboard project in a chosen folder, or open an existing project folder.</p>
         <div className="welcome-actions">
           <button type="button" className="primary" onClick={() => void handleNew()} disabled={projectActionBusy}>
             New project
           </button>
           <button type="button" onClick={() => void handleOpen()} disabled={projectActionBusy}>
-            Open project
+            Open project folder
           </button>
         </div>
       </div>
