@@ -5,7 +5,6 @@ import {
   applyRefSegmentImage,
   deleteRefSegment,
   projectFileUrl,
-  removeShotImage,
   restoreRefApply,
   updateSettings,
   uploadProjectReference,
@@ -15,6 +14,7 @@ import type { ProjectPayload, ReferenceLink } from '../types'
 import { useProject } from '../state/ProjectContext'
 import { shotDisplayLabel } from '../utils/shotDisplay'
 import { findRefSegment, segmentHasPendingBoards } from '../utils/refSegmentDisplay'
+import { ReferenceModelPreview } from './ReferenceModelPreview'
 import './ReferenceAssignmentPopover.css'
 
 type Segment = {
@@ -57,7 +57,7 @@ function RefThumb({ link, selected }: { link: ReferenceLink; selected: boolean }
   return (
     <div className={`ref-assign-ref-thumb ${selected ? 'is-selected' : ''}`}>
       {link.type === 'model' ? (
-        <div className="ref-assign-ref-fallback">3D</div>
+        <ReferenceModelPreview path={link.path} label={link.title || fileName(link.path)} compact />
       ) : failed ? (
         <div className="ref-assign-ref-fallback">{link.type}</div>
       ) : link.type === 'video' ? (
@@ -444,33 +444,13 @@ export function ReferenceAssignmentPopover() {
   const deleteSegment = () => {
     if (!activeAppliedSegmentId) return
     if (!window.confirm('Delete this applied reference segment and clear its generated board backgrounds/previews?')) return
-    const appliedShotIds = shots
-      .filter((shot) => String(shot.camera_data?.ref_segment_id || '').trim() === activeAppliedSegmentId)
-      .map((shot) => shot.shot_id)
-    const rangeShotIds = inspectSegment
-      ? shots
-          .slice(
-            Math.max(0, Math.min(anchorIdx, endIdx)),
-            Math.max(0, Math.max(anchorIdx, endIdx)) + 1,
-          )
-          .map((shot) => shot.shot_id)
-      : []
-    const shotIdsToClear = Array.from(new Set(appliedShotIds.length ? appliedShotIds : rangeShotIds))
     setBusy(true)
     void (async () => {
       try {
         await flushDirtyShots()
-        let payload = await deleteRefSegment(activeAppliedSegmentId)
-        for (const shotId of shotIdsToClear) {
-          payload = await removeShotImage(shotId)
-        }
-        setProject(payload)
+        setProject(await deleteRefSegment(activeAppliedSegmentId))
         dismissRefSegmentUi()
-        setToast(
-          shotIdsToClear.length
-            ? `Reference segment deleted; cleared ${shotIdsToClear.length} board${shotIdsToClear.length === 1 ? '' : 's'}.`
-            : 'Reference segment deleted.',
-        )
+        setToast('Reference segment deleted.')
       } catch (error) {
         reportError(error)
       } finally {
@@ -580,14 +560,7 @@ export function ReferenceAssignmentPopover() {
               {!selectedRef ? (
                 <div className="ref-assign-player-empty">Select a reference on the left</div>
               ) : selectedRef.type === 'model' ? (
-                <div className="ref-assign-player-empty ref-assign-player-model-safe">
-                  <strong>3D model reference</strong>
-                  <span>{previewLabel}</span>
-                  <span>Inline GLB rendering is disabled here to keep the assignment UI stable.</span>
-                  <button type="button" onClick={() => window.open('/ref-scene3d', '_blank', 'noopener')}>
-                    Open 3D viewer
-                  </button>
-                </div>
+                <ReferenceModelPreview path={selectedRef.path} label={previewLabel} />
               ) : previewFailed ? (
                 <div className="ref-assign-player-empty">Preview unavailable</div>
               ) : selectedRef.type === 'video' ? (

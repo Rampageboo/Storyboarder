@@ -143,6 +143,61 @@ def _clear_ref_segment_provenance(shot: Shot, segment_id: str | None = None) -> 
     shot.camera_data = camera_data
 
 
+def _shot_matches_segment_bake(shot: Shot, segment_ref_path: str, seg_id: str) -> bool:
+    camera_data = shot.camera_data or {}
+    if str(camera_data.get("ref_segment_id", "") or "").strip() == seg_id:
+        return True
+    if not segment_ref_path:
+        return False
+    shot_ref = pm._normalize_rel_path(shot.ref_video_path or "")
+    if shot_ref != pm._normalize_rel_path(segment_ref_path):
+        return False
+    return bool(
+        shot.preview_image_path
+        or shot.image_path
+        or (shot.ref_segment_time or 0) > 0
+        or (shot.ref_video_time or 0) > 0
+    )
+
+
+def _refresh_shot_preview_from_psd(project: Project, shot: Shot) -> None:
+    from .image_utils import export_psd_composite_to_png
+
+    shot_dir = pm.get_shot_dir(project, shot)
+    source_path: Path | None = None
+    if shot.source_file_path:
+        candidate = project.root_path / shot.source_file_path
+        if candidate.is_file():
+            source_path = candidate
+    if source_path is None:
+        fallback = shot_dir / f"{shot.shot_id}.psd"
+        if fallback.is_file():
+            source_path = fallback
+    if source_path is None:
+        shot.preview_image_path = ""
+        shot.image_path = ""
+        shot.thumbnail_path = ""
+        return
+    preview_path = export_psd_composite_to_png(source_path, shot_dir / f"{shot.shot_id}_preview.png")
+    pm._set_shot_preview_paths(project, shot, preview_path)
+
+
+def _clear_ref_segment_bake_for_shot(project: Project, shot: Shot, seg_id: str) -> None:
+    _clear_ref_segment_provenance(shot, seg_id)
+    shot.ref_video_path = ""
+    shot.ref_video_time = 0.0
+    shot.ref_segment_time = 0.0
+    shot_dir = pm.get_shot_dir(project, shot)
+    for name in _board_bake_filenames(shot):
+        (shot_dir / name).unlink(missing_ok=True)
+    if pm.shot_has_psd_canvas(project, shot):
+        _refresh_shot_preview_from_psd(project, shot)
+    else:
+        shot.preview_image_path = ""
+        shot.image_path = ""
+        shot.thumbnail_path = ""
+
+
 def normalize_ref_segments(settings: dict[str, Any]) -> list[dict[str, Any]]:
     raw = settings.get("ref_segments")
     # An explicitly-present list is authoritative even when empty: an empty array
@@ -963,44 +1018,14 @@ def delete_ref_segment(project: Project, segment_id: str) -> dict[str, Any]:
     if segment is None:
         raise ValueError(f"Segment not found: {seg_id}")
 
-    anchor_idx = next(
-        (index for index, shot in enumerate(project.shots) if shot.shot_id == segment.get("anchor_shot_id")),
-        -1,
-    )
-    end_idx = next(
-        (index for index, shot in enumerate(project.shots) if shot.shot_id == segment.get("end_shot_id")),
-        -1,
-    )
+    segment_ref_path, _ = resolve_segment_reference(project, segment)
+
     cleared = 0
     for shot in project.shots:
-        camera_data = shot.camera_data or {}
-        if str(camera_data.get("ref_segment_id", "") or "").strip() != seg_id:
+        if not _shot_matches_segment_bake(shot, segment_ref_path, seg_id):
             continue
-        _clear_ref_segment_provenance(shot, seg_id)
-        shot.ref_video_path = ""
-        shot.ref_video_time = 0.0
-        shot.ref_segment_time = 0.0
-        if pm.shot_has_psd_canvas(project, shot):
-            pm.remove_board_background_for_shot(project, shot)
-        else:
-            pm.remove_image_for_shot(project, shot)
+        _clear_ref_segment_bake_for_shot(project, shot, seg_id)
         cleared += 1
-
-    if anchor_idx >= 0 and end_idx >= 0:
-        min_index = min(anchor_idx, end_idx)
-        max_index = max(anchor_idx, end_idx)
-        for index in range(min_index, max_index + 1):
-            shot = project.shots[index]
-            if str((shot.camera_data or {}).get("ref_segment_id", "") or "").strip() == seg_id:
-                continue
-            shot.ref_video_path = ""
-            shot.ref_video_time = 0.0
-            shot.ref_segment_time = 0.0
-            if pm.shot_has_psd_canvas(project, shot):
-                pm.remove_board_background_for_shot(project, shot)
-            else:
-                pm.remove_image_for_shot(project, shot)
-            cleared += 1
 
     project.settings["ref_segments"] = [item for item in segments if item.get("id") != seg_id]
 

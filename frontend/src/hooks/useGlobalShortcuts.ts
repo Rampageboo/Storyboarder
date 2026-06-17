@@ -1,5 +1,5 @@
 import { useEffect, useRef } from 'react'
-import { addShot, createShotCanvas, deleteShot, openShotSource, syncShot } from '../api'
+import { addShot, createShotCanvas, deleteRefSegment, deleteShot, openShotSource, syncShot } from '../api'
 import { useProject } from '../state/ProjectContext'
 
 function isTypingTarget(target: EventTarget | null): boolean {
@@ -13,13 +13,10 @@ function isTypingTarget(target: EventTarget | null): boolean {
  * Global drawing-workflow keyboard shortcuts. Mounted once near the app root.
  * - ←/→ : select previous / next board
  * - Ctrl/Cmd+S : save (flushes dirty shot drafts, then saves the project)
- * - Delete : delete selected board (with confirm)
+ * - Delete : delete selected reference segment when a marker is selected, else delete selected board
  * - R : sync selected board from Photoshop
  * - O : open selected board's source in Photoshop (creates a canvas first if needed)
  * - N : add a board after the selected one
- *
- * Single-key shortcuts are ignored while typing in a field; Ctrl/Cmd+S still works there.
- * Every state-changing shortcut flushes dirty drafts first and surfaces errors via the banner.
  */
 export function useGlobalShortcuts() {
   const {
@@ -31,15 +28,15 @@ export function useGlobalShortcuts() {
     flushDirtyShots,
     reportError,
     projectActionBusy,
+    activeAppliedSegmentId,
+    dismissRefSegmentUi,
   } = useProject()
 
   const runningRef = useRef(false)
-  // Mirror the latest values so the listener (attached once) always reads current state.
-  const stateRef = useRef({ project, selectedShotId, projectActionBusy })
-  stateRef.current = { project, selectedShotId, projectActionBusy }
+  const stateRef = useRef({ project, selectedShotId, projectActionBusy, activeAppliedSegmentId })
+  stateRef.current = { project, selectedShotId, projectActionBusy, activeAppliedSegmentId }
 
   useEffect(() => {
-    // Flush drafts, then run a state-changing action. Guards against overlapping runs.
     const run = async (fn: () => Promise<void>) => {
       if (runningRef.current || stateRef.current.projectActionBusy) return
       runningRef.current = true
@@ -54,12 +51,11 @@ export function useGlobalShortcuts() {
     }
 
     const onKeyDown = (event: KeyboardEvent) => {
-      const { project } = stateRef.current
+      const { project, activeAppliedSegmentId } = stateRef.current
       const selectedShotId = stateRef.current.selectedShotId
       if (!project) return
       const mod = event.ctrlKey || event.metaKey
 
-      // Save works even while editing a field (modifier combo, won't disrupt typing).
       if (mod && (event.key === 's' || event.key === 'S')) {
         event.preventDefault()
         if (runningRef.current) return
@@ -73,7 +69,7 @@ export function useGlobalShortcuts() {
       }
 
       if (isTypingTarget(event.target)) return
-      if (mod || event.altKey) return // leave other modifier combos to the browser
+      if (mod || event.altKey) return
 
       const shots = project.shots
       const idx = shots.findIndex((s) => s.shot_id === selectedShotId)
@@ -92,8 +88,16 @@ export function useGlobalShortcuts() {
           }
           break
         case 'Delete':
-          if (!selectedShotId) break
           event.preventDefault()
+          if (activeAppliedSegmentId) {
+            if (!window.confirm('Delete this applied reference segment and clear its generated board backgrounds/previews?')) break
+            void run(async () => {
+              setProject(await deleteRefSegment(activeAppliedSegmentId))
+              dismissRefSegmentUi()
+            })
+            break
+          }
+          if (!selectedShotId) break
           if (!window.confirm('Delete the selected board?')) break
           void run(async () => {
             const payload = await deleteShot(selectedShotId)
@@ -142,5 +146,5 @@ export function useGlobalShortcuts() {
 
     document.addEventListener('keydown', onKeyDown)
     return () => document.removeEventListener('keydown', onKeyDown)
-  }, [flushDirtyShots, saveProject, setProject, setSelectedShotId, reportError])
+  }, [flushDirtyShots, saveProject, setProject, setSelectedShotId, reportError, dismissRefSegmentUi])
 }

@@ -120,7 +120,7 @@ export function BoardStrip() {
 
   const handleDeleteSegment = useCallback(async () => {
     if (!activeAppliedSegmentId || !project) return
-    if (!window.confirm('Delete this applied reference segment?')) return
+    if (!window.confirm('Delete this applied reference segment and clear its generated board backgrounds/previews?')) return
     setBusy(true)
     try {
       await flushDirtyShots()
