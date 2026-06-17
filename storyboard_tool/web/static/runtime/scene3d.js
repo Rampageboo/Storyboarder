@@ -15,8 +15,6 @@ import {
 import {
   makeId,
   vec3From,
-  eulerFrom,
-  colorFrom,
   defaultSceneData,
   createMeshFromSpec,
   PRIMITIVE_TYPES,
@@ -31,6 +29,9 @@ import {
   formatWorkspaceTime,
   disposeObject3DRoot,
   disposePrimitiveMesh,
+  loadShotCameraIntoEditor,
+  applyFollowCameraToEditor,
+  initWorkspaceEditorThree,
 } from "./scene3d_workspace.js";
 
 function formatTime(seconds) {
@@ -211,69 +212,34 @@ export class Scene3DEditor {
   }
 
   _initThree() {
-    this.renderer = new THREE.WebGLRenderer({
-      antialias: true,
-      alpha: false,
-      preserveDrawingBuffer: true,
+    const boot = initWorkspaceEditorThree(THREE, OrbitControls, TransformControls, {
+      mountEl: this.formatFrameEl,
+      transformMode: this.transformMode,
+      onOrbitChange: () => {
+        if (this.mode === "blender" && !this.followCamera) this._notifyViewChange();
+      },
+      onTransformDraggingChanged: (dragging) => {
+        this.orbit.enabled = !dragging && !this.followCamera;
+      },
+      onTransformObjectChange: () => {
+        this._syncSelectedFromMesh();
+        this._renderOutliner();
+      },
     });
-    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
-    this.renderer.outputColorSpace = THREE.SRGBColorSpace;
-    this.renderer.toneMapping = THREE.AgXToneMapping ?? THREE.ACESFilmicToneMapping;
-    this.renderer.toneMappingExposure = 1.0;
-    this.renderer.shadowMap.enabled = true;
-    this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
-    this.formatFrameEl.appendChild(this.renderer.domElement);
-
-    this.scene = new THREE.Scene();
-    this.scene.background = new THREE.Color(0x1a1d21);
-
-    this.camera = new THREE.PerspectiveCamera(50, 1, 0.01, 1000);
-    this.camera.position.set(6, 4, 8);
-
-    this.orbit = new OrbitControls(this.camera, this.renderer.domElement);
-    this.orbit.enableDamping = true;
-    this.orbit.target.set(0, 0.5, 0);
-    // Persist free-orbit view changes (React debounces). Only for a loaded GLB scene and only when
-    // not following a scene camera; suppressed during programmatic scene loads. This also covers
-    // resetView()/focusSelected(), which change the view via orbit.update().
-    this.orbit.addEventListener("change", () => {
-      if (this.mode === "blender" && !this.followCamera) this._notifyViewChange();
-    });
-
-    this.transform = new TransformControls(this.camera, this.renderer.domElement);
-    this.transform.setMode(this.transformMode);
-    this.transform.addEventListener("dragging-changed", (event) => {
-      this.orbit.enabled = !event.value && !this.followCamera;
-    });
-    this.transform.addEventListener("objectChange", () => {
-      this._syncSelectedFromMesh();
-      this._renderOutliner();
-    });
-    this.scene.add(this.transform);
-
-    this.defaultAmbient = new THREE.AmbientLight(0xffffff, 0.45);
-    this.scene.add(this.defaultAmbient);
-    this.defaultSun = new THREE.DirectionalLight(0xffffff, 1.1);
-    this.defaultSun.position.set(6, 10, 4);
-    this.scene.add(this.defaultSun);
-
-    this.pmremGenerator = new THREE.PMREMGenerator(this.renderer);
-    this.pmremGenerator.compileEquirectangularShader();
+    this.renderer = boot.renderer;
+    this.scene = boot.scene;
+    this.camera = boot.camera;
+    this.defaultAmbient = boot.defaultAmbient;
+    this.defaultSun = boot.defaultSun;
+    this.programAmbient = boot.programAmbient;
+    this.programHemisphere = boot.programHemisphere;
+    this.grid = boot.grid;
+    this.axes = boot.axes;
+    this.builtinBackground = boot.builtinBackground;
+    this.pmremGenerator = boot.pmremGenerator;
     this.blenderEnvMap = null;
-    this.builtinBackground = new THREE.Color(0x1a1d21);
-
-    this.programAmbient = new THREE.AmbientLight(0xffffff, 0.1);
-    this.programAmbient.visible = false;
-    this.scene.add(this.programAmbient);
-    this.programHemisphere = new THREE.HemisphereLight(0xd8e4ef, 0x404048, 0.28);
-    this.programHemisphere.visible = false;
-    this.scene.add(this.programHemisphere);
-
-    this.grid = new THREE.GridHelper(20, 20, 0x4a515a, 0x3a4048);
-    this.scene.add(this.grid);
-
-    this.axes = new THREE.AxesHelper(2);
-    this.scene.add(this.axes);
+    this.orbit = boot.orbit;
+    this.transform = boot.transform;
 
     this.raycaster = new THREE.Raycaster();
     this.pointer = new THREE.Vector2();
@@ -1301,21 +1267,7 @@ export class Scene3DEditor {
       return;
     }
     this.setFollowCamera(false);
-    const pos = vec3From(cameraData.position, [6, 4, 8]);
-    this.camera.position.set(pos[0], pos[1], pos[2]);
-    if (cameraData.target) {
-      const target = vec3From(cameraData.target, [0, 0.5, 0]);
-      this.orbit.target.set(target[0], target[1], target[2]);
-    } else if (cameraData.rotation) {
-      const [rx, ry, rz] = eulerFrom(cameraData.rotation);
-      this.camera.rotation.set(rx, ry, rz);
-      this.orbit.target.copy(this.camera.position.clone().add(this.camera.getWorldDirection(new THREE.Vector3())));
-    }
-    if (cameraData.fov) {
-      this.camera.fov = Number(cameraData.fov) || 50;
-      this.camera.updateProjectionMatrix();
-    }
-    this.orbit.update();
+    loadShotCameraIntoEditor(THREE, this.camera, this.orbit, cameraData);
   }
 
   _fovToFocalLength(fov) {
@@ -1520,20 +1472,11 @@ export class Scene3DEditor {
 
   _applyFollowCamera() {
     const active = this.importedCameras.find((item) => item.id === this.activeCameraId);
-    if (!active?.object3d) return;
-    const source = active.viewNode || active.object3d;
-    source.updateWorldMatrix(true, false);
-    source.matrixWorld.decompose(this._followPos, this._followQuat, this._followScale);
-    this.camera.position.copy(this._followPos);
-    this.camera.quaternion.copy(this._followQuat);
-    const proj = active.object3d.isCamera ? active.object3d : null;
-    if (proj?.isPerspectiveCamera) {
-      this.camera.fov = proj.fov;
-      this.camera.near = Math.max(0.001, proj.near);
-      this.camera.far = Math.max(this.camera.near + 1, proj.far);
-      this.camera.updateProjectionMatrix();
-    }
-    this.orbit.enabled = false;
+    applyFollowCameraToEditor(this.camera, this.orbit, active, {
+      position: this._followPos,
+      quaternion: this._followQuat,
+      scale: this._followScale,
+    });
   }
 
   _projectAspect() {

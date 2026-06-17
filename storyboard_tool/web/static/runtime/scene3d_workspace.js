@@ -178,17 +178,24 @@ function p(e, t, n, r, i = [
 	0
 ]) {
 	if (!r?.position) return !1;
-	let o = m(r.position, i);
+	let o = h(r.position, i);
 	if (t.position.set(o[0], o[1], o[2]), r.target) {
-		let e = m(r.target, a);
+		let e = h(r.target, a);
 		n.target.set(e[0], e[1], e[2]);
 	} else if (r.rotation) {
-		let [i, a, o] = m(r.rotation);
+		let [i, a, o] = h(r.rotation);
 		t.rotation.set(i, a, o), n.target.copy(t.position.clone().add(t.getWorldDirection(new e.Vector3())));
 	}
 	return r.fov && (t.fov = Number(r.fov) || 50, t.updateProjectionMatrix()), n.update(), !0;
 }
-function m(e, t = [
+function m(e, t, n, r) {
+	if (!n?.object3d) return !1;
+	let i = n.viewNode || n.object3d;
+	i.updateWorldMatrix(!0, !1), i.matrixWorld.decompose(r.position, r.quaternion, r.scale), e.position.copy(r.position), e.quaternion.copy(r.quaternion);
+	let a = n.object3d.isCamera ? n.object3d : null;
+	return a?.isPerspectiveCamera && (e.fov = a.fov, e.near = Math.max(.001, a.near), e.far = Math.max(e.near + 1, a.far), e.updateProjectionMatrix()), t.enabled = !1, !0;
+}
+function h(e, t = [
 	0,
 	0,
 	0
@@ -200,12 +207,96 @@ function m(e, t = [
 	] : [...t];
 }
 //#endregion
+//#region src/scene3d/workspace/workspaceScene.ts
+var g = 1711393, _ = [
+	6,
+	4,
+	8
+], v = [
+	0,
+	.5,
+	0
+];
+function y(e, t, n = {}) {
+	let r = new e.WebGLRenderer({
+		antialias: !0,
+		alpha: !1,
+		preserveDrawingBuffer: !0
+	}), i = n.maxPixelRatio ?? 2;
+	return r.setPixelRatio(Math.min(window.devicePixelRatio, i)), r.outputColorSpace = e.SRGBColorSpace, r.toneMapping = e.AgXToneMapping ?? e.ACESFilmicToneMapping, r.toneMappingExposure = 1, r.shadowMap.enabled = !0, r.shadowMap.type = e.PCFSoftShadowMap, t.appendChild(r.domElement), r;
+}
+function b(e) {
+	let t = new e.Scene();
+	t.background = new e.Color(g);
+	let n = new e.PerspectiveCamera(50, 1, .01, 1e3);
+	n.position.set(..._);
+	let r = new e.AmbientLight(16777215, .45);
+	t.add(r);
+	let i = new e.DirectionalLight(16777215, 1.1);
+	i.position.set(6, 10, 4), t.add(i);
+	let a = new e.AmbientLight(16777215, .1);
+	a.visible = !1, t.add(a);
+	let o = new e.HemisphereLight(14214383, 4210760, .28);
+	o.visible = !1, t.add(o);
+	let s = new e.GridHelper(20, 20, 4870490, 3817544);
+	t.add(s);
+	let c = new e.AxesHelper(2);
+	return t.add(c), {
+		scene: t,
+		camera: n,
+		defaultAmbient: r,
+		defaultSun: i,
+		programAmbient: a,
+		programHemisphere: o,
+		grid: s,
+		axes: c,
+		builtinBackground: new e.Color(g),
+		pmremGenerator: null
+	};
+}
+function x(e, t) {
+	let n = new e.PMREMGenerator(t);
+	return n.compileEquirectangularShader(), n;
+}
+//#endregion
+//#region src/scene3d/workspace/workspaceControls.ts
+function S(e, t, n, r = {}) {
+	let i = new e(t, n);
+	i.enableDamping = !0;
+	let [a, o, s] = r.target ?? v;
+	return i.target.set(a, o, s), r.onChange && i.addEventListener("change", r.onChange), i;
+}
+function C(e, t, n, r, i = {}) {
+	let a = new e(t, n);
+	return a.setMode(i.mode ?? "translate"), a.addEventListener("dragging-changed", (e) => {
+		i.onDraggingChanged?.(!!e.value);
+	}), a.addEventListener("objectChange", () => {
+		i.onObjectChange?.();
+	}), r.add(a), a;
+}
+//#endregion
+//#region src/scene3d/workspace/workspaceBridge.ts
+function w(e, t, n, r) {
+	let i = y(e, r.mountEl), a = b(e), o = x(e, i), s = S(t, a.camera, i.domElement, { onChange: r.onOrbitChange }), c = C(n, a.camera, i.domElement, a.scene, {
+		mode: r.transformMode ?? "translate",
+		onDraggingChanged: r.onTransformDraggingChanged,
+		onObjectChange: r.onTransformObjectChange
+	});
+	return {
+		...a,
+		renderer: i,
+		pmremGenerator: o,
+		orbit: s,
+		transform: c
+	};
+}
+//#endregion
 //#region src/scene3d/workspace/workspaceState.ts
-function h(e) {
+function T(e) {
 	let t = Math.max(0, Number(e) || 0), n = Math.floor(t / 60), r = (t % 60).toFixed(1).padStart(n > 0 ? 4 : 1, "0");
 	return n > 0 ? `${n}:${r}` : `${r}s`;
 }
-function g(e, t) {
+function E(e, t) {
 	return {
 		id: e,
 		name: String(t.userData?.objectName || t.userData?.objectType || e),
@@ -216,20 +307,20 @@ function g(e, t) {
 		color: `#${t.material.color.getHexString()}`
 	};
 }
-function _(e) {
+function D(e) {
 	let t = [];
-	for (let [n, r] of e) t.push(g(n, r));
+	for (let [n, r] of e) t.push(E(n, r));
 	return t;
 }
-function v(e, t, n) {
+function O(e, t, n) {
 	return {
 		source: "builtin",
-		objects: _(e),
+		objects: D(e),
 		wireframe_mode: t,
 		object_color_preview: n
 	};
 }
-function y(e) {
+function k(e) {
 	return {
 		...e.sceneMeta,
 		source: "blender",
@@ -242,51 +333,51 @@ function y(e) {
 		wireframe_mode: e.wireframeMode
 	};
 }
-function b(e) {
+function A(e) {
 	return e && typeof e == "object" ? { ...e } : {};
 }
 //#endregion
 //#region src/scene3d/workspace/workspaceDispose.ts
-function x(e) {
+function j(e) {
 	if (!e || typeof e != "object") return;
 	let t = e;
 	try {
 		t.dispose?.();
 	} catch {}
 }
-function S(e) {
+function M(e) {
 	let t = Array.isArray(e) ? e : [e];
 	for (let e of t) {
 		if (!e || typeof e != "object") continue;
 		let t = e;
-		for (let e of Object.keys(t)) x(t[e]);
+		for (let e of Object.keys(t)) j(t[e]);
 		try {
 			t.dispose?.();
 		} catch {}
 	}
 }
-function C(e) {
+function N(e) {
 	try {
 		e?.dispose?.();
 	} catch {}
 }
-function w(e) {
+function P(e) {
 	try {
-		C(e.geometry), S(e.material);
+		N(e.geometry), M(e.material);
 	} catch {}
 }
-function T(e) {
+function F(e) {
 	e?.traverse?.((e) => {
 		let t = e.userData?.scene3dOriginalMaterial;
 		if (t) {
-			S(t);
+			M(t);
 			return;
 		}
-		w(e);
+		P(e);
 	});
 }
-function E(e) {
-	e && (C(e.geometry), S(e.material));
+function I(e) {
+	e && (N(e.geometry), M(e.material));
 }
 //#endregion
-export { e as PRIMITIVE_TYPES, s as captureRendererPng, i as colorFrom, o as createMeshFromSpec, a as defaultSceneData, T as disposeObject3DRoot, E as disposePrimitiveMesh, r as eulerFrom, y as exportBlenderSceneData, v as exportBuiltinSceneData, _ as exportBuiltinSceneObjects, f as exportViewState, h as formatWorkspaceTime, c as fovToFocalLength, d as getCameraStateFromEditor, u as getProjectCanvasAspect, l as getProjectCanvasSize, p as loadShotCameraIntoEditor, t as makeId, b as normalizeWorkspaceSceneMeta, n as vec3From };
+export { e as PRIMITIVE_TYPES, m as applyFollowCameraToEditor, s as captureRendererPng, i as colorFrom, o as createMeshFromSpec, a as defaultSceneData, F as disposeObject3DRoot, I as disposePrimitiveMesh, r as eulerFrom, k as exportBlenderSceneData, O as exportBuiltinSceneData, D as exportBuiltinSceneObjects, f as exportViewState, T as formatWorkspaceTime, c as fovToFocalLength, d as getCameraStateFromEditor, u as getProjectCanvasAspect, l as getProjectCanvasSize, w as initWorkspaceEditorThree, p as loadShotCameraIntoEditor, t as makeId, A as normalizeWorkspaceSceneMeta, n as vec3From };

@@ -22,7 +22,10 @@ export {
   getProjectCanvasSize,
   getProjectCanvasAspect,
   loadShotCameraIntoEditor,
+  applyFollowCameraToEditor,
 } from './workspaceCamera'
+
+export { initWorkspaceEditorThree } from './workspaceBridge'
 
 export {
   exportBuiltinSceneData,

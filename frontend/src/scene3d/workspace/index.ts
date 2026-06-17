@@ -51,7 +51,10 @@ export {
   getProjectCanvasAspect,
   getProjectCanvasSize,
   loadShotCameraIntoEditor,
+  applyFollowCameraToEditor,
   type WorkspaceCameraState,
+  type WorkspaceFollowCameraScratch,
+  type WorkspaceImportedCameraObject,
   type WorkspaceImportedCameraRef,
 } from './workspaceCamera'
 
@@ -64,6 +67,12 @@ export {
   normalizeWorkspaceSceneMeta,
   type BlenderSceneExportState,
 } from './workspaceState'
+
+export {
+  initWorkspaceEditorThree,
+  type InitWorkspaceEditorThreeOptions,
+  type WorkspaceEditorThreeBoot,
+} from './workspaceBridge'
 
 export {
   WORKSPACE_PRIMITIVE_TYPE_SET,

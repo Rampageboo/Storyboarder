@@ -112,6 +112,41 @@ export function loadShotCameraIntoEditor(
   return true
 }
 
+export type WorkspaceFollowCameraScratch = {
+  position: ThreeObject
+  quaternion: ThreeObject
+  scale: ThreeObject
+}
+
+export type WorkspaceImportedCameraObject = {
+  object3d: ThreeObject
+  viewNode?: ThreeObject
+}
+
+/** Copy the active GLB scene camera onto the editor camera (scene3d.js _applyFollowCamera). */
+export function applyFollowCameraToEditor(
+  camera: ThreeObject,
+  orbit: { enabled: boolean },
+  activeCamera: WorkspaceImportedCameraObject | null | undefined,
+  scratch: WorkspaceFollowCameraScratch,
+): boolean {
+  if (!activeCamera?.object3d) return false
+  const source = activeCamera.viewNode || activeCamera.object3d
+  source.updateWorldMatrix(true, false)
+  source.matrixWorld.decompose(scratch.position, scratch.quaternion, scratch.scale)
+  camera.position.copy(scratch.position)
+  camera.quaternion.copy(scratch.quaternion)
+  const proj = activeCamera.object3d.isCamera ? activeCamera.object3d : null
+  if (proj?.isPerspectiveCamera) {
+    camera.fov = proj.fov
+    camera.near = Math.max(0.001, proj.near)
+    camera.far = Math.max(camera.near + 1, proj.far)
+    camera.updateProjectionMatrix()
+  }
+  orbit.enabled = false
+  return true
+}
+
 function vec3FromArray(value: unknown, fallback: WorkspaceVec3 = [0, 0, 0]): WorkspaceVec3 {
   if (Array.isArray(value) && value.length >= 3) {
     return [Number(value[0]) || 0, Number(value[1]) || 0, Number(value[2]) || 0]
