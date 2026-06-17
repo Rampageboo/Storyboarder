@@ -10,12 +10,48 @@ declare global {
 }
 
 let referenceModelPreviewModule: Promise<unknown> | null = null
+let assignmentPreviewObserver: MutationObserver | null = null
 
 function loadReferenceModelPreviewModule() {
   if (!referenceModelPreviewModule) {
     referenceModelPreviewModule = import(/* @vite-ignore */ '/static/reference_model_preview.js')
   }
   return referenceModelPreviewModule
+}
+
+function selectedAssignmentModelPath(): string {
+  const selected = document.querySelector<HTMLElement>('.ref-assign-ref-item.is-selected[title]')
+  return selected?.getAttribute('title') || ''
+}
+
+function hydrateAssignmentModelPlaceholder() {
+  const root = document.querySelector<HTMLElement>('.ref-assign-player-model-safe')
+  if (!root || root.dataset.modelPreviewHydrated === 'true') return
+  const path = selectedAssignmentModelPath()
+  if (!path) return
+  root.dataset.modelPreviewHydrated = 'true'
+  root.classList.add('is-hydrated')
+  root.textContent = ''
+  const canvas = document.createElement('canvas')
+  canvas.dataset.refModelPreview = `${projectFileUrl(path)}&preview=model`
+  canvas.setAttribute('aria-label', `3D preview: ${path.split(/[/\\]/).pop() || path}`)
+  root.appendChild(canvas)
+  const badge = document.createElement('div')
+  badge.className = 'ref-model-preview-badge'
+  badge.textContent = '3D'
+  root.appendChild(badge)
+  void loadReferenceModelPreviewModule().then(() => window.hydrateReferenceModelPreviews?.(root))
+}
+
+function ensureAssignmentPreviewObserver() {
+  if (assignmentPreviewObserver || typeof document === 'undefined') return
+  assignmentPreviewObserver = new MutationObserver(() => hydrateAssignmentModelPlaceholder())
+  assignmentPreviewObserver.observe(document.body, { childList: true, subtree: true })
+  hydrateAssignmentModelPlaceholder()
+}
+
+if (typeof window !== 'undefined') {
+  queueMicrotask(ensureAssignmentPreviewObserver)
 }
 
 export function ReferenceModelPreview({
