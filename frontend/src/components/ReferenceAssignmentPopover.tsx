@@ -15,7 +15,6 @@ import type { ProjectPayload, ReferenceLink } from '../types'
 import { useProject } from '../state/ProjectContext'
 import { shotDisplayLabel } from '../utils/shotDisplay'
 import { findRefSegment, segmentHasPendingBoards } from '../utils/refSegmentDisplay'
-import { ReferenceModelPreview } from './ReferenceModelPreview'
 import './ReferenceAssignmentPopover.css'
 
 type Segment = {
@@ -581,7 +580,14 @@ export function ReferenceAssignmentPopover() {
               {!selectedRef ? (
                 <div className="ref-assign-player-empty">Select a reference on the left</div>
               ) : selectedRef.type === 'model' ? (
-                <ReferenceModelPreview path={selectedRef.path} label={previewLabel} />
+                <div className="ref-assign-player-empty ref-assign-player-model-safe">
+                  <strong>3D model reference</strong>
+                  <span>{previewLabel}</span>
+                  <span>Inline GLB rendering is disabled here to keep the assignment UI stable.</span>
+                  <button type="button" onClick={() => window.open('/ref-scene3d', '_blank', 'noopener')}>
+                    Open 3D viewer
+                  </button>
+                </div>
               ) : previewFailed ? (
                 <div className="ref-assign-player-empty">Preview unavailable</div>
               ) : selectedRef.type === 'video' ? (
