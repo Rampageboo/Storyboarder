@@ -12,10 +12,18 @@
   min-height: 0;
 }
 
-.ref-model-preview canvas {
+.ref-model-preview canvas,
+.ref-assign-player-model-safe.is-hydrated canvas {
   width: 100%;
   height: 100%;
   display: block;
+}
+
+.ref-assign-player-model-safe.is-hydrated {
+  position: relative;
+  display: block;
+  padding: 0;
+  background: #111827;
 }
 
 .ref-model-preview-badge {
