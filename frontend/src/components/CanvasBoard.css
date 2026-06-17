@@ -39,7 +39,7 @@
   padding: 7px 10px;
   border-radius: 8px;
   border: 1px solid var(--color-border);
-  background: #f7f7f7;
+  background: var(--bg-panel);
   font-size: 12px;
 }
 
@@ -90,7 +90,7 @@
   gap: 2px;
   padding: 6px var(--panel-padding);
   border-bottom: 1px solid var(--color-border);
-  background: #fafafa;
+  background: var(--bg-toolbar);
 }
 
 .canvas-note {
@@ -126,7 +126,7 @@
   padding: 5px 8px;
   border-radius: 6px;
   border: 1px solid var(--color-border);
-  background: #fff;
+  background: var(--bg-input);
   font-size: 11px;
   cursor: pointer;
 }
@@ -140,7 +140,7 @@
   flex: 1 1 0;
   min-height: 0;
   padding: 16px 20px;
-  background: #e8e8e8;
+  background: var(--canvas-well);
   overflow: auto;
 }
 

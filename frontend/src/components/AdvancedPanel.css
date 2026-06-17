@@ -1,7 +1,7 @@
 .advanced {
   flex-shrink: 0;
   border-top: 1px solid var(--color-border);
-  background: #fafafa;
+  background: var(--bg-panel);
 }
 
 .advanced-toggle {
@@ -51,7 +51,7 @@
   padding: 6px 8px;
   border-radius: 8px;
   border: 1px solid var(--color-border);
-  background: #fff;
+  background: var(--bg-panel);
   font-size: 11px;
 }
 
@@ -59,7 +59,7 @@
   border: 1px solid var(--color-border);
   border-radius: 8px;
   padding: 8px;
-  background: #fff;
+  background: var(--bg-panel);
 }
 
 .advanced-details summary {
@@ -118,7 +118,7 @@
   padding: 8px;
   border-radius: 6px;
   border: 1px solid var(--color-border);
-  background: #f8f8f8;
+  background: color-mix(in srgb, var(--bg-input) 80%, var(--bg-panel));
   font: 10px/1.35 var(--font-mono);
   white-space: pre-wrap;
   word-break: break-word;

@@ -1,0 +1,206 @@
+/* Mirrored from storyboard_tool/web/static/themes.css — keep in sync for visual parity */
+
+:root,
+[data-theme="studio"] {
+  color-scheme: dark;
+  --font-ui: "Segoe UI", "PingFang SC", "Microsoft YaHei", Arial, sans-serif;
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --bg-app: #1a1d21;
+  --bg-panel: #24282e;
+  --bg-canvas: #2c3036;
+  --bg-toolbar: #1f2328;
+  --bg-input: #1a1d21;
+  --bg-hover: #2e3339;
+  --bg-elevated: #2a2f36;
+  --border: #3a4048;
+  --border-light: #4a515a;
+  --text: #e8eaed;
+  --text-muted: #9aa0a8;
+  --accent: #3d8bfd;
+  --accent-2: #6fcf97;
+  --accent-soft: rgba(61, 139, 253, 0.12);
+  --accent-ps: #31a8ff;
+  --accent-bl: #a5d66a;
+  --danger: #ff6b6b;
+  --success: #6fcf97;
+  --thumb-active: #3d8bfd;
+  --shadow: rgba(0, 0, 0, 0.42);
+  --modal-backdrop: rgba(0, 0, 0, 0.55);
+  --topbar-bg: linear-gradient(180deg, #232830 0%, #1f2328 100%);
+  --canvas-well: #1e2126;
+  --ps-bg: #1a3a5c;
+  --ps-bg-hover: #1e4a75;
+  --ps-border: #31a8ff;
+  --bl-bg: #2a3a1a;
+  --bl-bg-hover: #354820;
+  --bl-border: #8bc34a;
+  --startup-bg: radial-gradient(circle at 50% 42%, rgba(61, 139, 253, 0.16), transparent 34%),
+    linear-gradient(180deg, #1a1d21 0%, #0f1114 100%);
+  --startup-panel: rgba(36, 40, 46, 0.96);
+  --startup-brand: linear-gradient(135deg, #2563eb, #0f766e);
+  --startup-brand-border: rgba(61, 139, 253, 0.55);
+}
+
+[data-theme="cinema"] {
+  color-scheme: dark;
+  --font-ui: "Bahnschrift", "Segoe UI", "PingFang SC", sans-serif;
+  --radius-sm: 2px;
+  --radius-md: 4px;
+  --bg-app: #080809;
+  --bg-panel: #121216;
+  --bg-canvas: #18181d;
+  --bg-toolbar: #0e0e11;
+  --bg-input: #0c0c0f;
+  --bg-hover: #1c1c22;
+  --bg-elevated: #16161b;
+  --border: #2a2a32;
+  --border-light: #3a3a44;
+  --text: #f2ece0;
+  --text-muted: #9a9284;
+  --accent: #e8b923;
+  --accent-2: #f0d060;
+  --accent-soft: rgba(232, 185, 35, 0.14);
+  --accent-ps: #6ec4ff;
+  --accent-bl: #c4e080;
+  --danger: #ff6b5a;
+  --success: #b8d96a;
+  --thumb-active: #e8b923;
+  --shadow: rgba(0, 0, 0, 0.62);
+  --modal-backdrop: rgba(0, 0, 0, 0.72);
+  --topbar-bg: linear-gradient(180deg, #141418 0%, #0a0a0d 100%);
+  --canvas-well: #101014;
+  --ps-bg: #152638;
+  --ps-bg-hover: #1a3048;
+  --ps-border: #6ec4ff;
+  --bl-bg: #1e2818;
+  --bl-bg-hover: #283420;
+  --bl-border: #b8d96a;
+  --startup-bg: radial-gradient(circle at 50% 38%, rgba(232, 185, 35, 0.12), transparent 36%),
+    linear-gradient(180deg, #0a0a0c 0%, #040405 100%);
+  --startup-panel: rgba(14, 14, 17, 0.94);
+  --startup-brand: linear-gradient(135deg, #a67c00, #3d3010);
+  --startup-brand-border: rgba(232, 185, 35, 0.45);
+}
+
+[data-theme="paper"] {
+  color-scheme: light;
+  --font-ui: "Georgia", "Times New Roman", "PingFang SC", serif;
+  --radius-sm: 3px;
+  --radius-md: 5px;
+  --bg-app: #e8e2d6;
+  --bg-panel: #f6f2ea;
+  --bg-canvas: #ddd6c8;
+  --bg-toolbar: #f0ebe2;
+  --bg-input: #fffdf9;
+  --bg-hover: #ebe4d6;
+  --bg-elevated: #faf7f1;
+  --border: #c8bfb0;
+  --border-light: #b0a596;
+  --text: #2c2824;
+  --text-muted: #6f6558;
+  --accent: #b45309;
+  --accent-2: #d97706;
+  --accent-soft: rgba(180, 83, 9, 0.1);
+  --accent-ps: #0078d4;
+  --accent-bl: #5a7a28;
+  --danger: #c0392b;
+  --success: #4a7c3a;
+  --thumb-active: #b45309;
+  --shadow: rgba(44, 40, 36, 0.14);
+  --modal-backdrop: rgba(44, 40, 36, 0.35);
+  --topbar-bg: linear-gradient(180deg, #faf7f1 0%, #ebe4d6 100%);
+  --canvas-well: #d4cdc0;
+  --ps-bg: #dceaf8;
+  --ps-bg-hover: #c8dff5;
+  --ps-border: #0078d4;
+  --bl-bg: #e4edd8;
+  --bl-bg-hover: #d4e4c4;
+  --bl-border: #5a7a28;
+  --startup-bg: radial-gradient(circle at 50% 40%, rgba(180, 83, 9, 0.08), transparent 38%),
+    linear-gradient(180deg, #ebe6dc 0%, #ddd6c8 100%);
+  --startup-panel: rgba(246, 242, 234, 0.97);
+  --startup-brand: linear-gradient(135deg, #b45309, #78350f);
+  --startup-brand-border: rgba(180, 83, 9, 0.35);
+}
+
+[data-theme="slate"] {
+  color-scheme: dark;
+  --font-ui: "Inter", "Segoe UI", "PingFang SC", sans-serif;
+  --radius-sm: 8px;
+  --radius-md: 10px;
+  --bg-app: #111827;
+  --bg-panel: #1a2233;
+  --bg-canvas: #1e293b;
+  --bg-toolbar: #0f172a;
+  --bg-input: #0b1220;
+  --bg-hover: #243047;
+  --bg-elevated: #1e293b;
+  --border: #334155;
+  --border-light: #475569;
+  --text: #e2e8f0;
+  --text-muted: #94a3b8;
+  --accent: #818cf8;
+  --accent-2: #22d3ee;
+  --accent-soft: rgba(129, 140, 248, 0.14);
+  --accent-ps: #38bdf8;
+  --accent-bl: #a3e635;
+  --danger: #fb7185;
+  --success: #34d399;
+  --thumb-active: #818cf8;
+  --shadow: rgba(2, 6, 23, 0.5);
+  --modal-backdrop: rgba(2, 6, 23, 0.65);
+  --topbar-bg: linear-gradient(180deg, #1e293b 0%, #0f172a 100%);
+  --canvas-well: #0f172a;
+  --ps-bg: #1e3a5f;
+  --ps-bg-hover: #25466f;
+  --ps-border: #38bdf8;
+  --bl-bg: #1a3320;
+  --bl-bg-hover: #234028;
+  --bl-border: #a3e635;
+  --startup-bg: radial-gradient(circle at 50% 42%, rgba(129, 140, 248, 0.18), transparent 34%),
+    linear-gradient(180deg, #111827 0%, #0b1120 100%);
+  --startup-panel: rgba(26, 34, 51, 0.96);
+  --startup-brand: linear-gradient(135deg, #6366f1, #0891b2);
+  --startup-brand-border: rgba(129, 140, 248, 0.5);
+}
+
+[data-theme="noir"] {
+  color-scheme: dark;
+  --font-ui: "Consolas", "Segoe UI", "PingFang SC", monospace;
+  --radius-sm: 0;
+  --radius-md: 0;
+  --bg-app: #000000;
+  --bg-panel: #0d0d0d;
+  --bg-canvas: #141414;
+  --bg-toolbar: #050505;
+  --bg-input: #000000;
+  --bg-hover: #1a1a1a;
+  --bg-elevated: #111111;
+  --border: #333333;
+  --border-light: #555555;
+  --text: #f5f5f5;
+  --text-muted: #888888;
+  --accent: #ff3344;
+  --accent-2: #ff6677;
+  --accent-soft: rgba(255, 51, 68, 0.12);
+  --accent-ps: #ffffff;
+  --accent-bl: #cccccc;
+  --danger: #ff3344;
+  --success: #66ff99;
+  --thumb-active: #ff3344;
+  --shadow: rgba(0, 0, 0, 0.8);
+  --modal-backdrop: rgba(0, 0, 0, 0.82);
+  --topbar-bg: #000000;
+  --canvas-well: #0a0a0a;
+  --ps-bg: #1a1a1a;
+  --ps-bg-hover: #262626;
+  --ps-border: #ffffff;
+  --bl-bg: #1a1a1a;
+  --bl-bg-hover: #262626;
+  --bl-border: #cccccc;
+  --startup-bg: linear-gradient(180deg, #000000 0%, #0a0a0a 100%);
+  --startup-panel: rgba(13, 13, 13, 0.98);
+  --startup-brand: linear-gradient(135deg, #ff3344, #990011);
+  --startup-brand-border: rgba(255, 51, 68, 0.55);
+}

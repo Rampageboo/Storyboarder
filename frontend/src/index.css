@@ -1,16 +1,9 @@
+@import './legacy-themes.css';
+@import './legacy-visual.css';
+
 :root {
-  --font-sans: system-ui, 'Segoe UI', Roboto, sans-serif;
-  --font-mono: ui-monospace, Consolas, monospace;
-  --color-bg: #ececec;
-  --color-surface: #ffffff;
-  --color-border: rgba(0, 0, 0, 0.1);
-  --color-text: #1a1a1a;
-  --color-muted: #5c5c5c;
-  --color-accent: #3b5bdb;
-  --color-accent-soft: rgba(59, 91, 219, 0.12);
-  --color-danger: #9b1c1c;
-  --color-danger-bg: #fde8e8;
-  --topbar-height: 52px;
+  /* Layout tokens (unchanged) */
+  --topbar-height: 56px;
   --inspector-width: 360px;
   --reference-sidebar-width: 252px;
   --board-strip-height: 226px;
@@ -19,11 +12,31 @@
   --board-strip-thumb-height: 84px;
   --workspace-gap: 8px;
   --panel-padding: 14px;
-  font-family: var(--font-sans);
+
+  /* React semantic aliases → legacy theme tokens */
+  --font-sans: var(--font-ui);
+  --font-mono: ui-monospace, Consolas, monospace;
+  --color-bg: var(--bg-app);
+  --color-surface: var(--bg-panel);
+  --color-border: var(--border);
+  --color-text: var(--text);
+  --color-muted: var(--text-muted);
+  --color-accent: var(--accent);
+  --color-accent-soft: var(--accent-soft);
+  --color-danger: var(--danger);
+  --color-danger-bg: color-mix(in srgb, var(--danger) 14%, transparent);
+  --color-success: var(--success);
+  --color-input: var(--bg-input);
+  --color-toolbar: var(--bg-toolbar);
+  --color-canvas-well: var(--canvas-well);
+  --color-hover: var(--bg-hover);
+  --color-thumb-active: var(--thumb-active);
+
+  font-family: var(--font-ui);
   line-height: 1.45;
   font-weight: 400;
-  color: var(--color-text);
-  background-color: var(--color-bg);
+  color: var(--text);
+  background-color: var(--bg-app);
   font-synthesis: none;
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
@@ -43,6 +56,8 @@ body,
 
 body {
   overflow: hidden;
+  user-select: none;
+  -webkit-user-select: none;
 }
 
 button,
@@ -50,21 +65,60 @@ input,
 select,
 textarea {
   font: inherit;
+  color: inherit;
 }
+
+input:not([type='checkbox']):not([type='radio']):not([type='range']):not([type='button']):not([type='submit']):not([type='reset']):not([type='file']),
+textarea,
+select {
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text);
+  user-select: text;
+  -webkit-user-select: text;
+}
+
 
 button {
+  min-height: 32px;
+  padding: 4px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-panel);
+  color: var(--text);
   cursor: pointer;
+  transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
 }
 
-button:disabled {
-  cursor: not-allowed;
-  opacity: 0.55;
+button:hover:not(:disabled) {
+  background: var(--bg-hover);
+  border-color: var(--border-light);
+}
+
+button:disabled,
+input:disabled,
+textarea:disabled,
+select:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+/* Compact controls must not inherit the 32px toolbar button height */
+button.board-strip-dot,
+button.bs-badge,
+button.board-strip-segment-clear,
+button.reflib-remove,
+button.ref-segment-remove,
+button.refs-remove,
+button.annot-remove {
+  min-height: unset;
 }
 
 /* Horizontal scrollbar for the board strip viewport */
 .board-strip-viewport {
   scrollbar-width: thin;
-  scrollbar-color: rgba(0, 0, 0, 0.35) rgba(0, 0, 0, 0.06);
+  scrollbar-color: var(--border-light) var(--bg-toolbar);
 }
 
 .board-strip-viewport::-webkit-scrollbar {
@@ -73,18 +127,26 @@ button:disabled {
 
 .board-strip-viewport::-webkit-scrollbar-track {
   margin-top: 4px;
-  background: rgba(0, 0, 0, 0.05);
+  background: transparent;
   border-radius: 6px;
 }
 
 .board-strip-viewport::-webkit-scrollbar-thumb {
-  background: rgba(0, 0, 0, 0.28);
+  background: var(--border-light);
   border: 2px solid transparent;
   border-radius: 6px;
   background-clip: padding-box;
 }
 
 .board-strip-viewport::-webkit-scrollbar-thumb:hover {
-  background: rgba(0, 0, 0, 0.42);
+  background: color-mix(in srgb, var(--border-light) 70%, var(--text-muted));
   background-clip: padding-box;
+}
+
+.main-right {
+  scrollbar-color: var(--border-light) var(--bg-panel);
+}
+
+.ref-sidebar-scroll {
+  scrollbar-color: var(--border-light) var(--bg-panel);
 }

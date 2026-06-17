@@ -11,7 +11,7 @@ import {
   type SetStateAction,
 } from 'react'
 import { createProject, getProject, openProject, saveProject, updateShot } from '../api'
-import { browseFolder, getAppSession, isNoProjectOpenError, updateAppSession } from '../api'
+import { browseFolder, getAppSession, isNoProjectOpenError, updateAppSession, type AppSession } from '../api'
 import type { ProjectPathRequest, ProjectPayload, Shot, ShotUpdate } from '../types'
 
 interface ProjectContextValue {
@@ -223,7 +223,7 @@ export function ProjectProvider({ children }: PropsWithChildren) {
   const reloadProject = useCallback(async () => {
     setInitialLoading(true)
     try {
-      const session = await getAppSession().catch(() => ({}))
+      const session: AppSession = await getAppSession().catch((): AppSession => ({}))
       try {
         const payload = await getProject()
         openPayload(payload, typeof session.selected_shot_id === 'string' ? session.selected_shot_id : null)

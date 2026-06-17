@@ -13,7 +13,7 @@
   padding: 6px 8px;
   border-radius: 8px;
   border: 1px solid var(--color-border);
-  background: #fff;
+  background: var(--bg-panel);
   font-size: 11px;
 }
 
@@ -62,7 +62,7 @@
   line-height: 1;
   border-radius: 4px;
   border: 1px solid var(--color-border);
-  background: #fff;
+  background: var(--bg-panel);
   color: var(--color-danger);
   font-size: 14px;
   cursor: pointer;
@@ -79,7 +79,7 @@
   padding: 6px 4px;
   border-radius: 6px;
   border: 1px solid var(--color-border);
-  background: #fff;
+  background: var(--bg-panel);
 }
 
 .annot-add button {
@@ -87,6 +87,6 @@
   padding: 6px 10px;
   border-radius: 8px;
   border: 1px solid var(--color-border);
-  background: #fff;
+  background: var(--bg-panel);
   font-size: 11px;
 }

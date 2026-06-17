@@ -1,0 +1,350 @@
+/**
+ * Visual-only overrides: map React components to legacy Storyboard Tool styling.
+ * Do not change layout properties (size/position/flex/grid) here.
+ */
+
+/* ── Topbar ── */
+.topbar {
+  background: var(--topbar-bg);
+}
+
+.topbar button {
+  border-radius: var(--radius-sm);
+  background: var(--bg-panel);
+}
+
+.topbar-ps-status {
+  background: var(--bg-panel);
+  border-radius: var(--radius-sm);
+}
+
+.topbar-ps-status.is-linked {
+  background: var(--ps-bg);
+  border-color: var(--ps-border);
+  color: var(--accent-ps);
+}
+
+/* ── Primary actions (legacy PS-style) ── */
+button.primary,
+.canvas-actions button.primary,
+.board-strip-empty-cta,
+.welcome-actions button.primary,
+.ref-segment-actions button.primary,
+.ref-sidebar-head button:not(:disabled) {
+  background: var(--ps-bg);
+  border-color: var(--ps-border);
+  color: var(--accent-ps);
+}
+
+button.primary:hover:not(:disabled),
+.canvas-actions button.primary:hover:not(:disabled),
+.board-strip-empty-cta:hover:not(:disabled),
+.welcome-actions button.primary:hover:not(:disabled),
+.ref-segment-actions button.primary:hover:not(:disabled) {
+  background: var(--ps-bg-hover);
+}
+
+/* Segment apply uses accent like legacy reference import */
+.ref-segment-actions button.primary {
+  background: var(--accent-soft);
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.ref-segment-actions button.primary:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--accent) 18%, var(--bg-panel));
+}
+
+/* ── Canvas / preview ── */
+.canvas {
+  background: var(--bg-panel);
+}
+
+.canvas-body {
+  background: var(--canvas-well);
+}
+
+.canvas-status-compact {
+  background: var(--bg-toolbar);
+}
+
+.canvas-actions button,
+.canvas-placeholder button {
+  border-radius: var(--radius-sm);
+  background: var(--bg-panel);
+}
+
+.canvas-chip.ok {
+  background: color-mix(in srgb, var(--success) 14%, transparent);
+  border-color: color-mix(in srgb, var(--success) 40%, var(--border));
+  color: var(--success);
+}
+
+.canvas-chip.missing {
+  background: color-mix(in srgb, var(--bg-input) 55%, transparent);
+  color: var(--text-muted);
+}
+
+/* ── Board strip / timeline cards ── */
+.board-strip {
+  background: var(--bg-toolbar);
+  box-shadow: none;
+}
+
+.board-strip-toolbar {
+  background: var(--bg-toolbar);
+}
+
+.board-strip-actions button,
+.board-strip-segment-clear,
+.board-strip-empty-cta {
+  border-radius: var(--radius-sm);
+  background: var(--bg-panel);
+}
+
+.board-strip-card {
+  border-radius: var(--radius-sm);
+  background: var(--bg-panel);
+  border-color: var(--border);
+}
+
+.board-strip-card.is-selected {
+  border-color: var(--thumb-active);
+  background: var(--accent-soft);
+  box-shadow: 0 0 0 1px var(--thumb-active);
+}
+
+.board-strip-thumb,
+.shot-thumb-empty {
+  background: var(--canvas-well);
+  border-bottom-color: var(--border);
+}
+
+.board-strip-index {
+  border-radius: 3px;
+  background: rgba(0, 0, 0, 0.74);
+}
+
+.board-strip-dirty {
+  color: var(--danger);
+}
+
+.board-strip-dot {
+  background: var(--bg-panel);
+}
+
+.board-strip-dot.endpoint {
+  background: var(--thumb-active);
+  border-color: var(--thumb-active);
+}
+
+.bs-badge {
+  background: var(--bg-panel);
+  border-radius: var(--radius-sm);
+}
+
+.bs-badge.on {
+  color: var(--success);
+  border-color: color-mix(in srgb, var(--success) 40%, var(--border));
+  background: color-mix(in srgb, var(--success) 14%, transparent);
+}
+
+.bs-badge.warn {
+  color: var(--danger);
+  border-color: color-mix(in srgb, var(--danger) 40%, var(--border));
+  background: color-mix(in srgb, var(--danger) 12%, transparent);
+}
+
+.board-strip-viewport {
+  scrollbar-color: var(--border-light) var(--bg-toolbar);
+}
+
+/* ── Inspector ── */
+.inspector input,
+.inspector select,
+.inspector textarea,
+.ref-segment-field select,
+.ref-segment-field input {
+  border-radius: var(--radius-sm);
+  background: var(--bg-input);
+  border-color: var(--border);
+}
+
+.inspector-actions button {
+  border-radius: var(--radius-sm);
+  background: var(--bg-panel);
+}
+
+/* ── Reference sidebar ── */
+.ref-sidebar {
+  background: var(--bg-panel);
+  box-shadow: none;
+}
+
+.ref-sidebar-title {
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.ref-sidebar-head button {
+  border-radius: var(--radius-sm);
+  background: var(--bg-panel);
+}
+
+.reflib-card {
+  border-radius: var(--radius-md);
+  background: var(--bg-panel);
+  border-color: var(--border);
+}
+
+.reflib-card.is-selected {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 35%, transparent);
+}
+
+.reflib-thumb {
+  background: var(--canvas-well);
+}
+
+.reflib-remove,
+.ref-segment-remove {
+  background: var(--bg-panel);
+  border-radius: var(--radius-sm);
+}
+
+.ref-segment {
+  border-top-color: var(--border);
+}
+
+.ref-segment-actions button {
+  border-radius: var(--radius-sm);
+  background: var(--bg-panel);
+}
+
+.ref-segment-type {
+  background: var(--bg-panel);
+}
+
+.ref-sidebar-note {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+/* ── Per-shot references + advanced ── */
+.refs,
+.advanced,
+.refws {
+  background: var(--bg-panel);
+}
+
+.refs-header button,
+.advanced-actions button,
+.advanced-body button,
+.annot-actions button {
+  border-radius: var(--radius-sm);
+  background: var(--bg-panel);
+}
+
+.refs-thumb {
+  background: var(--canvas-well);
+  border-radius: var(--radius-sm);
+}
+
+.refs-thumb-missing {
+  background: color-mix(in srgb, var(--bg-input) 55%, transparent);
+}
+
+.refs-remove,
+.annot-remove {
+  background: var(--bg-panel);
+}
+
+.advanced-toggle,
+.refws-toggle {
+  color: var(--text-muted);
+}
+
+.advanced-toggle:hover,
+.refws-toggle:hover {
+  background: var(--bg-hover);
+}
+
+.advanced-details,
+.advanced-input,
+.advanced-textarea,
+.advanced-pre {
+  border-radius: var(--radius-sm);
+  background: var(--bg-input);
+}
+
+.advanced-pre {
+  background: color-mix(in srgb, var(--bg-input) 80%, var(--bg-panel));
+}
+
+/* ── Welcome / banners ── */
+.welcome-panel {
+  background: var(--startup-bg);
+}
+
+.welcome-card {
+  background: var(--startup-panel);
+  border-color: var(--border);
+  box-shadow: 0 8px 24px var(--shadow);
+}
+
+.welcome-actions button {
+  border-radius: var(--radius-sm);
+  background: var(--bg-panel);
+}
+
+.app-banner {
+  background: color-mix(in srgb, var(--danger) 14%, var(--bg-panel));
+  color: var(--danger);
+  border-bottom-color: color-mix(in srgb, var(--danger) 28%, var(--border));
+}
+
+/* ── Lightboxes ── */
+.refs-lightbox,
+.refws-lightbox,
+.ref-sidebar-lightbox {
+  background: var(--modal-backdrop);
+}
+
+.refs-lightbox img,
+.refws-lightbox img,
+.refws-lightbox video,
+.ref-sidebar-lightbox img,
+.ref-sidebar-lightbox video {
+  background: #000;
+}
+
+.refs-lightbox-close,
+.refws-lightbox-close,
+.ref-sidebar-lightbox-close {
+  background: color-mix(in srgb, var(--text) 18%, transparent);
+  color: var(--text);
+}
+
+/* ── Generic buttons in panels ── */
+.board-strip-actions button,
+.canvas-actions button,
+.topbar button,
+.ref-sidebar-head button,
+.refs-header button,
+.inspector-actions button {
+  transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+}
+
+.board-strip-actions button:hover:not(:disabled),
+.canvas-actions button:hover:not(:disabled),
+.topbar button:hover:not(:disabled),
+.ref-sidebar-head button:hover:not(:disabled),
+.refs-header button:hover:not(:disabled),
+.inspector-actions button:hover:not(:disabled) {
+  background: var(--bg-hover);
+  border-color: var(--border-light);
+}

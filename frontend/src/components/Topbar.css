@@ -19,7 +19,7 @@
   padding: 7px 12px;
   border-radius: 8px;
   border: 1px solid var(--color-border);
-  background: #f7f7f7;
+  background: var(--bg-panel);
 }
 
 .topbar-center {
@@ -55,7 +55,7 @@
   padding: 4px 8px;
   border-radius: 999px;
   border: 1px solid var(--color-border);
-  background: #fafafa;
+  background: var(--bg-panel);
   white-space: nowrap;
 }
 
