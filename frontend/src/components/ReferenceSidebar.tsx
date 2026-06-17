@@ -9,6 +9,7 @@ import {
 import type { ReferenceLink } from '../types'
 import { useProject } from '../state/ProjectContext'
 import { shotDisplayLabel } from '../utils/shotDisplay'
+import { ReferenceModelPreview } from './ReferenceModelPreview'
 import './ReferenceSidebar.css'
 
 type Segment = {
@@ -32,7 +33,7 @@ function RefPreview({ link }: { link: ReferenceLink }) {
   }, [link.id, link.path])
 
   if (link.type === 'model') {
-    return <div className="reflib-thumb-model">3D</div>
+    return <ReferenceModelPreview path={link.path} label={link.title || fileName(link.path)} compact />
   }
 
   if (failed) {
@@ -105,7 +106,7 @@ export function ReferenceSidebar() {
   }
 
   const removeLink = (id: string, title: string) => {
-    if (!window.confirm(`Remove reference "${title}" from the library?`)) return
+    if (!window.confirm(`Remove reference ${title} from the library?`)) return
     setBusy(true)
     void (async () => {
       try {
