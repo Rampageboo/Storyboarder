@@ -14,15 +14,12 @@ export type GlbCaptureOptions = {
   height?: number
 }
 
-const OBJECT_PALETTE = [
-  0x9cc9ff,
-  0xb8e986,
-  0xf8d57e,
-  0xffa8a8,
-  0xcdb4ff,
-  0x8fd3ff,
-  0xffc08a,
-  0xa7f3d0,
+// Keep this palette/hash in lockstep with storyboard_tool/web/static/runtime/scene3d.js so
+// reference Apply renders match the Scene3D workspace object-color preview.
+const VIEWPORT_OBJECT_PALETTE = [
+  0xc87a6e, 0x6eb87a, 0x6e8ec8, 0xc8b06e, 0xb06ec8, 0x6ec8b8,
+  0xc86e8a, 0x8ac86e, 0x6e6ec8, 0xc8946e, 0x6eb0c8, 0xa0c86e,
+  0xc87878, 0x78c878, 0x7878c8, 0xc8c878,
 ]
 
 let runtimePromise: Promise<Runtime> | null = null
@@ -46,12 +43,9 @@ function triple(value: unknown): [number, number, number] | null {
 }
 
 function hashString(value: string): number {
-  let hash = 2166136261
-  for (let i = 0; i < value.length; i += 1) {
-    hash ^= value.charCodeAt(i)
-    hash = Math.imul(hash, 16777619)
-  }
-  return hash >>> 0
+  let hash = 0
+  for (let i = 0; i < value.length; i += 1) hash = (hash * 31 + value.charCodeAt(i)) | 0
+  return Math.abs(hash)
 }
 
 function disposeMaterial(material: any) {
@@ -61,18 +55,10 @@ function disposeMaterial(material: any) {
     for (const key of Object.keys(item)) {
       const value = item[key]
       if (value && typeof value.dispose === 'function') {
-        try {
-          value.dispose()
-        } catch {
-          // best effort
-        }
+        try { value.dispose() } catch { /* best effort */ }
       }
     }
-    try {
-      item.dispose?.()
-    } catch {
-      // best effort
-    }
+    try { item.dispose?.() } catch { /* best effort */ }
   }
 }
 
@@ -203,19 +189,35 @@ export class ReferenceGlbRenderer {
     if (this.visible) this.start()
   }
 
+  objectColorKey(mesh: any): string {
+    let node = mesh
+    while (node.parent && node.parent !== this.root) {
+      if (node.name) return node.name
+      node = node.parent
+    }
+    return mesh.name || mesh.uuid
+  }
+
+  generateObjectColor(seed: string): number {
+    return VIEWPORT_OBJECT_PALETTE[hashString(seed) % VIEWPORT_OBJECT_PALETTE.length]
+  }
+
   preparePreviewMaterials() {
     if (!this.runtime || !this.root) return
     const { THREE } = this.runtime
-    let meshIndex = 0
+    const keys = new Set<string>()
+    this.root.traverse((node: any) => {
+      if (node?.isMesh) keys.add(this.objectColorKey(node))
+    })
+    const colorByKey = new Map<string, number>()
+    for (const key of [...keys].sort()) colorByKey.set(key, this.generateObjectColor(key))
     this.root.traverse((node: any) => {
       if (!node?.isMesh) return
-      const key = node.name || node.uuid || String(meshIndex)
-      const color = OBJECT_PALETTE[hashString(`${key}:${meshIndex}`) % OBJECT_PALETTE.length]
-      const material = new THREE.MeshBasicMaterial({ color, side: THREE.DoubleSide })
+      const key = this.objectColorKey(node)
+      const material = new THREE.MeshBasicMaterial({ color: colorByKey.get(key) ?? this.generateObjectColor(key) })
       this.previewMaterials.push(material)
       node.material = material
       node.frustumCulled = false
-      meshIndex += 1
     })
   }
 
