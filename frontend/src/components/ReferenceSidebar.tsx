@@ -1,17 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import {
-  applyRefSegment,
-  applyRefSegment3d,
-  applyRefSegmentImage,
   deleteProjectReference,
   deleteRefSegment,
   projectFileUrl,
   restoreRefApply,
-  updateSettings,
   uploadProjectReference,
-  type ApplyRefSegmentRequest,
 } from '../api'
-import type { ProjectPayload, ReferenceLink } from '../types'
+import type { ReferenceLink } from '../types'
 import { useProject } from '../state/ProjectContext'
 import { shotDisplayLabel } from '../utils/shotDisplay'
 import './ReferenceSidebar.css'
@@ -21,16 +16,7 @@ type Segment = {
   anchor_shot_id?: string
   end_shot_id?: string
   source_type?: string
-  reference_id?: string
-  reference_path?: string
-  video_start?: number
   [key: string]: unknown
-}
-
-function newSegmentId(): string {
-  const c = globalThis.crypto as Crypto | undefined
-  if (c && typeof c.randomUUID === 'function') return c.randomUUID().replace(/-/g, '')
-  return `seg_${Date.now().toString(36)}${Math.floor(Math.random() * 1e6).toString(36)}`
 }
 
 function fileName(path: string) {
@@ -63,23 +49,19 @@ function RefPreview({ link }: { link: ReferenceLink }) {
 export function ReferenceSidebar() {
   const {
     project,
-    selectedShotId,
     setProject,
     flushDirtyShots,
     projectActionBusy,
     reportError,
-    segmentRange,
-    setSegmentAnchor,
-    setSegmentEnd,
+    refApplyUndoToken,
+    setRefApplyUndoToken,
   } = useProject()
+  const [drawerOpen, setDrawerOpen] = useState(false)
+  const [segmentsOpen, setSegmentsOpen] = useState(false)
   const [busy, setBusy] = useState(false)
   const [note, setNote] = useState('')
   const [lightbox, setLightbox] = useState<ReferenceLink | null>(null)
   const importRef = useRef<HTMLInputElement | null>(null)
-
-  const [refId, setRefId] = useState('')
-  const [startTime, setStartTime] = useState('0')
-  const [undoToken, setUndoToken] = useState('')
 
   const links = useMemo(() => project?.settings?.reference_links ?? [], [project?.settings?.reference_links])
   const segments = useMemo(
@@ -87,27 +69,17 @@ export function ReferenceSidebar() {
     [project?.settings?.ref_segments],
   )
   const shots = project?.shots ?? []
-  // Start/end boards are the shared segment range (kept in sync with the filmstrip dots).
-  const startShot = segmentRange.anchorShotId ?? ''
-  const endShot = segmentRange.endShotId ?? ''
+  const recentSegments = useMemo(() => segments.slice(-5).reverse(), [segments])
 
   useEffect(() => {
-    setRefId((cur) => (cur && links.some((l) => l.id === cur) ? cur : links[0]?.id ?? ''))
-  }, [links])
-
-  // Seed the range to the selected board only when it is empty, so it never clobbers dot picks.
-  useEffect(() => {
-    if (selectedShotId && !segmentRange.anchorShotId && !segmentRange.endShotId) {
-      setSegmentAnchor(selectedShotId)
-      setSegmentEnd(selectedShotId)
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedShotId])
+    if (!note) return
+    const t = window.setTimeout(() => setNote(''), 3200)
+    return () => window.clearTimeout(t)
+  }, [note])
 
   if (!project) return null
 
   const disabled = busy || projectActionBusy
-  const selectedRef = links.find((l) => l.id === refId) || null
 
   const shotLabel = (id: string) => {
     const s = shots.find((sh) => sh.shot_id === id)
@@ -146,58 +118,14 @@ export function ReferenceSidebar() {
     })()
   }
 
-  const applySegment = () => {
-    if (!selectedRef) {
-      window.alert('Choose a source reference first.')
-      return
-    }
-    if (!startShot || !endShot) {
-      window.alert('Choose a start shot and an end shot.')
-      return
-    }
-    const start = Number(startTime)
-    const videoStart = Number.isFinite(start) && start > 0 ? start : 0
-    const segId = newSegmentId()
-    const seg: Segment = {
-      id: segId,
-      anchor_shot_id: startShot,
-      end_shot_id: endShot,
-      source_type: selectedRef.type,
-      reference_id: selectedRef.id,
-      reference_path: selectedRef.path,
-      video_start: videoStart,
-    }
-    setBusy(true)
-    void (async () => {
-      try {
-        await flushDirtyShots()
-        const existing = segments.filter((s) => s.id && s.id !== segId)
-        await updateSettings({ ref_segments: [...existing, seg], active_ref_segment_id: segId })
-        const body: ApplyRefSegmentRequest = { anchor_shot_id: startShot, end_shot_id: endShot, segment_id: segId }
-        let payload: ProjectPayload
-        if (selectedRef.type === 'image') payload = await applyRefSegmentImage(body)
-        else if (selectedRef.type === 'model') payload = await applyRefSegment3d({ ...body, camera_name: '' })
-        else payload = await applyRefSegment(body)
-        setProject(payload)
-        const result = payload as unknown as { board_count?: number; undo_token?: string }
-        setUndoToken(typeof result.undo_token === 'string' ? result.undo_token : '')
-        setNote(`Applied to ${result.board_count ?? '?'} board(s).`)
-      } catch (error) {
-        reportError(error)
-      } finally {
-        setBusy(false)
-      }
-    })()
-  }
-
   const undoLastApply = () => {
-    if (!undoToken) return
+    if (!refApplyUndoToken) return
     setBusy(true)
     void (async () => {
       try {
         await flushDirtyShots()
-        setProject(await restoreRefApply(undoToken))
-        setUndoToken('')
+        setProject(await restoreRefApply(refApplyUndoToken))
+        setRefApplyUndoToken(null)
         setNote('Reference apply undone.')
       } catch (error) {
         reportError(error)
@@ -222,154 +150,141 @@ export function ReferenceSidebar() {
   }
 
   return (
-    <aside className="ref-sidebar" aria-label="Project references">
-      <div className="ref-sidebar-scroll">
-        <div className="ref-sidebar-head">
-          <span className="ref-sidebar-title">References ({links.length})</span>
-          <button type="button" onClick={() => importRef.current?.click()} disabled={disabled}>
-            Import
-          </button>
-        </div>
-        <input
-          ref={importRef}
-          type="file"
-          accept="image/*,video/*,.glb,.gltf"
-          hidden
-          onChange={(e) => {
-            importReference(e.target.files?.[0] ?? undefined)
-            e.target.value = ''
-          }}
-        />
+    <>
+      <button
+        type="button"
+        className={`ref-rail-btn ${drawerOpen ? 'is-active' : ''}`}
+        onClick={() => setDrawerOpen((v) => !v)}
+        title="Reference library"
+        aria-expanded={drawerOpen}
+        aria-controls="ref-drawer-panel"
+      >
+        <span className="ref-rail-icon" aria-hidden="true">
+          ◫
+        </span>
+        <span className="ref-rail-label">Refs</span>
+        {links.length > 0 ? <span className="ref-rail-count">{links.length}</span> : null}
+      </button>
 
-        {links.length === 0 ? (
-          <div className="ref-sidebar-empty">Import images, video, or GLB models for reference segments.</div>
-        ) : (
-          <div className="reflib-grid">
-            {links.map((link) => {
-              const label = link.title || fileName(link.path)
-              const isSelected = refId === link.id
-              return (
-                <button
-                  key={link.id}
-                  type="button"
-                  className={`reflib-card ${isSelected ? 'is-selected' : ''}`}
-                  onClick={() => setRefId(link.id)}
-                  onDoubleClick={() => (link.type !== 'model' ? setLightbox(link) : undefined)}
-                  title={link.path}
-                >
-                  <div className="reflib-thumb">
-                    <RefPreview link={link} />
-                  </div>
-                  <div className="reflib-meta">
-                    <span className="reflib-type">{link.type}</span>
-                    <span className="reflib-name">{label}</span>
-                  </div>
-                  <button
-                    type="button"
-                    className="reflib-remove"
-                    onClick={(e) => {
-                      e.stopPropagation()
-                      removeLink(link.id, label)
-                    }}
-                    disabled={disabled}
-                    aria-label={`Remove ${label}`}
-                  >
-                    ×
-                  </button>
-                </button>
-              )
-            })}
-          </div>
-        )}
+      {drawerOpen ? <div className="ref-drawer-backdrop" onClick={() => setDrawerOpen(false)} aria-hidden="true" /> : null}
 
-        <section className="ref-segment">
-          <div className="ref-segment-title">Reference segment</div>
-          <label className="ref-segment-field">
-            <span>Source</span>
-            <select value={refId} onChange={(e) => setRefId(e.target.value)} disabled={!links.length}>
-              {links.length === 0 ? <option value="">No references</option> : null}
-              {links.map((l) => (
-                <option key={l.id} value={l.id}>
-                  {l.title || fileName(l.path)} · {l.type}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label className="ref-segment-field">
-            <span>Start board</span>
-            <select value={startShot} onChange={(e) => setSegmentAnchor(e.target.value || null)}>
-              {shots.map((s) => (
-                <option key={s.shot_id} value={s.shot_id}>
-                  {shotLabel(s.shot_id)}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label className="ref-segment-field">
-            <span>End board</span>
-            <select value={endShot} onChange={(e) => setSegmentEnd(e.target.value || null)}>
-              {shots.map((s) => (
-                <option key={s.shot_id} value={s.shot_id}>
-                  {shotLabel(s.shot_id)}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label className="ref-segment-field">
-            <span>Start time (s)</span>
-            <input
-              type="number"
-              min="0"
-              step="0.1"
-              value={startTime}
-              onChange={(e) => setStartTime(e.target.value)}
-              disabled={selectedRef?.type !== 'video'}
-            />
-          </label>
-          <div className="ref-segment-actions">
-            <button
-              type="button"
-              className="primary"
-              onClick={() => applySegment()}
-              disabled={disabled || !links.length || shots.length === 0}
-            >
-              Apply to board range
-            </button>
-            {undoToken ? (
-              <button type="button" onClick={() => undoLastApply()} disabled={disabled}>
-                Undo last apply
+      <aside
+        id="ref-drawer-panel"
+        className={`ref-sidebar ${drawerOpen ? 'is-open' : ''}`}
+        aria-label="Project references"
+        aria-hidden={!drawerOpen}
+      >
+        <div className="ref-sidebar-scroll">
+          <div className="ref-sidebar-head">
+            <span className="ref-sidebar-title">References ({links.length})</span>
+            <div className="ref-sidebar-head-actions">
+              <button type="button" onClick={() => importRef.current?.click()} disabled={disabled}>
+                Import
               </button>
-            ) : null}
+              <button type="button" className="ref-drawer-close" onClick={() => setDrawerOpen(false)} aria-label="Close">
+                ×
+              </button>
+            </div>
           </div>
-          <div className="ref-segment-hint">Select a reference above, choose a board range, then apply.</div>
+          <input
+            ref={importRef}
+            type="file"
+            accept="image/*,video/*,.glb,.gltf"
+            hidden
+            onChange={(e) => {
+              importReference(e.target.files?.[0] ?? undefined)
+              e.target.value = ''
+            }}
+          />
 
-          {segments.length > 0 ? (
-            <ul className="ref-segment-list">
-              {segments.map((s, i) => (
-                <li className="ref-segment-item" key={s.id || `${s.anchor_shot_id}-${s.end_shot_id}-${i}`}>
-                  <span className="ref-segment-type">{s.source_type || '—'}</span>
-                  <span className="ref-segment-range">
-                    {shotLabel(s.anchor_shot_id || '')} → {shotLabel(s.end_shot_id || '')}
-                  </span>
-                  {s.id ? (
+          <p className="ref-sidebar-hint">Pick a dot range on the filmstrip to assign a reference to boards.</p>
+
+          {links.length === 0 ? (
+            <div className="ref-sidebar-empty">Import images, video, or GLB models for reference segments.</div>
+          ) : (
+            <div className="reflib-grid">
+              {links.map((link) => {
+                const label = link.title || fileName(link.path)
+                return (
+                  <div key={link.id} className="reflib-card">
                     <button
                       type="button"
-                      className="ref-segment-remove"
-                      onClick={() => removeSegment(s.id as string)}
+                      className="reflib-card-main"
+                      onDoubleClick={() => (link.type !== 'model' ? setLightbox(link) : undefined)}
+                      title={link.path}
+                    >
+                      <div className="reflib-thumb">
+                        <RefPreview link={link} />
+                      </div>
+                      <div className="reflib-meta">
+                        <span className="reflib-type">{link.type}</span>
+                        <span className="reflib-name">{label}</span>
+                      </div>
+                    </button>
+                    <button
+                      type="button"
+                      className="reflib-remove"
+                      onClick={() => removeLink(link.id, label)}
                       disabled={disabled}
-                      aria-label="Delete segment"
+                      aria-label={`Remove ${label}`}
                     >
                       ×
                     </button>
-                  ) : null}
-                </li>
-              ))}
-            </ul>
-          ) : null}
-        </section>
+                  </div>
+                )
+              })}
+            </div>
+          )}
 
-        {note ? <div className="ref-sidebar-note">{note}</div> : null}
-      </div>
+          {segments.length > 0 ? (
+            <section className="ref-segments-disclosure">
+              <button
+                type="button"
+                className="ref-segments-toggle"
+                onClick={() => setSegmentsOpen((v) => !v)}
+                aria-expanded={segmentsOpen}
+              >
+                <span>Applied segments ({segments.length})</span>
+                <span className="ref-segments-chevron">{segmentsOpen ? '▾' : '▸'}</span>
+              </button>
+              {segmentsOpen ? (
+                <ul className="ref-segment-list">
+                  {recentSegments.map((s, i) => (
+                    <li className="ref-segment-item" key={s.id || `${s.anchor_shot_id}-${s.end_shot_id}-${i}`}>
+                      <span className="ref-segment-type">{s.source_type || '—'}</span>
+                      <span className="ref-segment-range">
+                        {shotLabel(s.anchor_shot_id || '')} → {shotLabel(s.end_shot_id || '')}
+                      </span>
+                      {s.id ? (
+                        <button
+                          type="button"
+                          className="ref-segment-remove"
+                          onClick={() => removeSegment(s.id as string)}
+                          disabled={disabled}
+                          aria-label="Delete segment"
+                        >
+                          ×
+                        </button>
+                      ) : null}
+                    </li>
+                  ))}
+                  {segments.length > 5 ? (
+                    <li className="ref-segment-more">+ {segments.length - 5} older segment(s)</li>
+                  ) : null}
+                </ul>
+              ) : null}
+            </section>
+          ) : null}
+
+          {refApplyUndoToken ? (
+            <button type="button" className="ref-sidebar-undo" onClick={() => undoLastApply()} disabled={disabled}>
+              Undo last apply
+            </button>
+          ) : null}
+
+          {note ? <div className="ref-sidebar-note">{note}</div> : null}
+        </div>
+      </aside>
 
       {lightbox ? (
         <div className="ref-sidebar-lightbox" role="dialog" aria-modal="true" onClick={() => setLightbox(null)}>
@@ -393,6 +308,6 @@ export function ReferenceSidebar() {
           </button>
         </div>
       ) : null}
-    </aside>
+    </>
   )
 }

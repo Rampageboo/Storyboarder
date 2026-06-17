@@ -43,6 +43,9 @@ interface ProjectContextValue {
   setSegmentEnd: (shotId: string | null) => void
   pickSegmentShot: (shotId: string) => void
   clearSegmentRange: () => void
+  /** Undo token from the most recent reference-segment apply (shared by assignment popover and library drawer). */
+  refApplyUndoToken: string | null
+  setRefApplyUndoToken: (token: string | null) => void
   lastError: string | null
   clearError: () => void
   reportError: (error: unknown) => void
@@ -89,6 +92,7 @@ export function ProjectProvider({ children }: PropsWithChildren) {
     anchorShotId: null,
     endShotId: null,
   })
+  const [refApplyUndoToken, setRefApplyUndoToken] = useState<string | null>(null)
   const versionsRef = useRef<Record<string, number>>({})
 
   // Refs mirror the latest committed values for synchronous reads inside async save/flush.
@@ -114,6 +118,7 @@ export function ProjectProvider({ children }: PropsWithChildren) {
     setDrafts({})
     setSavingShots({})
     setSegmentRange({ anchorShotId: null, endShotId: null })
+    setRefApplyUndoToken(null)
   }, [])
 
   const setSegmentAnchor = useCallback((shotId: string | null) => {
@@ -337,6 +342,8 @@ export function ProjectProvider({ children }: PropsWithChildren) {
       setSegmentEnd,
       pickSegmentShot,
       clearSegmentRange,
+      refApplyUndoToken,
+      setRefApplyUndoToken,
       lastError,
       clearError,
       reportError,
@@ -363,6 +370,8 @@ export function ProjectProvider({ children }: PropsWithChildren) {
       setSegmentEnd,
       pickSegmentShot,
       clearSegmentRange,
+      refApplyUndoToken,
+      setRefApplyUndoToken,
       lastError,
       clearError,
       reportError,

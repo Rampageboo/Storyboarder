@@ -5,6 +5,7 @@ import { BoardStrip } from './components/BoardStrip'
 import { CanvasBoard } from './components/CanvasBoard'
 import { ReferencePanel } from './components/ReferencePanel'
 import { ReferenceSidebar } from './components/ReferenceSidebar'
+import { ReferenceAssignmentPopover } from './components/ReferenceAssignmentPopover'
 import { Scene3DPanel } from './components/Scene3DPanel'
 import { NeighborContext } from './components/NeighborContext'
 import { AdvancedPanel } from './components/AdvancedPanel'
@@ -77,6 +78,7 @@ function AppInner() {
         ) : (
           <>
             <ReferenceSidebar />
+            <ReferenceAssignmentPopover />
             <main className="main-center">
               <CanvasBoard />
               <NeighborContext />
