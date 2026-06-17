@@ -38,9 +38,10 @@ function disposeObject3D(root) {
   });
 }
 
-function markCanvasFailed(canvas) {
+function markCanvasFailed(canvas, url = canvas.dataset.refModelPreview || "") {
   canvas.dataset.refModelFailed = "true";
   canvas.dataset.refModelStatus = "failed";
+  canvas.dataset.refModelFailedUrl = url;
   canvas.setAttribute("aria-label", "3D preview unavailable");
 }
 
@@ -86,7 +87,7 @@ function safeRender(state) {
     state.renderer.render(state.scene, state.camera);
   } catch (error) {
     console.warn("Reference 3D preview render failed:", error);
-    markCanvasFailed(state.canvas);
+    markCanvasFailed(state.canvas, state.url);
     disposePreview(state.canvas);
   }
 }
@@ -94,12 +95,14 @@ function safeRender(state) {
 async function mountPreview(canvas) {
   const url = canvas.dataset.refModelPreview;
   if (!url) return;
+  if (canvas.dataset.refModelFailed === "true" && canvas.dataset.refModelFailedUrl === url) return;
   const existing = previewState.get(canvas);
   if (existing?.url === url) return;
   if (existing) disposePreview(canvas);
 
   canvas.dataset.refModelStatus = "loading";
   delete canvas.dataset.refModelFailed;
+  delete canvas.dataset.refModelFailedUrl;
 
   let renderer;
   try {
@@ -111,7 +114,7 @@ async function mountPreview(canvas) {
     });
   } catch (error) {
     console.warn("Reference 3D preview WebGL unavailable:", error);
-    markCanvasFailed(canvas);
+    markCanvasFailed(canvas, url);
     return;
   }
 
@@ -141,7 +144,7 @@ async function mountPreview(canvas) {
     disposed: false,
     onContextLost: (event) => {
       event.preventDefault?.();
-      markCanvasFailed(canvas);
+      markCanvasFailed(canvas, url);
       disposePreview(canvas);
     },
   };
@@ -214,7 +217,7 @@ async function mountPreview(canvas) {
   } catch (error) {
     if (state.disposed) return;
     console.warn("Reference 3D preview failed:", error);
-    markCanvasFailed(canvas);
+    markCanvasFailed(canvas, url);
     disposePreview(canvas);
   }
 }
