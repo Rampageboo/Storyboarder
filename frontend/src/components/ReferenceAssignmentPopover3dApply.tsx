@@ -73,6 +73,10 @@ function clampStart(start: number, mediaDuration: number, boardDuration: number,
   return Math.min(Math.max(0, Number(start) || 0), Math.max(0, mediaDuration - Math.max(0.001, boardDuration)))
 }
 
+function nextFrame(): Promise<void> {
+  return new Promise((resolve) => requestAnimationFrame(() => resolve()))
+}
+
 function RefThumb({ link, selected }: { link: ReferenceLink; selected: boolean }) {
   const [failed, setFailed] = useState(false)
   const url = projectFileUrl(link.path)
@@ -230,11 +234,14 @@ export function ReferenceAssignmentPopover() {
       const shot = shots[index]
       const animationTime = Math.max(0, animStart + (durationSec > 0 ? offset / durationSec : 0) * animSpan)
       setProgress(`Rendering 3D board ${index - lo + 1} / ${boardCount}`)
+      await nextFrame()
       const dataUrl = await modelRef.current.captureFrame({ time: animationTime, view: scene3dView, width, height })
       captures.push({ shot_id: shot.shot_id, data_url: dataUrl, animation_time: animationTime })
       offset += Math.max(0.1, Number(shot.duration_seconds) || 3)
+      await nextFrame()
     }
     setProgress('Finalizing 3D apply…')
+    await nextFrame()
     return applyRefSegment3d({
       ...body,
       camera_name: scene3dView?.mode === 'scene_camera' ? scene3dView.camera_name || '' : '',
@@ -265,11 +272,12 @@ export function ReferenceAssignmentPopover() {
         await updateSettings({ ref_segments: [...existing, seg], active_ref_segment_id: segId })
         const body: ApplyRefSegmentRequest = { anchor_shot_id: startShot, end_shot_id: endShot, segment_id: segId }
         const payload = selectedRef.type === 'image' ? await applyRefSegmentImage(body) : selectedRef.type === 'model' ? await applyModel(body) : await applyRefSegment(body)
-        setProject(payload)
         const result = payload as unknown as { board_count?: number; undo_token?: string }
         const count = result.board_count ?? boardCount
         setRefApplyUndoToken(typeof result.undo_token === 'string' ? result.undo_token : null)
         close()
+        await nextFrame()
+        setProject(payload)
         setToast(`${isInspectMode ? 'Reapplied' : 'Applied'} to ${count} board${count === 1 ? '' : 's'}`)
       } catch (error) {
         reportError(error)
