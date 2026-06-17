@@ -17,7 +17,10 @@ function importRuntimeModule<T = unknown>(url: string): Promise<T> {
 
 function loadReferenceModelPreviewModule() {
   if (!referenceModelPreviewModule) {
-    referenceModelPreviewModule = importRuntimeModule('/static/reference_model_preview.js')
+    referenceModelPreviewModule = importRuntimeModule('/static/reference_model_preview.js').catch((error) => {
+      referenceModelPreviewModule = null
+      throw error
+    })
   }
   return referenceModelPreviewModule
 }
@@ -32,14 +35,14 @@ export function ReferenceModelPreview({
   compact?: boolean
 }) {
   const rootRef = useRef<HTMLDivElement | null>(null)
-  const [failed, setFailed] = useState(false)
+  const [moduleFailed, setModuleFailed] = useState(false)
   const previewUrl = useMemo(() => `${projectFileUrl(path)}&preview=model`, [path])
 
   useEffect(() => {
     const root = rootRef.current
     if (!root || !path) return
     let disposed = false
-    setFailed(false)
+    setModuleFailed(false)
 
     const hydrate = () => {
       if (disposed) return
@@ -48,11 +51,11 @@ export function ReferenceModelPreview({
 
     void loadReferenceModelPreviewModule()
       .then(() => {
-        hydrate()
+        requestAnimationFrame(hydrate)
       })
       .catch((error) => {
         console.warn('Reference model preview module failed:', error)
-        if (!disposed) setFailed(true)
+        if (!disposed) setModuleFailed(true)
       })
 
     const onReady = () => hydrate()
@@ -67,12 +70,12 @@ export function ReferenceModelPreview({
 
   return (
     <div className={`ref-model-preview ${compact ? 'is-compact' : ''}`} ref={rootRef} title={label}>
-      {failed ? (
+      {moduleFailed ? (
         <div className="ref-model-preview-fallback" aria-hidden="true">
           3D
         </div>
       ) : (
-        <canvas data-ref-model-preview={previewUrl} aria-label={`3D preview: ${label}`} />
+        <canvas key={previewUrl} data-ref-model-preview={previewUrl} aria-label={`3D preview: ${label}`} />
       )}
       <div className="ref-model-preview-badge">3D</div>
     </div>
