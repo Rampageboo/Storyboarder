@@ -1,18 +1,20 @@
 import { useEffect, useRef, useState } from 'react'
 import { projectFileUrl } from '../api'
 
-type ThreeModule = typeof import('/static/vendor/three/three.module.js')
-
-type OrbitControlsCtor = new (...args: unknown[]) => {
+type OrbitControlsInstance = {
   target: { set: (x: number, y: number, z: number) => void; copy: (v: unknown) => void }
   enableDamping: boolean
   update: () => void
   dispose?: () => void
 }
 
+type OrbitControlsCtor = new (...args: unknown[]) => OrbitControlsInstance
+
 type GltfLoaderCtor = new () => {
   loadAsync: (url: string) => Promise<{ scene: unknown }>
 }
+
+type ThreeLike = Record<string, any>
 
 type ModuleWithOrbit = { OrbitControls: OrbitControlsCtor }
 type ModuleWithLoader = { GLTFLoader: GltfLoaderCtor }
@@ -32,7 +34,7 @@ export function ReferenceModelPreview({ path, label }: { path: string; label: st
       setMessage('Loading 3D preview…')
 
       try {
-        const THREE = (await import(/* @vite-ignore */ '/static/vendor/three/three.module.js')) as ThreeModule
+        const THREE = (await import(/* @vite-ignore */ '/static/vendor/three/three.module.js')) as ThreeLike
         const { OrbitControls } = (await import(/* @vite-ignore */ '/static/vendor/three/OrbitControls.js')) as ModuleWithOrbit
         const { GLTFLoader } = (await import(/* @vite-ignore */ '/static/vendor/three/GLTFLoader.js')) as ModuleWithLoader
         if (cancelled) return
@@ -60,7 +62,7 @@ export function ReferenceModelPreview({ path, label }: { path: string; label: st
         const loader = new GLTFLoader()
         const gltf = await loader.loadAsync(`${projectFileUrl(path)}&t=${Date.now()}`)
         if (cancelled) return
-        const model = gltf.scene as InstanceType<ThreeModule['Object3D']>
+        const model = gltf.scene
         scene.add(model)
 
         const box = new THREE.Box3().setFromObject(model)
