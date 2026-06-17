@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import {
   applyRefSegment,
-  applyRefSegment3d,
   applyRefSegmentImage,
+  applyRefSegmentModelCaptures,
   deleteRefSegment,
   projectFileUrl,
   restoreRefApply,
@@ -15,6 +15,7 @@ import { useProject } from '../state/ProjectContext'
 import { shotDisplayLabel } from '../utils/shotDisplay'
 import { findRefSegment, refSegmentsWithoutOverlap } from '../utils/refSegmentDisplay'
 import { describeScene3dView, resolveScene3dReferenceView } from '../utils/scene3dView'
+import { applyModelCaptures } from '../scene3d/applyModelCaptures'
 import { ReferenceModelPreview, type ReferenceModelPreviewHandle } from './ReferenceModelPreview'
 import './ReferenceAssignmentPopover.css'
 
@@ -75,6 +76,10 @@ function clampStart(start: number, mediaDuration: number, boardDuration: number,
 
 function nextFrame(): Promise<void> {
   return new Promise((resolve) => requestAnimationFrame(() => resolve()))
+}
+
+async function waitFrames(count = 2): Promise<void> {
+  for (let i = 0; i < count; i += 1) await nextFrame()
 }
 
 function RefThumb({ link, selected }: { link: ReferenceLink; selected: boolean }) {
@@ -228,21 +233,23 @@ export function ReferenceAssignmentPopover() {
     const height = Math.max(1, Math.floor(Number(project.settings?.canvas_height) || 1080))
     const animStart = clampStart(segmentStart, mediaDuration, durationSec, refMode)
     const animSpan = Math.max(0.001, durationSec)
-    let offset = 0
-    const captures: NonNullable<ApplyRefSegmentRequest['captures']> = []
-    for (let index = lo; index <= hi; index += 1) {
-      const shot = shots[index]
-      const animationTime = Math.max(0, animStart + (durationSec > 0 ? offset / durationSec : 0) * animSpan)
-      setProgress(`Rendering 3D board ${index - lo + 1} / ${boardCount}`)
-      await nextFrame()
-      const dataUrl = await modelRef.current.captureFrame({ time: animationTime, view: scene3dView, width, height })
-      captures.push({ shot_id: shot.shot_id, data_url: dataUrl, animation_time: animationTime })
-      offset += Math.max(0.1, Number(shot.duration_seconds) || 3)
-      await nextFrame()
-    }
+    const captures = await applyModelCaptures({
+      shots,
+      lo,
+      hi,
+      boardCount,
+      durationSec,
+      animStart,
+      animSpan,
+      view: scene3dView,
+      width,
+      height,
+      captureFrame: (options) => modelRef.current!.captureFrame(options),
+      onProgress: setProgress,
+    })
     setProgress('Finalizing 3D apply…')
     await nextFrame()
-    return applyRefSegment3d({
+    return applyRefSegmentModelCaptures({
       ...body,
       camera_name: scene3dView?.mode === 'scene_camera' ? scene3dView.camera_name || '' : '',
       captures,
@@ -275,9 +282,10 @@ export function ReferenceAssignmentPopover() {
         const result = payload as unknown as { board_count?: number; undo_token?: string }
         const count = result.board_count ?? boardCount
         setRefApplyUndoToken(typeof result.undo_token === 'string' ? result.undo_token : null)
-        close()
-        await nextFrame()
+        setProgress('Refreshing boards…')
         setProject(payload)
+        await waitFrames(2)
+        close()
         setToast(`${isInspectMode ? 'Reapplied' : 'Applied'} to ${count} board${count === 1 ? '' : 's'}`)
       } catch (error) {
         reportError(error)
@@ -327,7 +335,16 @@ export function ReferenceAssignmentPopover() {
   return (
     <>
       <div className="ref-assign-backdrop" onClick={close} aria-hidden="true" />
-      <div className={`ref-assign-modal ref-assign-modal--${refMode}`} role="dialog" aria-modal="true" aria-label="Assign reference to board range">
+      <div className={`ref-assign-modal ref-assign-modal--${refMode}`} role="dialog" aria-modal="true" aria-label="Assign reference to board range" style={{ position: 'relative' }}>
+        {progress ? (
+          <div
+            className="ref-assign-player-empty"
+            style={{ position: 'absolute', inset: 0, zIndex: 20, background: 'rgba(0,0,0,0.78)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+            aria-live="polite"
+          >
+            {progress}
+          </div>
+        ) : null}
         <div className="ref-assign-modal-header">
           <h3>{isInspectMode ? 'Inspect reference segment' : 'Reference segment'}</h3>
           <button type="button" className="ref-assign-close" onClick={close} aria-label="Cancel">×</button>
@@ -346,7 +363,6 @@ export function ReferenceAssignmentPopover() {
             {refMode === 'model' ? <div className="ref-assign-3d-info"><span className={`ref-assign-3d-view ${scene3dView ? '' : 'is-generic'}`}>3D view: {describeScene3dView(scene3dView)}</span><span className="ref-assign-3d-note">Apply renders every board from the GLB, then the backend stamps metadata/provenance and creates an undo snapshot.</span></div> : null}
             <div className="ref-assign-player" style={{ position: 'relative' }}>
               {!selectedRef ? <div className="ref-assign-player-empty">Select a reference on the left</div> : selectedRef.type === 'model' ? <ReferenceModelPreview ref={modelRef} path={selectedRef.path} label={previewLabel} view={scene3dView} /> : previewFailed ? <div className="ref-assign-player-empty">Preview unavailable</div> : selectedRef.type === 'video' ? <video ref={videoRef} key={selectedRef.id} src={previewUrl} controls preload="metadata" playsInline style={{ objectFit }} onLoadedMetadata={(event) => { const duration = event.currentTarget.duration; if (Number.isFinite(duration) && duration > 0) setMediaDuration(duration) }} onTimeUpdate={(event) => setPlayheadTime(event.currentTarget.currentTime || 0)} onError={() => setPreviewFailed(true)} /> : <img key={selectedRef.id} src={previewUrl} alt={previewLabel} style={{ objectFit }} onError={() => setPreviewFailed(true)} />}
-              {progress ? <div className="ref-assign-player-empty" style={{ position: 'absolute', inset: 0, background: 'rgba(0,0,0,0.72)' }}>{progress}</div> : null}
             </div>
             <div className="ref-assign-fit-mode" role="group" aria-label="Reference fit"><span className="ref-assign-fit-label">Fit</span>{FIT_MODES.map((mode) => <button key={mode} type="button" className={`ref-assign-fit-btn ${fitMode === mode ? 'is-active' : ''}`} onClick={() => setFitMode(mode)} disabled={disabled}>{mode === 'fit' ? 'Fit' : mode === 'fill' ? 'Fill' : 'Stretch'}</button>)}</div>
             <section className="ref-assign-segment-box">

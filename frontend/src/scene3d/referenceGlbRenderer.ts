@@ -1,76 +1,16 @@
-import type { Scene3dReferenceView } from '../utils/scene3dView'
+import { disposeGlbObject, loadGlbScene } from './glbScene'
+import type { Scene3dCaptureRequest, Scene3dReferenceView } from './scene3dTypes'
+import { loadThreeRuntime } from './threeRuntime'
 
-type ThreeModule = Record<string, any>
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+type ThreeObject = any
 
-type Runtime = {
-  THREE: ThreeModule
-  GLTFLoader: new () => any
-}
-
-export type GlbCaptureOptions = {
-  time?: number
-  view?: Scene3dReferenceView | null
-  width?: number
-  height?: number
-}
-
-// Keep this palette/hash in lockstep with storyboard_tool/web/static/runtime/scene3d.js so
-// reference Apply renders match the Scene3D workspace object-color preview.
-const VIEWPORT_OBJECT_PALETTE = [
-  0xc87a6e, 0x6eb87a, 0x6e8ec8, 0xc8b06e, 0xb06ec8, 0x6ec8b8,
-  0xc86e8a, 0x8ac86e, 0x6e6ec8, 0xc8946e, 0x6eb0c8, 0xa0c86e,
-  0xc87878, 0x78c878, 0x7878c8, 0xc8c878,
-]
-
-let runtimePromise: Promise<Runtime> | null = null
-
-function loadRuntime(): Promise<Runtime> {
-  if (!runtimePromise) {
-    const threeUrl = '/static/vendor/three/three.module.js'
-    const loaderUrl = '/static/vendor/three/GLTFLoader.js'
-    runtimePromise = Promise.all([
-      import(/* @vite-ignore */ threeUrl) as Promise<ThreeModule>,
-      import(/* @vite-ignore */ loaderUrl) as Promise<ThreeModule>,
-    ]).then(([THREE, loader]) => ({ THREE, GLTFLoader: loader.GLTFLoader as new () => any }))
-  }
-  return runtimePromise
-}
+export type GlbCaptureOptions = Scene3dCaptureRequest
 
 function triple(value: unknown): [number, number, number] | null {
   if (!Array.isArray(value) || value.length < 3) return null
   const out: [number, number, number] = [Number(value[0]), Number(value[1]), Number(value[2])]
   return out.every((n) => Number.isFinite(n)) ? out : null
-}
-
-function hashString(value: string): number {
-  let hash = 0
-  for (let i = 0; i < value.length; i += 1) hash = (hash * 31 + value.charCodeAt(i)) | 0
-  return Math.abs(hash)
-}
-
-function disposeMaterial(material: any) {
-  const materials = Array.isArray(material) ? material : [material]
-  for (const item of materials) {
-    if (!item) continue
-    for (const key of Object.keys(item)) {
-      const value = item[key]
-      if (value && typeof value.dispose === 'function') {
-        try { value.dispose() } catch { /* best effort */ }
-      }
-    }
-    try { item.dispose?.() } catch { /* best effort */ }
-  }
-}
-
-function disposeObject(root: any) {
-  root?.traverse?.((node: any) => {
-    try {
-      node.geometry?.dispose?.()
-      disposeMaterial(node.material)
-    } catch {
-      // best effort
-    }
-  })
 }
 
 function isBlankCanvas(canvas: HTMLCanvasElement): boolean {
@@ -105,13 +45,12 @@ function isBlankCanvas(canvas: HTMLCanvasElement): boolean {
 export class ReferenceGlbRenderer {
   canvas: HTMLCanvasElement
   url: string
-  runtime: Runtime | null = null
-  renderer: any = null
-  scene: any = null
-  camera: any = null
-  root: any = null
-  mixer: any = null
-  center: any = null
+  renderer: ThreeObject | null = null
+  scene: ThreeObject | null = null
+  camera: ThreeObject | null = null
+  root: ThreeObject | null = null
+  mixer: ThreeObject | null = null
+  center: ThreeObject | null = null
   resizeObserver: ResizeObserver | null = null
   intersectionObserver: IntersectionObserver | null = null
   frameId = 0
@@ -119,7 +58,8 @@ export class ReferenceGlbRenderer {
   disposed = false
   currentView: Scene3dReferenceView | null = null
   readyPromise: Promise<void> | null = null
-  previewMaterials: any[] = []
+  private glbSceneDispose: (() => void) | null = null
+  private runtime: Awaited<ReturnType<typeof loadThreeRuntime>> | null = null
 
   constructor(canvas: HTMLCanvasElement, url: string) {
     this.canvas = canvas
@@ -133,9 +73,9 @@ export class ReferenceGlbRenderer {
   }
 
   async load(view: Scene3dReferenceView | null) {
-    const runtime = await loadRuntime()
+    const runtime = await loadThreeRuntime()
     if (this.disposed) return
-    const { THREE, GLTFLoader } = runtime
+    const { THREE } = runtime
     this.runtime = runtime
     this.renderer = new THREE.WebGLRenderer({
       canvas: this.canvas,
@@ -171,54 +111,18 @@ export class ReferenceGlbRenderer {
     )
     this.intersectionObserver.observe(this.canvas)
 
-    const gltf = await new GLTFLoader().loadAsync(this.url)
+    const glbScene = await loadGlbScene(this.url, runtime)
     if (this.disposed) {
-      disposeObject(gltf.scene)
+      glbScene.dispose()
       return
     }
-    this.root = gltf.scene
-    this.preparePreviewMaterials()
+    this.root = glbScene.root
+    this.mixer = glbScene.mixer
+    this.glbSceneDispose = () => glbScene.dispose()
     this.scene.add(this.root)
-    if (Array.isArray(gltf.animations) && gltf.animations.length > 0) {
-      this.mixer = new THREE.AnimationMixer(this.root)
-      for (const clip of gltf.animations) this.mixer.clipAction(clip).play()
-      this.mixer.setTime(0)
-    }
     this.applyViewOrFrame(view)
     this.render()
     if (this.visible) this.start()
-  }
-
-  objectColorKey(mesh: any): string {
-    let node = mesh
-    while (node.parent && node.parent !== this.root) {
-      if (node.name) return node.name
-      node = node.parent
-    }
-    return mesh.name || mesh.uuid
-  }
-
-  generateObjectColor(seed: string): number {
-    return VIEWPORT_OBJECT_PALETTE[hashString(seed) % VIEWPORT_OBJECT_PALETTE.length]
-  }
-
-  preparePreviewMaterials() {
-    if (!this.runtime || !this.root) return
-    const { THREE } = this.runtime
-    const keys = new Set<string>()
-    this.root.traverse((node: any) => {
-      if (node?.isMesh) keys.add(this.objectColorKey(node))
-    })
-    const colorByKey = new Map<string, number>()
-    for (const key of [...keys].sort()) colorByKey.set(key, this.generateObjectColor(key))
-    this.root.traverse((node: any) => {
-      if (!node?.isMesh) return
-      const key = this.objectColorKey(node)
-      const material = new THREE.MeshBasicMaterial({ color: colorByKey.get(key) ?? this.generateObjectColor(key) })
-      this.previewMaterials.push(material)
-      node.material = material
-      node.frustumCulled = false
-    })
   }
 
   setView(view: Scene3dReferenceView | null) {
@@ -290,16 +194,16 @@ export class ReferenceGlbRenderer {
     if (this.center) box.getCenter(this.center)
   }
 
-  findCamera(name: string): any | null {
-    let found: any | null = null
+  findCamera(name: string): ThreeObject | null {
+    let found: ThreeObject | null = null
     if (!this.root || !name) return null
-    this.root.traverse((node: any) => {
+    this.root.traverse((node: ThreeObject) => {
       if (!found && node?.isCamera && node.name === name) found = node
     })
     return found
   }
 
-  copyCamera(source: any) {
+  copyCamera(source: ThreeObject) {
     if (!this.runtime || !this.camera) return
     const { THREE } = this.runtime
     source.updateWorldMatrix(true, false)
@@ -345,7 +249,7 @@ export class ReferenceGlbRenderer {
     }
   }
 
-  async capture(options: GlbCaptureOptions = {}): Promise<string> {
+  async captureFrame(options: GlbCaptureOptions = {}): Promise<string> {
     await this.readyPromise
     if (!this.renderer || !this.camera || !this.root || !this.runtime) throw new Error('3D renderer is not ready.')
     const savedFrameId = this.frameId
@@ -389,14 +293,20 @@ export class ReferenceGlbRenderer {
     }
   }
 
+  /** @deprecated Use captureFrame */
+  async capture(options: GlbCaptureOptions = {}): Promise<string> {
+    return this.captureFrame(options)
+  }
+
   dispose() {
     this.disposed = true
     this.stop()
     this.resizeObserver?.disconnect()
     this.intersectionObserver?.disconnect()
-    disposeObject(this.root)
-    for (const material of this.previewMaterials) disposeMaterial(material)
-    this.previewMaterials = []
+    this.glbSceneDispose?.()
+    this.glbSceneDispose = null
+    disposeGlbObject(this.root)
+    this.root = null
     this.renderer?.dispose?.()
   }
 }

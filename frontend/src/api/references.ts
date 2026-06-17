@@ -42,6 +42,11 @@ export function applyRefSegment3d(body: ApplyRefSegmentRequest): Promise<Project
   return requestJson<ProjectPayload>('/api/project/ref-segment/apply-3d', { method: 'POST', body })
 }
 
+/** Preferred endpoint for browser-rendered GLB board captures (file transaction only on backend). */
+export function applyRefSegmentModelCaptures(body: ApplyRefSegmentRequest): Promise<ProjectPayload> {
+  return requestJson<ProjectPayload>('/api/project/ref-segment/apply-model-captures', { method: 'POST', body })
+}
+
 export function deleteRefSegment(segmentId: string): Promise<ProjectPayload> {
   return requestJson<ProjectPayload>(`/api/project/ref-segments/${encodeURIComponent(segmentId)}`, {
     method: 'DELETE',

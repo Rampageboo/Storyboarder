@@ -1,26 +1,13 @@
 import type { ProjectSettings } from '../types/settings'
 import type { Shot } from '../types/shot'
 
-// A reproducible Scene3D viewpoint, shared by the Scene3D workspace (which produces it via
-// editor.getViewState()) and the GLB reference preview (which reproduces it). The same shape is
-// persisted to settings.scene3d.reference_view and to shot.camera_data.scene3d_view.
-export type Scene3dViewMode = 'scene_camera' | 'free_view'
-
-// Where the resolved view came from — used only for UI feedback, not behavior.
-export type Scene3dViewSource = 'shot' | 'workspace' | 'scene_camera' | 'generic'
-
-export interface Scene3dReferenceView {
-  mode: Scene3dViewMode
-  /** Name of the GLB scene camera (only meaningful when mode === 'scene_camera'). */
-  camera_name?: string
-  /** Animation time the view was captured at. */
-  time?: number
-  position?: [number, number, number]
-  target?: [number, number, number]
-  rotation?: [number, number, number]
-  fov?: number
-  source: Scene3dViewSource
-}
+export type {
+  Scene3dCaptureRequest,
+  Scene3dReferenceView,
+  Scene3dViewMode,
+  Scene3dViewSource,
+} from '../scene3d/scene3dTypes'
+import type { Scene3dReferenceView, Scene3dViewMode, Scene3dViewSource } from '../scene3d/scene3dTypes'
 
 function triple(value: unknown): [number, number, number] | undefined {
   if (Array.isArray(value) && value.length >= 3) {

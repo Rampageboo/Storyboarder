@@ -1,10 +1,10 @@
 import { forwardRef, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react'
 import { projectFileUrl } from '../api'
-import { ReferenceGlbRenderer, type GlbCaptureOptions } from '../scene3d/referenceGlbRenderer'
-import type { Scene3dReferenceView } from '../utils/scene3dView'
+import { ReferenceGlbRenderer } from '../scene3d/referenceGlbRenderer'
+import type { Scene3dCaptureRequest, Scene3dReferenceView } from '../scene3d/scene3dTypes'
 import './ReferenceModelPreview.css'
 
-export interface ReferenceModelCaptureOptions extends GlbCaptureOptions {}
+export interface ReferenceModelCaptureOptions extends Scene3dCaptureRequest {}
 
 export interface ReferenceModelPreviewHandle {
   captureFrame(options?: ReferenceModelCaptureOptions): Promise<string>
@@ -63,7 +63,7 @@ export const ReferenceModelPreview = forwardRef<ReferenceModelPreviewHandle, {
     async captureFrame(options: ReferenceModelCaptureOptions = {}) {
       const renderer = rendererRef.current
       if (!renderer) throw new Error('3D preview is not mounted yet.')
-      return renderer.capture(options)
+      return renderer.captureFrame(options)
     },
   }), [])
 

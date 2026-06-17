@@ -523,6 +523,11 @@ def create_app(base_dir: Path, bridge_port: int = 8000) -> FastAPI:
             str(request.camera_name or ""),
         )
 
+    @app.post("/api/project/ref-segment/apply-model-captures")
+    def apply_ref_segment_model_captures(request: ApplyRefSegmentRequest) -> dict[str, Any]:
+        """Finalize browser-rendered GLB captures — validate, snapshot, save boards, stamp metadata."""
+        return _apply_ref_segment_3d_captures(app, request)
+
     @app.post("/api/project/ref-segment/apply-image")
     def apply_ref_segment_image(request: ApplyRefSegmentRequest) -> dict[str, Any]:
         return _svc().method_apply_ref_segment_image(request.anchor_shot_id, request.end_shot_id, request.segment_id or "")
