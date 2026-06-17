@@ -11,15 +11,13 @@ import {
   type SetStateAction,
 } from 'react'
 import { createProject, getProject, openProject, saveProject, updateShot } from '../api'
-import { browseProjectJson } from '../api'
-import { isNoProjectOpenError } from '../api'
+import { browseFolder, getAppSession, isNoProjectOpenError, updateAppSession } from '../api'
 import type { ProjectPathRequest, ProjectPayload, Shot, ShotUpdate } from '../types'
 
 interface ProjectContextValue {
   project: ProjectPayload | null
   selectedShotId: string | null
   setSelectedShotId: (shotId: string | null) => void
-  /** Accepts a value or a functional updater so stale-safe saves can merge into the latest state. */
   setProject: Dispatch<SetStateAction<ProjectPayload | null>>
   reloadProject: () => Promise<void>
   newProject: (body?: ProjectPathRequest) => Promise<void>
@@ -27,7 +25,6 @@ interface ProjectContextValue {
   saveProject: () => Promise<void>
   initialLoading: boolean
   projectActionBusy: boolean
-  // Per-shot editing (centralized dirty/version tracking).
   getDraft: (shotId: string) => ShotUpdate | undefined
   editShotField: <K extends keyof ShotUpdate>(shotId: string, key: K, value: ShotUpdate[K]) => void
   isShotDirty: (shotId: string) => boolean
@@ -36,14 +33,11 @@ interface ProjectContextValue {
   saveShot: (shotId: string) => Promise<void>
   flushDirtyShots: () => Promise<void>
   visualEpoch: number
-  // Reference-segment range draft, shared by the filmstrip dots and the ReferenceSidebar form.
-  // Local-only until the user applies — selecting dots never writes to disk.
   segmentRange: { anchorShotId: string | null; endShotId: string | null }
   setSegmentAnchor: (shotId: string | null) => void
   setSegmentEnd: (shotId: string | null) => void
   pickSegmentShot: (shotId: string) => void
   clearSegmentRange: () => void
-  /** Undo token from the most recent reference-segment apply (shared by assignment popover and library drawer). */
   refApplyUndoToken: string | null
   setRefApplyUndoToken: (token: string | null) => void
   lastError: string | null
@@ -53,7 +47,11 @@ interface ProjectContextValue {
 
 const ProjectContext = createContext<ProjectContextValue | null>(null)
 
-/** The editable subset sent on every PATCH. Backend resets omitted fields to defaults, so this must be complete. */
+function projectJsonInFolder(folderPath: string): string {
+  const trimmed = folderPath.replace(/[\\/]+$/, '')
+  return `${trimmed}/project.json`
+}
+
 function shotToUpdate(shot: Shot): ShotUpdate {
   return {
     title: shot.title,
@@ -77,14 +75,17 @@ function draftIsDirty(draft: ShotUpdate | undefined): boolean {
   return !!draft && Object.keys(draft).length > 0
 }
 
+function preferredShotId(payload: ProjectPayload, wanted?: string | null): string | null {
+  if (wanted && payload.shots.some((shot) => shot.shot_id === wanted)) return wanted
+  return payload.shots[0]?.shot_id ?? null
+}
+
 export function ProjectProvider({ children }: PropsWithChildren) {
   const [project, setProject] = useState<ProjectPayload | null>(null)
   const [selectedShotId, setSelectedShotId] = useState<string | null>(null)
   const [lastError, setLastError] = useState<string | null>(null)
   const [initialLoading, setInitialLoading] = useState(true)
   const [projectActionBusy, setProjectActionBusy] = useState(false)
-
-  // Per-shot edit state. `drafts` holds only changed fields per shot; presence ⇒ dirty.
   const [drafts, setDrafts] = useState<Record<string, ShotUpdate>>({})
   const [savingShots, setSavingShots] = useState<Record<string, boolean>>({})
   const [visualEpoch, setVisualEpoch] = useState(0)
@@ -94,20 +95,25 @@ export function ProjectProvider({ children }: PropsWithChildren) {
   })
   const [refApplyUndoToken, setRefApplyUndoToken] = useState<string | null>(null)
   const versionsRef = useRef<Record<string, number>>({})
-
-  // Refs mirror the latest committed values for synchronous reads inside async save/flush.
   const projectRef = useRef<ProjectPayload | null>(null)
   const draftsRef = useRef<Record<string, ShotUpdate>>({})
   projectRef.current = project
   draftsRef.current = drafts
 
-  // Bump thumbnail cache keys whenever committed project data changes (reference apply, sync, etc.).
   useEffect(() => {
     if (project) setVisualEpoch((v) => v + 1)
   }, [project])
 
-  const clearError = useCallback(() => setLastError(null), [])
+  useEffect(() => {
+    if (!project || !selectedShotId) return
+    void updateAppSession({
+      last_project_json_path: project.project_json_path,
+      selected_shot_id: selectedShotId,
+      recent_projects: [project.project_path, ...(project.settings.recent_projects ?? [])],
+    }).catch(() => {})
+  }, [project?.project_json_path, project?.project_path, project?.settings.recent_projects, selectedShotId])
 
+  const clearError = useCallback(() => setLastError(null), [])
   const reportError = useCallback((error: unknown) => {
     setLastError(error instanceof Error ? error.message : String(error))
   }, [])
@@ -122,74 +128,57 @@ export function ProjectProvider({ children }: PropsWithChildren) {
   }, [])
 
   const setSegmentAnchor = useCallback((shotId: string | null) => {
-    setSegmentRange((r) => ({ ...r, anchorShotId: shotId }))
+    setSegmentRange((range) => ({ ...range, anchorShotId: shotId }))
   }, [])
-
   const setSegmentEnd = useCallback((shotId: string | null) => {
-    setSegmentRange((r) => ({ ...r, endShotId: shotId }))
+    setSegmentRange((range) => ({ ...range, endShotId: shotId }))
   }, [])
-
-  const clearSegmentRange = useCallback(() => {
-    setSegmentRange({ anchorShotId: null, endShotId: null })
-  }, [])
-
-  // Filmstrip dot interaction: first pick sets the start, second sets the end, a third starts over.
+  const clearSegmentRange = useCallback(() => setSegmentRange({ anchorShotId: null, endShotId: null }), [])
   const pickSegmentShot = useCallback((shotId: string) => {
-    setSegmentRange((r) => {
-      if (!r.anchorShotId) return { anchorShotId: shotId, endShotId: null }
-      if (!r.endShotId) return { anchorShotId: r.anchorShotId, endShotId: shotId }
+    setSegmentRange((range) => {
+      if (!range.anchorShotId) return { anchorShotId: shotId, endShotId: null }
+      if (!range.endShotId) return { anchorShotId: range.anchorShotId, endShotId: shotId }
       return { anchorShotId: shotId, endShotId: null }
     })
   }, [])
 
-  const editShotField = useCallback(
-    <K extends keyof ShotUpdate>(shotId: string, key: K, value: ShotUpdate[K]) => {
-      versionsRef.current[shotId] = (versionsRef.current[shotId] ?? 0) + 1
-      setDrafts((prev) => ({
-        ...prev,
-        [shotId]: { ...(prev[shotId] ?? {}), [key]: value },
-      }))
+  const openPayload = useCallback(
+    (payload: ProjectPayload, selected?: string | null) => {
+      resetEditState()
+      setProject(payload)
+      setLastError(null)
+      setSelectedShotId(preferredShotId(payload, selected))
     },
-    [],
+    [resetEditState],
   )
+
+  const editShotField = useCallback(<K extends keyof ShotUpdate>(shotId: string, key: K, value: ShotUpdate[K]) => {
+    versionsRef.current[shotId] = (versionsRef.current[shotId] ?? 0) + 1
+    setDrafts((prev) => ({ ...prev, [shotId]: { ...(prev[shotId] ?? {}), [key]: value } }))
+  }, [])
 
   const getDraft = useCallback((shotId: string): ShotUpdate | undefined => drafts[shotId], [drafts])
-
   const isShotDirty = useCallback((shotId: string) => draftIsDirty(drafts[shotId]), [drafts])
+  const dirtyShotIds = useMemo(() => Object.keys(drafts).filter((id) => draftIsDirty(drafts[id])), [drafts])
 
-  const dirtyShotIds = useMemo(
-    () => Object.keys(drafts).filter((id) => draftIsDirty(drafts[id])),
-    [drafts],
-  )
-
-  // Save one shot, guarding against stale responses. Tied to the passed shotId, never selectedShotId.
   const saveShot = useCallback(async (shotId: string): Promise<void> => {
     const draft = draftsRef.current[shotId]
     if (!draftIsDirty(draft)) return
-    const baseShot = projectRef.current?.shots.find((s) => s.shot_id === shotId)
+    const baseShot = projectRef.current?.shots.find((shot) => shot.shot_id === shotId)
     if (!baseShot) return
-
     const startVersion = versionsRef.current[shotId] ?? 0
     const fullUpdate: ShotUpdate = { ...shotToUpdate(baseShot), ...draft }
 
     setSavingShots((prev) => ({ ...prev, [shotId]: true }))
     try {
       const payload = await updateShot(shotId, fullUpdate)
-
-      // If the user kept editing this shot while the request was in flight, the response is stale:
-      // ignore the returned payload entirely and keep the draft. Never overwrite newer local edits.
       if ((versionsRef.current[shotId] ?? 0) !== startVersion) return
-
-      // Safe: merge only this shot's server data into the latest project state.
-      const serverShot = payload.shots.find((s) => s.shot_id === shotId)
+      const serverShot = payload.shots.find((shot) => shot.shot_id === shotId)
       setProject((prev) => {
         if (!prev) return payload
-        const shots = serverShot
-          ? prev.shots.map((s) => (s.shot_id === shotId ? serverShot : s))
-          : prev.shots
         return {
           ...prev,
-          shots,
+          shots: serverShot ? prev.shots.map((shot) => (shot.shot_id === shotId ? serverShot : shot)) : prev.shots,
           dirty: payload.dirty,
           name: payload.name,
           settings: payload.settings,
@@ -198,7 +187,6 @@ export function ProjectProvider({ children }: PropsWithChildren) {
           project_json_path: payload.project_json_path,
         }
       })
-      // Shot is no longer dirty.
       setDrafts((prev) => {
         if (!(shotId in prev)) return prev
         const next = { ...prev }
@@ -218,21 +206,12 @@ export function ProjectProvider({ children }: PropsWithChildren) {
     }
   }, [])
 
-  // Save every dirty shot before destructive/structural actions. Sequential to avoid interleaved
-  // server-side mutation of the shared project. Re-throws so callers abort their action.
-  //
-  // A stale in-flight save keeps its draft (saveShot ignores stale responses), so one pass may not
-  // reach clean. Retry a bounded number of times until no dirty drafts remain; if edits keep
-  // changing past the limit, fail loudly so the caller aborts instead of discarding the draft.
   const flushDirtyShots = useCallback(async (): Promise<void> => {
     for (let attempt = 0; attempt < 5; attempt += 1) {
       const ids = Object.keys(draftsRef.current).filter((id) => draftIsDirty(draftsRef.current[id]))
       if (ids.length === 0) return
-      for (const id of ids) {
-        await saveShot(id)
-      }
+      for (const id of ids) await saveShot(id)
     }
-
     const remaining = Object.keys(draftsRef.current).filter((id) => draftIsDirty(draftsRef.current[id]))
     if (remaining.length > 0) {
       const message = 'Unsaved edits changed while saving. Try again before continuing.'
@@ -244,35 +223,46 @@ export function ProjectProvider({ children }: PropsWithChildren) {
   const reloadProject = useCallback(async () => {
     setInitialLoading(true)
     try {
-      const payload = await getProject()
-      resetEditState()
-      setProject(payload)
-      setLastError(null)
-      setSelectedShotId((prev) => prev ?? payload.shots[0]?.shot_id ?? null)
+      const session = await getAppSession().catch(() => ({}))
+      try {
+        const payload = await getProject()
+        openPayload(payload, typeof session.selected_shot_id === 'string' ? session.selected_shot_id : null)
+      } catch (error) {
+        if (!isNoProjectOpenError(error)) throw error
+        const lastPath = typeof session.last_project_json_path === 'string' ? session.last_project_json_path : ''
+        if (!lastPath) {
+          resetEditState()
+          setProject(null)
+          setSelectedShotId(null)
+          setLastError(null)
+          return
+        }
+        const payload = await openProject({ project_json_path: lastPath })
+        openPayload(payload, typeof session.selected_shot_id === 'string' ? session.selected_shot_id : null)
+      }
     } catch (error) {
       resetEditState()
       setProject(null)
       setSelectedShotId(null)
-      if (isNoProjectOpenError(error)) {
-        setLastError(null)
-        return
-      }
       setLastError(error instanceof Error ? error.message : String(error))
     } finally {
       setInitialLoading(false)
     }
-  }, [resetEditState])
+  }, [openPayload, resetEditState])
 
   const newProjectAction = useCallback(
     async (body: ProjectPathRequest = {}) => {
       setProjectActionBusy(true)
       try {
         await flushDirtyShots()
-        const payload = await createProject(body)
-        resetEditState()
-        setProject(payload)
-        setLastError(null)
-        setSelectedShotId(payload.shots[0]?.shot_id ?? null)
+        let nextBody = body
+        if (!nextBody.path) {
+          const result = await browseFolder()
+          if (result.cancelled || !result.path) return
+          nextBody = { ...nextBody, path: result.path }
+        }
+        const payload = await createProject(nextBody)
+        openPayload(payload, payload.shots[0]?.shot_id ?? null)
       } catch (error) {
         setLastError(error instanceof Error ? error.message : String(error))
         throw error
@@ -280,27 +270,24 @@ export function ProjectProvider({ children }: PropsWithChildren) {
         setProjectActionBusy(false)
       }
     },
-    [flushDirtyShots, resetEditState],
+    [flushDirtyShots, openPayload],
   )
 
   const openProjectFromDialog = useCallback(async () => {
     setProjectActionBusy(true)
     try {
       await flushDirtyShots()
-      const result = await browseProjectJson()
+      const result = await browseFolder()
       if (result.cancelled || !result.path) return
-      const payload = await openProject({ project_json_path: result.path })
-      resetEditState()
-      setProject(payload)
-      setLastError(null)
-      setSelectedShotId(payload.shots[0]?.shot_id ?? null)
+      const payload = await openProject({ project_json_path: projectJsonInFolder(result.path) })
+      openPayload(payload, payload.shots[0]?.shot_id ?? null)
     } catch (error) {
       setLastError(error instanceof Error ? error.message : String(error))
       throw error
     } finally {
       setProjectActionBusy(false)
     }
-  }, [flushDirtyShots, resetEditState])
+  }, [flushDirtyShots, openPayload])
 
   const saveProjectAction = useCallback(async () => {
     setProjectActionBusy(true)
@@ -348,34 +335,7 @@ export function ProjectProvider({ children }: PropsWithChildren) {
       clearError,
       reportError,
     }),
-    [
-      project,
-      selectedShotId,
-      reloadProject,
-      newProjectAction,
-      openProjectFromDialog,
-      saveProjectAction,
-      initialLoading,
-      projectActionBusy,
-      getDraft,
-      editShotField,
-      isShotDirty,
-      dirtyShotIds,
-      savingShots,
-      saveShot,
-      flushDirtyShots,
-      visualEpoch,
-      segmentRange,
-      setSegmentAnchor,
-      setSegmentEnd,
-      pickSegmentShot,
-      clearSegmentRange,
-      refApplyUndoToken,
-      setRefApplyUndoToken,
-      lastError,
-      clearError,
-      reportError,
-    ],
+    [project, selectedShotId, reloadProject, newProjectAction, openProjectFromDialog, saveProjectAction, initialLoading, projectActionBusy, getDraft, editShotField, isShotDirty, dirtyShotIds, savingShots, saveShot, flushDirtyShots, visualEpoch, segmentRange, setSegmentAnchor, setSegmentEnd, pickSegmentShot, clearSegmentRange, refApplyUndoToken, lastError, clearError, reportError],
   )
 
   return <ProjectContext.Provider value={value}>{children}</ProjectContext.Provider>
