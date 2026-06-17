@@ -305,15 +305,16 @@ export class ReferenceGlbRenderer {
 
   async capture(options: GlbCaptureOptions = {}): Promise<string> {
     await this.readyPromise
-    if (!this.renderer || !this.camera || !this.root) throw new Error('3D renderer is not ready.')
+    if (!this.renderer || !this.camera || !this.root || !this.runtime) throw new Error('3D renderer is not ready.')
     const savedFrameId = this.frameId
     if (savedFrameId) {
       cancelAnimationFrame(savedFrameId)
       this.frameId = 0
     }
 
+    const { THREE } = this.runtime
     const oldPixelRatio = this.renderer.getPixelRatio()
-    const oldSize = this.renderer.getSize(this.runtime?.THREE ? new this.runtime.THREE.Vector2() : undefined)
+    const oldSize = this.renderer.getSize(new THREE.Vector2())
     const oldAspect = this.camera.aspect
     const oldRotation = this.root.rotation.clone()
     const oldView = this.currentView
