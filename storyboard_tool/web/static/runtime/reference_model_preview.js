@@ -2,7 +2,6 @@ import * as THREE from "three";
 // Absolute path so this module resolves the loader regardless of where it lives
 // (it now lives under /static/runtime/, the vendor bundle stays under /static/vendor/).
 import { GLTFLoader } from "/static/vendor/three/GLTFLoader.js";
-import { RoomEnvironment } from "/static/vendor/three/RoomEnvironment.js";
 
 const previewState = new WeakMap();
 
@@ -57,20 +56,6 @@ function disposePreview(canvas) {
   state.observer?.disconnect();
   state.resizeObserver?.disconnect();
   canvas.removeEventListener("webglcontextlost", state.onContextLost);
-  try {
-    state.mixer?.stopAllAction?.();
-  } catch {
-    // best effort
-  }
-  state.mixer = null;
-  state.actions = [];
-  if (state.scene) state.scene.environment = null;
-  try {
-    state.envMap?.dispose?.();
-  } catch {
-    // best effort
-  }
-  state.envMap = null;
   disposeObject3D(state.root);
   try {
     state.renderer?.dispose?.();
@@ -98,88 +83,12 @@ function frameObject(camera, object, offset = 1.35) {
   return center;
 }
 
-function isNodeInGraph(root, node) {
-  let current = node;
-  while (current) {
-    if (current === root) return true;
-    current = current.parent;
-  }
-  return false;
-}
-
-// Collect every camera in the GLB the way the Scene3D workspace does: from all scenes, the active
-// root, and gltf.cameras (some exporters leave cameras out of the scene graph). Orphan cameras are
-// attached to root so their world matrices resolve. Returns the camera list for name lookup.
-function collectGltfCameras(root, gltf) {
-  const cameras = [];
-  const seen = new Set();
-  const addCamera = (node) => {
-    if (!node?.isCamera || seen.has(node.uuid)) return;
-    seen.add(node.uuid);
-    cameras.push(node);
-  };
-  for (const scene of gltf?.scenes || []) scene?.traverse?.(addCamera);
-  root?.traverse?.(addCamera);
-  for (const cam of gltf?.cameras || []) addCamera(cam);
-  for (const cam of cameras) {
-    if (!isNodeInGraph(root, cam)) root?.add?.(cam);
-  }
-  return cameras;
-}
-
-// Evaluate GLB animation clips at the requested time so the model pose (and any animated camera)
-// matches the Scene3D workspace instead of staying at frame 0.
-function syncAnimationTime(state, seconds) {
-  if (!state.mixer || !state.actions?.length) return;
-  const time = Math.max(0, Number(seconds) || 0);
-  for (const action of state.actions) {
-    action.enabled = true;
-    action.paused = false;
-    action.play();
-    action.time = time;
-  }
-  state.mixer.update(0);
-  state.root?.updateMatrixWorld(true);
-}
-
 function parseTriple(value) {
   if (Array.isArray(value) && value.length >= 3) {
     const out = [Number(value[0]), Number(value[1]), Number(value[2])];
     if (out.every((n) => Number.isFinite(n))) return out;
   }
   return null;
-}
-
-let blankCheckCanvas = null;
-
-// True if the rendered GLB frame is essentially a single flat color (model not visible at this
-// time/camera). Lets capture fail early with a clear message instead of uploading a blank board
-// that the backend would later reject as a "solid" preview.
-function isCapturedFrameBlank(glCanvas) {
-  try {
-    if (!blankCheckCanvas) blankCheckCanvas = document.createElement("canvas");
-    const w = 24;
-    const h = 24;
-    blankCheckCanvas.width = w;
-    blankCheckCanvas.height = h;
-    const ctx = blankCheckCanvas.getContext("2d", { willReadFrequently: true });
-    if (!ctx) return false;
-    ctx.drawImage(glCanvas, 0, 0, w, h);
-    const { data } = ctx.getImageData(0, 0, w, h);
-    let minR = 255, maxR = 0, minG = 255, maxG = 0, minB = 255, maxB = 0;
-    for (let i = 0; i < data.length; i += 4) {
-      if (data[i] < minR) minR = data[i];
-      if (data[i] > maxR) maxR = data[i];
-      if (data[i + 1] < minG) minG = data[i + 1];
-      if (data[i + 1] > maxG) maxG = data[i + 1];
-      if (data[i + 2] < minB) minB = data[i + 2];
-      if (data[i + 2] > maxB) maxB = data[i + 2];
-    }
-    // Truly-uniform (range < 4/255) means nothing rendered; a lit model exceeds this easily.
-    return Math.max(maxR - minR, maxG - minG, maxB - minB) < 4;
-  } catch {
-    return false; // can't sample (e.g. tainted canvas) — don't block the apply
-  }
 }
 
 // Parse the optional view descriptor serialized onto the canvas by ReferenceModelPreview.
@@ -194,14 +103,10 @@ function parseView(canvas) {
   }
 }
 
-// Find a GLB camera by name, searching the collected camera list first (covers cameras outside the
-// scene graph) then the root traversal as a fallback.
-function findNamedCamera(state, name) {
-  if (!name) return null;
-  const collected = (state.cameras || []).find((cam) => cam?.isCamera && cam.name === name);
-  if (collected) return collected;
+function findNamedCamera(root, name) {
+  if (!root || !name) return null;
   let found = null;
-  state.root?.traverse?.((node) => {
+  root.traverse?.((node) => {
     if (found) return;
     if (node?.isCamera && node.name === name) found = node;
   });
@@ -221,37 +126,36 @@ function applyClipPlanesFromBounds(camera, object) {
   return box.getCenter(new THREE.Vector3());
 }
 
-// Point the preview camera at a named GLB scene camera's current world transform (the model/camera
-// must already be posed at the desired time). Returns true if the named camera was found+applied.
-function applyNamedCamera(state, camera, name) {
-  const cam = findNamedCamera(state, name);
-  if (!cam) return false;
-  cam.updateWorldMatrix(true, false);
+function copySceneCameraToPreviewCamera(sourceCamera, previewCamera) {
+  sourceCamera.updateWorldMatrix(true, false);
   const pos = new THREE.Vector3();
   const quat = new THREE.Quaternion();
   const scl = new THREE.Vector3();
-  cam.matrixWorld.decompose(pos, quat, scl);
-  camera.position.copy(pos);
-  camera.quaternion.copy(quat);
-  if (cam.isPerspectiveCamera && Number.isFinite(cam.fov)) camera.fov = cam.fov;
-  camera.updateProjectionMatrix();
-  return true;
+  sourceCamera.matrixWorld.decompose(pos, quat, scl);
+  previewCamera.position.copy(pos);
+  previewCamera.quaternion.copy(quat);
+  if (sourceCamera.isPerspectiveCamera && Number.isFinite(sourceCamera.fov)) {
+    previewCamera.fov = sourceCamera.fov;
+  }
+  previewCamera.updateProjectionMatrix();
 }
 
-// Apply a supplied view to the preview camera. Returns a short path label describing which strategy
-// drove the camera (for diagnostics), or null if nothing usable was applied (caller falls back to
-// generic frameObject() framing — never black-screens).
+// Apply a supplied view to the preview camera. Returns a diagnostic label if a usable view was
+// applied, or an empty string when the caller should fall back to generic framing.
 function applySuppliedView(state, view) {
-  if (!view || !state.root) return null;
+  if (!view || !state.root) return "";
   const camera = state.camera;
   const center = applyClipPlanesFromBounds(camera, state.root);
-  const name = typeof view.camera_name === "string" ? view.camera_name : "";
 
-  // Prefer the actual GLB scene camera for scene_camera views: reproduces the workspace exactly,
-  // including an animated camera's motion at the time the model was just posed to.
-  if (view.mode === "scene_camera" && name) {
-    if (applyNamedCamera(state, camera, name)) return `scene-camera:${name}`;
-    console.warn(`[ref3d] scene camera "${name}" not found in GLB — using saved transform`);
+  const mode = typeof view.mode === "string" ? view.mode : "";
+  const name = typeof view.camera_name === "string" ? view.camera_name.trim() : "";
+  if (mode === "scene_camera" && name) {
+    const cam = findNamedCamera(state.root, name);
+    if (cam) {
+      copySceneCameraToPreviewCamera(cam, camera);
+      applyClipPlanesFromBounds(camera, state.root);
+      return `scene-camera:${name}`;
+    }
   }
 
   const position = parseTriple(view.position);
@@ -273,43 +177,44 @@ function applySuppliedView(state, view) {
     } else {
       camera.lookAt(center);
     }
-    return `saved-transform:${view.mode || "free_view"}`;
+    return mode === "scene_camera" && name ? `saved-camera-transform:${name}` : "free-view-transform";
   }
 
-  // No numeric position — last resort: resolve any camera by name (mode unknown).
-  if (name && applyNamedCamera(state, camera, name)) return `named-camera:${name}`;
+  if (name) {
+    const cam = findNamedCamera(state.root, name);
+    if (cam) {
+      copySceneCameraToPreviewCamera(cam, camera);
+      applyClipPlanesFromBounds(camera, state.root);
+      return `named-camera:${name}`;
+    }
+  }
 
-  return null;
+  return "";
 }
 
 // Frame the model with the supplied view if present/usable, else the default orbit framing.
 // Records whether a view drove the camera (state.hasView) so the render loop can skip the
 // idle auto-rotate when reproducing a specific camera.
 function applyViewOrFrame(state) {
-  let path = null;
+  let path = "";
   const view = parseView(state.canvas);
-  // Pose the model (and any animated camera) at the view's time before reading camera transforms,
-  // so the preview matches the Scene3D workspace at that animation time.
-  syncAnimationTime(state, view?.time ?? 0);
   if (view) {
     try {
       path = applySuppliedView(state, view);
     } catch (error) {
       console.warn("Reference 3D preview view apply failed:", error);
-      path = null;
+      path = "";
     }
-    // Diagnostic (fires on view changes, not per frame): which strategy drove the preview camera.
-    console.info(
-      `[ref3d] preview view: ${path || "fallback-framing"} · mode=${view.mode || "-"} · cam=${view.camera_name || "-"} · t=${view.time ?? 0}`,
-    );
   }
-  const applied = !!path;
-  if (!applied) {
+  if (!path) {
+    state.root.rotation.set(0, 0, 0);
     const center = frameObject(state.camera, state.root);
     if (center) state.center.copy(center);
+    path = "generic-frame";
   }
-  state.hasView = applied;
+  state.hasView = path !== "generic-frame";
   state.viewKey = state.canvas.dataset.refModelView || "";
+  state.viewPath = path;
 }
 
 function safeRender(state) {
@@ -321,6 +226,37 @@ function safeRender(state) {
     markCanvasFailed(state.canvas, state.url);
     disposePreview(state.canvas);
   }
+}
+
+function isProbablyBlankFrame(canvas) {
+  const width = canvas.width || 0;
+  const height = canvas.height || 0;
+  if (width <= 1 || height <= 1) return true;
+  const sample = document.createElement("canvas");
+  sample.width = 32;
+  sample.height = 32;
+  const ctx = sample.getContext("2d", { willReadFrequently: true });
+  if (!ctx) return false;
+  ctx.drawImage(canvas, 0, 0, sample.width, sample.height);
+  const pixels = ctx.getImageData(0, 0, sample.width, sample.height).data;
+  let min = 255;
+  let max = 0;
+  let transparent = 0;
+  let brightness = 0;
+  const count = sample.width * sample.height;
+  for (let i = 0; i < pixels.length; i += 4) {
+    const r = pixels[i];
+    const g = pixels[i + 1];
+    const b = pixels[i + 2];
+    const a = pixels[i + 3];
+    if (a < 8) transparent += 1;
+    min = Math.min(min, r, g, b);
+    max = Math.max(max, r, g, b);
+    brightness += (r + g + b) / 3;
+  }
+  const avg = brightness / count;
+  if (transparent / count > 0.8) return true;
+  return max - min < 3 && (avg < 8 || avg > 247);
 }
 
 async function mountPreview(canvas) {
@@ -341,10 +277,8 @@ async function mountPreview(canvas) {
       canvas,
       antialias: true,
       alpha: true,
-      powerPreference: "low-power",
-      // Required so captureReferenceModelFrame's toDataURL readback is reliable across drivers
-      // (matches the Scene3D workspace renderer); without it the buffer may be cleared first.
       preserveDrawingBuffer: true,
+      powerPreference: "low-power",
     });
   } catch (error) {
     console.warn("Reference 3D preview WebGL unavailable:", error);
@@ -354,32 +288,14 @@ async function mountPreview(canvas) {
 
   renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.5));
   renderer.outputColorSpace = THREE.SRGBColorSpace;
-  // Match the Scene3D workspace renderer so a head-on scene camera doesn't blow out to white:
-  // tone mapping compresses bright PBR highlights instead of hard-clipping them.
-  renderer.toneMapping = THREE.AgXToneMapping ?? THREE.ACESFilmicToneMapping;
-  renderer.toneMappingExposure = 1.0;
 
   const scene = new THREE.Scene();
   scene.background = new THREE.Color(0x111827);
   const camera = new THREE.PerspectiveCamera(42, 1, 0.01, 500);
-  scene.add(new THREE.AmbientLight(0xffffff, 0.45));
+  scene.add(new THREE.AmbientLight(0xffffff, 0.65));
   const sun = new THREE.DirectionalLight(0xffffff, 1.1);
   sun.position.set(4, 8, 6);
   scene.add(sun);
-
-  // Image-based lighting (same RoomEnvironment the workspace uses) so PBR materials shade like the
-  // workspace rather than rendering flat/over-bright. Best-effort: tone mapping alone still helps.
-  let envMap = null;
-  try {
-    const pmrem = new THREE.PMREMGenerator(renderer);
-    const room = new RoomEnvironment();
-    envMap = pmrem.fromScene(room, 0.04).texture;
-    room.dispose?.();
-    pmrem.dispose?.(); // generator scratch no longer needed; the env texture stands alone
-    scene.environment = envMap;
-  } catch (error) {
-    console.warn("Reference 3D preview environment unavailable:", error);
-  }
 
   const state = {
     url,
@@ -388,13 +304,12 @@ async function mountPreview(canvas) {
     scene,
     camera,
     root: null,
-    center: new THREE.Vector3(),
-    cameras: [],
     mixer: null,
     actions: [],
-    envMap,
+    center: new THREE.Vector3(),
     hasView: false,
     viewKey: "",
+    viewPath: "",
     rafId: 0,
     visible: false,
     observer: null,
@@ -466,12 +381,16 @@ async function mountPreview(canvas) {
       return;
     }
     state.root = gltf.scene;
-    scene.add(state.root);
-    state.cameras = collectGltfCameras(state.root, gltf);
-    if (gltf.animations && gltf.animations.length) {
+    if (Array.isArray(gltf.animations) && gltf.animations.length > 0) {
       state.mixer = new THREE.AnimationMixer(state.root);
-      state.actions = gltf.animations.map((clip) => state.mixer.clipAction(clip));
+      state.actions = gltf.animations.map((clip) => {
+        const action = state.mixer.clipAction(clip);
+        action.play();
+        return action;
+      });
+      state.mixer.setTime(0);
     }
+    scene.add(state.root);
     applyViewOrFrame(state);
     canvas.dataset.refModelStatus = "ready";
     resize();
@@ -482,6 +401,98 @@ async function mountPreview(canvas) {
     console.warn("Reference 3D preview failed:", error);
     markCanvasFailed(canvas, url);
     disposePreview(canvas);
+  }
+}
+
+function canvasFromRoot(root = document) {
+  if (root instanceof HTMLCanvasElement && root.matches("[data-ref-model-preview]")) return root;
+  return root.querySelector?.("[data-ref-model-preview]") || null;
+}
+
+async function waitForReady(canvas, timeoutMs = 10000) {
+  if (!previewState.has(canvas)) mountPreview(canvas);
+  const start = performance.now();
+  while (performance.now() - start < timeoutMs) {
+    const state = previewState.get(canvas);
+    if (state?.root && !state.disposed && canvas.dataset.refModelStatus === "ready") return state;
+    if (canvas.dataset.refModelStatus === "failed") throw new Error("3D preview failed to load.");
+    await new Promise((resolve) => requestAnimationFrame(resolve));
+  }
+  throw new Error("Timed out waiting for 3D preview to load.");
+}
+
+export async function captureReferenceModelFrame(root = document, options = {}) {
+  const canvas = canvasFromRoot(root);
+  if (!canvas) throw new Error("3D preview canvas not found.");
+  const state = await waitForReady(canvas);
+  if (!state.root || state.disposed) throw new Error("3D preview is not ready.");
+
+  const wasAnimating = state.rafId;
+  if (wasAnimating) {
+    cancelAnimationFrame(state.rafId);
+    state.rafId = 0;
+  }
+
+  const previousPixelRatio = state.renderer.getPixelRatio();
+  const previousSize = state.renderer.getSize(new THREE.Vector2());
+  const previousAspect = state.camera.aspect;
+  const previousRootRotation = state.root.rotation.clone();
+  const previousViewKey = state.viewKey;
+  const previousHasView = state.hasView;
+  const previousViewPath = state.viewPath;
+
+  const width = Math.max(1, Math.floor(Number(options.width) || canvas.width || canvas.clientWidth || 1920));
+  const height = Math.max(1, Math.floor(Number(options.height) || canvas.height || canvas.clientHeight || 1080));
+  const time = Math.max(0, Number(options.time) || 0);
+  const view = options.view && typeof options.view === "object" ? options.view : parseView(canvas);
+
+  try {
+    state.renderer.setPixelRatio(1);
+    state.renderer.setSize(width, height, false);
+    state.camera.aspect = width / height;
+    state.camera.updateProjectionMatrix();
+
+    if (state.mixer) state.mixer.setTime(time);
+
+    let path = "";
+    if (view) {
+      path = applySuppliedView(state, view);
+    }
+    if (!path) {
+      state.root.rotation.set(0, 0, 0);
+      const center = frameObject(state.camera, state.root);
+      if (center) state.center.copy(center);
+      path = "generic-frame";
+    }
+    state.hasView = path !== "generic-frame";
+
+    safeRender(state);
+    if (isProbablyBlankFrame(canvas)) {
+      throw new Error("3D capture produced a blank frame; refusing to overwrite boards.");
+    }
+    const dataUrl = canvas.toDataURL("image/png");
+    console.debug?.("[ref3d] capture", { path, time, width, height, camera: view?.camera_name || "" });
+    return dataUrl;
+  } finally {
+    state.renderer.setPixelRatio(previousPixelRatio);
+    state.renderer.setSize(previousSize.x, previousSize.y, false);
+    state.camera.aspect = previousAspect;
+    state.camera.updateProjectionMatrix();
+    state.root.rotation.copy(previousRootRotation);
+    state.viewKey = previousViewKey;
+    state.hasView = previousHasView;
+    state.viewPath = previousViewPath;
+    applyViewOrFrame(state);
+    safeRender(state);
+    if (wasAnimating && state.visible && !state.disposed) {
+      const tick = (tickTime) => {
+        if (!previewState.has(canvas) || state.disposed) return;
+        if (state.root && !state.hasView) state.root.rotation.y = tickTime * 0.00035;
+        safeRender(state);
+        state.rafId = requestAnimationFrame(tick);
+      };
+      state.rafId = requestAnimationFrame(tick);
+    }
   }
 }
 
@@ -502,85 +513,6 @@ export function applyReferenceModelView(root = document) {
     applyViewOrFrame(state);
     safeRender(state);
   });
-}
-
-// Wait for the preview under `canvas` to finish loading its GLB (so capture can read state.root).
-async function waitForPreviewReady(canvas, timeoutMs = 8000) {
-  const start = performance.now();
-  for (;;) {
-    const state = previewState.get(canvas);
-    if (state && !state.disposed && state.root) return state;
-    if (canvas.dataset.refModelFailed === "true") throw new Error("3D preview failed to load");
-    if (performance.now() - start > timeoutMs) throw new Error("3D preview not ready (timed out)");
-    await new Promise((resolve) => requestAnimationFrame(() => resolve()));
-  }
-}
-
-/**
- * Render one frame of the mounted GLB preview under `root` at the given animation time + view and
- * return a PNG data URL. Used by reference assignment to bake a board image per shot from the GLB.
- * Throws an explicit error if no preview/model is available; never silently black-screens.
- */
-export async function captureReferenceModelFrame(root, options = {}) {
-  const { time = 0, view = null, width = 1920, height = 1080 } = options;
-  const canvas = root?.querySelector?.("[data-ref-model-preview]");
-  if (!canvas) throw new Error("captureReferenceModelFrame: no 3D preview canvas under root");
-
-  const state = await waitForPreviewReady(canvas);
-  const { renderer, camera, scene } = state;
-
-  // Pose the model (and animated camera) at this board's time, then drive the camera from the view.
-  syncAnimationTime(state, time);
-  // Drop the idle auto-rotation (live preview spins generic models) so captures are deterministic.
-  if (state.root) state.root.rotation.y = 0;
-  let path = null;
-  if (view) {
-    try {
-      path = applySuppliedView(state, view);
-    } catch (error) {
-      console.warn("[ref3d] capture view apply failed:", error);
-      path = null;
-    }
-  }
-  if (!path) frameObject(camera, state.root);
-
-  const w = Math.max(1, Math.floor(width));
-  const h = Math.max(1, Math.floor(height));
-  console.info(
-    `[ref3d] capture: ${path || "fallback-framing"} · cam=${view?.camera_name || "-"} · t=${time} · ${w}x${h}`,
-  );
-
-  // Render at the requested export size, capture, then restore the on-screen preview size + view.
-  const prevSize = new THREE.Vector2();
-  renderer.getSize(prevSize);
-  const prevRatio = renderer.getPixelRatio();
-  const prevAspect = camera.aspect;
-
-  let url;
-  try {
-    renderer.setPixelRatio(1);
-    renderer.setSize(w, h, false);
-    camera.aspect = w / h;
-    camera.updateProjectionMatrix();
-    renderer.render(scene, camera);
-    if (isCapturedFrameBlank(renderer.domElement)) {
-      throw new Error(
-        "Rendered an empty 3D frame — the model is not visible at this animation time/camera. Adjust the camera, time, or range.",
-      );
-    }
-    url = renderer.domElement.toDataURL("image/png");
-  } finally {
-    renderer.setPixelRatio(prevRatio);
-    renderer.setSize(prevSize.x, prevSize.y, false);
-    camera.aspect = prevAspect;
-    camera.updateProjectionMatrix();
-    // Return the live preview to its own (static) view.
-    applyViewOrFrame(state);
-    safeRender(state);
-  }
-
-  if (!url || url.length < 128) throw new Error("captureReferenceModelFrame: empty frame");
-  return url;
 }
 
 window.disposeReferenceModelPreviews = disposeReferenceModelPreviews;

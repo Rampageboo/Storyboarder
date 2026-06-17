@@ -13,8 +13,10 @@ from fastapi.responses import FileResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from . import project_manager
+from . import app_state, project_manager, reference_segments
 from .backend_service import StoryboardBackendService
+from .image_utils import normalize_reference_fit_mode, save_png_data_url
+from .shot_store import save_shots
 
 # Photoshop plugin treats bridge files older than ~8s as stale (see BRIDGE_STALE_MS in panel.js).
 _BRIDGE_REFRESH_SECONDS = 1.5
@@ -140,11 +142,18 @@ class ImportImagePathRequest(BaseModel):
     source_path: str
 
 
+class RefSegment3dCapture(BaseModel):
+    shot_id: str
+    data_url: str
+    animation_time: float | None = None
+
+
 class ApplyRefSegmentRequest(BaseModel):
     anchor_shot_id: str
     end_shot_id: str
     segment_id: str | None = None
     camera_name: str | None = None
+    captures: list[RefSegment3dCapture] = Field(default_factory=list)
 
 
 class LiveBridgeUpdateRequest(BaseModel):
@@ -167,6 +176,137 @@ def _react_index_response(react_dist: Path) -> FileResponse:
     if not index_file.is_file():
         raise HTTPException(status_code=404, detail=_REACT_BUILD_HINT)
     return FileResponse(index_file)
+
+
+def _apply_ref_segment_3d_captures(app: FastAPI, request: ApplyRefSegmentRequest) -> dict[str, Any]:
+    """Finalize browser-rendered GLB captures as a normal 3D reference apply.
+
+    The browser renders the GLB frame for each board, but this backend function owns the destructive
+    write: it snapshots the original board files first, composites each capture through the existing
+    board-background path, stamps provenance, and returns an undo token.
+    """
+    from datetime import datetime, timezone
+
+    project = app_state._require_project(app)
+    anchor = app_state._find_shot_index(project, request.anchor_shot_id)
+    end = app_state._find_shot_index(project, request.end_shot_id)
+    min_index = max(0, min(anchor, end))
+    max_index = min(len(project.shots) - 1, max(anchor, end))
+    if min_index > max_index:
+        raise HTTPException(status_code=400, detail="Invalid board range.")
+
+    captures = request.captures or []
+    if not captures:
+        raise HTTPException(status_code=400, detail="3D captures are required.")
+    capture_by_shot: dict[str, RefSegment3dCapture] = {}
+    for capture in captures:
+        shot_id = str(capture.shot_id or "").strip()
+        if not shot_id:
+            raise HTTPException(status_code=400, detail="Capture shot_id is required.")
+        if shot_id in capture_by_shot:
+            raise HTTPException(status_code=400, detail=f"Duplicate 3D capture for board: {shot_id}")
+        if not str(capture.data_url or "").startswith("data:image/png;base64,"):
+            raise HTTPException(status_code=400, detail=f"Invalid PNG data URL for board: {shot_id}")
+        capture_by_shot[shot_id] = capture
+
+    range_shots = project.shots[min_index : max_index + 1]
+    missing = [shot.shot_id for shot in range_shots if shot.shot_id not in capture_by_shot]
+    if missing:
+        raise HTTPException(status_code=400, detail=f"Missing 3D captures for board(s): {', '.join(missing)}")
+
+    model_seg = project_manager.find_ref_segment(project, request.segment_id or None) or {}
+    model_rel, ref_type = project_manager.resolve_segment_reference(project, model_seg)
+    if ref_type != "model" or not model_rel:
+        raise HTTPException(status_code=400, detail="Bind a reference GLB to this segment first.")
+    model_path = (project.root_path / model_rel).resolve()
+    root = project.root_path.resolve()
+    if root not in model_path.parents and model_path != root:
+        raise HTTPException(status_code=400, detail="Reference model path is outside the project.")
+    if not model_path.is_file():
+        raise HTTPException(status_code=400, detail=f"Reference model not found: {model_rel}")
+
+    fit_mode = normalize_reference_fit_mode(str(model_seg.get("fit_mode", "") or "fit"))
+    seg_id = str(model_seg.get("id", request.segment_id or "") or "").strip()
+    undo_token = reference_segments.snapshot_boards_for_undo(project, min_index, max_index)
+    model_mtime = model_path.stat().st_mtime
+    storyboard_duration = sum(max(0.1, float(shot.duration_seconds or 3)) for shot in range_shots)
+    applied_at = datetime.now(timezone.utc).isoformat()
+    applied: list[dict[str, Any]] = []
+    segment_offset = 0.0
+
+    for index in range(min_index, max_index + 1):
+        shot = project.shots[index]
+        capture = capture_by_shot[shot.shot_id]
+        if capture.animation_time is None:
+            anim_time = segment_offset
+        else:
+            anim_time = max(0.0, float(capture.animation_time))
+        shot_dir = project_manager.get_shot_dir(project, shot)
+        raw_path = shot_dir / f"{shot.shot_id}_ref_raw.png"
+        try:
+            save_png_data_url(capture.data_url, raw_path)
+            preview_path = project_manager._apply_reference_frame_to_shot(project, shot, raw_path, fit_mode)
+        finally:
+            raw_path.unlink(missing_ok=True)
+        shot.source_sync_mtime = preview_path.stat().st_mtime
+        shot.ref_video_path = model_rel
+        shot.ref_video_time = round(anim_time, 3)
+        shot.ref_segment_time = round(segment_offset, 3)
+        camera_data = dict(shot.camera_data or {})
+        camera_data["scene3d_time"] = round(anim_time, 3)
+        camera_name = str(request.camera_name or "").strip()
+        if camera_name:
+            camera_data["scene3d_camera"] = camera_name
+        camera_data["ref_segment_id"] = seg_id
+        camera_data["ref_source_type"] = "model"
+        camera_data["ref_applied_at"] = applied_at
+        camera_data["ref_frame_time"] = round(anim_time, 3)
+        shot.camera_data = camera_data
+        applied.append(
+            {
+                "shot_id": shot.shot_id,
+                "board_index": index,
+                "segment_time": round(segment_offset, 3),
+                "animation_time": round(anim_time, 3),
+            }
+        )
+        segment_offset += max(0.1, float(shot.duration_seconds or 3))
+
+    project.settings["ref_segment_apply"] = {
+        "segment_id": seg_id,
+        "anchor_shot_id": project.shots[min_index].shot_id,
+        "end_shot_id": project.shots[max_index].shot_id,
+        "source_type": "model",
+        "reference_model_path": model_rel,
+        "model_mtime": model_mtime,
+        "video_start": round(float(model_seg.get("video_start", 0.0) or 0.0), 3),
+        "storyboard_duration": round(storyboard_duration, 3),
+        "fit_mode": fit_mode,
+        "applied_at": applied_at,
+    }
+    project.settings["ref_segment"] = {
+        "anchor_shot_id": project.shots[min_index].shot_id,
+        "end_shot_id": project.shots[max_index].shot_id,
+    }
+    segments = project_manager.normalize_ref_segments(project.settings)
+    if seg_id:
+        for segment in segments:
+            if segment["id"] == seg_id:
+                segment.update({"video_start": round(float(model_seg.get("video_start", 0.0) or 0.0), 3), "source_type": "model"})
+                break
+        project.settings["active_ref_segment_id"] = seg_id
+    project.settings["ref_segments"] = segments
+    project_manager.sync_ref_segment_settings(project)
+    project_manager.save_settings(project)
+    save_shots(project.root_path, project.shots)
+    app_state._autosave(app)
+    return {
+        "board_count": len(applied),
+        "segment_duration": round(segment_offset, 3),
+        "applied": applied,
+        "undo_token": undo_token,
+        **app_state._project_payload(project, app.state.dirty),
+    }
 
 
 def create_app(base_dir: Path, bridge_port: int = 8000) -> FastAPI:
@@ -230,9 +370,6 @@ def create_app(base_dir: Path, bridge_port: int = 8000) -> FastAPI:
 
     @app.middleware("http")
     async def _no_store_assets(request, call_next):
-        # The desktop app loads the UI through WebView2, which otherwise caches
-        # HTML/JS/CSS and keeps showing stale code after the app is restarted.
-        # Force the embedded browser to re-fetch UI assets every launch.
         response = await call_next(request)
         path = request.url.path
         if (
@@ -255,16 +392,12 @@ def create_app(base_dir: Path, bridge_port: int = 8000) -> FastAPI:
     def index() -> FileResponse:
         return _react_index_response(react_dist)
 
-    # Compatibility redirects for retired standalone reference windows (workflows live in React).
     @app.get("/ref-segment")
     @app.get("/ref-scene3d")
     @app.get("/ref-video")
     def ref_window_redirect() -> RedirectResponse:
         return RedirectResponse(url="/", status_code=302)
 
-    # React frontend. Built by `cd frontend && npm run build` into web/dist.
-    # Guarded FileResponse routes (not a StaticFiles mount) so a missing build can't crash startup,
-    # and the SPA fallback stays scoped to /react/... only — never shadowing /static, /ref-*, or /api/*.
     @app.get("/react")
     def react_index() -> FileResponse:
         return _react_index_response(react_dist)
@@ -272,8 +405,6 @@ def create_app(base_dir: Path, bridge_port: int = 8000) -> FastAPI:
     @app.get("/react/{asset_path:path}")
     def react_asset(asset_path: str) -> FileResponse:
         index_file = react_dist / "index.html"
-        # Serve a real built file (asset, favicon) when it exists and resolves inside web/dist;
-        # otherwise fall back to index.html for client-side routing.
         resolved = (react_dist / asset_path).resolve()
         dist_root = react_dist.resolve()
         if resolved.is_file() and (resolved == dist_root or dist_root in resolved.parents):
@@ -323,11 +454,7 @@ def create_app(base_dir: Path, bridge_port: int = 8000) -> FastAPI:
 
     @app.post("/api/project/new")
     def new_project(request: ProjectPathRequest) -> dict[str, Any]:
-        return _svc().method_new_project(
-            request.path,
-            request.canvas_width,
-            request.canvas_height,
-        )
+        return _svc().method_new_project(request.path, request.canvas_width, request.canvas_height)
 
     @app.post("/api/project/open")
     def open_project(request: OpenProjectRequest) -> dict[str, Any]:
@@ -387,6 +514,8 @@ def create_app(base_dir: Path, bridge_port: int = 8000) -> FastAPI:
 
     @app.post("/api/project/ref-segment/apply-3d")
     def apply_ref_segment_3d(request: ApplyRefSegmentRequest) -> dict[str, Any]:
+        if request.captures:
+            return _apply_ref_segment_3d_captures(app, request)
         return _svc().method_apply_ref_segment_3d(
             request.anchor_shot_id,
             request.end_shot_id,
@@ -396,19 +525,11 @@ def create_app(base_dir: Path, bridge_port: int = 8000) -> FastAPI:
 
     @app.post("/api/project/ref-segment/apply-image")
     def apply_ref_segment_image(request: ApplyRefSegmentRequest) -> dict[str, Any]:
-        return _svc().method_apply_ref_segment_image(
-            request.anchor_shot_id,
-            request.end_shot_id,
-            request.segment_id or "",
-        )
+        return _svc().method_apply_ref_segment_image(request.anchor_shot_id, request.end_shot_id, request.segment_id or "")
 
     @app.post("/api/project/ref-segment/apply")
     def apply_ref_segment(request: ApplyRefSegmentRequest) -> dict[str, Any]:
-        return _svc().method_apply_ref_segment(
-            request.anchor_shot_id,
-            request.end_shot_id,
-            request.segment_id or "",
-        )
+        return _svc().method_apply_ref_segment(request.anchor_shot_id, request.end_shot_id, request.segment_id or "")
 
     @app.delete("/api/project/ref-segments/{segment_id}")
     def delete_ref_segment(segment_id: str) -> dict[str, Any]:
@@ -520,12 +641,7 @@ def create_app(base_dir: Path, bridge_port: int = 8000) -> FastAPI:
 
     @app.post("/api/shots/{shot_id}/canvas")
     def create_canvas(shot_id: str, request: CanvasRequest) -> dict[str, Any]:
-        return _svc().method_create_shot_canvas(
-            shot_id,
-            request.width,
-            request.height,
-            request.background_color,
-        )
+        return _svc().method_create_shot_canvas(shot_id, request.width, request.height, request.background_color)
 
     @app.post("/api/shots/{shot_id}/drawing")
     def save_drawing(shot_id: str, request: DrawingSaveRequest) -> dict[str, Any]:

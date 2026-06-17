@@ -1,11 +1,18 @@
 import { requestJson } from './client'
 import type { ProjectPayload } from '../types'
 
+export interface RefSegment3dCapture {
+  shot_id: string
+  data_url: string
+  animation_time?: number
+}
+
 export interface ApplyRefSegmentRequest {
   anchor_shot_id: string
   end_shot_id: string
   segment_id?: string
   camera_name?: string
+  captures?: RefSegment3dCapture[]
 }
 
 /** Import a project-level reference asset (image / video / GLB model — dispatched by extension).
