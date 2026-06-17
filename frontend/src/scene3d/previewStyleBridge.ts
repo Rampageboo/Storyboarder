@@ -39,6 +39,10 @@ export type PreviewStyleModule = {
     resources: WireframeOverlayResources,
   ) => void
   clearWireframeOverlays: (roots: unknown[] | unknown, resources: WireframeOverlayResources) => void
+  generateObjectColor: (THREE: ThreeModule, seed: string) => unknown
+  generateObjectColorHex: (seed: string) => number
+  objectColorKey: (mesh: unknown, root: unknown) => string
+  disposePreviewMaterials: (previewMaterials: unknown[] | Set<unknown>) => void
 }
 
 let previewStylePromise: Promise<PreviewStyleModule> | null = null
