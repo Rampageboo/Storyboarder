@@ -142,3 +142,40 @@ export {
   WIREFRAME_MODE_LABELS,
   type WorkspaceTransformInputs,
 } from './workspaceTransform'
+
+export {
+  buildOutlinerEntries,
+  renderOutlinerDom,
+  buildCameraSelectOptions,
+  populateCameraSelectDom,
+  type WorkspaceOutlinerEntry,
+  type WorkspaceCameraSelectOption,
+} from './workspaceOutliner'
+
+export {
+  applyWorkspaceModeUi,
+  applyWorkspaceSceneModeFlags,
+  shouldUseOrbitControls,
+  type WorkspaceSceneModeTargets,
+} from './workspaceMode'
+
+export {
+  canDeleteWorkspaceObject,
+  shouldAttachTransformToSelection,
+  getWorkspaceFocusTarget,
+  resetBuiltinCameraView,
+} from './workspaceSelection'
+
+export {
+  shouldIgnoreWorkspaceKeyboard,
+  resolveBlenderKeyboardAction,
+  resolveBuiltinKeyboardAction,
+  applyWorkspaceKeyboardAction,
+  type WorkspaceKeyboardAction,
+} from './workspaceInput'
+
+export {
+  createEmptyBlenderPlaybackState,
+  stopWorkspaceMixer,
+  type EmptyBlenderPlaybackState,
+} from './workspaceClear'

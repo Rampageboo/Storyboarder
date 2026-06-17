@@ -99,3 +99,35 @@ export {
   syncTransformInputsFromMesh,
   WIREFRAME_MODE_LABELS,
 } from './workspaceTransform'
+
+export {
+  buildOutlinerEntries,
+  renderOutlinerDom,
+  buildCameraSelectOptions,
+  populateCameraSelectDom,
+} from './workspaceOutliner'
+
+export {
+  applyWorkspaceModeUi,
+  applyWorkspaceSceneModeFlags,
+  shouldUseOrbitControls,
+} from './workspaceMode'
+
+export {
+  canDeleteWorkspaceObject,
+  shouldAttachTransformToSelection,
+  getWorkspaceFocusTarget,
+  resetBuiltinCameraView,
+} from './workspaceSelection'
+
+export {
+  shouldIgnoreWorkspaceKeyboard,
+  resolveBlenderKeyboardAction,
+  resolveBuiltinKeyboardAction,
+  applyWorkspaceKeyboardAction,
+} from './workspaceInput'
+
+export {
+  createEmptyBlenderPlaybackState,
+  stopWorkspaceMixer,
+} from './workspaceClear'

@@ -78,6 +78,23 @@ import {
   applyTransformFromInputs,
   syncTransformInputsFromMesh,
   WIREFRAME_MODE_LABELS,
+  buildOutlinerEntries,
+  renderOutlinerDom,
+  buildCameraSelectOptions,
+  populateCameraSelectDom,
+  applyWorkspaceModeUi,
+  applyWorkspaceSceneModeFlags,
+  shouldUseOrbitControls,
+  canDeleteWorkspaceObject,
+  shouldAttachTransformToSelection,
+  getWorkspaceFocusTarget,
+  resetBuiltinCameraView,
+  shouldIgnoreWorkspaceKeyboard,
+  resolveBlenderKeyboardAction,
+  resolveBuiltinKeyboardAction,
+  applyWorkspaceKeyboardAction,
+  createEmptyBlenderPlaybackState,
+  stopWorkspaceMixer,
 } from "./scene3d_workspace.js";
 
 function formatTime(seconds) {
@@ -397,41 +414,22 @@ export class Scene3DEditor {
   }
 
   _onKeyDown(event) {
-    if (event.target.matches("input, textarea, select")) return;
-    if (this.mode === "blender") {
-      if (event.code === "Space") {
-        event.preventDefault();
-        this.toggleAnimationPlayback();
-        return;
-      }
-      if (event.code === "F5") {
-        event.preventDefault();
-        this.reloadBlenderScene();
-        return;
-      }
-      if (event.key === "Home") {
-        event.preventDefault();
-        this.goToAnimationStart();
-        return;
-      }
-      if (event.key === "ArrowLeft") {
-        event.preventDefault();
-        this.stepAnimation(event.shiftKey ? -0.5 : -0.1);
-        return;
-      }
-      if (event.key === "ArrowRight") {
-        event.preventDefault();
-        this.stepAnimation(event.shiftKey ? 0.5 : 0.1);
-        return;
-      }
-      return;
-    }
-    const key = event.key.toLowerCase();
-    if (key === "g") this.setTransformMode("translate");
-    if (key === "r") this.setTransformMode("rotate");
-    if (key === "s") this.setTransformMode("scale");
-    if (key === "delete") this.deleteSelected();
-    if (key === "f") this.focusSelected();
+    if (shouldIgnoreWorkspaceKeyboard(event.target)) return;
+    const action =
+      this.mode === "blender"
+        ? resolveBlenderKeyboardAction(event)
+        : resolveBuiltinKeyboardAction(event);
+    if (!action) return;
+    if (this.mode === "blender") event.preventDefault();
+    applyWorkspaceKeyboardAction(action, {
+      togglePlayback: () => this.toggleAnimationPlayback(),
+      reloadGlb: () => this.reloadBlenderScene(),
+      goToStart: () => this.goToAnimationStart(),
+      stepAnimation: (delta) => this.stepAnimation(delta),
+      setTransformMode: (mode) => this.setTransformMode(mode),
+      deleteSelected: () => this.deleteSelected(),
+      focusSelected: () => this.focusSelected(),
+    });
   }
 
   _onPointerDown(event) {
@@ -870,25 +868,11 @@ export class Scene3DEditor {
   }
 
   _populateCameraSelect() {
-    this.cameraSelectEl.innerHTML = "";
-    if (!this.importedCameras.length) {
-      const option = document.createElement("option");
-      option.value = "";
-      option.textContent = "（无相机）";
-      this.cameraSelectEl.appendChild(option);
-      this.cameraSelectEl.disabled = true;
-      return;
-    }
-    for (const item of this.importedCameras) {
-      const option = document.createElement("option");
-      option.value = item.id;
-      option.textContent = item.name;
-      this.cameraSelectEl.appendChild(option);
-    }
-    this.cameraSelectEl.disabled = false;
-    if (this.activeCameraId) {
-      this.cameraSelectEl.value = this.activeCameraId;
-    }
+    populateCameraSelectDom(
+      this.cameraSelectEl,
+      buildCameraSelectOptions(this.importedCameras),
+      this.activeCameraId,
+    );
   }
 
   setActiveCamera(cameraId, showMessage = true) {
@@ -935,27 +919,22 @@ export class Scene3DEditor {
 
   setMode(mode) {
     this.mode = mode;
-    this.rootEl.classList.toggle("scene3d-mode-blender", mode === "blender");
-    this.rootEl.classList.toggle("scene3d-mode-builtin", mode === "builtin");
-    this.rootEl.querySelectorAll(".scene3d-blender-only").forEach((node) => {
-      node.hidden = mode !== "blender";
+    applyWorkspaceModeUi(this.rootEl, mode);
+    applyWorkspaceSceneModeFlags(mode, {
+      grid: this.grid,
+      axes: this.axes,
+      defaultAmbient: this.defaultAmbient,
+      defaultSun: this.defaultSun,
+      programAmbient: this.programAmbient,
+      programHemisphere: this.programHemisphere,
+      scene: this.scene,
+      builtinBackground: this.builtinBackground,
     });
-    this.rootEl.querySelectorAll(".scene3d-builtin-only").forEach((node) => {
-      node.hidden = mode === "blender";
-    });
-    this.grid.visible = mode === "builtin";
-    this.axes.visible = mode === "builtin";
-    this.defaultAmbient.visible = mode === "builtin";
-    this.defaultSun.visible = mode === "builtin";
     if (mode === "blender") {
       this._applyProgramLighting();
       this.transform.detach();
       this.selectObject(null);
     } else {
-      this.scene.environment = null;
-      this.scene.background = this.builtinBackground.clone();
-      this.programAmbient.visible = false;
-      this.programHemisphere.visible = false;
       this._updateLightStatusUi();
     }
   }
@@ -978,17 +957,8 @@ export class Scene3DEditor {
   }
 
   clearBlenderScene() {
-    if (this.mixer) {
-      this.mixer.stopAllAction();
-      this.mixer = null;
-    }
-    this.mixerActions = [];
-    this.importedCameras = [];
-    this.activeCameraId = "";
-    this.importedLightCount = 0;
-    this.animationDuration = 0;
-    this.animationTime = 0;
-    this.isPlaying = false;
+    stopWorkspaceMixer(this.mixer);
+    Object.assign(this, createEmptyBlenderPlaybackState());
     this._clearWireframeOverlays();
     if (this.blenderRoot) {
       this._restoreImportedMaterials(this.blenderRoot);
@@ -1030,7 +1000,7 @@ export class Scene3DEditor {
   selectObject(id) {
     this.selectedId = id;
     const mesh = id ? this.objects.get(id) : null;
-    if (mesh && this.mode === "builtin") {
+    if (shouldAttachTransformToSelection(this.mode, mesh)) {
       this.transform.attach(mesh);
     } else {
       this.transform.detach();
@@ -1040,7 +1010,7 @@ export class Scene3DEditor {
   }
 
   deleteSelected() {
-    if (!this.selectedId || this.selectedId === "ground") return;
+    if (!canDeleteWorkspaceObject(this.selectedId)) return;
     const mesh = this.objects.get(this.selectedId);
     if (!mesh) return;
     this.transform.detach();
@@ -1054,7 +1024,7 @@ export class Scene3DEditor {
 
   focusSelected() {
     const mesh = this.selectedId ? this.objects.get(this.selectedId) : null;
-    const target = mesh ? mesh.position.clone() : this.orbit.target.clone();
+    const target = getWorkspaceFocusTarget(mesh, this.orbit);
     this.orbit.target.copy(target);
     this.orbit.update();
   }
@@ -1064,9 +1034,7 @@ export class Scene3DEditor {
       this._frameImportedScene();
       return;
     }
-    this.camera.position.set(6, 4, 8);
-    this.orbit.target.set(0, 0.5, 0);
-    this.orbit.update();
+    resetBuiltinCameraView(this.camera, this.orbit);
   }
 
   getCameraState() {
@@ -1114,30 +1082,16 @@ export class Scene3DEditor {
   }
 
   _renderOutliner() {
-    this.outlinerEl.innerHTML = "";
-    if (this.mode === "blender") {
-      for (const item of this.importedCameras) {
-        const li = document.createElement("li");
-        li.dataset.cameraId = item.id;
-        li.className = item.id === this.activeCameraId ? "active" : "";
-        li.textContent = `📷 ${item.name}`;
-        this.outlinerEl.appendChild(li);
-      }
-      if (!this.importedCameras.length) {
-        const empty = document.createElement("li");
-        empty.className = "scene3d-empty";
-        empty.textContent = "无相机";
-        this.outlinerEl.appendChild(empty);
-      }
-      return;
-    }
-    for (const [id, mesh] of this.objects.entries()) {
-      const li = document.createElement("li");
-      li.dataset.objectId = id;
-      li.className = id === this.selectedId ? "active" : "";
-      li.textContent = mesh.userData.objectName;
-      this.outlinerEl.appendChild(li);
-    }
+    renderOutlinerDom(
+      this.outlinerEl,
+      buildOutlinerEntries(
+        this.mode,
+        this.objects,
+        this.importedCameras,
+        this.activeCameraId,
+        this.selectedId,
+      ),
+    );
   }
 
   refreshBoardPreview() {
@@ -1289,10 +1243,10 @@ export class Scene3DEditor {
       this._syncMixerTime(nextTime);
       this._updateTimelineUi();
     }
-    if (this.followCamera && this.mode === "blender") {
-      this._applyFollowCamera();
-    } else {
+    if (shouldUseOrbitControls(this.mode, this.followCamera)) {
       this.orbit.update();
+    } else {
+      this._applyFollowCamera();
     }
     this.renderer.render(this.scene, this.camera);
   }
