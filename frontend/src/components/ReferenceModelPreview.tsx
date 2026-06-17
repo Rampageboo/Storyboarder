@@ -1,13 +1,25 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { forwardRef, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react'
 import { projectFileUrl } from '../api'
 import type { Scene3dReferenceView } from '../utils/scene3dView'
 import './ReferenceModelPreview.css'
+
+export interface ReferenceModelCaptureOptions {
+  time?: number
+  view?: Scene3dReferenceView | null
+  width?: number
+  height?: number
+}
+
+export interface ReferenceModelPreviewHandle {
+  captureFrame(options?: ReferenceModelCaptureOptions): Promise<string>
+}
 
 declare global {
   interface Window {
     hydrateReferenceModelPreviews?: (root?: ParentNode) => void
     disposeReferenceModelPreviews?: (root?: ParentNode) => void
     applyReferenceModelView?: (root?: ParentNode) => void
+    captureReferenceModelFrame?: (root?: ParentNode, options?: ReferenceModelCaptureOptions) => Promise<string>
   }
 }
 
@@ -27,18 +39,21 @@ function loadReferenceModelPreviewModule() {
   return referenceModelPreviewModule
 }
 
-export function ReferenceModelPreview({
-  path,
-  label,
-  compact = false,
-  view = null,
-}: {
+export const ReferenceModelPreview = forwardRef<ReferenceModelPreviewHandle, {
   path: string
   label: string
   compact?: boolean
   /** Optional Scene3D view to reproduce instead of the generic framed orbit preview. */
   view?: Scene3dReferenceView | null
-}) {
+}>(function ReferenceModelPreview(
+  {
+    path,
+    label,
+    compact = false,
+    view = null,
+  },
+  ref,
+) {
   const rootRef = useRef<HTMLDivElement | null>(null)
   const [moduleFailed, setModuleFailed] = useState(false)
   const previewUrl = useMemo(() => `${projectFileUrl(path)}&preview=model`, [path])
@@ -96,6 +111,16 @@ export function ReferenceModelPreview({
     }
   }, [viewJson])
 
+  useImperativeHandle(ref, () => ({
+    async captureFrame(options: ReferenceModelCaptureOptions = {}) {
+      const root = rootRef.current
+      if (!root) throw new Error('3D preview is not mounted yet.')
+      await loadReferenceModelPreviewModule()
+      if (!window.captureReferenceModelFrame) throw new Error('3D capture runtime is unavailable.')
+      return window.captureReferenceModelFrame(root, options)
+    },
+  }), [])
+
   return (
     <div className={`ref-model-preview ${compact ? 'is-compact' : ''}`} ref={rootRef} title={label}>
       {moduleFailed ? (
@@ -113,4 +138,4 @@ export function ReferenceModelPreview({
       <div className="ref-model-preview-badge">3D</div>
     </div>
   )
-}
+})
