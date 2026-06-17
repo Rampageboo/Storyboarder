@@ -5,6 +5,7 @@ import {
   applyRefSegmentImage,
   deleteRefSegment,
   projectFileUrl,
+  removeShotImage,
   restoreRefApply,
   updateSettings,
   uploadProjectReference,
@@ -14,6 +15,7 @@ import type { ProjectPayload, ReferenceLink } from '../types'
 import { useProject } from '../state/ProjectContext'
 import { shotDisplayLabel } from '../utils/shotDisplay'
 import { findRefSegment, segmentHasPendingBoards } from '../utils/refSegmentDisplay'
+import { ReferenceModelPreview } from './ReferenceModelPreview'
 import './ReferenceAssignmentPopover.css'
 
 type Segment = {
@@ -442,14 +444,34 @@ export function ReferenceAssignmentPopover() {
 
   const deleteSegment = () => {
     if (!activeAppliedSegmentId) return
-    if (!window.confirm('Delete this applied reference segment?')) return
+    if (!window.confirm('Delete this applied reference segment and clear its generated board backgrounds/previews?')) return
+    const appliedShotIds = shots
+      .filter((shot) => String(shot.camera_data?.ref_segment_id || '').trim() === activeAppliedSegmentId)
+      .map((shot) => shot.shot_id)
+    const rangeShotIds = inspectSegment
+      ? shots
+          .slice(
+            Math.max(0, Math.min(anchorIdx, endIdx)),
+            Math.max(0, Math.max(anchorIdx, endIdx)) + 1,
+          )
+          .map((shot) => shot.shot_id)
+      : []
+    const shotIdsToClear = Array.from(new Set(appliedShotIds.length ? appliedShotIds : rangeShotIds))
     setBusy(true)
     void (async () => {
       try {
         await flushDirtyShots()
-        setProject(await deleteRefSegment(activeAppliedSegmentId))
+        let payload = await deleteRefSegment(activeAppliedSegmentId)
+        for (const shotId of shotIdsToClear) {
+          payload = await removeShotImage(shotId)
+        }
+        setProject(payload)
         dismissRefSegmentUi()
-        setToast('Reference segment deleted.')
+        setToast(
+          shotIdsToClear.length
+            ? `Reference segment deleted; cleared ${shotIdsToClear.length} board${shotIdsToClear.length === 1 ? '' : 's'}.`
+            : 'Reference segment deleted.',
+        )
       } catch (error) {
         reportError(error)
       } finally {
@@ -559,7 +581,7 @@ export function ReferenceAssignmentPopover() {
               {!selectedRef ? (
                 <div className="ref-assign-player-empty">Select a reference on the left</div>
               ) : selectedRef.type === 'model' ? (
-                <div className="ref-assign-player-empty">3D model · {previewLabel}</div>
+                <ReferenceModelPreview path={selectedRef.path} label={previewLabel} />
               ) : previewFailed ? (
                 <div className="ref-assign-player-empty">Preview unavailable</div>
               ) : selectedRef.type === 'video' ? (
