@@ -77,3 +77,25 @@ export {
   buildAnimationHint,
   advancePlaybackTime,
 } from './workspaceAnimation'
+
+export {
+  cacheImportedMaterialsOnRoot,
+  restoreImportedMaterialsOnRoot,
+  collectMeshObjectColorKeys,
+} from './workspaceMaterials'
+
+export {
+  createWorkspaceAnimationMixer,
+  buildGlbLoadNotifications,
+  resolveInitialAnimationTime,
+  resolveReloadAnimationTime,
+  formatWorkspaceFileName,
+  getWireframeRoots,
+  filterBuiltinObjectSpecs,
+} from './workspaceGlbLoad'
+
+export {
+  applyTransformFromInputs,
+  syncTransformInputsFromMesh,
+  WIREFRAME_MODE_LABELS,
+} from './workspaceTransform'

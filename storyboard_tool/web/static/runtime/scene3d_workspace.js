@@ -246,16 +246,16 @@ function g(e, t = [
 }
 //#endregion
 //#region src/scene3d/workspace/workspaceScene.ts
-var _ = 1711393, v = [
+var _ = 1711393, ee = [
 	6,
 	4,
 	8
-], y = [
+], te = [
 	0,
 	.5,
 	0
 ];
-function ee(e, t, n = {}) {
+function v(e, t, n = {}) {
 	let r = new e.WebGLRenderer({
 		antialias: !0,
 		alpha: !1,
@@ -263,11 +263,11 @@ function ee(e, t, n = {}) {
 	}), i = n.maxPixelRatio ?? 2;
 	return r.setPixelRatio(Math.min(window.devicePixelRatio, i)), r.outputColorSpace = e.SRGBColorSpace, r.toneMapping = e.AgXToneMapping ?? e.ACESFilmicToneMapping, r.toneMappingExposure = 1, r.shadowMap.enabled = !0, r.shadowMap.type = e.PCFSoftShadowMap, t.appendChild(r.domElement), r;
 }
-function b(e) {
+function y(e) {
 	let t = new e.Scene();
 	t.background = new e.Color(_);
 	let n = new e.PerspectiveCamera(50, 1, .01, 1e3);
-	n.position.set(...v);
+	n.position.set(...ee);
 	let r = new e.AmbientLight(16777215, .45);
 	t.add(r);
 	let i = new e.DirectionalLight(16777215, 1.1);
@@ -292,16 +292,16 @@ function b(e) {
 		pmremGenerator: null
 	};
 }
-function x(e, t) {
+function b(e, t) {
 	let n = new e.PMREMGenerator(t);
 	return n.compileEquirectangularShader(), n;
 }
 //#endregion
 //#region src/scene3d/workspace/workspaceControls.ts
-function te(e, t, n, r = {}) {
+function x(e, t, n, r = {}) {
 	let i = new e(t, n);
 	i.enableDamping = !0;
-	let [a, o, s] = r.target ?? y;
+	let [a, o, s] = r.target ?? te;
 	return i.target.set(a, o, s), r.onChange && i.addEventListener("change", r.onChange), i;
 }
 function S(e, t, n, r, i = {}) {
@@ -315,7 +315,7 @@ function S(e, t, n, r, i = {}) {
 //#endregion
 //#region src/scene3d/workspace/workspaceBridge.ts
 function C(e, t, n, r) {
-	let i = ee(e, r.mountEl), a = b(e), o = x(e, i), s = te(t, a.camera, i.domElement, { onChange: r.onOrbitChange }), c = S(n, a.camera, i.domElement, a.scene, {
+	let i = v(e, r.mountEl), a = y(e), o = b(e, i), s = x(t, a.camera, i.domElement, { onChange: r.onOrbitChange }), c = S(n, a.camera, i.domElement, a.scene, {
 		mode: r.transformMode ?? "translate",
 		onDraggingChanged: r.onTransformDraggingChanged,
 		onObjectChange: r.onTransformObjectChange
@@ -350,7 +350,7 @@ function E(e) {
 	for (let [n, r] of e) t.push(T(n, r));
 	return t;
 }
-function D(e, t, n) {
+function ne(e, t, n) {
 	return {
 		source: "builtin",
 		objects: E(e),
@@ -358,7 +358,7 @@ function D(e, t, n) {
 		object_color_preview: n
 	};
 }
-function ne(e) {
+function re(e) {
 	return {
 		...e.sceneMeta,
 		source: "blender",
@@ -371,68 +371,68 @@ function ne(e) {
 		wireframe_mode: e.wireframeMode
 	};
 }
-function O(e) {
+function ie(e) {
 	return e && typeof e == "object" ? { ...e } : {};
 }
 //#endregion
 //#region src/scene3d/dispose.ts
-function k(e) {
+function ae(e) {
 	if (!e || typeof e != "object") return;
 	let t = e;
 	try {
 		t.dispose?.();
 	} catch {}
 }
-function A(e) {
+function D(e) {
 	let t = Array.isArray(e) ? e : [e];
 	for (let e of t) {
 		if (!e || typeof e != "object") continue;
 		let t = e;
-		for (let e of Object.keys(t)) k(t[e]);
+		for (let e of Object.keys(t)) ae(t[e]);
 		try {
 			t.dispose?.();
 		} catch {}
 	}
 }
-function j(e) {
+function O(e) {
 	try {
 		e?.dispose?.();
 	} catch {}
 }
-function M(e) {
+function k(e) {
 	try {
-		j(e.geometry), A(e.material);
+		O(e.geometry), D(e.material);
 	} catch {}
 }
 //#endregion
 //#region src/scene3d/workspace/workspaceDispose.ts
-function N(e) {
+function A(e) {
 	e?.traverse?.((e) => {
 		let t = e.userData?.scene3dOriginalMaterial;
 		if (t) {
-			A(t);
+			D(t);
 			return;
 		}
-		M(e);
+		k(e);
 	});
 }
-function P(e) {
-	e && (j(e.geometry), A(e.material));
+function j(e) {
+	e && (O(e.geometry), D(e.material));
 }
 //#endregion
 //#region src/scene3d/workspace/workspaceGlb.ts
-function F(e) {
+function M(e) {
 	let t = 0;
 	return e?.traverse?.((e) => {
 		e.isLight && (t += 1);
 	}), t;
 }
-function I(e) {
+function N(e) {
 	e?.traverse?.((e) => {
 		!e.isLight || typeof e.intensity != "number" || (e.isDirectionalLight ? e.intensity = Math.min(e.intensity * Math.PI * .35, 4) : (e.isPointLight || e.isSpotLight) && e.intensity > 0 && e.intensity < 800 && (e.intensity = Math.min(e.intensity * 1.5, 600)));
 	});
 }
-function L(e, t) {
+function P(e, t) {
 	let n = t;
 	for (; n;) {
 		if (n === e) return !0;
@@ -440,7 +440,7 @@ function L(e, t) {
 	}
 	return !1;
 }
-function R(e) {
+function F(e) {
 	let t = [], n = /* @__PURE__ */ new Set(), r = e.scene, i = (e, r = {}) => {
 		if (!e?.isCamera || n.has(e.uuid)) return;
 		n.add(e.uuid);
@@ -455,59 +455,59 @@ function R(e) {
 	for (let e of a) e?.traverse?.((e) => i(e, { source: "scene" }));
 	if (e.parser?.associations) for (let [t] of e.parser.associations.entries()) i(t, { source: "parser" });
 	for (let t of e.cameras || []) i(t, { source: "gltf.cameras" });
-	for (let e of t) L(r, e.object3d) || (r.add(e.object3d), e.orphan = !0);
+	for (let e of t) P(r, e.object3d) || (r.add(e.object3d), e.orphan = !0);
 	return t.sort((e, t) => e.name.localeCompare(t.name, void 0, { numeric: !0 }));
 }
-function z(e) {
+function I(e) {
 	let t = ((e.parser?.json || {}).nodes || []).filter((e) => e.camera !== void 0).length, n = e.cameras?.length || 0;
 	return n > 0 || t > 0 ? `GLB 元数据含 ${Math.max(n, t)} 个相机，但未能正确挂到场景。 请检查 Blender：相机不要隐藏（眼睛图标），Limit to 不要勾选 Visible/Active Collection，或把相机放进导出集合。` : "GLB 内完全没有相机数据（不是勾选 Cameras 就行）。 请确认场景里有 Camera 对象、导出时 Limit to 留空、相机可见，并重新导出。";
 }
-function B(e, t) {
+function L(e, t) {
 	let n = 0, r = e.object3d;
 	for (; r;) r.name && t.has(r.name) && (n += 10), r = r.parent ?? null;
 	return n;
 }
-function V(e, t, n = "") {
+function R(e, t, n = "") {
 	if (!e.length) return "";
 	if (n) {
 		let t = e.find((e) => e.name === n);
 		if (t) return t.id;
 	}
-	let r = e[0], i = B(r, t);
+	let r = e[0], i = L(r, t);
 	for (let n of e.slice(1)) {
-		let e = B(n, t);
+		let e = L(n, t);
 		e > i && (r = n, i = e);
 	}
 	return r.id;
 }
-function H(e, t, n, r) {
+function z(e, t, n, r) {
 	let i = new e.Box3().setFromObject(t);
 	if (i.isEmpty?.()) return;
 	let a = i.getSize(new e.Vector3()), o = i.getCenter(new e.Vector3()), s = Math.max(a.x, a.y, a.z) * .6 || 4;
 	r.target.copy(o), n.position.copy(o.clone().add(new e.Vector3(s, s * .7, s))), n.near = Math.max(.01, s / 100), n.far = Math.max(100, s * 40), n.updateProjectionMatrix(), r.update();
 }
-function U(e, t) {
+function B(e, t) {
 	if (!e || t.animationDuration <= 0) return !1;
 	let n = t.animationTime;
 	t.setMixerTime(0), e.getWorldPosition(t.probeA);
 	let r = Math.min(Math.max(t.animationDuration * .25, .1), t.animationDuration);
 	return t.setMixerTime(r), e.getWorldPosition(t.probeB), t.setMixerTime(n), t.probeA.distanceToSquared(t.probeB) > 1e-10;
 }
-function W(e, t, n, r) {
-	if (U(e.object3d, r)) return e.object3d;
+function V(e, t, n, r) {
+	if (B(e.object3d, r)) return e.object3d;
 	let i = e.object3d.parent ?? null;
 	for (; i && i !== t;) {
-		if (i.name && n.has(i.name) && U(i, r)) return e.object3d;
+		if (i.name && n.has(i.name) && B(i, r)) return e.object3d;
 		i = i.parent ?? null;
 	}
 	return e.object3d;
 }
-function G(e, t) {
+function H(e, t) {
 	e?.traverse?.((e) => {
 		e.isLight && (e.visible = t);
 	});
 }
-function K(e, t) {
+function U(e, t) {
 	e?.traverse?.((e) => {
 		if (!e.isMesh) return;
 		let n = Array.isArray(e.material) ? e.material : [e.material];
@@ -516,59 +516,59 @@ function K(e, t) {
 }
 //#endregion
 //#region src/scene3d/workspace/workspaceLighting.ts
-function q(e) {
+function W(e) {
 	return e === "on" || e === "off" ? e : "auto";
 }
-function J(e) {
+function G(e) {
 	return !(e.workspaceMode !== "blender" || e.mode === "off");
 }
-function Y(e) {
+function K(e) {
 	return e.workspaceMode !== "blender" || e.mode === "off" ? !1 : (e.mode, e.importedLightCount === 0);
 }
-function X(e) {
+function q(e) {
 	return e.workspaceMode !== "blender" || e.mode === "off" || e.objectColorPreview ? !1 : (e.mode, e.importedLightCount > 0);
 }
-function Z(e) {
-	return J(e) ? e.importedLightCount > 0 ? .35 : 1 : 0;
+function J(e) {
+	return G(e) ? e.importedLightCount > 0 ? .35 : 1 : 0;
 }
-function re(e) {
+function oe(e) {
 	return e.mode === "on" ? "手动：环境 + 柔光" : e.mode === "off" ? "手动：仅 GLB 灯光" : e.importedLightCount > 0 ? `自动：GLB ${e.importedLightCount} 盏灯 + 弱环境反射` : "自动：GLB 无灯，全程序补光";
 }
-function Q(e) {
+function Y(e) {
 	switch (e) {
 		case "on": return "始终开启";
 		case "off": return "关闭";
 		default: return "自动";
 	}
 }
-function ie(e) {
-	let t = e.importedLightCount > 0 ? `GLB 已导出 ${e.importedLightCount} 盏灯` : "GLB 未导出灯光（导出时请勾选 Punctual Lights）", n = J(e) && !e.objectColorPreview ? "环境反射：开" : "环境反射：关", r = Y(e) ? "柔光补光：开" : X(e) ? "柔光补光：弱" : "柔光补光：关", i = e.objectColorPreview ? "对象色：开（不受灯光影响）" : "对象色：关";
-	return `${t} · ${Q(e.mode)} · ${n} · ${r} · ${i}`;
+function se(e) {
+	let t = e.importedLightCount > 0 ? `GLB 已导出 ${e.importedLightCount} 盏灯` : "GLB 未导出灯光（导出时请勾选 Punctual Lights）", n = G(e) && !e.objectColorPreview ? "环境反射：开" : "环境反射：关", r = K(e) ? "柔光补光：开" : q(e) ? "柔光补光：弱" : "柔光补光：关", i = e.objectColorPreview ? "对象色：开（不受灯光影响）" : "对象色：关";
+	return `${t} · ${Y(e.mode)} · ${n} · ${r} · ${i}`;
 }
-function ae(e, t, n) {
+function ce(e, t, n) {
 	if (t.workspaceMode !== "blender") return;
-	let r = J(t) && !t.objectColorPreview, i = Y(t), a = X(t);
+	let r = G(t) && !t.objectColorPreview, i = K(t), a = q(t);
 	r ? (n.scene.environment = n.ensureBlenderEnvMap(), n.scene.background = new e.Color(3158064)) : t.objectColorPreview ? (n.scene.environment = null, n.scene.background = new e.Color(3815994)) : (n.scene.environment = null, n.scene.background = n.builtinBackground.clone()), n.programAmbient.intensity = i ? .1 : .22, n.programAmbient.visible = i || a, n.programHemisphere.visible = i, n.setImportedLightsVisible(!t.objectColorPreview);
 }
-function oe(e, t) {
+function le(e, t) {
 	let n = new e(), r = t.fromScene(n, .04).texture;
 	return n.dispose?.(), r;
 }
 //#endregion
 //#region src/scene3d/workspace/workspaceAnimation.ts
-function $(e) {
+function X(e) {
 	let t = String(e || "").lastIndexOf(".");
 	return t > 0 ? e.slice(0, t) : e;
 }
-function se(e) {
+function ue(e) {
 	let t = /* @__PURE__ */ new Set();
 	for (let n of e || []) for (let e of n.tracks || []) {
-		let n = $(e.name);
+		let n = X(e.name);
 		n && t.add(n);
 	}
 	return t;
 }
-function ce(e) {
+function Z(e) {
 	let t = 0;
 	for (let n of e || []) {
 		t = Math.max(t, Number(n.duration) || 0);
@@ -579,19 +579,19 @@ function ce(e) {
 	}
 	return t;
 }
-function le(e) {
+function Q(e) {
 	return e || [];
 }
-function ue(e, t) {
+function de(e, t) {
 	return t > 0 ? Math.min(Math.max(0, e), t) : Math.max(0, e);
 }
-function de(e, t, n) {
+function fe(e, t, n) {
 	if (!t || !e.length) return Math.max(0, Number(n) || 0);
 	let r = Math.max(0, Number(n) || 0);
 	for (let t of e) t.enabled = !0, t.paused = !1, t.time = r;
 	return t.update(0), r;
 }
-function fe(e, t, n) {
+function pe(e, t, n) {
 	let r = t || 0;
 	return {
 		max: r.toFixed(2),
@@ -600,11 +600,11 @@ function fe(e, t, n) {
 		displayText: `${n(e)} / ${n(r)}`
 	};
 }
-function pe(e) {
+function me(e) {
 	let t = e.animationDuration || 0;
 	return t ? e.activeCameraName ? e.cameraMoves ? "拖动时间条或点 ▶ 播放 · 跟随相机视角 · 「印到当前分镜」保存当前画面" : `动画 ${e.formatTime(t)} · 当前相机「${e.activeCameraName}」未随时间变化。请换其他相机，或在 Blender 给该相机（或其父级）打关键帧后重新导出。` : `动画 ${e.formatTime(t)} · 请在左侧选择相机` : "未检测到 GLB 动画。Blender 导出请勾选 Animation，Animation mode 建议选 Scene，并勾选 Bake All Objects Animations。";
 }
-function me(e, t, n) {
+function he(e, t, n) {
 	let r = n || 0, i = e + t;
 	return r > 0 && i >= r ? {
 		nextTime: r,
@@ -615,4 +615,83 @@ function me(e, t, n) {
 	};
 }
 //#endregion
-export { e as PRIMITIVE_TYPES, me as advancePlaybackTime, h as applyFollowCameraToEditor, ae as applyWorkspaceProgramLighting, pe as buildAnimationHint, ie as buildLightStatusText, fe as buildTimelineUiState, I as calibrateImportedLights, U as cameraMovesOverTime, c as captureRendererPng, ue as clampAnimationTime, se as collectAnimatedNodeNames, R as collectImportedCameras, i as colorFrom, ce as computeClipDuration, F as countImportedLights, oe as createBlenderEnvMap, s as createMeshFromSpec, o as defaultAddObjectSpec, a as defaultSceneData, z as diagnoseMissingCameras, N as disposeObject3DRoot, P as disposePrimitiveMesh, r as eulerFrom, ne as exportBlenderSceneData, D as exportBuiltinSceneData, E as exportBuiltinSceneObjects, p as exportViewState, w as formatWorkspaceTime, l as fovToFocalLength, H as frameImportedScene, f as getCameraStateFromEditor, Z as getEnvMapIntensity, d as getProjectCanvasAspect, u as getProjectCanvasSize, C as initWorkspaceEditorThree, L as isNodeInSceneGraph, m as loadShotCameraIntoEditor, t as makeId, q as normalizeProgramLightingMode, O as normalizeWorkspaceSceneMeta, V as pickBestCameraId, K as prepareImportedMaterials, Q as programLightingModeLabel, re as programLightingReason, W as resolveViewNode, B as scoreCameraForAnimation, le as selectAnimationClips, G as setImportedLightsVisible, Y as shouldUseProgramFill, J as shouldUseProgramIbl, X as shouldUseProgramWeakFill, de as syncMixerActionsTime, $ as trackNodeName, n as vec3From };
+//#region src/scene3d/workspace/workspaceMaterials.ts
+function ge(e) {
+	e?.traverse?.((e) => {
+		!e.isMesh || e.userData.scene3dOriginalMaterial !== void 0 || (e.userData.scene3dOriginalMaterial = e.material);
+	});
+}
+function _e(e) {
+	e?.traverse?.((e) => {
+		!e.isMesh || e.userData.scene3dOriginalMaterial === void 0 || (e.material = e.userData.scene3dOriginalMaterial);
+	});
+}
+function ve(e, t) {
+	let n = /* @__PURE__ */ new Set();
+	return e?.traverse?.((e) => {
+		e.isMesh && n.add(t(e));
+	}), [...n].sort();
+}
+//#endregion
+//#region src/scene3d/workspace/workspaceGlbLoad.ts
+function ye(e, t, n) {
+	let r = Q(n || []), i = e.AnimationMixer, a = new i(t), o = [], s = e.LoopOnce;
+	for (let e of r) {
+		let t = a.clipAction(e);
+		t.setLoop(s, 1), t.play(), o.push(t);
+	}
+	return {
+		mixer: a,
+		mixerActions: o,
+		animationDuration: Z(r.length ? r : n)
+	};
+}
+function be(e) {
+	let { gltf: t, importedCameras: n, animationDuration: r, importedLightCount: i, programLightingMode: a } = e, o = [];
+	return n.length === 0 ? (o.push(I(t)), o) : (n.some((e) => e.orphan) ? o.push(`已找到 ${n.length} 个相机（部分未挂到场景树，已自动修复）。`) : (t.animations || []).length ? r <= 0 ? o.push("已找到动画轨道，但时长为 0。请检查 Blender 时间轴范围与关键帧。") : a === "auto" && (i > 0 ? o.push(`检测到 GLB 含 ${i} 盏灯，已校准强度并启用弱环境反射（模拟 Blender World）。`) : o.push("GLB 无导出灯光，已自动开启全程序补光。")) : o.push("场景已加载，但未找到动画。请在 Blender 导出时勾选 Animation。"), o);
+}
+function $(e, t) {
+	if (t != null && !Number.isNaN(Number(t))) return Number(t);
+	let n = Number(e.animation_time);
+	return !Number.isNaN(n) && n >= 0 ? n : null;
+}
+function xe(e, t) {
+	return e <= 0 ? 0 : Math.min(e, t || e);
+}
+function Se(e, t) {
+	let n = t.blend_file_path || "scene3d/scene.blend", r = t.file_name || t.file_path || "";
+	return e === "blender" && r ? `GLB: ${String(r).split("/").pop()}` : n.split("/").pop() || "scene.blend";
+}
+function Ce(e, t) {
+	let n = [];
+	e && n.push(e);
+	for (let e of t) n.push(e);
+	return n;
+}
+function we(e, t, n) {
+	let r = e?.objects?.length ? e : t(), i = (r.objects || []).filter((e) => n.has(String(e.type || "")));
+	return {
+		...r,
+		objects: i
+	};
+}
+//#endregion
+//#region src/scene3d/workspace/workspaceTransform.ts
+function Te(e, t, n, r, i) {
+	let a = (e, t) => Number(n[e]?.value) || t, o = e.MathUtils;
+	t.position.set(a("px", t.position.x), a("py", t.position.y), a("pz", t.position.z)), t.rotation.set(o.degToRad(a("rx", o.radToDeg(t.rotation.x))), o.degToRad(a("ry", o.radToDeg(t.rotation.y))), o.degToRad(a("rz", o.radToDeg(t.rotation.z)))), t.scale.set(Math.max(.01, a("sx", t.scale.x)), Math.max(.01, a("sy", t.scale.y)), Math.max(.01, a("sz", t.scale.z))), r && i?.updateMatrixWorld();
+}
+function Ee(e, t, n) {
+	let r = !t;
+	for (let e of Object.values(n)) e.disabled = r;
+	if (!t) return;
+	let i = e.MathUtils;
+	n.px.value = t.position.x.toFixed(2), n.py.value = t.position.y.toFixed(2), n.pz.value = t.position.z.toFixed(2), n.rx.value = i.radToDeg(t.rotation.x).toFixed(1), n.ry.value = i.radToDeg(t.rotation.y).toFixed(1), n.rz.value = i.radToDeg(t.rotation.z).toFixed(1), n.sx.value = t.scale.x.toFixed(2), n.sy.value = t.scale.y.toFixed(2), n.sz.value = t.scale.z.toFixed(2);
+}
+var De = {
+	off: "关闭",
+	on: "标准",
+	strong: "强化"
+};
+//#endregion
+export { e as PRIMITIVE_TYPES, De as WIREFRAME_MODE_LABELS, he as advancePlaybackTime, h as applyFollowCameraToEditor, Te as applyTransformFromInputs, ce as applyWorkspaceProgramLighting, me as buildAnimationHint, be as buildGlbLoadNotifications, se as buildLightStatusText, pe as buildTimelineUiState, ge as cacheImportedMaterialsOnRoot, N as calibrateImportedLights, B as cameraMovesOverTime, c as captureRendererPng, de as clampAnimationTime, ue as collectAnimatedNodeNames, F as collectImportedCameras, ve as collectMeshObjectColorKeys, i as colorFrom, Z as computeClipDuration, M as countImportedLights, le as createBlenderEnvMap, s as createMeshFromSpec, ye as createWorkspaceAnimationMixer, o as defaultAddObjectSpec, a as defaultSceneData, I as diagnoseMissingCameras, A as disposeObject3DRoot, j as disposePrimitiveMesh, r as eulerFrom, re as exportBlenderSceneData, ne as exportBuiltinSceneData, E as exportBuiltinSceneObjects, p as exportViewState, we as filterBuiltinObjectSpecs, Se as formatWorkspaceFileName, w as formatWorkspaceTime, l as fovToFocalLength, z as frameImportedScene, f as getCameraStateFromEditor, J as getEnvMapIntensity, d as getProjectCanvasAspect, u as getProjectCanvasSize, Ce as getWireframeRoots, C as initWorkspaceEditorThree, P as isNodeInSceneGraph, m as loadShotCameraIntoEditor, t as makeId, W as normalizeProgramLightingMode, ie as normalizeWorkspaceSceneMeta, R as pickBestCameraId, U as prepareImportedMaterials, Y as programLightingModeLabel, oe as programLightingReason, $ as resolveInitialAnimationTime, xe as resolveReloadAnimationTime, V as resolveViewNode, _e as restoreImportedMaterialsOnRoot, L as scoreCameraForAnimation, Q as selectAnimationClips, H as setImportedLightsVisible, K as shouldUseProgramFill, G as shouldUseProgramIbl, q as shouldUseProgramWeakFill, fe as syncMixerActionsTime, Ee as syncTransformInputsFromMesh, X as trackNodeName, n as vec3From };

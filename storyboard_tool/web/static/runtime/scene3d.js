@@ -65,6 +65,19 @@ import {
   buildTimelineUiState,
   buildAnimationHint,
   advancePlaybackTime,
+  cacheImportedMaterialsOnRoot,
+  restoreImportedMaterialsOnRoot,
+  collectMeshObjectColorKeys,
+  createWorkspaceAnimationMixer,
+  buildGlbLoadNotifications,
+  resolveInitialAnimationTime,
+  resolveReloadAnimationTime,
+  formatWorkspaceFileName,
+  getWireframeRoots,
+  filterBuiltinObjectSpecs,
+  applyTransformFromInputs,
+  syncTransformInputsFromMesh,
+  WIREFRAME_MODE_LABELS,
 } from "./scene3d_workspace.js";
 
 function formatTime(seconds) {
@@ -467,11 +480,10 @@ export class Scene3DEditor {
       return;
     }
     this.setMode("builtin");
-    this.sceneData = this.sceneMeta.objects?.length ? this.sceneMeta : defaultSceneData();
+    this.sceneData = filterBuiltinObjectSpecs(this.sceneMeta, defaultSceneData, PRIMITIVE_TYPES);
     this.clearBlenderScene();
     this.clearObjects();
     for (const spec of this.sceneData.objects || []) {
-      if (!PRIMITIVE_TYPES.has(spec.type)) continue;
       this._addMeshFromSpec(spec);
     }
     this.selectObject(this.sceneData.objects?.[0]?.id || null);
@@ -493,16 +505,12 @@ export class Scene3DEditor {
     this._applyWireframeMode();
     if (persist) this._scheduleSceneSettingsSave();
     if (notify) {
-      const labels = { off: "关闭", on: "标准", strong: "强化" };
-      this.callbacks.onMessage?.(`线框：${labels[this.wireframeMode]}`);
+      this.callbacks.onMessage?.(`线框：${WIREFRAME_MODE_LABELS[this.wireframeMode] || this.wireframeMode}`);
     }
   }
 
   _getWireframeRoots() {
-    const roots = [];
-    if (this.blenderRoot) roots.push(this.blenderRoot);
-    for (const mesh of this.objects.values()) roots.push(mesh);
-    return roots;
+    return getWireframeRoots(this.blenderRoot, this.objects.values());
   }
 
   _clearWireframeOverlays() {
@@ -545,11 +553,8 @@ export class Scene3DEditor {
       this.setActiveCamera(this._pickBestCameraId(""), false);
     }
     const shotTime = this.callbacks.getShotScene3dTime?.();
-    const startTime =
-      shotTime != null && !Number.isNaN(Number(shotTime))
-        ? Number(shotTime)
-        : Number(meta.animation_time);
-    if (!Number.isNaN(startTime) && startTime >= 0) {
+    const startTime = resolveInitialAnimationTime(meta, shotTime);
+    if (startTime != null) {
       this.setAnimationTime(startTime);
     }
     this._updateFileName();
@@ -580,7 +585,7 @@ export class Scene3DEditor {
         this.setActiveCamera(this._pickBestCameraId(savedCameraName), false);
       }
       if (savedTime > 0) {
-        this.setAnimationTime(Math.min(savedTime, this.animationDuration));
+        this.setAnimationTime(resolveReloadAnimationTime(savedTime, this.animationDuration));
       }
       this.callbacks.onMessage?.("已刷新 GLB（保留时间与显示设置）");
     } catch (error) {
@@ -747,11 +752,7 @@ export class Scene3DEditor {
   }
 
   _collectObjectColorKeys(root) {
-    const keys = new Set();
-    root?.traverse((node) => {
-      if (node.isMesh) keys.add(this._objectColorKey(node));
-    });
-    return [...keys].sort();
+    return collectMeshObjectColorKeys(root, (mesh) => this._objectColorKey(mesh));
   }
 
   _objectColorKey(mesh) {
@@ -759,17 +760,11 @@ export class Scene3DEditor {
   }
 
   _cacheImportedMaterials(root) {
-    root?.traverse((node) => {
-      if (!node.isMesh || node.userData.scene3dOriginalMaterial !== undefined) return;
-      node.userData.scene3dOriginalMaterial = node.material;
-    });
+    cacheImportedMaterialsOnRoot(root);
   }
 
   _restoreImportedMaterials(root) {
-    root?.traverse((node) => {
-      if (!node.isMesh || node.userData.scene3dOriginalMaterial === undefined) return;
-      node.material = node.userData.scene3dOriginalMaterial;
-    });
+    restoreImportedMaterialsOnRoot(root);
   }
 
   _disposePreviewMaterials() {
@@ -832,16 +827,10 @@ export class Scene3DEditor {
     this.importedCameras = this._collectImportedCameras(gltf);
     this.animatedNodeNames = this._collectAnimatedNodeNames(gltf.animations);
 
-    const clipsToPlay = this._selectAnimationClips(gltf.animations || []);
-    this.mixer = new THREE.AnimationMixer(gltf.scene);
-    this.mixerActions = [];
-    for (const clip of clipsToPlay) {
-      const action = this.mixer.clipAction(clip);
-      action.setLoop(THREE.LoopOnce, 1);
-      action.play();
-      this.mixerActions.push(action);
-    }
-    this.animationDuration = this._computeClipDuration(clipsToPlay.length ? clipsToPlay : gltf.animations);
+    const mixerBoot = createWorkspaceAnimationMixer(THREE, gltf.scene, gltf.animations || []);
+    this.mixer = mixerBoot.mixer;
+    this.mixerActions = mixerBoot.mixerActions;
+    this.animationDuration = mixerBoot.animationDuration;
     this.animationTime = 0;
     this.isPlaying = false;
     this._syncMixerTime(0);
@@ -860,24 +849,14 @@ export class Scene3DEditor {
     }
     this.setFollowCamera(this.followCamera);
     this._updateAnimationHint();
-    if (this.importedCameras.length === 0) {
-      this.callbacks.onMessage?.(this._diagnoseMissingCameras(gltf));
-    } else if (this.importedCameras.some((item) => item.orphan)) {
-      this.callbacks.onMessage?.(
-        `已找到 ${this.importedCameras.length} 个相机（部分未挂到场景树，已自动修复）。`,
-      );
-    } else if (!(gltf.animations || []).length) {
-      this.callbacks.onMessage?.("场景已加载，但未找到动画。请在 Blender 导出时勾选 Animation。");
-    } else if (this.animationDuration <= 0) {
-      this.callbacks.onMessage?.("已找到动画轨道，但时长为 0。请检查 Blender 时间轴范围与关键帧。");
-    } else if (this.programLightingMode === "auto") {
-      if (this.importedLightCount > 0) {
-        this.callbacks.onMessage?.(
-          `检测到 GLB 含 ${this.importedLightCount} 盏灯，已校准强度并启用弱环境反射（模拟 Blender World）。`,
-        );
-      } else {
-        this.callbacks.onMessage?.("GLB 无导出灯光，已自动开启全程序补光。");
-      }
+    for (const message of buildGlbLoadNotifications({
+      gltf,
+      importedCameras: this.importedCameras,
+      animationDuration: this.animationDuration,
+      importedLightCount: this.importedLightCount,
+      programLightingMode: this.programLightingMode,
+    })) {
+      this.callbacks.onMessage?.(message);
     }
   }
 
@@ -1126,39 +1105,12 @@ export class Scene3DEditor {
   _applyTransformInputs(changedKey) {
     const mesh = this.selectedId ? this.objects.get(this.selectedId) : null;
     if (!mesh) return;
-    const read = (key, fallback) => Number(this.transformInputs[key]?.value) || fallback;
-    mesh.position.set(read("px", mesh.position.x), read("py", mesh.position.y), read("pz", mesh.position.z));
-    mesh.rotation.set(
-      THREE.MathUtils.degToRad(read("rx", THREE.MathUtils.radToDeg(mesh.rotation.x))),
-      THREE.MathUtils.degToRad(read("ry", THREE.MathUtils.radToDeg(mesh.rotation.y))),
-      THREE.MathUtils.degToRad(read("rz", THREE.MathUtils.radToDeg(mesh.rotation.z))),
-    );
-    mesh.scale.set(
-      Math.max(0.01, read("sx", mesh.scale.x)),
-      Math.max(0.01, read("sy", mesh.scale.y)),
-      Math.max(0.01, read("sz", mesh.scale.z)),
-    );
-    if (changedKey) {
-      this.transform.updateMatrixWorld();
-    }
+    applyTransformFromInputs(THREE, mesh, this.transformInputs, changedKey, this.transform);
   }
 
   _updateTransformInputs() {
     const mesh = this.selectedId ? this.objects.get(this.selectedId) : null;
-    const disabled = !mesh;
-    Object.values(this.transformInputs).forEach((input) => {
-      input.disabled = disabled;
-    });
-    if (!mesh) return;
-    this.transformInputs.px.value = mesh.position.x.toFixed(2);
-    this.transformInputs.py.value = mesh.position.y.toFixed(2);
-    this.transformInputs.pz.value = mesh.position.z.toFixed(2);
-    this.transformInputs.rx.value = THREE.MathUtils.radToDeg(mesh.rotation.x).toFixed(1);
-    this.transformInputs.ry.value = THREE.MathUtils.radToDeg(mesh.rotation.y).toFixed(1);
-    this.transformInputs.rz.value = THREE.MathUtils.radToDeg(mesh.rotation.z).toFixed(1);
-    this.transformInputs.sx.value = mesh.scale.x.toFixed(2);
-    this.transformInputs.sy.value = mesh.scale.y.toFixed(2);
-    this.transformInputs.sz.value = mesh.scale.z.toFixed(2);
+    syncTransformInputsFromMesh(THREE, mesh, this.transformInputs);
   }
 
   _renderOutliner() {
@@ -1204,13 +1156,7 @@ export class Scene3DEditor {
   }
 
   _updateFileName() {
-    const blendPath = this.sceneMeta.blend_file_path || "scene3d/scene.blend";
-    const glbName = this.sceneMeta.file_name || this.sceneMeta.file_path || "";
-    if (this.mode === "blender" && glbName) {
-      this.fileNameEl.textContent = `GLB: ${String(glbName).split("/").pop()}`;
-      return;
-    }
-    this.fileNameEl.textContent = blendPath.split("/").pop() || "scene.blend";
+    this.fileNameEl.textContent = formatWorkspaceFileName(this.mode, this.sceneMeta);
   }
 
   setBlendFilePath(relativePath) {

@@ -119,3 +119,26 @@ export {
   type Scene3DEditorConstructor,
   type Scene3DEditorInstance,
 } from './loadScene3DEditor'
+
+export {
+  cacheImportedMaterialsOnRoot,
+  restoreImportedMaterialsOnRoot,
+  collectMeshObjectColorKeys,
+} from './workspaceMaterials'
+
+export {
+  createWorkspaceAnimationMixer,
+  buildGlbLoadNotifications,
+  resolveInitialAnimationTime,
+  resolveReloadAnimationTime,
+  formatWorkspaceFileName,
+  getWireframeRoots,
+  filterBuiltinObjectSpecs,
+} from './workspaceGlbLoad'
+
+export {
+  applyTransformFromInputs,
+  syncTransformInputsFromMesh,
+  WIREFRAME_MODE_LABELS,
+  type WorkspaceTransformInputs,
+} from './workspaceTransform'
