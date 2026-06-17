@@ -70,7 +70,7 @@
 }
 
 .scene3d-editor-root .scene3d-outliner {
-  max-height: 210px;
+  max-height: 260px;
 }
 
 .scene3d-editor-root [hidden] {
@@ -79,6 +79,10 @@
 
 .scene3d-editor-root .scene3d-builtin-only,
 .scene3d-editor-root .scene3d-transform-fields {
+  display: none !important;
+}
+
+.scene3d-editor-root .scene3d-field:has([data-camera-select]) {
   display: none !important;
 }
 
@@ -95,4 +99,10 @@
   border-color: #8ea2ff;
   background: rgba(111, 140, 255, 0.18);
   color: #fff;
+}
+
+.scene3d-editor-root .scene3d-outliner li:hover,
+.scene3d-editor-root .scene3d-outliner [data-object-id]:hover {
+  border-color: rgba(142, 162, 255, 0.8);
+  background: rgba(111, 140, 255, 0.12);
 }
