@@ -23,6 +23,20 @@ export const ReferenceModelPreview = forwardRef<ReferenceModelPreviewHandle, {
   const previewUrl = useMemo(() => `${projectFileUrl(path)}&preview=model`, [path])
   const viewKey = useMemo(() => (view ? JSON.stringify(view) : ''), [view])
 
+  // Compact reference-library thumbnails deliberately do not create WebGL contexts. The popover only
+  // needs one live renderer: the large selected preview that also performs board captures. This avoids
+  // WebView2 context churn, which was one source of intermittent layout corruption/blank canvases.
+  if (compact) {
+    return (
+      <div className="ref-model-preview is-compact" title={label}>
+        <div className="ref-model-preview-fallback" aria-hidden="true">
+          3D
+        </div>
+        <div className="ref-model-preview-badge">3D</div>
+      </div>
+    )
+  }
+
   useEffect(() => {
     const canvas = canvasRef.current
     if (!canvas || !path) return
@@ -54,10 +68,10 @@ export const ReferenceModelPreview = forwardRef<ReferenceModelPreviewHandle, {
   }), [])
 
   return (
-    <div className={`ref-model-preview ${compact ? 'is-compact' : ''}`} title={label}>
+    <div className="ref-model-preview" title={label}>
       {failed ? (
         <div className="ref-model-preview-fallback" aria-hidden="true">
-          3D
+          3D preview unavailable
         </div>
       ) : (
         <canvas ref={canvasRef} aria-label={`3D preview: ${label}`} />
