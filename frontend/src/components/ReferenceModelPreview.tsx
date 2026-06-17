@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { projectFileUrl } from '../api'
+import './ReferenceModelPreview.css'
 
 type OrbitControlsInstance = {
   target: { set: (x: number, y: number, z: number) => void; copy: (v: unknown) => void }
