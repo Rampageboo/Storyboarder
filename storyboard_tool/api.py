@@ -245,7 +245,7 @@ def _apply_ref_segment_3d_captures(app: FastAPI, request: ApplyRefSegmentRequest
         raw_path = shot_dir / f"{shot.shot_id}_ref_raw.png"
         try:
             save_png_data_url(capture.data_url, raw_path)
-            preview_path = project_manager._apply_reference_frame_to_shot(project, shot, raw_path, fit_mode)
+            preview_path = project_manager._apply_model_capture_to_shot(project, shot, raw_path, fit_mode)
         finally:
             raw_path.unlink(missing_ok=True)
         shot.source_sync_mtime = preview_path.stat().st_mtime

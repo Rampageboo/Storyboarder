@@ -15,6 +15,7 @@ from .image_utils import (
     export_psd_composite_to_png,
     is_psd_path,
     is_solid_color_image,
+    normalize_reference_fit_mode,
     save_png_data_url,
 )
 from .linked_sync import linked_mtime, sync_shot_from_linked_files
@@ -372,6 +373,34 @@ def _apply_reference_frame_to_shot(
     with Image.open(source_path) as image:
         composed = compose_image_to_canvas(image, width, height, fit_mode, bg_color)
         composed.save(preview_path, "PNG")
+    _save_board_background_copy(preview_path, shot_dir / board_background_filename(shot.shot_id))
+    _set_shot_preview_paths(project, shot, preview_path)
+    return preview_path
+
+
+def _apply_model_capture_to_shot(
+    project: Project,
+    shot: Shot,
+    source_path: Path,
+    fit_mode: str,
+) -> Path:
+    """Write a browser-rendered GLB capture to board preview/background.
+
+  When the PNG already matches project canvas dimensions, preserve pixels exactly
+  (no compose pass that can shift colors). Smaller captures still go through fit compose.
+    """
+    from PIL import Image
+
+    width, height = get_canvas_size(project)
+    shot_dir = get_shot_dir(project, shot)
+    preview_path = shot_dir / f"{shot.shot_id}_preview.png"
+    mode = normalize_reference_fit_mode(fit_mode)
+    with Image.open(source_path) as image:
+        if image.size == (width, height) and mode in {"fit", "stretch"}:
+            rgb = image.convert("RGB")
+            rgb.save(preview_path, "PNG")
+        else:
+            return _apply_reference_frame_to_shot(project, shot, source_path, fit_mode)
     _save_board_background_copy(preview_path, shot_dir / board_background_filename(shot.shot_id))
     _set_shot_preview_paths(project, shot, preview_path)
     return preview_path

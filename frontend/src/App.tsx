@@ -83,7 +83,6 @@ function AppInner() {
         ) : (
           <>
             <ReferenceSidebar />
-            <ReferenceAssignmentPopover />
             <main className="main-center">
               <CanvasBoard />
               <NeighborContext />
@@ -98,6 +97,7 @@ function AppInner() {
           </>
         )}
       </div>
+      <ReferenceAssignmentPopover />
     </div>
   )
 }

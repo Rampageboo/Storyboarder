@@ -1,4 +1,12 @@
 import { disposeGlbObject, loadGlbScene } from './glbScene'
+import {
+  loadPreviewStyle,
+  SCENE3D_WORKSPACE_BACKGROUND,
+  type PreviewStyleModule,
+  type Scene3dPreviewSettings,
+  type Scene3dWireframeMode,
+  type WireframeOverlayResources,
+} from './previewStyleBridge'
 import type { Scene3dCaptureRequest, Scene3dReferenceView } from './scene3dTypes'
 import { loadThreeRuntime } from './threeRuntime'
 
@@ -45,6 +53,9 @@ function isBlankCanvas(canvas: HTMLCanvasElement): boolean {
 export class ReferenceGlbRenderer {
   canvas: HTMLCanvasElement
   url: string
+  sceneBackground: number
+  wireframeMode: Scene3dWireframeMode
+  objectColorPreview: boolean
   renderer: ThreeObject | null = null
   scene: ThreeObject | null = null
   camera: ThreeObject | null = null
@@ -59,11 +70,17 @@ export class ReferenceGlbRenderer {
   currentView: Scene3dReferenceView | null = null
   readyPromise: Promise<void> | null = null
   private glbSceneDispose: (() => void) | null = null
+  private glbSetObjectColorPreview: ((enabled: boolean) => void) | null = null
   private runtime: Awaited<ReturnType<typeof loadThreeRuntime>> | null = null
+  private previewStyle: PreviewStyleModule | null = null
+  private wireframeResources: WireframeOverlayResources | null = null
 
-  constructor(canvas: HTMLCanvasElement, url: string) {
+  constructor(canvas: HTMLCanvasElement, url: string, previewSettings?: Partial<Scene3dPreviewSettings>) {
     this.canvas = canvas
     this.url = url
+    this.sceneBackground = previewSettings?.sceneBackground ?? SCENE3D_WORKSPACE_BACKGROUND
+    this.wireframeMode = previewSettings?.wireframeMode ?? 'off'
+    this.objectColorPreview = previewSettings?.objectColorPreview !== false
   }
 
   init(view: Scene3dReferenceView | null = null): Promise<void> {
@@ -73,10 +90,12 @@ export class ReferenceGlbRenderer {
   }
 
   async load(view: Scene3dReferenceView | null) {
-    const runtime = await loadThreeRuntime()
+    const [runtime, previewStyle] = await Promise.all([loadThreeRuntime(), loadPreviewStyle()])
     if (this.disposed) return
     const { THREE } = runtime
     this.runtime = runtime
+    this.previewStyle = previewStyle
+    this.wireframeResources = previewStyle.createWireframeResources()
     this.renderer = new THREE.WebGLRenderer({
       canvas: this.canvas,
       antialias: true,
@@ -88,10 +107,11 @@ export class ReferenceGlbRenderer {
     this.renderer.outputColorSpace = THREE.SRGBColorSpace
     if ('toneMapping' in this.renderer) this.renderer.toneMapping = THREE.AgXToneMapping ?? THREE.ACESFilmicToneMapping
     if ('toneMappingExposure' in this.renderer) this.renderer.toneMappingExposure = 1
+    this.renderer.sortObjects = true
 
     this.scene = new THREE.Scene()
-    this.scene.background = new THREE.Color(0x1a1d21)
-    this.camera = new THREE.PerspectiveCamera(42, 1, 0.01, 500)
+    this.scene.background = new THREE.Color(this.sceneBackground)
+    this.camera = new THREE.PerspectiveCamera(50, 1, 0.01, 1000)
     this.center = new THREE.Vector3()
     this.scene.add(new THREE.AmbientLight(0xffffff, 0.75))
     const sun = new THREE.DirectionalLight(0xffffff, 1.1)
@@ -111,24 +131,63 @@ export class ReferenceGlbRenderer {
     )
     this.intersectionObserver.observe(this.canvas)
 
-    const glbScene = await loadGlbScene(this.url, runtime)
+    const glbScene = await loadGlbScene(this.url, runtime, previewStyle, {
+      objectColorPreview: this.objectColorPreview,
+    })
     if (this.disposed) {
       glbScene.dispose()
       return
     }
     this.root = glbScene.root
     this.mixer = glbScene.mixer
+    this.glbSetObjectColorPreview = glbScene.setObjectColorPreview
     this.glbSceneDispose = () => glbScene.dispose()
     this.scene.add(this.root)
     this.applyViewOrFrame(view)
+    this.applyWireframe()
     this.render()
     if (this.visible) this.start()
+  }
+
+  setSceneBackground(color: number) {
+    this.sceneBackground = color
+    if (this.scene && this.runtime) {
+      this.scene.background = new this.runtime.THREE.Color(color)
+      this.render()
+    }
+  }
+
+  updatePreviewSettings(settings: Partial<Scene3dPreviewSettings>) {
+    if (settings.sceneBackground != null) this.setSceneBackground(settings.sceneBackground)
+    if (settings.wireframeMode != null) this.setWireframeMode(settings.wireframeMode)
+    if (settings.objectColorPreview != null && settings.objectColorPreview !== this.objectColorPreview) {
+      this.objectColorPreview = settings.objectColorPreview
+      this.glbSetObjectColorPreview?.(this.objectColorPreview)
+      this.applyWireframe()
+    }
+  }
+
+  setWireframeMode(mode: Scene3dWireframeMode) {
+    this.wireframeMode = this.previewStyle?.normalizeWireframeMode(mode) ?? mode
+    this.applyWireframe()
+  }
+
+  private applyWireframe() {
+    if (!this.runtime || !this.root || !this.previewStyle || !this.wireframeResources) return
+    this.previewStyle.applyWireframeModeToRoots(
+      this.runtime.THREE,
+      this.root,
+      this.wireframeMode,
+      this.wireframeResources,
+    )
+    this.render()
   }
 
   setView(view: Scene3dReferenceView | null) {
     this.currentView = view
     if (!this.root) return
     this.applyViewOrFrame(view)
+    this.applyWireframe()
     this.render()
   }
 
@@ -277,6 +336,7 @@ export class ReferenceGlbRenderer {
       if (this.mixer) this.mixer.setTime(time)
       this.currentView = view
       this.applyViewOrFrame(view)
+      this.applyWireframe()
       this.render()
       if (isBlankCanvas(this.canvas)) throw new Error('3D capture produced a blank frame; refusing to overwrite boards.')
       return this.canvas.toDataURL('image/png')
@@ -288,6 +348,7 @@ export class ReferenceGlbRenderer {
       this.root.rotation.copy(oldRotation)
       this.currentView = oldView
       this.applyViewOrFrame(oldView)
+      this.applyWireframe()
       this.render()
       if (savedFrameId && this.visible && !this.disposed) this.start()
     }
@@ -303,6 +364,9 @@ export class ReferenceGlbRenderer {
     this.stop()
     this.resizeObserver?.disconnect()
     this.intersectionObserver?.disconnect()
+    if (this.previewStyle && this.wireframeResources) {
+      this.previewStyle.clearWireframeOverlays(this.root, this.wireframeResources)
+    }
     this.glbSceneDispose?.()
     this.glbSceneDispose = null
     disposeGlbObject(this.root)

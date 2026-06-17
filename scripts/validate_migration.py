@@ -17,6 +17,7 @@ from storyboard_tool import api as api_module  # noqa: E402
 STATIC = ROOT / "storyboard_tool" / "web" / "static"
 REQUIRED_STATIC = {
     STATIC / "runtime" / "scene3d.js",
+    STATIC / "runtime" / "scene3d_preview_style.js",
     STATIC / "runtime" / "reference_model_preview.js",
     STATIC / "vendor" / "three" / "three.module.js",
     STATIC / "favicon.svg",
@@ -59,6 +60,7 @@ def check_routes() -> list[str]:
             ("/ref-video", 302, "/"),
             ("/ref-segment", 302, "/"),
             ("/static/runtime/scene3d.js", 200, None),
+            ("/static/runtime/scene3d_preview_style.js", 200, None),
             ("/static/scene3d.js", 404, None),
         ]
         if react_index.is_file():

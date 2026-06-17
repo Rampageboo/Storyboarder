@@ -1,5 +1,6 @@
-import { applyObjectColorPreviewMaterials } from './objectColorPreview'
+import type { PreviewStyleModule } from './previewStyleBridge'
 import type { ThreeRuntime } from './threeRuntime'
+import { loadPreviewStyle } from './previewStyleBridge'
 import { loadThreeRuntime } from './threeRuntime'
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -33,19 +34,36 @@ export function disposeGlbObject(root: ThreeObject | null | undefined) {
 
 export type LoadedGlbScene = {
   runtime: ThreeRuntime
+  previewStyle: PreviewStyleModule
   root: ThreeObject
   mixer: ThreeObject | null
   previewMaterials: ThreeObject[]
+  setObjectColorPreview(enabled: boolean): void
   dispose(): void
 }
 
-export async function loadGlbScene(url: string, runtime?: ThreeRuntime): Promise<LoadedGlbScene> {
+export type LoadGlbSceneOptions = {
+  objectColorPreview?: boolean
+}
+
+export async function loadGlbScene(
+  url: string,
+  runtime?: ThreeRuntime,
+  previewStyle?: PreviewStyleModule,
+  options: LoadGlbSceneOptions = {},
+): Promise<LoadedGlbScene> {
   const resolvedRuntime = runtime ?? await loadThreeRuntime()
+  const resolvedStyle = previewStyle ?? await loadPreviewStyle()
   const { THREE, GLTFLoader } = resolvedRuntime
   const gltf = await new GLTFLoader().loadAsync(url)
   const root = gltf.scene as ThreeObject
   const previewMaterials: ThreeObject[] = []
-  applyObjectColorPreviewMaterials(resolvedRuntime.THREE, root, previewMaterials)
+  const objectColorPreview = options.objectColorPreview !== false
+
+  const applyObjectColors = (enabled: boolean) => {
+    resolvedStyle.applyObjectColorPreview(resolvedRuntime.THREE, root, root, previewMaterials, enabled)
+  }
+  applyObjectColors(objectColorPreview)
 
   let mixer: ThreeObject | null = null
   if (Array.isArray(gltf.animations) && gltf.animations.length > 0) {
@@ -59,13 +77,14 @@ export async function loadGlbScene(url: string, runtime?: ThreeRuntime): Promise
 
   return {
     runtime: resolvedRuntime,
+    previewStyle: resolvedStyle,
     root,
     mixer,
     previewMaterials,
+    setObjectColorPreview: applyObjectColors,
     dispose() {
+      resolvedStyle.applyObjectColorPreview(resolvedRuntime.THREE, root, root, previewMaterials, false)
       disposeGlbObject(root)
-      for (const material of previewMaterials) disposeMaterial(material)
-      previewMaterials.length = 0
     },
   }
 }

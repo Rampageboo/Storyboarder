@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { createPortal } from 'react-dom'
 import {
   applyRefSegment,
   applyRefSegmentImage,
@@ -80,6 +81,10 @@ function nextFrame(): Promise<void> {
 
 async function waitFrames(count = 2): Promise<void> {
   for (let i = 0; i < count; i += 1) await nextFrame()
+}
+
+function renderBodyPortal(node: ReactNode) {
+  return createPortal(node, document.body)
 }
 
 function RefThumb({ link, selected }: { link: ReferenceLink; selected: boolean }) {
@@ -191,7 +196,9 @@ export function ReferenceAssignmentPopover() {
     return () => window.clearTimeout(t)
   }, [toast])
 
-  if (!project || !open) return toast ? <div className="ref-assign-toast">{toast}</div> : null
+  if (!project) {
+    return toast ? renderBodyPortal(<div className="ref-assign-toast" role="status">{toast}</div>) : null
+  }
 
   const disabled = busy || projectActionBusy
   const previewUrl = selectedRef ? projectFileUrl(selectedRef.path) : ''
@@ -332,22 +339,24 @@ export function ReferenceAssignmentPopover() {
     })()
   }
 
-  return (
+  const toastNode = toast ? <div className="ref-assign-toast" role="status">{toast}</div> : null
+
+  if (!open) {
+    return toastNode ? renderBodyPortal(toastNode) : null
+  }
+
+  return renderBodyPortal(
     <>
-      <div className="ref-assign-backdrop" onClick={close} aria-hidden="true" />
-      <div className={`ref-assign-modal ref-assign-modal--${refMode}`} role="dialog" aria-modal="true" aria-label="Assign reference to board range" style={{ position: 'relative' }}>
+      <div className="ref-assign-backdrop" onClick={busy ? undefined : close} aria-hidden="true" />
+      <div className={`ref-assign-modal ref-assign-modal--${refMode}`} role="dialog" aria-modal="true" aria-label="Assign reference to board range">
         {progress ? (
-          <div
-            className="ref-assign-player-empty"
-            style={{ position: 'absolute', inset: 0, zIndex: 20, background: 'rgba(0,0,0,0.78)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
-            aria-live="polite"
-          >
+          <div className="ref-assign-modal-overlay" aria-live="polite">
             {progress}
           </div>
         ) : null}
         <div className="ref-assign-modal-header">
           <h3>{isInspectMode ? 'Inspect reference segment' : 'Reference segment'}</h3>
-          <button type="button" className="ref-assign-close" onClick={close} aria-label="Cancel">×</button>
+          <button type="button" className="ref-assign-close" onClick={close} disabled={busy} aria-label="Cancel">×</button>
         </div>
         <div className="ref-assign-layout">
           <aside className="ref-assign-refs" aria-label="References">
@@ -373,7 +382,7 @@ export function ReferenceAssignmentPopover() {
           </main>
         </div>
       </div>
-      {toast ? <div className="ref-assign-toast">{toast}</div> : null}
-    </>
+      {toastNode}
+    </>,
   )
 }

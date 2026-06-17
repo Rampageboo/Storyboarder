@@ -3,20 +3,15 @@ import { OrbitControls } from "/static/vendor/three/OrbitControls.js";
 import { TransformControls } from "/static/vendor/three/TransformControls.js";
 import { GLTFLoader } from "/static/vendor/three/GLTFLoader.js";
 import { RoomEnvironment } from "/static/vendor/three/RoomEnvironment.js";
-
-const VIEWPORT_OBJECT_PALETTE = [
-  0xc87a6e, 0x6eb87a, 0x6e8ec8, 0xc8b06e, 0xb06ec8, 0x6ec8b8,
-  0xc86e8a, 0x8ac86e, 0x6e6ec8, 0xc8946e, 0x6eb0c8, 0xa0c86e,
-  0xc87878, 0x78c878, 0x7878c8, 0xc8c878,
-];
-
-function hashString(value) {
-  let hash = 0;
-  for (let i = 0; i < value.length; i += 1) {
-    hash = (hash * 31 + value.charCodeAt(i)) | 0;
-  }
-  return Math.abs(hash);
-}
+import {
+  generateObjectColor,
+  normalizeWireframeMode,
+  objectColorKey,
+  applyObjectColorPreview as applySharedObjectColorPreview,
+  applyWireframeModeToRoots,
+  clearWireframeOverlays,
+  createWireframeResources,
+} from "./scene3d_preview_style.js";
 
 const PRIMITIVE_TYPES = new Set(["cube", "sphere", "plane", "cylinder", "cone"]);
 
@@ -138,8 +133,7 @@ export class Scene3DEditor {
     this.objectColorPreview = true;
     this.previewMaterials = new Set();
     this.wireframeMode = "off";
-    this.wireframeOverlayGeometries = new Set();
-    this.wireframeOverlayMaterials = new Set();
+    this.wireframeResources = createWireframeResources();
     this.animationTime = 0;
     this.animationDuration = 0;
     this.animatedNodeNames = new Set();
@@ -558,7 +552,7 @@ export class Scene3DEditor {
   }
 
   _normalizeWireframeMode(mode) {
-    return mode === "on" || mode === "strong" ? mode : "off";
+    return normalizeWireframeMode(mode);
   }
 
   setWireframeMode(mode, { persist = true, notify = false } = {}) {
@@ -583,77 +577,21 @@ export class Scene3DEditor {
   }
 
   _clearWireframeOverlays() {
-    for (const root of this._getWireframeRoots()) {
-      root.traverse((node) => {
-        const line = node.userData?.scene3dWireframeLine;
-        if (!line) return;
-        node.remove(line);
-        delete node.userData.scene3dWireframeLine;
-      });
+    if (!this.wireframeResources) {
+      this.wireframeResources = createWireframeResources();
     }
-    for (const geometry of this.wireframeOverlayGeometries) geometry.dispose();
-    for (const material of this.wireframeOverlayMaterials) material.dispose();
-    this.wireframeOverlayGeometries.clear();
-    this.wireframeOverlayMaterials.clear();
+    clearWireframeOverlays(this._getWireframeRoots(), this.wireframeResources);
   }
 
-  _restoreWireframeFillOpacity(root) {
-    root?.traverse((node) => {
-      if (!node.isMesh || node.userData.scene3dWireframeFillOpacity == null) return;
-      const materials = Array.isArray(node.material) ? node.material : [node.material];
-      for (const mat of materials) {
-        if (!mat) continue;
-        mat.opacity = node.userData.scene3dWireframeFillOpacity;
-        mat.transparent = node.userData.scene3dWireframeFillTransparent;
-        mat.needsUpdate = true;
-      }
-      delete node.userData.scene3dWireframeFillOpacity;
-      delete node.userData.scene3dWireframeFillTransparent;
-    });
+  _restoreWireframeFillOpacity(_root) {
+    // handled by clearWireframeOverlays / applyWireframeModeToRoots in scene3d_preview_style.js
   }
 
   _applyWireframeMode() {
-    for (const root of this._getWireframeRoots()) {
-      this._restoreWireframeFillOpacity(root);
+    if (!this.wireframeResources) {
+      this.wireframeResources = createWireframeResources();
     }
-    this._clearWireframeOverlays();
-    if (this.wireframeMode === "off") return;
-
-    const strong = this.wireframeMode === "strong";
-    const threshold = strong ? 1 : 35;
-    const lineMaterial = new THREE.LineBasicMaterial({
-      color: strong ? 0xffffff : 0x151515,
-      transparent: !strong,
-      opacity: strong ? 1 : 0.72,
-      depthTest: true,
-      depthWrite: false,
-    });
-    this.wireframeOverlayMaterials.add(lineMaterial);
-
-    for (const root of this._getWireframeRoots()) {
-      root.traverse((node) => {
-        if (!node.isMesh || !node.geometry || node.userData.scene3dWireframeLine) return;
-        const edges = new THREE.EdgesGeometry(node.geometry, threshold);
-        const lines = new THREE.LineSegments(edges, lineMaterial);
-        lines.renderOrder = strong ? 2 : 1;
-        lines.frustumCulled = false;
-        node.add(lines);
-        node.userData.scene3dWireframeLine = lines;
-        this.wireframeOverlayGeometries.add(edges);
-
-        if (strong && node.material) {
-          const materials = Array.isArray(node.material) ? node.material : [node.material];
-          for (const mat of materials) {
-            if (!mat || node.userData.scene3dWireframeFillOpacity != null) continue;
-            node.userData.scene3dWireframeFillOpacity = mat.opacity ?? 1;
-            node.userData.scene3dWireframeFillTransparent = Boolean(mat.transparent);
-            mat.transparent = true;
-            mat.opacity = Math.min(mat.opacity ?? 1, 0.42);
-            mat.needsUpdate = true;
-          }
-        }
-      });
-    }
+    applyWireframeModeToRoots(THREE, this._getWireframeRoots(), this.wireframeMode, this.wireframeResources);
   }
 
   async loadBlenderFromProject(meta) {
@@ -1025,8 +963,7 @@ export class Scene3DEditor {
   }
 
   _generateBlenderObjectColor(seed) {
-    const index = hashString(String(seed)) % VIEWPORT_OBJECT_PALETTE.length;
-    return new THREE.Color(VIEWPORT_OBJECT_PALETTE[index]);
+    return generateObjectColor(THREE, seed);
   }
 
   _collectObjectColorKeys(root) {
@@ -1038,12 +975,7 @@ export class Scene3DEditor {
   }
 
   _objectColorKey(mesh) {
-    let node = mesh;
-    while (node.parent && node.parent !== this.blenderRoot) {
-      if (node.name) return node.name;
-      node = node.parent;
-    }
-    return mesh.name || mesh.uuid;
+    return objectColorKey(mesh, this.blenderRoot);
   }
 
   _cacheImportedMaterials(root) {
@@ -1091,27 +1023,10 @@ export class Scene3DEditor {
 
   _applyObjectColorPreview(enabled) {
     if (!this.blenderRoot) return;
-    if (!enabled) {
-      this._restoreImportedMaterials(this.blenderRoot);
-      this._disposePreviewMaterials();
-      return;
+    applySharedObjectColorPreview(THREE, this.blenderRoot, this.blenderRoot, this.previewMaterials, enabled);
+    if (!enabled && this.blenderRoot) {
+      this._prepareImportedMaterials(this.blenderRoot);
     }
-
-    this._cacheImportedMaterials(this.blenderRoot);
-    this._disposePreviewMaterials();
-    const colorByKey = new Map();
-    for (const key of this._collectObjectColorKeys(this.blenderRoot)) {
-      colorByKey.set(key, this._generateBlenderObjectColor(key));
-    }
-    this.blenderRoot.traverse((node) => {
-      if (!node.isMesh) return;
-      const key = this._objectColorKey(node);
-      const previewMat = new THREE.MeshBasicMaterial({
-        color: colorByKey.get(key) || this._generateBlenderObjectColor(key),
-      });
-      this.previewMaterials.add(previewMat);
-      node.material = previewMat;
-    });
   }
 
   _prepareImportedMaterials(root) {
