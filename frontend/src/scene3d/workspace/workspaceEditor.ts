@@ -23,9 +23,7 @@ import { GLTFLoader } from '/static/vendor/three/GLTFLoader.js'
 // @ts-ignore
 import { RoomEnvironment } from '/static/vendor/three/RoomEnvironment.js'
 
-// Preview style helpers — externalized runtime module
-// eslint-disable-next-line @typescript-eslint/ban-ts-comment
-// @ts-ignore
+// Preview style helpers — bundled from TypeScript source
 import {
   generateObjectColor,
   normalizeWireframeMode,
@@ -35,9 +33,8 @@ import {
   clearWireframeOverlays,
   createWireframeResources,
   disposePreviewMaterials,
-// eslint-disable-next-line @typescript-eslint/ban-ts-comment
-// @ts-ignore
-} from '/static/runtime/scene3d_preview_style.js'
+  type Scene3dWireframeMode,
+} from '../previewStyle'
 
 // TS workspace helpers (bundled)
 import {
@@ -49,7 +46,6 @@ import {
   WORKSPACE_PRIMITIVE_TYPE_SET,
 } from './workspacePrimitives'
 import type { WorkspacePrimitiveType, WorkspaceTransformMode } from './workspaceTypes'
-import type { Scene3dWireframeMode } from '../previewStyleBridge'
 import { captureRendererPng } from './workspaceCapture'
 import {
   exportViewState,

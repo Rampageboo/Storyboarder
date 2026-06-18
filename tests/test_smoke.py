@@ -80,13 +80,23 @@ class StoryboardSmokeTests(unittest.TestCase):
             app = api_module.create_app(Path(tmp))
             client = TestClient(app, raise_server_exceptions=False)
             for route in (
-                "/static/runtime/scene3d.js",
                 "/static/runtime/scene3d_workspace.js",
-                "/static/runtime/scene3d_preview_style.js",
             ):
                 with self.subTest(route=route):
                     response = client.get(route)
                     self.assertEqual(response.status_code, 200)
+
+    def test_deleted_runtime_shims_return_404(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            app = api_module.create_app(Path(tmp))
+            client = TestClient(app, raise_server_exceptions=False)
+            for route in (
+                "/static/runtime/scene3d.js",
+                "/static/runtime/scene3d_preview_style.js",
+            ):
+                with self.subTest(route=route):
+                    response = client.get(route)
+                    self.assertEqual(response.status_code, 404)
 
     @unittest.skipIf(find_spec("multipart") is None, "python-multipart is not installed")
     def test_rest_pdf_export_route_reaches_exporter(self) -> None:

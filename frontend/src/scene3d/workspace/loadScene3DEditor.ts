@@ -1,5 +1,6 @@
 /**
- * Dynamic loader for the Scene3D workspace editor (still served as scene3d.js until full TS port).
+ * Dynamic loader for the Scene3D workspace editor.
+ * Loads the generated runtime bundle directly.
  */
 
 export type Scene3DEditorInstance = {
@@ -26,11 +27,11 @@ export type Scene3DEditorConstructor = new (
 ) => Scene3DEditorInstance
 
 export async function loadScene3DEditorClass(): Promise<Scene3DEditorConstructor> {
-  const module = (await import(/* @vite-ignore */ `/static/runtime/scene3d.js?v=${Date.now()}`)) as {
+  const module = (await import(/* @vite-ignore */ `/static/runtime/scene3d_workspace.js?v=${Date.now()}`)) as {
     Scene3DEditor?: Scene3DEditorConstructor
   }
   if (!module.Scene3DEditor) {
-    throw new Error('Scene3DEditor export not found in /static/runtime/scene3d.js')
+    throw new Error('Scene3DEditor export not found in /static/runtime/scene3d_workspace.js')
   }
   return module.Scene3DEditor
 }

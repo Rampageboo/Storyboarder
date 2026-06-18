@@ -16,11 +16,13 @@ from storyboard_tool import api as api_module  # noqa: E402
 
 STATIC = ROOT / "storyboard_tool" / "web" / "static"
 REQUIRED_STATIC = {
-    STATIC / "runtime" / "scene3d.js",
     STATIC / "runtime" / "scene3d_workspace.js",
-    STATIC / "runtime" / "scene3d_preview_style.js",
     STATIC / "vendor" / "three" / "three.module.js",
     STATIC / "favicon.svg",
+}
+FORBIDDEN_RUNTIME = {
+    STATIC / "runtime" / "scene3d.js",
+    STATIC / "runtime" / "scene3d_preview_style.js",
 }
 FORBIDDEN_STATIC = {
     STATIC / "index.html",
@@ -44,6 +46,9 @@ def check_static_tree() -> list[str]:
     for path in FORBIDDEN_STATIC:
         if path.exists():
             errors.append(f"legacy static path still present: {path.relative_to(ROOT)}")
+    for path in FORBIDDEN_RUNTIME:
+        if path.exists():
+            errors.append(f"obsolete runtime file still present: {path.relative_to(ROOT)}")
     for path in FORBIDDEN_WEB:
         if path.exists():
             errors.append(f"legacy HTML still present: {path.relative_to(ROOT)}")
@@ -59,8 +64,9 @@ def check_routes() -> list[str]:
             ("/legacy", 404, None),
             ("/ref-video", 302, "/"),
             ("/ref-segment", 302, "/"),
-            ("/static/runtime/scene3d.js", 200, None),
-            ("/static/runtime/scene3d_preview_style.js", 200, None),
+            ("/static/runtime/scene3d_workspace.js", 200, None),
+            ("/static/runtime/scene3d.js", 404, None),
+            ("/static/runtime/scene3d_preview_style.js", 404, None),
             ("/static/scene3d.js", 404, None),
         ]
         if react_index.is_file():

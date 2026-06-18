@@ -1,6 +1,7 @@
 /**
- * Static runtime entry — built to storyboard_tool/web/static/runtime/scene3d_workspace.js
- * and imported by scene3d.js during incremental TS migration.
+ * Static runtime entry — built to storyboard_tool/web/static/runtime/scene3d_workspace.js.
+ * Loaded directly by Scene3DPanel.tsx via dynamic import.
+ * Do not hand-edit the output; run `npm run build:workspace` to regenerate.
  */
 
 export {

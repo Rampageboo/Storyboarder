@@ -1,56 +1,27 @@
 /**
- * Loads the shared scene3d_preview_style.js module used by both the Scene3D workspace
- * (scene3d.js) and the React reference GLB renderer — one implementation, identical output.
+ * Compatibility bridge for callers that use the loadPreviewStyle() async pattern.
+ * Now backed by a static TypeScript import instead of a dynamic /static/ fetch.
+ * Source of truth: frontend/src/scene3d/previewStyle.ts
  */
 
+import * as previewStyleImpl from './previewStyle'
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
 type ThreeModule = Record<string, any>
 
-export type Scene3dWireframeMode = 'off' | 'on' | 'strong'
+export type Scene3dWireframeMode = previewStyleImpl.Scene3dWireframeMode
+export type WireframeOverlayResources = previewStyleImpl.WireframeOverlayResources
+export type Scene3dPreviewSettings = previewStyleImpl.Scene3dPreviewSettings
 
-export type WireframeOverlayResources = {
-  geometries: Set<unknown>
-  materials: Set<unknown>
-}
+export const SCENE3D_WORKSPACE_BACKGROUND = previewStyleImpl.SCENE3D_WORKSPACE_BACKGROUND
 
-export type Scene3dPreviewSettings = {
-  wireframeMode: Scene3dWireframeMode
-  objectColorPreview: boolean
-  sceneBackground: number
-}
-
-export const SCENE3D_WORKSPACE_BACKGROUND = 0x1a1d21
-
-export type PreviewStyleModule = {
-  SCENE3D_WORKSPACE_BACKGROUND: number
-  normalizeWireframeMode: (mode: unknown) => Scene3dWireframeMode
-  resolvePreviewSettings: (scene3dMeta?: Record<string, unknown>) => Scene3dPreviewSettings
-  createWireframeResources: () => WireframeOverlayResources
-  applyObjectColorPreview: (
-    THREE: ThreeModule,
-    root: unknown,
-    rootRef: unknown,
-    previewMaterials: unknown[] | Set<unknown>,
-    enabled: boolean,
-  ) => void
-  applyWireframeModeToRoots: (
-    THREE: ThreeModule,
-    roots: unknown[] | unknown,
-    mode: Scene3dWireframeMode,
-    resources: WireframeOverlayResources,
-  ) => void
-  clearWireframeOverlays: (roots: unknown[] | unknown, resources: WireframeOverlayResources) => void
-  generateObjectColor: (THREE: ThreeModule, seed: string) => unknown
-  generateObjectColorHex: (seed: string) => number
-  objectColorKey: (mesh: unknown, root: unknown) => string
-  disposePreviewMaterials: (previewMaterials: unknown[] | Set<unknown>) => void
-}
+export type PreviewStyleModule = typeof previewStyleImpl
 
 let previewStylePromise: Promise<PreviewStyleModule> | null = null
 
 export function loadPreviewStyle(): Promise<PreviewStyleModule> {
   if (!previewStylePromise) {
-    const url = '/static/runtime/scene3d_preview_style.js'
-    previewStylePromise = import(/* @vite-ignore */ url) as Promise<PreviewStyleModule>
+    previewStylePromise = Promise.resolve(previewStyleImpl)
   }
   return previewStylePromise
 }

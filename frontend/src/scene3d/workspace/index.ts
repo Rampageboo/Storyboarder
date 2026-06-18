@@ -1,8 +1,6 @@
 /**
- * Scene3D workspace runtime — incremental migration from scene3d.js.
- *
- * React still loads `/static/runtime/scene3d.js`; shared helpers are built to
- * `/static/runtime/scene3d_workspace.js`.
+ * Scene3D workspace runtime.
+ * React loads `/static/runtime/scene3d_workspace.js` directly; TypeScript source lives here.
  */
 
 export type {
