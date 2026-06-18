@@ -162,6 +162,9 @@ class StoryboardBackendService(ExportServiceMixin):
 
     def method_plugin_context(self) -> dict[str, Any]:
         project = app_state._refresh_project_from_disk(self.app)
+        return self._plugin_context_payload(project)
+
+    def _plugin_context_payload(self, project) -> dict[str, Any]:
         canvas_width, canvas_height = project_manager.get_canvas_size(project)
         selected_shot_id = str(
             app_state._plugin_selected_shot_id(self.app)

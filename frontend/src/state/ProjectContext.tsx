@@ -18,6 +18,8 @@ export interface ProjectContextValue {
   project: ProjectPayload | null
   selectedShotId: string | null
   setSelectedShotId: (shotId: string | null) => void
+  replaceProject: (payload: ProjectPayload, preferredShotId?: string | null) => void
+  refreshProjectFromBridge: (pluginSelectedShotId?: string | null) => Promise<void>
   setProject: Dispatch<SetStateAction<ProjectPayload | null>>
   reloadProject: () => Promise<void>
   newProject: (body?: ProjectPathRequest) => Promise<void>
@@ -185,6 +187,21 @@ export function ProjectProvider({ children }: PropsWithChildren) {
     [resetEditState],
   )
 
+  const replaceProject = useCallback((payload: ProjectPayload, selected?: string | null) => {
+    setProject(payload)
+    setLastError(null)
+    setSelectedShotId((current) => preferredShotId(payload, selected === undefined ? current : selected))
+  }, [])
+
+  const refreshProjectFromBridge = useCallback(
+    async (pluginSelectedShotId?: string | null) => {
+      const payload = await getProject()
+      const pluginSelectionValid = !!pluginSelectedShotId && payload.shots.some((shot) => shot.shot_id === pluginSelectedShotId)
+      replaceProject(payload, pluginSelectionValid ? pluginSelectedShotId : undefined)
+    },
+    [replaceProject],
+  )
+
   const editShotField = useCallback(<K extends keyof ShotUpdate>(shotId: string, key: K, value: ShotUpdate[K]) => {
     versionsRef.current[shotId] = (versionsRef.current[shotId] ?? 0) + 1
     setDrafts((prev) => ({ ...prev, [shotId]: { ...(prev[shotId] ?? {}), [key]: value } }))
@@ -342,6 +359,8 @@ export function ProjectProvider({ children }: PropsWithChildren) {
       project,
       selectedShotId,
       setSelectedShotId,
+      replaceProject,
+      refreshProjectFromBridge,
       setProject,
       reloadProject,
       newProject: newProjectAction,
@@ -375,7 +394,7 @@ export function ProjectProvider({ children }: PropsWithChildren) {
       clearError,
       reportError,
     }),
-    [project, selectedShotId, reloadProject, newProjectAction, openProjectFromDialog, saveProjectAction, initialLoading, projectActionBusy, getDraft, editShotField, isShotDirty, dirtyShotIds, savingShots, saveShot, flushDirtyShots, visualEpoch, segmentRange, setSegmentAnchor, setSegmentEnd, pickSegmentShot, clearSegmentRange, activeAppliedSegmentId, setActiveAppliedSegmentId, clearActiveAppliedSegment, refSegmentInspectOpen, openRefSegmentInspect, closeRefSegmentInspect, dismissRefSegmentUi, refApplyUndoToken, lastError, clearError, reportError],
+    [project, selectedShotId, replaceProject, refreshProjectFromBridge, reloadProject, newProjectAction, openProjectFromDialog, saveProjectAction, initialLoading, projectActionBusy, getDraft, editShotField, isShotDirty, dirtyShotIds, savingShots, saveShot, flushDirtyShots, visualEpoch, segmentRange, setSegmentAnchor, setSegmentEnd, pickSegmentShot, clearSegmentRange, activeAppliedSegmentId, setActiveAppliedSegmentId, clearActiveAppliedSegment, refSegmentInspectOpen, openRefSegmentInspect, closeRefSegmentInspect, dismissRefSegmentUi, refApplyUndoToken, lastError, clearError, reportError],
   )
 
   return <ProjectContext.Provider value={value}>{children}</ProjectContext.Provider>

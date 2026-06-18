@@ -9,11 +9,12 @@ export interface BridgeStatusPayload {
   plugin_open_shot_ids?: string[]
   plugin_last_exported_preview?: Record<string, number>
   plugin_project_revision?: number
-  ok?: string
-  status?: string
   bridge_url?: string
+  global_bridge_path?: string
+  shared_bridge_path?: string
+  plugin_heartbeat_path?: string
   server_port?: number
-  plugin_last_seen?: number
+  live?: Record<string, unknown>
   [key: string]: unknown
 }
 

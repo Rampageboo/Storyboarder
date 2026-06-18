@@ -15,6 +15,12 @@ from pydantic import BaseModel, Field
 from . import app_state, project_manager
 from .backend_service import StoryboardBackendService
 from .logging_config import setup_logging
+from .schemas import (
+    LiveBridgeUpdateRequest,
+    PluginHeartbeatRequest,
+    PluginNextShotRequest,
+    PluginShotEventRequest,
+)
 
 # Photoshop plugin treats bridge files older than ~8s as stale (see BRIDGE_STALE_MS in panel.js).
 _BRIDGE_REFRESH_SECONDS = 1.5
@@ -152,25 +158,6 @@ class ApplyRefSegmentRequest(BaseModel):
     segment_id: str | None = None
     camera_name: str | None = None
     captures: list[RefSegment3dCapture] = Field(default_factory=list)
-
-
-class LiveBridgeUpdateRequest(BaseModel):
-    selected_shot_id: str | None = None
-
-
-class PluginHeartbeatRequest(BaseModel):
-    open_shot_ids: list[str] = Field(default_factory=list)
-    selected_shot_id: str | None = None
-
-
-class PluginShotEventRequest(BaseModel):
-    source_file_path: str | None = None
-    preview_image_path: str | None = None
-
-
-class PluginNextShotRequest(BaseModel):
-    current_shot_id: str | None = None
-    auto_add: bool = False
 
 
 class AddShotRequest(BaseModel):

@@ -381,16 +381,59 @@ Each applied shot's `camera_data` field receives:
 
 ## 13. Photoshop Plugin API
 
-`/api/plugin/*` — endpoints consumed exclusively by the Photoshop UXP plugin (`photoshop_uxp_plugin/`).
+The Photoshop bridge has two related surfaces:
 
-| Endpoint | Method | Purpose |
+- `/api/bridge/*` is the desktop app and live-link status surface. The React app uses it for heartbeat and status polling; older plugin builds can also use it for heartbeat compatibility.
+- `/api/plugin/*` is the UXP plugin contract. The plugin uses it for project context, shot focus, preview export, PSD-saved notifications, and next-shot navigation.
+
+### Bridge endpoint map
+
+| Endpoint | Backend method | Primary caller | Request | Response | Side effects |
+|---|---|---|---|---|---|
+| `GET /api/bridge/live` | `method_touch_live_bridge()` | Plugin discovery / compatibility | none | Live bridge JSON file payload | Refreshes `storyboard_live_bridge.json` |
+| `PUT /api/bridge/live` | `method_touch_live_bridge(selected_shot_id)` | `LiveBridgeContext.tsx` | `LiveBridgeUpdateRequest` (`selected_shot_id`) | Live bridge JSON file payload | Updates `app.state.live_selected_shot_id`; refreshes live bridge file |
+| `POST /api/bridge/relink` | `method_bridge_relink()` | Frontend advanced tools | none | Bridge status payload | Requires open project; refreshes live bridge file |
+| `GET /api/bridge/status` | `method_bridge_status()` | `LiveBridgeContext.tsx`, Topbar, Advanced panel | none | `BridgeStatusResponse` fields plus `live` payload | Refreshes live bridge file; reports current plugin heartbeat state |
+| `POST /api/bridge/plugin-heartbeat` | `method_plugin_heartbeat()` | Older UXP fallback | `PluginHeartbeatRequest` | `{ "ok": "true" }` | Updates transient plugin heartbeat state |
+| `POST /api/plugin/heartbeat` | `method_plugin_heartbeat()` | Current UXP plugin | `PluginHeartbeatRequest` | `{ "ok": "true" }` | Updates transient plugin heartbeat state |
+| `GET /api/plugin/context` | `method_plugin_context()` | UXP plugin | none | `PluginContextResponse` shape | Refreshes project from disk when safe; embeds bridge status |
+| `POST /api/plugin/shots/{shot_id}/export-preview` | `method_plugin_export_preview()` | UXP plugin | `PluginShotEventRequest` (`preview_image_path`, optional `source_file_path`) | `{ shot, context }` | Validates project-relative paths; relinks preview; autosaves; increments `plugin_project_revision`; records `plugin_last_exported_preview[shot_id]` |
+| `POST /api/plugin/shots/{shot_id}/psd-saved` | `method_plugin_psd_saved()` | UXP plugin | `PluginShotEventRequest` (`source_file_path`) | `{ shot, context }` | Validates PSD path; updates `source_file_path` metadata; autosaves; increments `plugin_project_revision` |
+| `POST /api/plugin/shots/{shot_id}/focus` | `method_plugin_focus_shot()` | UXP plugin | none | Plugin context payload | Validates shot; updates plugin/app selected shot; persists app session; refreshes live bridge file |
+| `POST /api/plugin/shots/next` | `method_plugin_next_shot()` | UXP plugin | `PluginNextShotRequest` (`current_shot_id`, `auto_add`) | `{ shot, created, context }` | Selects next shot; optionally creates/autosaves a shot; increments revision only when a shot is created |
+
+### Bridge ownership
+
+| Area | Owner | Notes |
 |---|---|---|
-| `/api/plugin/heartbeat` | POST | Plugin reports it is alive; carries `selected_shot_id` and `open_shot_ids` |
-| `/api/plugin/context` | GET | Full project context for the plugin panel (shots, canvas, selected shot, bridge status) |
-| `/api/plugin/shots/{shot_id}/export-preview` | POST | Plugin has exported a preview PNG; update shot's preview path and autosave |
-| `/api/plugin/shots/{shot_id}/psd-saved` | POST | Plugin has saved a PSD; update shot's `source_file_path` and autosave |
-| `/api/plugin/shots/{shot_id}/focus` | POST | Switch the selected shot to `shot_id` in both the app and live bridge |
-| `/api/plugin/shots/next` | POST | Advance to the next shot (optionally creating one if `auto_add=true`) |
+| Route parsing and request models | `api.py`, bridge request models in `schemas.py` | Routes should only parse Pydantic inputs and call `StoryboardBackendService`. |
+| Project-changing bridge behavior | `backend_service.py` | Preview export, PSD-saved, focus, next-shot, and revision increments live here. |
+| Transient app/bridge state payloads | `app_state.py` | Owns `_touch_live_bridge()`, `_bridge_status_payload()`, `_plugin_link_state()`, heartbeat source precedence, and app session persistence. |
+| File/project persistence | `project_manager.py` | Owns project-relative path resolution, preview relinking, thumbnail generation, and disk saves. |
+| Frontend polling | `LiveBridgeContext.tsx` | Publishes app heartbeat and polls `/api/bridge/status`; it does not rebuild project payloads itself. |
+| Frontend project replacement | `ProjectContext.tsx` | Owns `refreshProjectFromBridge()`, including selection fallback when the plugin-selected shot is stale. |
+| Bridge display helpers | `liveBridgeUtils.ts` | Owns the bridge status hook and label helpers only. |
+
+### Key fields
+
+| Field | Owner | Meaning |
+|---|---|---|
+| `plugin_selected_shot_id` | Plugin heartbeat / focus endpoints, exposed by `app_state._bridge_status_payload()` | Shot the plugin currently reports as selected. Frontend should use it only if it exists in the refreshed project payload. |
+| `plugin_open_shot_ids` | Plugin heartbeat, normalized in `app_state._plugin_open_shot_ids()` | Shot ids for open Photoshop tabs; used to focus existing plugin tabs instead of launching Photoshop again. |
+| `plugin_last_exported_preview` | `method_plugin_export_preview()` | Per-shot timestamp for the latest plugin preview export. |
+| `plugin_project_revision` | Backend plugin mutation methods | Monotonic in-memory counter telling `LiveBridgeContext.tsx` to ask `ProjectContext` for a project refresh. |
+| `focus_request` in live bridge payload | `method_open_source()` / `_request_plugin_focus()` | One-shot request for the plugin to focus an already-open tab; includes a monotonic token so polling does not repeatedly switch tabs. |
+
+### UXP linked mode and local fallback
+
+When the plugin can reach the backend, it is in backend-linked mode:
+
+- it reads `/api/plugin/context` for project, canvas, selected shot, paths, and bridge status;
+- it sends `/api/plugin/heartbeat` with selected/open shot ids;
+- it reports preview and PSD metadata through plugin endpoints;
+- `panel_storage_adapter.js` avoids writing canonical project metadata files directly and refreshes from the backend instead.
+
+When no backend is reachable, the plugin falls back to local project files (`project.json`, `shots.json`, `shots.csv`, `storyboard_bridge.json`) for compatibility. Do not casually change the linked-mode endpoints, field names, heartbeat file names, or local fallback behavior; older plugin sessions and saved projects depend on them.
 
 **Plugin link detection**
 

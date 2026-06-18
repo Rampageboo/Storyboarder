@@ -171,19 +171,33 @@ def _plugin_link_state(app: FastAPI) -> tuple[bool, float | None, list[str]]:
     return plugin_linked, age, open_shot_ids
 
 
-def _plugin_selected_shot_id(app: FastAPI) -> str:
-    selected = str(getattr(app.state, "plugin_selected_shot_id", "") or "")
-    if selected:
-        return selected
+def _plugin_selected_shot_id(
+    app: FastAPI,
+    plugin_linked: bool | None = None,
+    file_seen: float | None = None,
+    http_seen: float | None = None,
+) -> str:
+    http_seen_value = float(getattr(app.state, "plugin_last_seen", 0.0) or 0.0) if http_seen is None else http_seen
+    file_seen_value = live_bridge.read_plugin_heartbeat_mtime() if file_seen is None else file_seen
+    if plugin_linked is None:
+        last_seen = max(http_seen_value, file_seen_value)
+        age = time.time() - last_seen if last_seen else None
+        plugin_linked = age is not None and age <= 12.0
+    if not plugin_linked:
+        return ""
+
+    http_selected = str(getattr(app.state, "plugin_selected_shot_id", "") or "")
     heartbeat = live_bridge.read_plugin_heartbeat()
-    if isinstance(heartbeat, dict):
-        return str(heartbeat.get("selected_shot_id") or "")
-    return ""
+    file_selected = str(heartbeat.get("selected_shot_id") or "") if isinstance(heartbeat, dict) else ""
+    primary, fallback = (file_selected, http_selected) if file_seen_value >= http_seen_value else (http_selected, file_selected)
+    return primary or fallback
 
 
 def _bridge_status_payload(app: FastAPI) -> dict[str, Any]:
     live = _touch_live_bridge(app)
     project = app.state.project
+    http_seen = float(getattr(app.state, "plugin_last_seen", 0.0) or 0.0)
+    file_seen = live_bridge.read_plugin_heartbeat_mtime()
     plugin_linked, age, open_shot_ids = _plugin_link_state(app)
     last_exported = getattr(app.state, "plugin_last_exported_preview", {})
     if not isinstance(last_exported, dict):
@@ -193,7 +207,7 @@ def _bridge_status_payload(app: FastAPI) -> dict[str, Any]:
         "project_open": project is not None,
         "plugin_linked": plugin_linked,
         "plugin_last_seen_seconds_ago": age,
-        "plugin_selected_shot_id": _plugin_selected_shot_id(app),
+        "plugin_selected_shot_id": _plugin_selected_shot_id(app, plugin_linked, file_seen, http_seen),
         "plugin_open_shot_ids": open_shot_ids,
         "plugin_last_exported_preview": last_exported,
         "plugin_project_revision": int(getattr(app.state, "plugin_project_revision", 0) or 0),
