@@ -1,3 +1,7 @@
+> **Historical document.** This file records the incremental refactor work carried out before the React migration and architecture-cleanup commits (`f1eee1a`, `60f8a8a`). It describes a pre-React frontend that no longer exists (classic JS modules, `app/main_module.js`, `init_globals.js`, `APP_SCRIPTS` loader, `globalThis` bridging). Do not treat it as a description of the current codebase. See [current_architecture.md](current_architecture.md) for the current architecture.
+
+---
+
 # 代码审查与重构记录
 
 最后更新:2026-06-15(Layer3 / P10 / P5 续推已落地)

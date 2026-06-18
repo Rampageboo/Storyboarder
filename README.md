@@ -2,6 +2,10 @@
 
 A minimal local storyboard planning app with a React + Vite frontend and a Python FastAPI backend.
 
+## Developer Documentation
+
+- [Current Architecture](docs/current_architecture.md) — desktop launch flow, internal server, pywebview shell, React/Vite bundle, FastAPI routes, backend_service, shot_service, project_manager, project_transaction safety, Scene3D TypeScript source, generated-files policy, and deleted legacy artifacts.
+
 ## Features
 
 - Run as a native desktop window
