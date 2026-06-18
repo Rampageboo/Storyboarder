@@ -9,6 +9,26 @@
       <sp-heading size="S">Storyboard Bridge</sp-heading>
       <sp-detail id="linkStatus" class="link-status">Connecting…</sp-detail>
       <sp-detail id="currentShot" class="current-shot" hidden></sp-detail>
+      <section id="currentShotCard" class="current-shot-card" hidden>
+        <div class="card-kicker" id="shotCardMode">Linked shot</div>
+        <div class="card-title-row">
+          <div>
+            <div class="card-shot-id" id="shotCardIndex">No shot selected</div>
+            <div class="card-title" id="shotCardTitle">Untitled shot</div>
+          </div>
+          <div class="card-status-pill" id="shotCardStatus">Draft</div>
+        </div>
+        <div class="card-meta" id="shotCardMeta"></div>
+        <div class="card-section" id="shotCardAction" hidden></div>
+        <div class="card-section" id="shotCardCamera" hidden></div>
+        <div class="card-section" id="shotCardNotes" hidden></div>
+        <div class="status-buttons" id="quickStatusButtons"></div>
+        <div class="quick-note-row">
+          <textarea id="quickNoteText" class="quick-note-input" rows="2" placeholder="Add quick note"></textarea>
+          <sp-button id="addQuickNote" variant="secondary">Add note</sp-button>
+        </div>
+        <sp-detail id="shotCardHint" class="card-hint"></sp-detail>
+      </section>
 
       <div id="unlinkedPanel">
         <sp-button id="relinkNow" variant="secondary">Reconnect</sp-button>
@@ -17,6 +37,7 @@
       <div id="linkedPanel" hidden>
         <div class="panel-group panel-group-save">
           <span class="group-label">Preview export</span>
+          <sp-detail class="helper-text">Export preview updates Storyboard Tool. Press Ctrl+S in Photoshop to save the PSD.</sp-detail>
           <sp-button id="saveAndNext" variant="cta">Export &amp; next</sp-button>
           <sp-button id="saveAndStay" variant="primary">Export preview</sp-button>
           <sp-checkbox id="autoAddShot" checked>Auto-add at end</sp-checkbox>
@@ -30,17 +51,24 @@
             <sp-button id="nextShot" variant="secondary">Next</sp-button>
           </div>
           <sp-button id="openShot" variant="secondary">Open canvas</sp-button>
+          <sp-button id="focusCurrentTab" variant="secondary">Focus open tab</sp-button>
         </div>
 
         <div class="panel-group">
-          <span class="group-label">References</span>
+          <span class="group-label">Onion skin</span>
           <sp-label for="overlayCount">Overlay count</sp-label>
           <sp-textfield id="overlayCount" class="overlay-count" value="1" placeholder="1"></sp-textfield>
           <sp-label for="overlayOpacity">Opacity</sp-label>
           <sp-textfield id="overlayOpacity" class="overlay-count" value="45" placeholder="45"></sp-textfield>
-          <sp-button id="overlayPrevious" variant="secondary">Previous overlay</sp-button>
-          <sp-button id="overlayNext" variant="secondary">Next overlay</sp-button>
+          <sp-button id="overlayPrevious" variant="secondary">Apply previous overlay</sp-button>
+          <sp-button id="overlayNext" variant="secondary">Apply next overlay</sp-button>
           <sp-button id="clearOverlay" variant="secondary">Clear overlay</sp-button>
+        </div>
+
+        <div class="panel-group">
+          <span class="group-label">Layers</span>
+          <sp-detail class="helper-text">Template: Rough / Clean / Notes</sp-detail>
+          <sp-button id="ensureTemplateLayers" variant="secondary">Ensure template layers</sp-button>
         </div>
       </div>
 

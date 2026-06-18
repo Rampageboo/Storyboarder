@@ -15,6 +15,7 @@ const SB_BG_LAYER_NAME = "SB bg";
 const DRAWING_LAYER_NAME = "Layer 1";
 const TEMPLATE_LAYER_NAMES = ["Rough", "Clean", "Notes"];
 const DEFAULT_OVERLAY_OPACITY = 45;
+const QUICK_STATUS_OPTIONS = ["Draft", "In Progress", "Review", "Approved"];
 const SHOT_CSV_COLUMNS = [
   "order",
   "shot_id",
@@ -71,6 +72,15 @@ function init() {
   $("chooseFolder").addEventListener("click", () => runPanelAction(chooseShotFolder));
   $("shotSelect").addEventListener("change", () => runPanelAction(switchToSelectedShot));
   $("openShot").addEventListener("click", () => runPanelAction(switchToSelectedShot));
+  $("focusCurrentTab")?.addEventListener("click", () => runPanelAction(focusCurrentShotTab));
+  $("ensureTemplateLayers")?.addEventListener("click", () => runPanelAction(ensureTemplateLayersForActiveDocument));
+  $("quickStatusButtons")?.addEventListener("click", (event) => {
+    const button = event.target?.closest?.("[data-status]");
+    if (button) {
+      runPanelAction(() => updateShotStatusViaBackend(button.getAttribute("data-status"))).catch(() => {});
+    }
+  });
+  $("addQuickNote")?.addEventListener("click", () => runPanelAction(addQuickNoteViaBackend));
   $("previousShot")?.addEventListener("click", () => runPanelAction(goToPreviousShot));
   $("nextShot")?.addEventListener("click", () => runPanelAction(goToNextShot));
   $("overlayPrevious").addEventListener("click", () => runPanelAction(overlayPreviousShots));
@@ -92,6 +102,7 @@ function init() {
   startActiveDocumentWatch();
   scheduleBackgroundSyncForActiveDocument();
   updateCurrentShotIndicator();
+  renderCurrentShotCard();
 }
 
 function setLinkedUi(linked) {
@@ -755,6 +766,7 @@ function setSelectedShotId(shotId) {
     select.value = shotId;
   }
   updateOverlayCountLimits();
+  renderCurrentShotCard();
 }
 
 function currentShotIndex() {
@@ -847,6 +859,21 @@ async function goToNextShot() {
   await switchToShot(shot.shot_id);
 }
 
+async function focusCurrentShotTab() {
+  const shotId = selectedShotIdValue();
+  if (!isValidShotId(shotId)) {
+    throw new Error("Pick a shot first.");
+  }
+  const doc = findOpenDocumentForShot(shotId);
+  if (!doc) {
+    throw new Error(`No open Photoshop tab for ${shotId}.`);
+  }
+  activateDocument(doc);
+  setSelectedShotId(shotId);
+  await notifyBackendShotFocus(shotId);
+  setStatus(`Focused open tab for ${shotId}.`);
+}
+
 function isValidShotId(value) {
   return /^shot_\d{3,}$/i.test(value) || /^[a-f0-9]{32}$/i.test(value);
 }
@@ -874,6 +901,175 @@ function currentShotRecord() {
     throw new Error(`Shot not found in project: ${shotId}`);
   }
   return shot;
+}
+
+function selectedShotIdValue() {
+  return String($("shotId")?.value || $("shotSelect")?.value || detectShotFromDocument() || "").trim().toLowerCase();
+}
+
+function currentShotFromProjectData() {
+  const shotId = selectedShotIdValue();
+  if (!shotId) {
+    return null;
+  }
+  return (projectData?.shots || []).find((shot) => shot.shot_id === shotId) || null;
+}
+
+function currentShotIndexLabel(shot) {
+  const shots = projectData?.shots || [];
+  const index = shots.findIndex((item) => item.shot_id === shot?.shot_id);
+  if (index < 0) {
+    return shot?.shot_id || selectedShotIdValue() || "No shot";
+  }
+  return `${shot.shot_id} / ${String(index + 1).padStart(3, "0")} of ${String(shots.length).padStart(3, "0")}`;
+}
+
+function compactText(value, fallback = "") {
+  return String(value || "").trim() || fallback;
+}
+
+function latestCommentSummary(shot) {
+  const comments = Array.isArray(shot?.comments) ? shot.comments : [];
+  const latest = [...comments].reverse().find((comment) => String(comment?.text || "").trim());
+  return latest ? String(latest.text || "").trim() : "";
+}
+
+function setCardSection(id, label, value) {
+  const node = $(id);
+  if (!node) {
+    return;
+  }
+  const text = compactText(value);
+  node.hidden = !text;
+  node.innerHTML = "";
+  if (!text) {
+    return;
+  }
+  const strong = document.createElement("strong");
+  strong.textContent = label;
+  const body = document.createElement("span");
+  body.textContent = text;
+  node.append(strong, body);
+}
+
+function renderQuickStatusButtons(shot, enabled) {
+  const container = $("quickStatusButtons");
+  if (!container) {
+    return;
+  }
+  container.innerHTML = "";
+  const currentStatus = String(shot?.status || "Draft");
+  for (const status of QUICK_STATUS_OPTIONS) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.textContent = status;
+    button.setAttribute("data-status", status);
+    button.disabled = !enabled;
+    button.classList.toggle("is-active", status === currentStatus);
+    container.appendChild(button);
+  }
+}
+
+function renderCurrentShotCard() {
+  const card = $("currentShotCard");
+  if (!card) {
+    return;
+  }
+  const shot = currentShotFromProjectData();
+  const selectedId = selectedShotIdValue();
+  const hasStandaloneSelection = !linkedFromStoryboard && selectedId;
+  if (!shot && !hasStandaloneSelection) {
+    card.hidden = true;
+    return;
+  }
+
+  card.hidden = false;
+  $("shotCardMode").textContent = linkedFromStoryboard ? "Linked to Storyboard Tool" : "Standalone folder mode";
+  $("shotCardIndex").textContent = shot ? currentShotIndexLabel(shot) : selectedId;
+  $("shotCardTitle").textContent = compactText(shot?.title, "Untitled shot");
+  $("shotCardStatus").textContent = compactText(shot?.status, linkedFromStoryboard ? "Draft" : "Standalone");
+  const meta = [];
+  if (shot?.duration_seconds) meta.push(`${Number(shot.duration_seconds).toFixed(1)}s`);
+  if (compactText(shot?.scene)) meta.push(`Scene: ${shot.scene}`);
+  if (compactText(shot?.sequence)) meta.push(`Seq: ${shot.sequence}`);
+  $("shotCardMeta").textContent = meta.join(" | ");
+  setCardSection("shotCardAction", "Action", shot?.action_note || shot?.description);
+  setCardSection("shotCardCamera", "Camera", shot?.camera_note);
+  setCardSection("shotCardNotes", "Notes", latestCommentSummary(shot));
+  renderQuickStatusButtons(shot, Boolean(linkedFromStoryboard && shot));
+  const note = $("quickNoteText");
+  if (note) note.disabled = !linkedFromStoryboard || !shot;
+  const add = $("addQuickNote");
+  if (add) add.disabled = !linkedFromStoryboard || !shot;
+  const hint = $("shotCardHint");
+  if (hint) {
+    hint.textContent = linkedFromStoryboard
+      ? "Status and notes are saved through Storyboard Tool."
+      : "Status and quick notes need Storyboard Tool linked.";
+  }
+}
+
+function shotUpdatePayload(shot, status) {
+  return {
+    title: shot.title || "",
+    scene: shot.scene || "",
+    sequence: shot.sequence || "",
+    description: shot.description || "",
+    action_note: shot.action_note || "",
+    camera_note: shot.camera_note || "",
+    character_note: shot.character_note || "",
+    dialogue: shot.dialogue || "",
+    lighting_note: shot.lighting_note || "",
+    transition_note: shot.transition_note || "",
+    duration_seconds: Number.parseFloat(shot.duration_seconds || "3") || 3,
+    camera_data: shot.camera_data && typeof shot.camera_data === "object" ? shot.camera_data : {},
+    tags: Array.isArray(shot.tags) ? shot.tags : [],
+    status,
+  };
+}
+
+async function updateShotStatusViaBackend(status) {
+  if (!linkedFromStoryboard) {
+    throw new Error("Status changes require Storyboard Tool linked.");
+  }
+  const shot = currentShotFromProjectData();
+  if (!shot) {
+    throw new Error("Pick a shot first.");
+  }
+  const payload = await requestStoryboardApi(`/api/shots/${encodeURIComponent(shot.shot_id)}`, {
+    method: "PATCH",
+    body: JSON.stringify(shotUpdatePayload(shot, status || "Draft")),
+  });
+  if (!payload) {
+    throw new Error("Could not update shot status. Is Storyboard Tool running?");
+  }
+  await refreshProjectDataFromBackend();
+  setStatus(`Marked ${shot.shot_id} as ${status}.`);
+}
+
+async function addQuickNoteViaBackend() {
+  if (!linkedFromStoryboard) {
+    throw new Error("Quick notes require Storyboard Tool linked.");
+  }
+  const shot = currentShotFromProjectData();
+  if (!shot) {
+    throw new Error("Pick a shot first.");
+  }
+  const input = $("quickNoteText");
+  const text = String(input?.value || "").trim();
+  if (!text) {
+    throw new Error("Type a note first.");
+  }
+  const payload = await requestStoryboardApi(`/api/shots/${encodeURIComponent(shot.shot_id)}/comments`, {
+    method: "POST",
+    body: JSON.stringify({ text }),
+  });
+  if (!payload) {
+    throw new Error("Could not add note. Is Storyboard Tool running?");
+  }
+  if (input) input.value = "";
+  await refreshProjectDataFromBackend();
+  setStatus(`Added note to ${shot.shot_id}.`);
 }
 
 function shotIdFromDocumentName(name) {
@@ -1226,6 +1422,22 @@ async function ensureDrawingLayerInModal(doc) {
     return null;
   }
   return createNamedLayerAtTopInModal(doc, DRAWING_LAYER_NAME);
+}
+
+async function ensureTemplateLayersForActiveDocument() {
+  if (!app.activeDocument) {
+    throw new Error("Open a shot canvas first.");
+  }
+  let createdCount = 0;
+  await runModal("Ensure template layers", async () => {
+    const created = await ensureLayerTemplateInModal(app.activeDocument);
+    createdCount = created.length;
+  });
+  setStatus(
+    createdCount
+      ? `Created ${createdCount} missing template layer(s).`
+      : "Template layers already exist.",
+  );
 }
 
 async function deleteLayersInModal(layers) {
@@ -1589,6 +1801,9 @@ function updateCurrentShotIndicator() {
   node.classList.remove("muted");
   const shots = projectData?.shots || [];
   const index = shots.findIndex((shot) => shot.shot_id === shotId);
+  if (index >= 0 && String($("shotId")?.value || "").trim().toLowerCase() !== shotId) {
+    setSelectedShotId(shotId);
+  }
   const idLabel = formatShotIdLabel(shotId);
   let text;
   if (index >= 0) {
@@ -1617,6 +1832,7 @@ function updateCurrentShotIndicator() {
   }
   node.textContent = text;
   node.hidden = false;
+  renderCurrentShotCard();
 }
 
 function scheduleBackgroundSyncForActiveDocument() {
@@ -2077,6 +2293,7 @@ function applyPluginContext(context) {
   if (shotId) {
     setSelectedShotId(shotId);
   }
+  renderCurrentShotCard();
 }
 
 async function refreshProjectDataFromBackend() {
@@ -2254,7 +2471,7 @@ async function saveCurrentShot() {
   const shotId = await exportDrawingPreview();
   await updateProjectAfterSave(shotId);
   setStatus(
-    `Exported drawing for ${shotId}. Press Ctrl+S in Photoshop to save the PSD (Storyboard Tool syncs the preview automatically).`,
+    `Preview exported for ${shotId}. Press Ctrl+S in Photoshop to save the PSD.`,
   );
 }
 
@@ -2315,7 +2532,7 @@ async function saveAndGoNext() {
 
   if (!nextShot) {
     setStatus(
-      `Exported drawing for ${shotId}. No more shots in the project. Press Ctrl+S to save the PSD.`,
+      `Preview exported for ${shotId}. No more shots in the project. Press Ctrl+S to save the PSD.`,
     );
     return;
   }
@@ -2430,7 +2647,7 @@ async function switchToShot(shotId) {
         await ensureDrawingLayerInModal(app.activeDocument);
       }
     }
-    await finishShotSwitch(previousDoc, app.activeDocument || nextDoc);
+    await finishShotSwitch(previousDoc, app.activeDocument || nextDoc, { closePrevious: false });
   });
 
   setSelectedShotId(shotId);

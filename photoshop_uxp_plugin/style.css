@@ -144,6 +144,126 @@ sp-textfield {
   display: none !important;
 }
 
+.current-shot-card {
+  display: block;
+  padding: 10px;
+  border-radius: 6px;
+  border: 1px solid #46546d;
+  background: #182234;
+  color: #e6eefc;
+}
+
+.current-shot-card[hidden] {
+  display: none !important;
+}
+
+.card-kicker,
+.card-meta,
+.card-hint,
+.helper-text {
+  color: #aeb9c9;
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+.card-title-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  align-items: flex-start;
+  margin: 4px 0 8px;
+}
+
+.card-shot-id {
+  color: #9fb9ff;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.card-title {
+  font-weight: 700;
+  line-height: 1.25;
+  word-break: break-word;
+}
+
+.card-status-pill {
+  flex: 0 0 auto;
+  max-width: 96px;
+  padding: 3px 6px;
+  border-radius: 999px;
+  background: #263a5c;
+  color: #d8e5ff;
+  font-size: 10px;
+  font-weight: 700;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.card-section {
+  margin-top: 8px;
+  line-height: 1.35;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.card-section strong {
+  color: #aeb9c9;
+  display: block;
+  margin-bottom: 2px;
+}
+
+.status-buttons {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+  margin-top: 10px;
+}
+
+.status-buttons button {
+  padding: 5px 6px;
+  border-radius: 5px;
+  border: 1px solid #4e5a6e;
+  background: #222b3a;
+  color: #e6eefc;
+  font-size: 11px;
+}
+
+.status-buttons button.is-active {
+  border-color: #75a7ff;
+  background: #29456f;
+}
+
+.status-buttons button:disabled,
+.quick-note-input:disabled {
+  opacity: 0.55;
+}
+
+.quick-note-row {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 10px;
+}
+
+.quick-note-input {
+  width: 100%;
+  box-sizing: border-box;
+  resize: vertical;
+  min-height: 44px;
+  border: 1px solid #4e5a6e;
+  border-radius: 5px;
+  background: #101722;
+  color: #f3f3f3;
+  padding: 6px;
+  font: inherit;
+}
+
+.card-hint {
+  display: block;
+  margin-top: 8px;
+}
+
 .link-status.waiting {
   background: #3a3420;
   color: #f0e2b8;
