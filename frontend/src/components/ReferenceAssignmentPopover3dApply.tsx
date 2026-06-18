@@ -12,7 +12,7 @@ import {
   type ApplyRefSegmentRequest,
 } from '../api'
 import type { ProjectPayload, ReferenceLink } from '../types'
-import { useProject } from '../state/ProjectContext'
+import { useProject } from '../state/useProject'
 import { shotDisplayLabel } from '../utils/shotDisplay'
 import { findRefSegment, refSegmentsWithoutOverlap } from '../utils/refSegmentDisplay'
 import { describeScene3dView, resolveScene3dReferenceView } from '../utils/scene3dView'
@@ -88,9 +88,14 @@ function renderBodyPortal(node: ReactNode) {
 }
 
 function RefThumb({ link, selected }: { link: ReferenceLink; selected: boolean }) {
+  const linkKey = `${link.id}:${link.path}`
+  const [prevLinkKey, setPrevLinkKey] = useState(linkKey)
   const [failed, setFailed] = useState(false)
   const url = projectFileUrl(link.path)
-  useEffect(() => setFailed(false), [link.id, link.path])
+  if (linkKey !== prevLinkKey) {
+    setPrevLinkKey(linkKey)
+    setFailed(false)
+  }
   return (
     <div className={`ref-assign-ref-thumb ${selected ? 'is-selected' : ''}`}>
       {link.type === 'model' ? (
@@ -140,7 +145,7 @@ export function ReferenceAssignmentPopover() {
 
   const links = useMemo(() => project?.settings?.reference_links ?? [], [project?.settings?.reference_links])
   const segments = useMemo(() => (project?.settings?.ref_segments ?? []) as unknown as Segment[], [project?.settings?.ref_segments])
-  const shots = project?.shots ?? []
+  const shots = useMemo(() => project?.shots ?? [], [project?.shots])
   const draftComplete = !!(segmentRange.anchorShotId && segmentRange.endShotId)
   const isInspectMode = refSegmentInspectOpen && !!activeAppliedSegmentId && !draftComplete
   const open = draftComplete || isInspectMode
@@ -161,26 +166,44 @@ export function ReferenceAssignmentPopover() {
     [refMode, anchorShot, project?.settings],
   )
 
-  useEffect(() => {
-    if (!isInspectMode || !inspectSegment) return
-    const ref = inspectSegment.reference_id ? String(inspectSegment.reference_id) : links.find((l) => l.path === inspectSegment.reference_path)?.id ?? ''
-    if (ref) setRefId(ref)
-    setFormAnchorShotId(String(inspectSegment.anchor_shot_id || ''))
-    setFormEndShotId(String(inspectSegment.end_shot_id || ''))
-    setFitMode(normalizeFitMode(inspectSegment.fit_mode))
-    const start = Number(inspectSegment.video_start)
-    setSegmentStart(Number.isFinite(start) && start > 0 ? start : 0)
-    setPreviewFailed(false)
-    setPlayheadTime(0)
-    setMediaDuration(0)
-  }, [isInspectMode, inspectSegment, links])
+  // Seed form state when entering inspect mode for a segment.
+  const inspectKey = isInspectMode ? (inspectSegment?.id ?? '') : ''
+  const [prevInspectKey, setPrevInspectKey] = useState(inspectKey)
+  if (inspectKey !== prevInspectKey) {
+    setPrevInspectKey(inspectKey)
+    if (isInspectMode && inspectSegment) {
+      const ref = inspectSegment.reference_id
+        ? String(inspectSegment.reference_id)
+        : links.find((l) => l.path === inspectSegment.reference_path)?.id ?? ''
+      if (ref) setRefId(ref)
+      setFormAnchorShotId(String(inspectSegment.anchor_shot_id || ''))
+      setFormEndShotId(String(inspectSegment.end_shot_id || ''))
+      setFitMode(normalizeFitMode(inspectSegment.fit_mode))
+      const start = Number(inspectSegment.video_start)
+      setSegmentStart(Number.isFinite(start) && start > 0 ? start : 0)
+      setPreviewFailed(false)
+      setPlayheadTime(0)
+      setMediaDuration(0)
+    }
+  }
 
-  useEffect(() => {
-    if (isInspectMode) return
-    setRefId((cur) => (cur && links.some((l) => l.id === cur) ? cur : links[0]?.id ?? ''))
-  }, [links, isInspectMode])
+  // Normalize refId to a valid link when the library or mode changes.
+  const linksKey = links.map((l) => l.id).join(',')
+  const [prevLinksKey, setPrevLinksKey] = useState(linksKey)
+  const [prevIsInspectMode, setPrevIsInspectMode] = useState(isInspectMode)
+  if (linksKey !== prevLinksKey || isInspectMode !== prevIsInspectMode) {
+    setPrevLinksKey(linksKey)
+    setPrevIsInspectMode(isInspectMode)
+    if (!isInspectMode) {
+      setRefId((cur) => (cur && links.some((l) => l.id === cur) ? cur : links[0]?.id ?? ''))
+    }
+  }
 
-  useEffect(() => {
+  // Reset preview state when the selected reference or mode changes.
+  const refModeKey = `${refId}:${isInspectMode ? '1' : '0'}`
+  const [prevRefModeKey, setPrevRefModeKey] = useState(refModeKey)
+  if (refModeKey !== prevRefModeKey) {
+    setPrevRefModeKey(refModeKey)
     setPreviewFailed(false)
     if (!isInspectMode) {
       setFitMode('fit')
@@ -188,7 +211,7 @@ export function ReferenceAssignmentPopover() {
       setMediaDuration(0)
       setPlayheadTime(0)
     }
-  }, [refId, isInspectMode])
+  }
 
   useEffect(() => {
     if (!toast) return

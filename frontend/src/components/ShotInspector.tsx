@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useState } from 'react'
-import { useProject } from '../state/ProjectContext'
+import { useMemo, useState } from 'react'
+import { useProject } from '../state/useProject'
 import './ShotInspector.css'
 
 function toTagsString(tags: string[] | undefined) {
@@ -21,17 +21,18 @@ export function ShotInspector() {
     return project.shots.find((s) => s.shot_id === selectedShotId) || null
   }, [project, selectedShotId])
 
+  const [prevShotId, setPrevShotId] = useState(selectedShotId)
   const [tagsText, setTagsText] = useState<string>('')
-  useEffect(() => {
+  if (selectedShotId !== prevShotId) {
+    setPrevShotId(selectedShotId)
     if (!selectedShotId) {
       setTagsText('')
-      return
+    } else {
+      const current = project?.shots.find((s) => s.shot_id === selectedShotId)
+      const draftTags = getDraft(selectedShotId)?.tags
+      setTagsText(toTagsString(draftTags ?? current?.tags))
     }
-    const current = project?.shots.find((s) => s.shot_id === selectedShotId)
-    const draftTags = getDraft(selectedShotId)?.tags
-    setTagsText(toTagsString(draftTags ?? current?.tags))
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedShotId])
+  }
 
   if (!project) {
     return null

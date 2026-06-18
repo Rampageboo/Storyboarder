@@ -1,6 +1,6 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useMemo, useRef, useState } from 'react'
 import { projectFileUrl, removeShotReference, uploadShotReference } from '../api'
-import { useProject } from '../state/ProjectContext'
+import { useProject } from '../state/useProject'
 import './ReferencePanel.css'
 
 function fileName(path: string) {
@@ -9,10 +9,12 @@ function fileName(path: string) {
 
 // A reference thumbnail that degrades to a clean "missing" tile instead of a broken-image icon.
 function RefThumb({ url, name }: { url: string; name: string }) {
+  const [prevUrl, setPrevUrl] = useState(url)
   const [failed, setFailed] = useState(false)
-  useEffect(() => {
+  if (url !== prevUrl) {
+    setPrevUrl(url)
     setFailed(false)
-  }, [url])
+  }
   if (failed) {
     return <div className="refs-thumb-missing">missing</div>
   }
@@ -33,13 +35,17 @@ export function ReferencePanel() {
   }, [project, selectedShotId])
 
   // Close the lightbox when switching shots.
-  useEffect(() => {
+  const [prevShotIdForLightbox, setPrevShotIdForLightbox] = useState(selectedShotId)
+  if (selectedShotId !== prevShotIdForLightbox) {
+    setPrevShotIdForLightbox(selectedShotId)
     setLightbox(null)
-  }, [selectedShotId])
+  }
 
-  useEffect(() => {
+  const [prevLightbox, setPrevLightbox] = useState(lightbox)
+  if (lightbox !== prevLightbox) {
+    setPrevLightbox(lightbox)
     setLightboxFailed(false)
-  }, [lightbox])
+  }
 
   if (!project || !shot) {
     return (

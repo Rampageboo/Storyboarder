@@ -1,6 +1,6 @@
-import { useEffect, useRef } from 'react'
+import { useEffect, useLayoutEffect, useRef } from 'react'
 import { addShot, createShotCanvas, deleteRefSegment, deleteShot, openShotSource, syncShot } from '../api'
-import { useProject } from '../state/ProjectContext'
+import { useProject } from '../state/useProject'
 
 function isTypingTarget(target: EventTarget | null): boolean {
   if (!(target instanceof HTMLElement)) return false
@@ -34,7 +34,9 @@ export function useGlobalShortcuts() {
 
   const runningRef = useRef(false)
   const stateRef = useRef({ project, selectedShotId, projectActionBusy, activeAppliedSegmentId })
-  stateRef.current = { project, selectedShotId, projectActionBusy, activeAppliedSegmentId }
+  useLayoutEffect(() => {
+    stateRef.current = { project, selectedShotId, projectActionBusy, activeAppliedSegmentId }
+  })
 
   useEffect(() => {
     const run = async (fn: () => Promise<void>) => {

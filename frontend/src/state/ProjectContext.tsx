@@ -1,8 +1,7 @@
 import {
-  createContext,
   useCallback,
-  useContext,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -13,8 +12,9 @@ import {
 import { createProject, getProject, openProject, saveProject, updateShot } from '../api'
 import { browseFolder, getAppSession, isNoProjectOpenError, updateAppSession, type AppSession } from '../api'
 import type { ProjectPathRequest, ProjectPayload, Shot, ShotUpdate } from '../types'
+import { ProjectContext } from './useProject'
 
-interface ProjectContextValue {
+export interface ProjectContextValue {
   project: ProjectPayload | null
   selectedShotId: string | null
   setSelectedShotId: (shotId: string | null) => void
@@ -53,8 +53,6 @@ interface ProjectContextValue {
   clearError: () => void
   reportError: (error: unknown) => void
 }
-
-const ProjectContext = createContext<ProjectContextValue | null>(null)
 
 function projectJsonInFolder(folderPath: string): string {
   const trimmed = folderPath.replace(/[\\/]+$/, '')
@@ -108,15 +106,21 @@ export function ProjectProvider({ children }: PropsWithChildren) {
   const versionsRef = useRef<Record<string, number>>({})
   const projectRef = useRef<ProjectPayload | null>(null)
   const draftsRef = useRef<Record<string, ShotUpdate>>({})
-  projectRef.current = project
-  draftsRef.current = drafts
 
-  useEffect(() => {
+  // Keep refs current after every render so stable callbacks always read latest values.
+  useLayoutEffect(() => {
+    projectRef.current = project
+    draftsRef.current = drafts
+  })
+
+  const [prevProject, setPrevProject] = useState(project)
+  if (project !== prevProject) {
+    setPrevProject(project)
     if (project) setVisualEpoch((v) => v + 1)
-  }, [project])
+  }
 
   useEffect(() => {
-    if (!project || !selectedShotId) return
+    if (!project?.project_json_path || !selectedShotId) return
     void updateAppSession({
       last_project_json_path: project.project_json_path,
       selected_shot_id: selectedShotId,
@@ -377,8 +381,3 @@ export function ProjectProvider({ children }: PropsWithChildren) {
   return <ProjectContext.Provider value={value}>{children}</ProjectContext.Provider>
 }
 
-export function useProject() {
-  const ctx = useContext(ProjectContext)
-  if (!ctx) throw new Error('useProject must be used within ProjectProvider')
-  return ctx
-}

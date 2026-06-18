@@ -1,6 +1,6 @@
 import { useCallback } from 'react'
-import { useProject } from '../state/ProjectContext'
-import { useBridgeStatus, bridgeStatusLabel } from '../state/LiveBridgeContext'
+import { useProject } from '../state/useProject'
+import { useBridgeStatus, bridgeStatusLabel } from '../state/liveBridgeUtils'
 import type { ProjectPathRequest } from '../types'
 import './Topbar.css'
 

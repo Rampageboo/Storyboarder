@@ -7,7 +7,7 @@ import {
   uploadProjectReference,
 } from '../api'
 import type { ReferenceLink } from '../types'
-import { useProject } from '../state/ProjectContext'
+import { useProject } from '../state/useProject'
 import { shotDisplayLabel } from '../utils/shotDisplay'
 import { ReferenceModelPreview } from './ReferenceModelPreview'
 import './ReferenceSidebar.css'
@@ -25,12 +25,15 @@ function fileName(path: string) {
 }
 
 function RefPreview({ link }: { link: ReferenceLink }) {
+  const linkKey = `${link.id}:${link.path}`
+  const [prevLinkKey, setPrevLinkKey] = useState(linkKey)
   const [failed, setFailed] = useState(false)
   const url = projectFileUrl(link.path)
 
-  useEffect(() => {
+  if (linkKey !== prevLinkKey) {
+    setPrevLinkKey(linkKey)
     setFailed(false)
-  }, [link.id, link.path])
+  }
 
   if (link.type === 'model') {
     return <ReferenceModelPreview path={link.path} label={link.title || fileName(link.path)} compact />

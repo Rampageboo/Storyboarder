@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { importScene3d, openBlenderScene, updateSettings, updateShot, uploadShotImage } from '../api'
-import { useProject } from '../state/ProjectContext'
+import { useProject } from '../state/useProject'
 import type { ProjectPayload, Shot, ShotUpdate } from '../types'
 import { shotDisplayLabel } from '../utils/shotDisplay'
 import {
@@ -115,13 +115,13 @@ export function Scene3DPanel() {
     selectedShotIdRef.current = selectedShotId
   }, [selectedShotId])
 
-  const scene = useMemo(() => sceneSettings(project), [project?.settings?.scene3d])
+  const scene = useMemo(() => sceneSettings(project), [project])
   const scenePath = typeof scene.file_path === 'string' ? scene.file_path : ''
   const sceneName = (typeof scene.file_name === 'string' && scene.file_name) || (scenePath ? fileName(scenePath) : '')
   const hasScene = !!scenePath || Array.isArray(scene.objects)
   const hasLinkedGlb = !!scenePath
   const disabled = busy || projectActionBusy
-  const currentSceneKey = useMemo(() => sceneKey(project), [project?.project_json_path, project?.settings?.scene3d])
+  const currentSceneKey = useMemo(() => sceneKey(project), [project])
 
   const currentShot = useCallback((): Shot | null => {
     const shotId = selectedShotIdRef.current

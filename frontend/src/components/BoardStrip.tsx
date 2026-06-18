@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
 import { addShot, deleteRefSegment, deleteShot, getMissingFiles, moveShotDown, moveShotUp } from '../api'
-import { useProject } from '../state/ProjectContext'
+import { useProject } from '../state/useProject'
 import { shotDisplayLabel } from '../utils/shotDisplay'
 import {
   resolveVisibleSegmentMarkerSpans,
@@ -53,7 +53,7 @@ export function BoardStrip() {
   const viewportRef = useRef<HTMLDivElement | null>(null)
   const markerClickTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
-  const shots = project?.shots ?? []
+  const shots = useMemo(() => project?.shots ?? [], [project?.shots])
   const selectedIndex = useMemo(() => shots.findIndex((s) => s.shot_id === selectedShotId), [shots, selectedShotId])
   const disabled = busy || projectActionBusy || initialLoading
 
@@ -65,7 +65,7 @@ export function BoardStrip() {
   const hi = bothSet ? Math.max(anchorIdx, endIdx) : -1
   const showDraftLine = bothSet && !activeAppliedSegmentId
 
-  const referenceLinks = project?.settings?.reference_links ?? []
+  const referenceLinks = useMemo(() => project?.settings?.reference_links ?? [], [project?.settings?.reference_links])
   const visibleMarkers = useMemo(
     () =>
       resolveVisibleSegmentMarkerSpans(

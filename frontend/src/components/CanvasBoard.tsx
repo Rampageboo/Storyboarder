@@ -12,7 +12,7 @@ import {
   uploadShotImage,
   uploadShotSource,
 } from '../api'
-import { useProject } from '../state/ProjectContext'
+import { useProject } from '../state/useProject'
 import { shotDisplayLabel } from '../utils/shotDisplay'
 import './CanvasBoard.css'
 
@@ -49,35 +49,34 @@ export function CanvasBoard() {
 
   const imgSrc = useMemo(() => {
     if (!shot || !shot.image_path) return ''
-    const v = shot.preview_disk_mtime || shot.thumbnail_disk_mtime || bust || Date.now()
+    const v = shot.preview_disk_mtime || shot.thumbnail_disk_mtime || bust || 0
     return `${shotImageUrl(shot.shot_id)}?v=${encodeURIComponent(String(v))}`
   }, [shot, bust])
 
-  // Clear the failed-load flag when the preview identity changes (new shot, or preview replaced by
-  // sync/upload/recover/relink elsewhere) so the fresh image gets a chance to load.
-  useEffect(() => {
+  // Clear the failed-load flag when the preview identity changes.
+  const loadFailedKey = `${selectedShotId}:${shot?.image_path ?? ''}:${shot?.preview_disk_mtime ?? ''}`
+  const [prevLoadFailedKey, setPrevLoadFailedKey] = useState(loadFailedKey)
+  if (loadFailedKey !== prevLoadFailedKey) {
+    setPrevLoadFailedKey(loadFailedKey)
     setLoadFailed(false)
-  }, [selectedShotId, shot?.image_path, shot?.preview_disk_mtime])
+  }
 
-  // Action notes are per-shot.
-  useEffect(() => {
+  // Action notes and relink path are per-shot.
+  const [prevShotId, setPrevShotId] = useState(selectedShotId)
+  if (selectedShotId !== prevShotId) {
+    setPrevShotId(selectedShotId)
     setNote('')
-  }, [selectedShotId])
-
-  // Seed the relink-preview repair field from the shot's current (possibly missing) preview path.
-  useEffect(() => {
+    if (!selectedShotId) {
+      setMissing(null)
+    }
     const cur = project?.shots.find((s) => s.shot_id === selectedShotId)
     setRelinkPath(cur?.preview_image_path || cur?.image_path || '')
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedShotId])
+  }
 
   // On-disk missing-file status for the selected shot (metadata path present but file gone).
   // Stale-guarded and silent — an ordinary missing thumbnail must never raise the error banner.
   useEffect(() => {
-    if (!selectedShotId) {
-      setMissing(null)
-      return
-    }
+    if (!selectedShotId) return
     let cancelled = false
     getMissingFiles()
       .then((payload) => {
@@ -95,7 +94,6 @@ export function CanvasBoard() {
     return () => {
       cancelled = true
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedShotId, sourcePath, previewPath, shot?.preview_disk_mtime, shot?.reference_image_paths?.length])
 
   const disabled = busy || projectActionBusy

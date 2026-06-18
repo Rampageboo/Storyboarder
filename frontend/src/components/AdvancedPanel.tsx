@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useMemo, useRef, useState } from 'react'
 import {
   getBridgeStatus,
   recoverShotSource,
@@ -6,7 +6,7 @@ import {
   updateSettings,
   uploadShotSource,
 } from '../api'
-import { useProject } from '../state/ProjectContext'
+import { useProject } from '../state/useProject'
 import { AnnotationList } from './AnnotationList'
 import './AdvancedPanel.css'
 
@@ -23,6 +23,26 @@ export function AdvancedPanel() {
   const [canvasNote, setCanvasNote] = useState('')
   const sourceInputRef = useRef<HTMLInputElement | null>(null)
 
+  // Reset per-shot form fields when the selected shot changes.
+  const [prevShotId, setPrevShotId] = useState(selectedShotId)
+  if (selectedShotId !== prevShotId) {
+    setPrevShotId(selectedShotId)
+    setSourceNote('')
+    const cur = project?.shots.find((s) => s.shot_id === selectedShotId)
+    setRelinkPath(cur?.preview_image_path || cur?.image_path || '')
+  }
+
+  // Re-seed canvas defaults when project settings change on disk.
+  const settingsKey = `${project?.settings?.canvas_width}:${project?.settings?.canvas_height}:${project?.settings?.canvas_background_color}`
+  const [prevSettingsKey, setPrevSettingsKey] = useState(settingsKey)
+  if (settingsKey !== prevSettingsKey) {
+    setPrevSettingsKey(settingsKey)
+    const s = project?.settings
+    setCanvasW(String(s?.canvas_width ?? 1920))
+    setCanvasH(String(s?.canvas_height ?? 1080))
+    setCanvasColor(String(s?.canvas_background_color ?? '#E8E8E8'))
+  }
+
   const shot = useMemo(() => {
     if (!project || !selectedShotId) return null
     return project.shots.find((s) => s.shot_id === selectedShotId) || null
@@ -35,22 +55,6 @@ export function AdvancedPanel() {
     const segments = project?.settings?.ref_segments
     return Array.isArray(segments) ? segments.length : 0
   }, [project?.settings])
-
-  useEffect(() => {
-    setSourceNote('')
-    const current = project?.shots.find((s) => s.shot_id === selectedShotId)
-    setRelinkPath(current?.preview_image_path || current?.image_path || '')
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedShotId])
-
-  // Seed the Canvas defaults form from project settings (re-seed if they change on disk).
-  useEffect(() => {
-    const s = project?.settings
-    setCanvasW(String(s?.canvas_width ?? 1920))
-    setCanvasH(String(s?.canvas_height ?? 1080))
-    setCanvasColor(String(s?.canvas_background_color ?? '#E8E8E8'))
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [project?.settings?.canvas_width, project?.settings?.canvas_height, project?.settings?.canvas_background_color])
 
   const refreshBridge = useCallback(async () => {
     setBusy(true)
@@ -213,7 +217,7 @@ export function AdvancedPanel() {
 
           <details className="advanced-details">
             <summary>Annotations</summary>
-            <AnnotationList shotId={selectedShotId} />
+            <AnnotationList key={selectedShotId ?? 'none'} shotId={selectedShotId} />
           </details>
 
           <details className="advanced-details">

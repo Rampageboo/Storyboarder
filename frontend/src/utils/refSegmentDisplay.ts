@@ -126,8 +126,8 @@ function parseSegmentRecord(
     .map((shot, index) => (isShotAppliedToSegment(shot, seg, links) ? index : -1))
     .filter((index) => index >= 0)
 
-  let lo = -1
-  let hi = -1
+  let lo: number
+  let hi: number
   let needsRepair = false
 
   if (anchorIdx !== undefined && endIdx !== undefined) {

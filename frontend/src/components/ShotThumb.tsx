@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useState } from 'react'
 import { shotImageUrl, shotThumbnailUrl } from '../api'
 import './ShotThumb.css'
 
@@ -14,13 +14,16 @@ export function ShotThumb({
   version: string | number
   hasImage: boolean
 }) {
+  const resetKey = `${shotId}:${String(version)}:${hasImage ? '1' : '0'}`
+  const [prevResetKey, setPrevResetKey] = useState(resetKey)
   const [stage, setStage] = useState<ThumbStage>(hasImage ? 'thumb' : 'failed')
   const [loaded, setLoaded] = useState(false)
 
-  useEffect(() => {
+  if (resetKey !== prevResetKey) {
+    setPrevResetKey(resetKey)
     setStage(hasImage ? 'thumb' : 'failed')
     setLoaded(false)
-  }, [shotId, version, hasImage])
+  }
 
   const showImage = hasImage && stage !== 'failed'
   const imageSrc = showImage

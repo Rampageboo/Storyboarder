@@ -1,6 +1,6 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useState } from 'react'
 import { getAnnotations, saveAnnotations } from '../api'
-import { useProject } from '../state/ProjectContext'
+import { useProject } from '../state/useProject'
 import './AnnotationList.css'
 
 // Annotations are stored as a list of objects. Text labels carry a `text` field plus normalized
@@ -33,13 +33,6 @@ export function AnnotationList({ shotId }: { shotId: string | null }) {
   const [dirty, setDirty] = useState(false)
   const [newText, setNewText] = useState('')
   const [placement, setPlacement] = useState<Placement>('top-left')
-
-  useEffect(() => {
-    setItems([])
-    setLoaded(false)
-    setDirty(false)
-    setNewText('')
-  }, [shotId])
 
   const load = useCallback(async () => {
     if (!shotId) return

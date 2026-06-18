@@ -1,6 +1,6 @@
 import { useMemo } from 'react'
 import type { Shot } from '../types'
-import { useProject } from '../state/ProjectContext'
+import { useProject } from '../state/useProject'
 import { shotDisplayLabel } from '../utils/shotDisplay'
 import { shotHasPreview, shotThumbVersion } from '../utils/shotPreview'
 import { ShotThumb } from './ShotThumb'

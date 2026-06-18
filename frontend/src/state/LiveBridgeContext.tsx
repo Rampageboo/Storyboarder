@@ -1,8 +1,7 @@
-import { createContext, useContext, useEffect, useRef, useState, type PropsWithChildren } from 'react'
+import { useEffect, useRef, useState, type PropsWithChildren } from 'react'
 import { getBridgeStatus, getProject, publishLiveBridge, type BridgeStatusPayload } from '../api'
-import { useProject } from './ProjectContext'
-
-const BridgeStatusContext = createContext<BridgeStatusPayload | null>(null)
+import { useProject } from './useProject'
+import { BridgeStatusContext } from './liveBridgeUtils'
 
 const HEARTBEAT_MS = 1500
 const STATUS_POLL_MS = 2500
@@ -12,9 +11,14 @@ export function LiveBridgeProvider({ children }: PropsWithChildren) {
   const [bridgeStatus, setBridgeStatus] = useState<BridgeStatusPayload | null>(null)
   const lastPluginProjectRevisionRef = useRef<number | null>(null)
 
+  const [prevProject, setPrevProject] = useState(project)
+  if (project !== prevProject) {
+    setPrevProject(project)
+    if (!project) setBridgeStatus(null)
+  }
+
   useEffect(() => {
     if (!project) {
-      setBridgeStatus(null)
       lastPluginProjectRevisionRef.current = null
       return
     }
@@ -66,13 +70,3 @@ export function LiveBridgeProvider({ children }: PropsWithChildren) {
   return <BridgeStatusContext.Provider value={bridgeStatus}>{children}</BridgeStatusContext.Provider>
 }
 
-export function useBridgeStatus() {
-  return useContext(BridgeStatusContext)
-}
-
-export function bridgeStatusLabel(status: BridgeStatusPayload | null, projectOpen: boolean): string {
-  if (!projectOpen) return 'Photoshop: no project'
-  if (!status) return 'PS: …'
-  if (status.plugin_linked) return 'Photoshop Connected'
-  return 'Photoshop Disconnected'
-}

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useMemo, useRef, useState } from 'react'
 import {
   applyRefSegment,
   applyRefSegment3d,
@@ -12,7 +12,7 @@ import {
   type ApplyRefSegmentRequest,
 } from '../api'
 import type { ProjectPayload, ReferenceLink } from '../types'
-import { useProject } from '../state/ProjectContext'
+import { useProject } from '../state/useProject'
 import { shotDisplayLabel } from '../utils/shotDisplay'
 import { refSegmentsWithoutOverlap } from '../utils/refSegmentDisplay'
 import './ReferenceWorkspace.css'
@@ -63,17 +63,21 @@ export function ReferenceWorkspace() {
   const shots = project?.shots ?? []
 
   // Default the reference select to the first available asset.
-  useEffect(() => {
+  const [prevLinks, setPrevLinks] = useState(links)
+  if (links !== prevLinks) {
+    setPrevLinks(links)
     setRefId((cur) => (cur && links.some((l) => l.id === cur) ? cur : links[0]?.id ?? ''))
-  }, [links])
+  }
 
   // Default the segment range to the selected shot.
-  useEffect(() => {
+  const [prevSelectedShotId, setPrevSelectedShotId] = useState(selectedShotId)
+  if (selectedShotId !== prevSelectedShotId) {
+    setPrevSelectedShotId(selectedShotId)
     if (selectedShotId) {
       setStartShot(selectedShotId)
       setEndShot(selectedShotId)
     }
-  }, [selectedShotId])
+  }
 
   if (!project) return null
 

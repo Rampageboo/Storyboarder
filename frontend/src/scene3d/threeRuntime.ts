@@ -1,5 +1,7 @@
 /** Single source of truth for dynamic Three.js + GLTFLoader imports. */
 
+// Dynamic vendor import — Three.js members cannot be statically typed from a URL import.
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
 type ThreeModule = Record<string, any>
 
 export type ThreeRuntime = {

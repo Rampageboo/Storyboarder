@@ -12,7 +12,7 @@ import {
 
 import type { Scene3dCaptureRequest, Scene3dReferenceView } from '../scene3d/scene3dTypes'
 
-import { useProject } from '../state/ProjectContext'
+import { useProject } from '../state/useProject'
 
 import './ReferenceModelPreview.css'
 
