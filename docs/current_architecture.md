@@ -173,10 +173,20 @@ The `base: '/react/'` setting means all Vite-generated asset paths are prefixed 
 
 | Module | Role |
 |---|---|
-| `state/ProjectContext.tsx` | Global project and shot state; wraps all API calls |
-| `state/LiveBridgeContext.tsx` | Polls `/api/bridge/live` every 2–3 s for Photoshop sync |
+| `state/ProjectContext.tsx` | Project server state, selected shot, dirty shot drafts, project busy/error flags, and central project actions that replace the project payload |
+| `state/useProject.ts` | Public hook for reading project state and calling ProjectContext actions |
+| `state/LiveBridgeContext.tsx` | Bridge heartbeat/status polling; delegates project refreshes caused by plugin revisions back to ProjectContext |
+| `state/liveBridgeUtils.ts` | Bridge-specific context hook and display helpers |
 | `api/client.ts` | Thin `fetch` wrapper; `ApiError` class carries HTTP status |
 | `api/project.ts`, `api/shots.ts`, `api/references.ts`, … | Domain-specific HTTP methods |
+
+Frontend state ownership is intentionally narrow:
+
+- `ProjectContext` owns server-backed project payloads, selected-shot behavior, dirty/saving shot drafts, project fetch/save busy state, and project-level actions such as add/delete/sync/open selected shot.
+- `LiveBridgeContext` owns bridge status, heartbeat publication, plugin revision polling, and Photoshop connection metadata. It delegates project refreshes back to `ProjectContext`.
+- Component-local state stays local when it is only needed by one component: text input drafts, annotation editor rows, image load failures, popover form fields, lightboxes, upload notes, relink paths, and per-panel open/closed state.
+- Derived state should be computed from `project`, `selectedShotId`, or component props with `useMemo` or pure helpers rather than stored globally.
+- There is no UI layout context today; shared layout state has not crossed enough unrelated components to justify one.
 
 ---
 

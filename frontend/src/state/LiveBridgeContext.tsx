@@ -11,12 +11,6 @@ export function LiveBridgeProvider({ children }: PropsWithChildren) {
   const [bridgeStatus, setBridgeStatus] = useState<BridgeStatusPayload | null>(null)
   const lastPluginProjectRevisionRef = useRef<number | null>(null)
 
-  const [prevProject, setPrevProject] = useState(project)
-  if (project !== prevProject) {
-    setPrevProject(project)
-    if (!project) setBridgeStatus(null)
-  }
-
   useEffect(() => {
     if (!project) {
       lastPluginProjectRevisionRef.current = null
@@ -61,6 +55,6 @@ export function LiveBridgeProvider({ children }: PropsWithChildren) {
     }
   }, [project, selectedShotId, refreshProjectFromBridge])
 
-  return <BridgeStatusContext.Provider value={bridgeStatus}>{children}</BridgeStatusContext.Provider>
+  return <BridgeStatusContext.Provider value={project ? bridgeStatus : null}>{children}</BridgeStatusContext.Provider>
 }
 
