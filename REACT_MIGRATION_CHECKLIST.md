@@ -10,7 +10,7 @@
   and assets via `GET /react/{asset_path:path}` in [storyboard_tool/api.py](storyboard_tool/api.py).
 - **Reference windows:** workflows live in React (References drawer + assignment modal + 3D Scene panel).
   `/ref-segment`, `/ref-scene3d`, `/ref-video` redirect (302) to `/` for bookmark/bridge compatibility.
-- **Shared runtime:** `static/runtime/scene3d.js` and `static/runtime/reference_model_preview.js`;
+- **Shared runtime:** `static/runtime/scene3d_workspace.js` (compiled from `frontend/src/scene3d/workspace/`) and `static/runtime/reference_model_preview.js`;
   `static/vendor/three/*` unchanged.
 - **Removed:** legacy HTML (`index.html`, `ref_segment.html`), `GET /legacy`, and all legacy static JS/CSS.
 
@@ -43,7 +43,7 @@ Run after `npm run build` + `python main.py`.
 - [ ] `http://127.0.0.1:8000/react` → React app loads; assets return 200 under `/react/assets/...`.
 - [ ] `http://127.0.0.1:8000/legacy` → 404.
 - [ ] `/ref-segment`, `/ref-scene3d`, `/ref-video` → 302 redirect to `/`.
-- [ ] `/static/runtime/scene3d.js` and `/static/runtime/reference_model_preview.js` return 200.
+- [ ] `/static/runtime/scene3d_workspace.js` and `/static/runtime/reference_model_preview.js` return 200.
 
 ### Reference segments (in React — no standalone windows)
 - [ ] Import image, video, and GLB references; assign to board range; Apply / Reapply / Undo / Delete.

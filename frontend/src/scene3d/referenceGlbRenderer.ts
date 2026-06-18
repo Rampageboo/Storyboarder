@@ -1,14 +1,15 @@
 import { loadGlbScene } from './glbScene'
 import { isBlankCanvas } from './capture'
 import {
+  normalizeWireframeMode,
+  applyWireframeModeToRoots,
   clearWireframeOverlays,
-  loadPreviewStyle,
+  createWireframeResources,
   SCENE3D_WORKSPACE_BACKGROUND,
-  type PreviewStyleModule,
+  type WireframeOverlayResources,
   type Scene3dPreviewSettings,
   type Scene3dWireframeMode,
-  type WireframeOverlayResources,
-} from './previewStyleBridge'
+} from './previewStyle'
 import type { Scene3dCaptureRequest, Scene3dReferenceView } from './scene3dTypes'
 import { loadThreeRuntime } from './threeRuntime'
 
@@ -45,7 +46,6 @@ export class ReferenceGlbRenderer {
   private glbSceneDispose: (() => void) | null = null
   private glbSetObjectColorPreview: ((enabled: boolean) => void) | null = null
   private runtime: Awaited<ReturnType<typeof loadThreeRuntime>> | null = null
-  private previewStyle: PreviewStyleModule | null = null
   private wireframeResources: WireframeOverlayResources | null = null
 
   constructor(canvas: HTMLCanvasElement, url: string, previewSettings?: Partial<Scene3dPreviewSettings>) {
@@ -63,12 +63,11 @@ export class ReferenceGlbRenderer {
   }
 
   async load(view: Scene3dReferenceView | null) {
-    const [runtime, previewStyle] = await Promise.all([loadThreeRuntime(), loadPreviewStyle()])
+    const runtime = await loadThreeRuntime()
     if (this.disposed) return
     const { THREE } = runtime
     this.runtime = runtime
-    this.previewStyle = previewStyle
-    this.wireframeResources = previewStyle.createWireframeResources()
+    this.wireframeResources = createWireframeResources()
     this.renderer = new THREE.WebGLRenderer({
       canvas: this.canvas,
       antialias: true,
@@ -104,7 +103,7 @@ export class ReferenceGlbRenderer {
     )
     this.intersectionObserver.observe(this.canvas)
 
-    const glbScene = await loadGlbScene(this.url, runtime, previewStyle, {
+    const glbScene = await loadGlbScene(this.url, runtime, {
       objectColorPreview: this.objectColorPreview,
     })
     if (this.disposed) {
@@ -141,13 +140,13 @@ export class ReferenceGlbRenderer {
   }
 
   setWireframeMode(mode: Scene3dWireframeMode) {
-    this.wireframeMode = this.previewStyle?.normalizeWireframeMode(mode) ?? mode
+    this.wireframeMode = normalizeWireframeMode(mode)
     this.applyWireframe()
   }
 
   private applyWireframe() {
-    if (!this.runtime || !this.root || !this.previewStyle || !this.wireframeResources) return
-    this.previewStyle.applyWireframeModeToRoots(
+    if (!this.runtime || !this.root || !this.wireframeResources) return
+    applyWireframeModeToRoots(
       this.runtime.THREE,
       this.root,
       this.wireframeMode,
@@ -337,8 +336,8 @@ export class ReferenceGlbRenderer {
     this.stop()
     this.resizeObserver?.disconnect()
     this.intersectionObserver?.disconnect()
-    if (this.previewStyle && this.wireframeResources) {
-      clearWireframeOverlays(this.previewStyle, this.root, this.wireframeResources)
+    if (this.wireframeResources) {
+      clearWireframeOverlays(this.root, this.wireframeResources)
     }
     this.glbSceneDispose?.()
     this.glbSceneDispose = null

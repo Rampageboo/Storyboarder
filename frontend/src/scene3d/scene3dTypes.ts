@@ -35,5 +35,5 @@ export interface RefSegmentModelCapture {
   animation_time: number
 }
 
-export type { Scene3dWireframeMode } from './previewStyleBridge'
-export { loadPreviewStyle, SCENE3D_WORKSPACE_BACKGROUND } from './previewStyleBridge'
+export type { Scene3dWireframeMode } from './previewStyle'
+export { SCENE3D_WORKSPACE_BACKGROUND } from './previewStyle'

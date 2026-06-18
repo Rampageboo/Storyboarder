@@ -79,7 +79,6 @@ export {
   createWorkspaceWireframeResources,
   generateWorkspaceObjectColor,
   isWorkspacePrimitiveType,
-  loadWorkspacePreviewStyle,
   normalizeWorkspaceWireframeMode,
 } from './workspaceObjects'
 

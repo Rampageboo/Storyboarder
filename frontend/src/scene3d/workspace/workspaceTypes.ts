@@ -1,6 +1,6 @@
 /** Types for the Scene3D workspace runtime (mirrors scene3d.js metadata shapes). */
 
-import type { Scene3dWireframeMode } from '../previewStyleBridge'
+import type { Scene3dWireframeMode } from '../previewStyle'
 
 export const WORKSPACE_PRIMITIVE_TYPES = ['cube', 'sphere', 'plane', 'cylinder', 'cone'] as const
 

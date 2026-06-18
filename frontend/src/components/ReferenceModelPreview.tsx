@@ -2,13 +2,11 @@ import { forwardRef, useEffect, useImperativeHandle, useMemo, useRef, useState }
 
 import { projectFileUrl } from '../api'
 
-import { loadPreviewStyle } from '../scene3d/previewStyleBridge'
-
 import { ReferenceGlbRenderer } from '../scene3d/referenceGlbRenderer'
 
 import {
   defaultPreviewSettings,
-  resolveScene3dPreviewSettingsSync,
+  resolveScene3dPreviewSettings,
   type Scene3dPreviewSettings,
 } from '../scene3d/scenePreviewSettings'
 
@@ -52,14 +50,8 @@ const ReferenceModelPreviewCanvas = forwardRef<ReferenceModelPreviewHandle, Omit
     const previewSettingsKey = useMemo(() => JSON.stringify(previewSettings), [previewSettings])
 
     useEffect(() => {
-      let cancelled = false
-      void loadPreviewStyle().then((style) => {
-        if (cancelled) return
-        setPreviewSettings(resolveScene3dPreviewSettingsSync(project?.settings ?? null, style))
-      })
-      return () => {
-        cancelled = true
-      }
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setPreviewSettings(resolveScene3dPreviewSettings(project?.settings ?? null))
     }, [project?.settings?.scene3d?.wireframe_mode, project?.settings?.scene3d?.object_color_preview, project?.settings])
 
     useEffect(() => {

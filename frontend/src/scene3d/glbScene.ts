@@ -1,9 +1,5 @@
-import type { PreviewStyleModule } from './previewStyleBridge'
 import type { ThreeRuntime } from './threeRuntime'
-import {
-  applyObjectColorPreview,
-  loadPreviewStyle,
-} from './previewStyleBridge'
+import { applyObjectColorPreview } from './previewStyle'
 import { disposeGlbObject } from './dispose'
 import { loadThreeRuntime } from './threeRuntime'
 
@@ -14,7 +10,6 @@ export { disposeGlbObject } from './dispose'
 
 export type LoadedGlbScene = {
   runtime: ThreeRuntime
-  previewStyle: PreviewStyleModule
   root: ThreeObject
   mixer: ThreeObject | null
   previewMaterials: ThreeObject[]
@@ -29,11 +24,9 @@ export type LoadGlbSceneOptions = {
 export async function loadGlbScene(
   url: string,
   runtime?: ThreeRuntime,
-  previewStyle?: PreviewStyleModule,
   options: LoadGlbSceneOptions = {},
 ): Promise<LoadedGlbScene> {
   const resolvedRuntime = runtime ?? await loadThreeRuntime()
-  const resolvedStyle = previewStyle ?? await loadPreviewStyle()
   const { THREE, GLTFLoader } = resolvedRuntime
   const gltf = await new GLTFLoader().loadAsync(url)
   const root = gltf.scene as ThreeObject
@@ -41,7 +34,7 @@ export async function loadGlbScene(
   const objectColorPreview = options.objectColorPreview !== false
 
   const applyObjectColors = (enabled: boolean) => {
-    applyObjectColorPreview(resolvedStyle, resolvedRuntime.THREE, root, root, previewMaterials, enabled)
+    applyObjectColorPreview(resolvedRuntime.THREE, root, root, previewMaterials, enabled)
   }
   applyObjectColors(objectColorPreview)
 
@@ -57,13 +50,12 @@ export async function loadGlbScene(
 
   return {
     runtime: resolvedRuntime,
-    previewStyle: resolvedStyle,
     root,
     mixer,
     previewMaterials,
     setObjectColorPreview: applyObjectColors,
     dispose() {
-      applyObjectColorPreview(resolvedStyle, resolvedRuntime.THREE, root, root, previewMaterials, false)
+      applyObjectColorPreview(resolvedRuntime.THREE, root, root, previewMaterials, false)
       disposeGlbObject(root)
     },
   }

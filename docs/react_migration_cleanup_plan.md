@@ -19,7 +19,7 @@ storyboard_tool/web/
     ├── favicon.ico
     ├── favicon.png
     ├── runtime/
-    │   ├── scene3d.js             # Scene3DEditor — React Scene3DPanel
+    │   ├── scene3d_workspace.js        # Scene3DEditor — compiled from frontend/src/scene3d/workspace/
     │   └── reference_model_preview.js  # GLB preview — React ReferenceModelPreview
     └── vendor/
         ├── three/

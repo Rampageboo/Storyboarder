@@ -4,10 +4,9 @@
 
 import {
   clearWireframeOverlays,
-  disposePreviewMaterials as disposePreviewMaterialsViaBridge,
-  type PreviewStyleModule,
+  disposePreviewMaterials as disposePreviewMaterialsImpl,
   type WireframeOverlayResources,
-} from '../previewStyleBridge'
+} from '../previewStyle'
 
 import { disposeGeometry, disposeMaterial, disposeObject3DNode } from '../dispose'
 
@@ -28,16 +27,15 @@ export function disposeObject3DRoot(root: ThreeObject | null | undefined): void 
   })
 }
 
-export function disposePreviewMaterials(previewStyle: PreviewStyleModule, previewMaterials: Set<unknown>): void {
-  disposePreviewMaterialsViaBridge(previewStyle, previewMaterials)
+export function disposePreviewMaterials(previewMaterials: Set<unknown>): void {
+  disposePreviewMaterialsImpl(previewMaterials)
 }
 
 export function disposeWorkspaceWireframe(
-  previewStyle: PreviewStyleModule,
   roots: unknown[] | unknown,
   resources: WireframeOverlayResources,
 ): void {
-  clearWireframeOverlays(previewStyle, roots, resources)
+  clearWireframeOverlays(roots, resources)
 }
 
 export function disposePrimitiveMesh(mesh: ThreeObject | null | undefined): void {
