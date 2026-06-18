@@ -5,7 +5,10 @@ export interface BridgeStatusPayload {
   project_open?: boolean
   plugin_linked?: boolean
   plugin_last_seen_seconds_ago?: number | null
+  plugin_selected_shot_id?: string
   plugin_open_shot_ids?: string[]
+  plugin_last_exported_preview?: Record<string, number>
+  plugin_project_revision?: number
   ok?: string
   status?: string
   bridge_url?: string
@@ -33,4 +36,3 @@ export function getBridgeStatus(): Promise<BridgeStatusPayload> {
 export function relinkBridge(): Promise<Record<string, unknown>> {
   return requestJson<Record<string, unknown>>('/api/bridge/relink', { method: 'POST' })
 }
-

@@ -57,6 +57,9 @@
   border: 1px solid var(--color-border);
   background: var(--bg-panel);
   white-space: nowrap;
+  max-width: 260px;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .topbar-ps-status.is-linked {

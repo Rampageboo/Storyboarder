@@ -425,6 +425,26 @@ def _normalize_rel_path(path: str) -> str:
     return str(path or "").replace("\\", "/").strip()
 
 
+def resolve_project_relative_path(
+    project: Project,
+    rel_path: str,
+    *,
+    required_suffixes: tuple[str, ...] | None = None,
+) -> Path:
+    path_text = str(rel_path or "").strip()
+    if not path_text:
+        raise ValueError("Project-relative path is required.")
+    resolved = (project.root_path / path_text).resolve()
+    root = project.root_path.resolve()
+    if resolved != root and root not in resolved.parents:
+        raise ValueError("Path must be inside the project.")
+    if required_suffixes is not None:
+        suffixes = tuple(str(suffix).lower() for suffix in required_suffixes)
+        if resolved.suffix.lower() not in suffixes:
+            raise ValueError(f"Path must use one of these extensions: {', '.join(required_suffixes)}")
+    return resolved
+
+
 def collect_reference_image_paths(project: Project) -> set[str]:
     referenced: set[str] = set()
     for shot in project.shots:
@@ -505,13 +525,7 @@ def import_source_file_stream(
 
 
 def relink_preview_image(project: Project, shot: Shot, preview_rel: str) -> Path:
-    preview_text = str(preview_rel or "").strip()
-    if not preview_text:
-        raise ValueError("Preview path is required.")
-    candidate = (project.root_path / preview_text).resolve()
-    root = project.root_path.resolve()
-    if root not in candidate.parents and candidate != root:
-        raise ValueError("Preview path must be inside the project.")
+    candidate = resolve_project_relative_path(project, preview_rel)
     if not candidate.is_file():
         raise FileNotFoundError(f"Preview not found: {preview_rel}")
     _set_shot_preview_paths(project, shot, candidate)

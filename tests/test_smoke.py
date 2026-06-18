@@ -729,6 +729,64 @@ class StoryboardSmokeTests(unittest.TestCase):
             resolved = project_manager.resolve_shot_preview_path(project, shot)
             self.assertEqual(resolved, preview_path)
 
+    def test_plugin_export_preview_validates_project_relative_paths(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            app = api_module.create_app(root)
+            client = TestClient(app, raise_server_exceptions=False)
+
+            with contextlib.redirect_stderr(io.StringIO()):
+                created = client.post("/api/project/new", json={"path": tmp})
+            self.assertEqual(created.status_code, 200)
+            root = Path(created.json()["project_path"])
+            with contextlib.redirect_stderr(io.StringIO()):
+                added = client.post("/api/shots", json={})
+            self.assertEqual(added.status_code, 200)
+            shot_id = added.json()["shot"]["shot_id"]
+            shot_dir = root / "shots" / shot_id
+            shot_dir.mkdir(parents=True, exist_ok=True)
+            preview_rel = f"shots/{shot_id}/{shot_id}_preview.png"
+            source_rel = f"shots/{shot_id}/{shot_id}.psd"
+            (shot_dir / f"{shot_id}_preview.png").write_bytes(MINI_PNG)
+            (shot_dir / f"{shot_id}.psd").write_bytes(b"8BPS" + b"\0" * 32)
+
+            with contextlib.redirect_stderr(io.StringIO()):
+                valid = client.post(
+                    f"/api/plugin/shots/{shot_id}/export-preview",
+                    json={"preview_image_path": preview_rel, "source_file_path": source_rel},
+                )
+            self.assertEqual(valid.status_code, 200)
+            payload = valid.json()
+            self.assertEqual(payload["shot"]["source_file_path"], source_rel)
+            self.assertEqual(payload["shot"]["preview_image_path"], preview_rel)
+            self.assertIn("context", payload)
+            status = client.get("/api/bridge/status")
+            self.assertEqual(status.status_code, 200)
+            self.assertGreaterEqual(status.json()["plugin_project_revision"], 1)
+
+            with contextlib.redirect_stderr(io.StringIO()):
+                bad_preview = client.post(
+                    f"/api/plugin/shots/{shot_id}/export-preview",
+                    json={"preview_image_path": "../../outside.png", "source_file_path": source_rel},
+                )
+            self.assertEqual(bad_preview.status_code, 400)
+
+            with contextlib.redirect_stderr(io.StringIO()):
+                bad_source = client.post(
+                    f"/api/plugin/shots/{shot_id}/export-preview",
+                    json={"preview_image_path": preview_rel, "source_file_path": "../../outside.psd"},
+                )
+            self.assertEqual(bad_source.status_code, 400)
+
+            text_source = shot_dir / "not-a-psd.txt"
+            text_source.write_text("not psd", encoding="utf-8")
+            with contextlib.redirect_stderr(io.StringIO()):
+                non_psd = client.post(
+                    f"/api/plugin/shots/{shot_id}/export-preview",
+                    json={"preview_image_path": preview_rel, "source_file_path": f"shots/{shot_id}/not-a-psd.txt"},
+                )
+            self.assertEqual(non_psd.status_code, 400)
+
     def test_delete_ref_segment_keeps_drawing_when_psd_exists_without_link(self) -> None:
         from storyboard_tool import reference_segments
         from storyboard_tool.image_utils import board_background_filename, create_blank_psd

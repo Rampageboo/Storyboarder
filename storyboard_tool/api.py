@@ -229,6 +229,7 @@ def create_app(base_dir: Path, bridge_port: int = 8000) -> FastAPI:
     app.state.plugin_open_shot_ids = []
     app.state.plugin_selected_shot_id = ""
     app.state.plugin_last_exported_preview = {}
+    app.state.plugin_project_revision = 0
     app.state.live_focus_shot_id = ""
     app.state.live_focus_token = 0
 

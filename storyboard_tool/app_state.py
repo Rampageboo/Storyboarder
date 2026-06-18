@@ -192,6 +192,7 @@ def _bridge_status_payload(app: FastAPI) -> dict[str, Any]:
         "plugin_selected_shot_id": _plugin_selected_shot_id(app),
         "plugin_open_shot_ids": open_shot_ids,
         "plugin_last_exported_preview": last_exported,
+        "plugin_project_revision": int(getattr(app.state, "plugin_project_revision", 0) or 0),
         "bridge_url": live.get("bridge_url", f"http://127.0.0.1:{app.state.bridge_port}/api/bridge/live"),
         "global_bridge_path": live.get("global_bridge_path", str(live_bridge.global_bridge_file_path())),
         "shared_bridge_path": live.get("shared_bridge_path", str(live_bridge.shared_bridge_file_path())),

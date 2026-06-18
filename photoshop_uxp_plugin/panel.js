@@ -1592,11 +1592,28 @@ function updateCurrentShotIndicator() {
   const idLabel = formatShotIdLabel(shotId);
   let text;
   if (index >= 0) {
-    const title = String(shots[index].title || "").trim();
+    const shot = shots[index];
+    const title = String(shot.title || "").trim();
     text = `Editing shot ${index + 1}/${shots.length}`;
     text += title ? ` · ${title} (${idLabel})` : ` · ${idLabel}`;
   } else {
     text = `Editing · ${idLabel}`;
+  }
+  if (index >= 0) {
+    const shot = shots[index];
+    const status = String(shot.status || "").trim();
+    const duration = Number.parseFloat(shot.duration_seconds || "0") || 0;
+    const warnings = [];
+    if (shot.broken_or_zero_byte_psd) warnings.push("PSD broken");
+    else if (shot.source_path_missing || shot.psd_exists === false) warnings.push("PSD missing");
+    if (shot.preview_out_of_date) warnings.push("preview stale");
+    else if (shot.preview_exists === false) warnings.push("preview missing");
+    if (status || duration) {
+      text += ` Â· ${status || "No status"}${duration ? ` Â· ${duration}s` : ""}`;
+    }
+    if (warnings.length) {
+      text += ` Â· ${warnings.join(", ")}`;
+    }
   }
   node.textContent = text;
   node.hidden = false;

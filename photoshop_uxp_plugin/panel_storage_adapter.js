@@ -81,6 +81,32 @@
     };
   }
 
+  function isBackendLinkedMode() {
+    try {
+      return Boolean(linkedFromStoryboard);
+    } catch {
+      return false;
+    }
+  }
+
+  async function refreshProjectDataFromBackendIfAvailable() {
+    try {
+      if (typeof refreshProjectDataFromBackend === "function") {
+        return await refreshProjectDataFromBackend();
+      }
+      if (typeof requestPluginContext === "function" && typeof applyPluginContext === "function") {
+        const context = await requestPluginContext();
+        if (context) {
+          applyPluginContext(context);
+          return true;
+        }
+      }
+    } catch {
+      // Backend refresh is best-effort; linked mode still must not write metadata files.
+    }
+    return false;
+  }
+
   async function readJsonFile(folder, fileName) {
     try {
       const entry = await folder.getEntry(fileName);
@@ -197,8 +223,23 @@
     };
   }
 
+  if (typeof saveShotsCsv === "function") {
+    const saveShotsCsvFallback = saveShotsCsv;
+    saveShotsCsv = async function saveShotsCsvOnlyWhenStandalone(shots) {
+      if (isBackendLinkedMode()) {
+        await refreshProjectDataFromBackendIfAvailable();
+        return;
+      }
+      return saveShotsCsvFallback(shots);
+    };
+  }
+
   if (typeof saveProjectJson === "function") {
     saveProjectJson = async function saveCanonicalProjectData() {
+      if (isBackendLinkedMode()) {
+        await refreshProjectDataFromBackendIfAvailable();
+        return;
+      }
       requireProjectRoot();
       const shots = await saveShotsJson((projectData?.shots || []).map(normalizeShotRecord));
       if (projectData) {

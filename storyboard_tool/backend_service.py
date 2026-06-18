@@ -138,6 +138,9 @@ class StoryboardBackendService(ExportServiceMixin):
     def method_touch_live_bridge(self, selected_shot_id: str | None = None) -> dict[str, Any]:
         return app_state._touch_live_bridge(self.app, selected_shot_id=selected_shot_id)
 
+    def _mark_plugin_project_changed(self) -> None:
+        self.app.state.plugin_project_revision = int(getattr(self.app.state, "plugin_project_revision", 0) or 0) + 1
+
     def method_plugin_heartbeat(self, payload: dict[str, Any] | None = None) -> dict[str, str]:
         data = payload if isinstance(payload, dict) else {}
         self.app.state.plugin_last_seen = time.time()
@@ -193,11 +196,21 @@ class StoryboardBackendService(ExportServiceMixin):
         shot = app_state._find_shot(project, shot_id)
         data = payload if isinstance(payload, dict) else {}
         preview_rel = str(data.get("preview_image_path") or f"shots/{shot.shot_id}/{shot.shot_id}_preview.png")
-        source_rel = str(data.get("source_file_path") or f"shots/{shot.shot_id}/{shot.shot_id}.psd")
-        source_path = project.root_path / source_rel
-        if source_path.is_file():
+        source_rel = str(data.get("source_file_path") or "").strip()
+        if source_rel:
+            try:
+                source_path = project_manager.resolve_project_relative_path(project, source_rel, required_suffixes=(".psd",))
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+            if not source_path.is_file():
+                raise HTTPException(status_code=400, detail=f"PSD not found: {source_rel}")
             shot.source_file_path = source_path.relative_to(project.root_path).as_posix()
             shot.source_sync_mtime = source_path.stat().st_mtime
+        else:
+            fallback_source = project.root_path / f"shots/{shot.shot_id}/{shot.shot_id}.psd"
+            if fallback_source.is_file():
+                shot.source_file_path = fallback_source.relative_to(project.root_path).as_posix()
+                shot.source_sync_mtime = fallback_source.stat().st_mtime
         try:
             project_manager.relink_preview_image(project, shot, preview_rel)
         except (ValueError, FileNotFoundError) as exc:
@@ -208,6 +221,7 @@ class StoryboardBackendService(ExportServiceMixin):
             self.app.state.plugin_last_exported_preview = exported
         exported[shot.shot_id] = time.time()
         app_state._autosave(self.app)
+        self._mark_plugin_project_changed()
         return {
             "shot": self._plugin_shot_payload(project, shot),
             "context": self.method_plugin_context(),
@@ -218,12 +232,16 @@ class StoryboardBackendService(ExportServiceMixin):
         shot = app_state._find_shot(project, shot_id)
         data = payload if isinstance(payload, dict) else {}
         source_rel = str(data.get("source_file_path") or shot.source_file_path or f"shots/{shot.shot_id}/{shot.shot_id}.psd")
-        source_path = project.root_path / source_rel
+        try:
+            source_path = project_manager.resolve_project_relative_path(project, source_rel, required_suffixes=(".psd",))
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
         if not source_path.is_file():
             raise HTTPException(status_code=400, detail=f"PSD not found: {source_rel}")
         shot.source_file_path = source_path.relative_to(project.root_path).as_posix()
         shot.source_sync_mtime = source_path.stat().st_mtime
         app_state._autosave(self.app)
+        self._mark_plugin_project_changed()
         return {"shot": self._plugin_shot_payload(project, shot), "context": self.method_plugin_context()}
 
     def method_plugin_focus_shot(self, shot_id: str) -> dict[str, Any]:
@@ -246,6 +264,7 @@ class StoryboardBackendService(ExportServiceMixin):
             next_shot = project_manager.add_shot(project, after_index=index if index >= 0 else None)
             created = next_shot
             app_state._autosave(self.app)
+            self._mark_plugin_project_changed()
         else:
             return {"shot": None, "created": False, "context": self.method_plugin_context()}
         self.app.state.plugin_selected_shot_id = next_shot.shot_id
