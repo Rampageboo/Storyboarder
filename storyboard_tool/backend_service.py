@@ -897,11 +897,12 @@ class StoryboardBackendService(ExportServiceMixin):
     def method_upload_project_reference(self, filename: str, data: list[int] | bytes | bytearray) -> dict[str, Any]:
         project = app_state._require_project(self.app)
         try:
-            entry = project_manager.import_project_reference_stream(
-                project,
-                _upload_stream(data),
-                str(filename or "reference"),
-            )
+            with project_transaction.mutate_project(project):
+                entry = project_manager.import_project_reference_stream(
+                    project,
+                    _upload_stream(data),
+                    str(filename or "reference"),
+                )
         except Exception as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         app_state._autosave(self.app)
@@ -910,11 +911,12 @@ class StoryboardBackendService(ExportServiceMixin):
     def method_upload_reference_video(self, filename: str, data: list[int] | bytes | bytearray) -> dict[str, Any]:
         project = app_state._require_project(self.app)
         try:
-            project_manager.import_reference_video_stream(
-                project,
-                _upload_stream(data),
-                str(filename or "reference.mp4"),
-            )
+            with project_transaction.mutate_project(project):
+                project_manager.import_reference_video_stream(
+                    project,
+                    _upload_stream(data),
+                    str(filename or "reference.mp4"),
+                )
         except Exception as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         app_state._autosave(self.app)

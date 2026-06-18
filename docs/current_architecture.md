@@ -1,6 +1,6 @@
 # Storyboarder — Current Architecture
 
-> Last updated: 2026-06-19
+> Last updated: 2026-06-19 (asset lifecycle boundaries)
 > Reflects the codebase after the desktop-only refactor, architecture cleanup,
 > Photoshop plugin API, shot-service extraction, and project-transaction safety
 > commits. For earlier history see [code-review-and-refactor.md](code-review-and-refactor.md).
@@ -27,6 +27,7 @@
 16. [Kept Routes](#16-kept-routes)
 17. [Deleted Legacy Artifacts](#17-deleted-legacy-artifacts)
 18. [Non-Goals](#18-non-goals)
+19. [Asset Lifecycle Boundaries](#19-asset-lifecycle-boundaries)
 
 ---
 
@@ -728,3 +729,82 @@ The following are explicitly out of scope and not implemented:
 - Blender or Unreal live capture (Blender scene files can be opened; capture is not automated)
 - Mobile or tablet support
 - Multi-window layout (second windows redirect to the main SPA)
+
+---
+
+## 19. Asset Lifecycle Boundaries
+
+This section maps each asset type to its on-disk location, the module that owns it, and the deletion/rollback behaviour.
+
+### 19.1 On-disk directory layout
+
+```
+<root>/                        ← project.root_path
+  project.json                 ← lightweight version manifest
+  settings.json                ← all project settings (atomic write via temp + replace)
+  shots.json                   ← canonical shot list
+  shots.csv                    ← read-only compatibility snapshot (written on save, never read back)
+  shots/
+    <shot_id>/
+      <shot_id>_preview.png    ← flattened board image (drawn frame or reference bake)
+      <shot_id>_thumb.png      ← thumbnail (derived from preview)
+      <shot_id>_background.png ← reference background layer (separate from drawing)
+      <shot_id>.psd            ← Photoshop canvas (optional)
+      <shot_id>_annotations.json
+      _history/                ← PSD recovery backups
+  references/
+    ref_<uuid>.<ext>           ← imported video/image/model references
+  scene3d/
+    <filename>.glb / .gltf     ← imported 3D scene files
+  exports/                     ← PDF, CSV, contact-sheet output (never input)
+  backups/                     ← rolling project.json + shots.json copies on save
+  backups/ref_undo/<token>/    ← pre-apply board snapshot (preview + bg + thumb copies)
+  scripts/                     ← Blender .blend template
+```
+
+### 19.2 Lifecycle flows and owning modules
+
+| Flow | Files touched | Module | Transaction-safe? |
+|---|---|---|---|
+| `create_project` | root dirs, project.json, settings.json | `project_manager` | atomic JSON writes only |
+| `add_shot` | `shots/<id>/` dir, optional blank canvas PSD | `project_manager` | no rollback needed — shot ID is new |
+| `delete_shot` | removes Shot from `project.shots`; files are NOT deleted | `shot_service` → `project_manager` | `mutate_project` in `backend_service` |
+| `import_image_for_shot` | writes `<id>_preview.png` + `<id>_background.png`, sets shot fields | `project_manager` | file write before metadata; `_autosave` commits |
+| `remove_image_for_shot` | deletes `<id>_background.png`, clears shot preview fields | `project_manager` | no settings involved; shot-level only |
+| `import_project_reference_stream` | writes `references/ref_<uuid>.<ext>`, appends to `reference_links` | `reference_segments` | `mutate_project` in `backend_service` |
+| `remove_project_reference` | deletes reference file (if inside root), clears `reference_links` + any segments | `reference_segments` | `mutate_project` in `backend_service` |
+| `import_scene3d_stream` | writes `scene3d/<name>.glb`, updates `settings["scene3d"]` | `external_tools` | `mutate_project` in `backend_service` |
+| `apply_ref_segment_to_boards` | writes board preview/bg/thumb PNGs, stamps shot metadata | `reference_segments` | `mutate_project` in `backend_service`; undo snapshot taken first |
+| `apply_model_captures_to_boards` | writes board preview/bg/thumb PNGs, stamps shot metadata | `reference_segments` | `mutate_project` in `backend_service`; undo snapshot taken first |
+| `delete_ref_segment` | deletes bake PNGs, clears shot metadata, removes segment from settings | `reference_segments` | `mutate_project` in `backend_service` |
+| `snapshot_boards_for_undo` | copies preview/bg/thumb to `backups/ref_undo/<token>/` | `reference_segments` | snapshot is write-only; original files untouched |
+| `restore_boards_from_undo` | copies snapshot PNGs back over current board files, restores shot metadata | `reference_segments` | `mutate_project` in `backend_service` |
+| Export (PDF/CSV/contact sheet) | writes files under `exports/` only | `export_service` | no project metadata mutation |
+
+### 19.3 Deletion behaviour
+
+- **Shot files are never deleted on `delete_shot`.** Only the `Shot` object is removed from `project.shots`. The `shots/<id>/` directory and all its contents remain on disk. This is intentional: undo (via `restore_shot`) can re-insert the shot record, and the files remain available.
+- **Reference files are deleted on `remove_project_reference`,** but only when the resolved path is inside `project.root_path`. External paths (e.g. a path accidentally set to an absolute path outside the project) are silently skipped without deletion.
+- **Board bake files are deleted on `delete_ref_segment`** (`<id>_preview.png`, `<id>_background.png`, `<id>_thumb.png`, `<id>_ref_raw.png`). This is not reversible via the undo mechanism — undo is only for `apply_*` operations, not `delete_ref_segment`.
+- **Export files are never deleted by the application.** Exports overwrite existing output files at the same path.
+
+### 19.4 `mutate_project` coverage
+
+`project_transaction.mutate_project` protects **in-memory** state (`project.shots` and `project.settings`) only. It does not roll back filesystem side-effects (PNG writes, file deletions). Methods wrapped with it in `backend_service`:
+
+- `method_delete_shot`
+- `method_restore_shot`
+- `method_reorder_shots`
+- `method_apply_ref_segment` / `_image` / `_3d` / `_model_captures`
+- `method_restore_ref_apply`
+- `method_delete_ref_segment`
+- `method_delete_project_reference`
+- `method_create_shot_canvas`
+- `method_save_shot_drawing`
+- `method_import_scene3d`
+- `method_upload_project_reference`
+- `method_upload_reference_video`
+
+### 19.5 Missing-file reporting
+
+`export_utils.missing_files(project)` iterates all shots and checks whether the files referenced by `preview_image_path`, `thumbnail_path`, `source_file_path`, `annotation_path`, and each entry in `reference_image_paths` actually exist on disk. It returns a list of `{shot_id, field, path}` dicts — one entry per broken reference. Used by `method_get_missing_files` in the backend service.
