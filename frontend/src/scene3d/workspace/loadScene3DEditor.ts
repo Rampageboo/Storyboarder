@@ -17,6 +17,7 @@ export type Scene3DEditorInstance = {
   setFollowCamera?: (enabled: boolean, options?: Record<string, unknown>) => void
   setActiveCamera?: (cameraId: string, showMessage?: boolean) => void
   _resize?: () => void
+  dispose?: () => void
 }
 
 export type Scene3DEditorConstructor = new (

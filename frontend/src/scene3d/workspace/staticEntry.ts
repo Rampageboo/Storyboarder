@@ -131,3 +131,5 @@ export {
   createEmptyBlenderPlaybackState,
   stopWorkspaceMixer,
 } from './workspaceClear'
+
+export { Scene3DEditor } from './workspaceEditor'

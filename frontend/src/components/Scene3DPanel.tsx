@@ -397,7 +397,8 @@ export function Scene3DPanel() {
     () => () => {
       if (persistTimerRef.current) window.clearTimeout(persistTimerRef.current)
       if (refViewTimerRef.current) window.clearTimeout(refViewTimerRef.current)
-      editorRef.current?.pauseAnimation?.()
+      editorRef.current?.dispose?.()
+      editorRef.current = null
     },
     [],
   )
