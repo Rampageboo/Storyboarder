@@ -59,7 +59,6 @@ if errorlevel 1 (
 )
 
 echo Starting Storyboard Tool desktop window...
-echo Tip: pass --browser to open in the system browser instead ^(http://127.0.0.1:8000^).
 echo Logs: %LOG_FILE%
 echo.
 echo [%DATE% %TIME%] Starting Storyboard Tool>>"%LOG_FILE%"

@@ -6,7 +6,7 @@ React + TypeScript + Vite UI for Storyboarder. Production build output goes to `
 
 ```bash
 npm install
-npm run dev      # http://localhost:5173/react/  (proxies /api and /static to :8000)
+npm run dev      # http://localhost:5173/react/  (proxies /api and /static to the desktop backend)
 npm run build    # writes dist + rebuilds scene3d_workspace.js
 npm run build:workspace  # only rebuild /static/runtime/scene3d_workspace.js
 ```

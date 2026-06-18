@@ -4,7 +4,7 @@ A minimal local storyboard planning app with a React + Vite frontend and a Pytho
 
 ## Features
 
-- Run as a native desktop window (default) or in a browser with `--browser`
+- Run as a native desktop window
 - Create and open JSON-based storyboard projects
 - Add, duplicate, delete, and reorder shots
 - View shots as a list or thumbnail board
@@ -95,14 +95,6 @@ pip install -r requirements.txt
 python main.py
 ```
 
-This opens a **desktop app window** (via pywebview + local FastAPI backend).
+This opens a **desktop app window** (via pywebview). The local FastAPI server is an internal implementation detail — do not open the app in a system browser.
 
-Optional browser mode:
-
-```bash
-python main.py --browser
-```
-
-Then open `http://127.0.0.1:8000`.
-
-The app stores projects as `project.json` plus local image files. New/Open Project dialogs use native file pickers handled by the local server.
+The app stores projects as `project.json` plus local image files. New/Open Project dialogs use native file pickers handled by the internal server.

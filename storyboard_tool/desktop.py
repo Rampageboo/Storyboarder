@@ -12,8 +12,10 @@ from . import project_manager
 from .live_bridge import global_bridge_dir, resolve_server_port, server_identity_url
 
 
-HOST = "127.0.0.1"
-PORT = 8000
+# The desktop shell starts a private localhost server for the React bundle and API.
+# This is an implementation detail for pywebview — not a supported browser workflow.
+_HOST = "127.0.0.1"
+_PORT = 0  # 0 = resolved dynamically at startup; see resolve_server_port()
 ICON_PATH = Path(__file__).resolve().parent / "assets" / "icon.ico"
 APP_USER_MODEL_ID = "StoryboardTool.StoryboardTool.1"
 _WEBVIEW_STORAGE_WARNED_PATHS: set[str] = set()
@@ -108,7 +110,8 @@ def _ignore_connection_reset(loop, context) -> None:
     loop.default_exception_handler(context)
 
 
-def start_server(app, host: str = HOST, port: int = PORT) -> tuple[threading.Thread, int]:
+def start_internal_server(app, host: str = _HOST, port: int = _PORT) -> tuple[threading.Thread, int]:
+    """Start the private localhost server that pywebview loads. Not a public endpoint."""
     if port <= 0:
         port = resolve_server_port(host, port)
     app.state.bridge_port = port
@@ -129,6 +132,10 @@ def start_server(app, host: str = HOST, port: int = PORT) -> tuple[threading.Thr
     thread.start()
     wait_for_server(host, port)
     return thread, port
+
+
+# Back-compat alias — prefer start_internal_server in new code.
+start_server = start_internal_server
 
 
 def webview_storage_path() -> Path:
@@ -161,7 +168,7 @@ def open_desktop_window(app, title: str = "Storyboard Tool") -> int:
     from .live_bridge import publish
 
     try:
-        port = resolve_server_port(HOST, PORT)
+        port = resolve_server_port(_HOST, _PORT)
     except RuntimeError as exc:
         print(str(exc))
         return 1
@@ -171,7 +178,7 @@ def open_desktop_window(app, title: str = "Storyboard Tool") -> int:
 
     bridge = DesktopBridge(app)
     _configure_windows_asyncio_noise()
-    start_server(app, HOST, port)
+    start_internal_server(app, _HOST, port)
     react_index = Path(__file__).resolve().parent / "web" / "dist" / "index.html"
     if not react_index.is_file():
         print(
@@ -179,11 +186,11 @@ def open_desktop_window(app, title: str = "Storyboard Tool") -> int:
             file=sys.stderr,
         )
         return 1
-    app_url = f"http://{HOST}:{port}/"
+    internal_app_url = f"http://{_HOST}:{port}/"
     _configure_windows_taskbar_identity()
     webview.create_window(
         title,
-        app_url,
+        internal_app_url,
         width=1440,
         height=900,
         min_size=(1024, 680),

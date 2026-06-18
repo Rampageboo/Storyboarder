@@ -9,16 +9,6 @@
       "console": "integratedTerminal",
       "cwd": "${workspaceFolder}",
       "justMyCode": true
-    },
-    {
-      "name": "Storyboard Tool (Browser)",
-      "type": "debugpy",
-      "request": "launch",
-      "program": "${workspaceFolder}/main.py",
-      "args": ["--browser"],
-      "console": "integratedTerminal",
-      "cwd": "${workspaceFolder}",
-      "justMyCode": true
     }
   ]
 }

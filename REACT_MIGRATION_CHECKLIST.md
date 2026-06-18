@@ -23,8 +23,7 @@ cd frontend
 npm install        # first time only
 npm run build      # builds into ../storyboard_tool/web/dist with base /react/
 cd ..
-python main.py
-# then open http://127.0.0.1:8000/
+python main.py     # opens desktop window; internal server starts automatically
 ```
 
 For React dev mode with hot reload (backend must be running on :8000 for the `/api` proxy):
@@ -38,10 +37,10 @@ npm run dev        # http://localhost:5173/react/
 
 Run after `npm run build` + `python main.py`.
 
-### Serving
-- [ ] `http://127.0.0.1:8000/` → React app loads.
-- [ ] `http://127.0.0.1:8000/react` → React app loads; assets return 200 under `/react/assets/...`.
-- [ ] `http://127.0.0.1:8000/legacy` → 404.
+### Internal server routes (tested via smoke test — not intended for browser use)
+- [ ] `GET /` → React index served (200).
+- [ ] `GET /react` → React index served (200); assets under `/react/assets/` return 200.
+- [ ] `GET /legacy` → 404.
 - [ ] `/ref-segment`, `/ref-scene3d`, `/ref-video` → 302 redirect to `/`.
 - [ ] `/static/runtime/scene3d_workspace.js` and `/static/runtime/reference_model_preview.js` return 200.
 
