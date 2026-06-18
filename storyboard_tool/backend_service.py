@@ -8,8 +8,7 @@ from typing import Any, BinaryIO
 
 from fastapi import FastAPI, HTTPException
 
-from . import app_state, project_manager, project_transaction, reference_segments, session_store, shot_service
-from .export_utils import missing_files
+from . import app_state, export_service, project_manager, project_transaction, reference_segments, session_store, shot_service
 from .linked_sync import sync_project
 from .models import Shot
 from .service_exports import ExportServiceMixin
@@ -125,7 +124,7 @@ class StoryboardBackendService(ExportServiceMixin):
 
     def method_get_missing_files(self) -> dict[str, Any]:
         project = app_state._require_project(self.app)
-        return {"missing_files": missing_files(project)}
+        return {"missing_files": export_service.get_missing_media(project)}
 
     def method_bridge_status(self) -> dict[str, Any]:
         return app_state._bridge_status_payload(self.app)

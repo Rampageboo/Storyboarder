@@ -5,19 +5,28 @@ from typing import Any
 
 from fastapi import HTTPException
 
-from . import app_state, project_manager
-from .export_utils import (
-    export_contact_sheet,
-    export_image_sequence,
-    export_shot_list_csv,
-    export_timing_json,
-)
+from . import app_state, export_service, project_manager
 
+_DOWNLOAD_URLS: dict[str, str] = {
+    "pdf": "/api/export/pdf",
+    "shot_list": "/api/export/shot-list",
+    "timing": "/api/export/timing",
+    "contact_sheet": "/api/export/contact-sheet",
+}
 
-def _export_storyboard_pdf(project, output_path: Path, *, layout: str) -> None:
-    from .pdf_exporter import export_storyboard_pdf
+_MEDIA_TYPES: dict[str, str] = {
+    "pdf": "application/pdf",
+    "shot_list": "text/csv",
+    "timing": "application/json",
+    "contact_sheet": "image/png",
+}
 
-    export_storyboard_pdf(project, output_path, layout=layout)
+_FILENAMES: dict[str, str] = {
+    "pdf": "storyboard.pdf",
+    "shot_list": "shot_list.csv",
+    "timing": "timing.json",
+    "contact_sheet": "contact_sheet.png",
+}
 
 
 class ExportServiceMixin:
@@ -25,51 +34,46 @@ class ExportServiceMixin:
 
     def method_export_pdf(self, layout: str = "two_per_page") -> dict[str, str]:
         project = app_state._require_project(self.app)
-        output_path = project.exports_dir / "storyboard.pdf"
-        chosen = layout if layout in {"one_per_page", "two_per_page", "thumbnails"} else "two_per_page"
+        chosen = layout if layout in export_service.VALID_PDF_LAYOUTS else export_service.DEFAULT_PDF_LAYOUT
         try:
-            _export_storyboard_pdf(project, output_path, layout=chosen)
+            output_path = export_service.export_pdf(project, chosen)
         except Exception as exc:
             raise HTTPException(status_code=500, detail=str(exc)) from exc
         project.settings["pdf_layout"] = chosen
         project_manager.save_settings(project)
-        return {"path": str(output_path), "download_url": "/api/export/pdf"}
+        return {"path": str(output_path), "download_url": _DOWNLOAD_URLS["pdf"]}
 
     def method_export_shot_list(self) -> dict[str, str]:
         project = app_state._require_project(self.app)
-        output_path = project.exports_dir / "shot_list.csv"
         try:
-            export_shot_list_csv(project, output_path)
+            output_path = export_service.export_shot_list(project)
         except Exception as exc:
             raise HTTPException(status_code=500, detail=str(exc)) from exc
-        return {"path": str(output_path), "download_url": "/api/export/shot-list"}
+        return {"path": str(output_path), "download_url": _DOWNLOAD_URLS["shot_list"]}
 
     def method_export_timing(self) -> dict[str, str]:
         project = app_state._require_project(self.app)
-        output_path = project.exports_dir / "timing.json"
         try:
-            export_timing_json(project, output_path)
+            output_path = export_service.export_timing(project)
         except Exception as exc:
             raise HTTPException(status_code=500, detail=str(exc)) from exc
-        return {"path": str(output_path), "download_url": "/api/export/timing"}
+        return {"path": str(output_path), "download_url": _DOWNLOAD_URLS["timing"]}
 
     def method_export_contact_sheet(self) -> dict[str, str]:
         project = app_state._require_project(self.app)
-        output_path = project.exports_dir / "contact_sheet.png"
         try:
-            export_contact_sheet(project, output_path)
+            output_path = export_service.export_contact_sheet(project)
         except Exception as exc:
             raise HTTPException(status_code=500, detail=str(exc)) from exc
-        return {"path": str(output_path), "download_url": "/api/export/contact-sheet"}
+        return {"path": str(output_path), "download_url": _DOWNLOAD_URLS["contact_sheet"]}
 
     def method_export_image_sequence(self) -> dict[str, str]:
         project = app_state._require_project(self.app)
-        output_dir = project.exports_dir / "image_sequence"
         try:
-            export_image_sequence(project, output_dir)
+            output_path = export_service.export_image_sequence(project)
         except Exception as exc:
             raise HTTPException(status_code=500, detail=str(exc)) from exc
-        return {"path": str(output_dir)}
+        return {"path": str(output_path)}
 
     def method_get_scene3d_file(self) -> dict[str, str]:
         project = app_state._require_project(self.app)
@@ -118,44 +122,32 @@ class ExportServiceMixin:
 
     def method_download_shot_list(self) -> dict[str, str]:
         project = app_state._require_project(self.app)
-        output_path = project.exports_dir / "shot_list.csv"
-        if not output_path.exists():
-            raise HTTPException(status_code=404, detail="Export the shot list first.")
-        return {
-            "path": str(output_path),
-            "media_type": "text/csv",
-            "filename": "shot_list.csv",
-        }
+        try:
+            output_path = export_service.check_export_exists(project, "shot_list")
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        return {"path": str(output_path), "media_type": _MEDIA_TYPES["shot_list"], "filename": _FILENAMES["shot_list"]}
 
     def method_download_timing(self) -> dict[str, str]:
         project = app_state._require_project(self.app)
-        output_path = project.exports_dir / "timing.json"
-        if not output_path.exists():
-            raise HTTPException(status_code=404, detail="Export timing data first.")
-        return {
-            "path": str(output_path),
-            "media_type": "application/json",
-            "filename": "timing.json",
-        }
+        try:
+            output_path = export_service.check_export_exists(project, "timing")
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        return {"path": str(output_path), "media_type": _MEDIA_TYPES["timing"], "filename": _FILENAMES["timing"]}
 
     def method_download_contact_sheet(self) -> dict[str, str]:
         project = app_state._require_project(self.app)
-        output_path = project.exports_dir / "contact_sheet.png"
-        if not output_path.exists():
-            raise HTTPException(status_code=404, detail="Export the contact sheet first.")
-        return {
-            "path": str(output_path),
-            "media_type": "image/png",
-            "filename": "contact_sheet.png",
-        }
+        try:
+            output_path = export_service.check_export_exists(project, "contact_sheet")
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        return {"path": str(output_path), "media_type": _MEDIA_TYPES["contact_sheet"], "filename": _FILENAMES["contact_sheet"]}
 
     def method_download_pdf(self) -> dict[str, str]:
         project = app_state._require_project(self.app)
-        output_path = project.exports_dir / "storyboard.pdf"
-        if not output_path.exists():
-            raise HTTPException(status_code=404, detail="Export the PDF first.")
-        return {
-            "path": str(output_path),
-            "media_type": "application/pdf",
-            "filename": "storyboard.pdf",
-        }
+        try:
+            output_path = export_service.check_export_exists(project, "pdf")
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        return {"path": str(output_path), "media_type": _MEDIA_TYPES["pdf"], "filename": _FILENAMES["pdf"]}

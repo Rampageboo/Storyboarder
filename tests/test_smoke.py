@@ -20,6 +20,7 @@ from storyboard_tool.bridge import DesktopBridge
 from storyboard_tool import desktop, live_bridge, project_manager
 from storyboard_tool import api as api_module
 from storyboard_tool import backend_service as backend_service_module
+from storyboard_tool import export_service as export_service_module
 from storyboard_tool import service_exports as service_exports_module
 from storyboard_tool import backups as backups_module
 from storyboard_tool import video_utils
@@ -108,14 +109,16 @@ class StoryboardSmokeTests(unittest.TestCase):
     @unittest.skipIf(find_spec("multipart") is None, "python-multipart is not installed")
     def test_rest_pdf_export_route_reaches_exporter(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            original_export = service_exports_module._export_storyboard_pdf
+            original_export = export_service_module.export_pdf
 
-            def fake_export(_project, output_path, *, layout):
+            def fake_export(project, layout=export_service_module.DEFAULT_PDF_LAYOUT):
                 self.assertEqual(layout, "two_per_page")
-                output_path.parent.mkdir(parents=True, exist_ok=True)
-                output_path.write_bytes(b"%PDF-1.4\n")
+                out = export_service_module.resolve_output_path(project, "pdf")
+                out.parent.mkdir(parents=True, exist_ok=True)
+                out.write_bytes(b"%PDF-1.4\n")
+                return out
 
-            service_exports_module._export_storyboard_pdf = fake_export
+            export_service_module.export_pdf = fake_export
             app = api_module.create_app(Path(tmp))
             client = TestClient(app, raise_server_exceptions=False)
             try:
@@ -136,7 +139,7 @@ class StoryboardSmokeTests(unittest.TestCase):
                 self.assertIn("application/pdf", download.headers.get("content-type", ""))
                 self.assertEqual(download.content, b"%PDF-1.4\n")
             finally:
-                service_exports_module._export_storyboard_pdf = original_export
+                export_service_module.export_pdf = original_export
 
     def test_export_download_returns_404_before_export(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
