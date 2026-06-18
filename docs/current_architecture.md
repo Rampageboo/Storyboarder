@@ -746,9 +746,9 @@ This section maps each asset type to its on-disk location, the module that owns 
   shots.csv                    ← read-only compatibility snapshot (written on save, never read back)
   shots/
     <shot_id>/
-      <shot_id>_preview.png    ← flattened board image (drawn frame or reference bake)
-      <shot_id>_thumb.png      ← thumbnail (derived from preview)
-      <shot_id>_background.png ← reference background layer (separate from drawing)
+      <shot_id>_preview.png    ← artist artwork export (from Photoshop, drawing tool, or image import)
+      <shot_id>_background.png ← reference / background plate (owned by reference apply flows)
+      <shot_id>_thumb.png      ← thumbnail for filmstrip / timeline display
       <shot_id>.psd            ← Photoshop canvas (optional)
       <shot_id>_annotations.json
       _history/                ← PSD recovery backups
@@ -762,7 +762,21 @@ This section maps each asset type to its on-disk location, the module that owns 
   scripts/                     ← Blender .blend template
 ```
 
-### 19.2 Lifecycle flows and owning modules
+### 19.2 Board asset model
+
+Three per-shot files serve distinct roles and must not be conflated:
+
+| File | Owner | Written by | Must NOT be written by |
+|---|---|---|---|
+| `<id>_preview.png` | Artist / Photoshop | PSD export, drawing save, image import | Reference apply (video / image / model) |
+| `<id>_background.png` | Reference system | `_apply_reference_frame_to_shot`, `_apply_model_capture_to_shot`, `import_image_for_shot` | Never by Photoshop sync |
+| `<id>_thumb.png` | Display system | `_refresh_thumbnail_for_shot` (called by apply / import flows) | Never written as a primary operation |
+
+**Display composite rule**: when the UI, filmstrip, contact sheet, or export needs to show a board, it may composite `_background.png` (bottom) + `_preview.png` (top, on transparency). The thumbnail `_thumb.png` reflects the best available source — artwork preview when present and non-solid, otherwise the background plate. Neither composite generation nor thumbnail refresh may destroy the originals.
+
+**Legacy boards**: projects created before this separation may have a `_preview.png` that IS a baked reference (the old model wrote the reference directly into the preview). Such shots are identified as "legacy-baked" — they have reference provenance (`camera_data["ref_segment_id"]` set) and no linked PSD or `source_file_path`. On `delete_ref_segment` their preview is cleared along with the background (since both represent the same baked reference). Shots that have a PSD or a `source_file_path` are never treated as legacy-baked.
+
+### 19.3 Lifecycle flows and owning modules
 
 | Flow | Files touched | Module | Transaction-safe? |
 |---|---|---|---|
@@ -774,21 +788,23 @@ This section maps each asset type to its on-disk location, the module that owns 
 | `import_project_reference_stream` | writes `references/ref_<uuid>.<ext>`, appends to `reference_links` | `reference_segments` | `mutate_project` in `backend_service` |
 | `remove_project_reference` | deletes reference file (if inside root), clears `reference_links` + any segments | `reference_segments` | `mutate_project` in `backend_service` |
 | `import_scene3d_stream` | writes `scene3d/<name>.glb`, updates `settings["scene3d"]` | `external_tools` | `mutate_project` in `backend_service` |
-| `apply_ref_segment_to_boards` | writes board preview/bg/thumb PNGs, stamps shot metadata | `reference_segments` | `mutate_project` in `backend_service`; undo snapshot taken first |
-| `apply_model_captures_to_boards` | writes board preview/bg/thumb PNGs, stamps shot metadata | `reference_segments` | `mutate_project` in `backend_service`; undo snapshot taken first |
-| `delete_ref_segment` | deletes bake PNGs, clears shot metadata, removes segment from settings | `reference_segments` | `mutate_project` in `backend_service` |
+| `apply_ref_segment_to_boards` | writes **only** `<id>_background.png` + `<id>_thumb.png`; stamps provenance metadata; does NOT touch `<id>_preview.png` or `source_file_path` | `reference_segments` | `mutate_project` in `backend_service`; undo snapshot taken first |
+| `apply_model_captures_to_boards` | writes **only** `<id>_background.png` + `<id>_thumb.png`; stamps provenance metadata; does NOT touch `<id>_preview.png` or `source_file_path` | `reference_segments` | `mutate_project` in `backend_service`; undo snapshot taken first |
+| `delete_ref_segment` | deletes `<id>_background.png` + `<id>_thumb.png`; for legacy-baked shots (no PSD, has provenance) also deletes `<id>_preview.png`; clears shot metadata; removes segment from settings | `reference_segments` | `mutate_project` in `backend_service` |
 | `snapshot_boards_for_undo` | copies preview/bg/thumb to `backups/ref_undo/<token>/` | `reference_segments` | snapshot is write-only; original files untouched |
 | `restore_boards_from_undo` | copies snapshot PNGs back over current board files, restores shot metadata | `reference_segments` | `mutate_project` in `backend_service` |
 | Export (PDF/CSV/contact sheet) | writes files under `exports/` only | `export_service` | no project metadata mutation |
 
-### 19.3 Deletion behaviour
+**Atomic file safety**: `_apply_reference_frame_to_shot` and `_apply_model_capture_to_shot` write to a `.tmp.png` staging file, validate it can be opened, then `os.replace()` atomically into the final path. A compose failure unlinks the temp file and leaves the previous background intact.
+
+### 19.4 Deletion behaviour
 
 - **Shot files are never deleted on `delete_shot`.** Only the `Shot` object is removed from `project.shots`. The `shots/<id>/` directory and all its contents remain on disk. This is intentional: undo (via `restore_shot`) can re-insert the shot record, and the files remain available.
 - **Reference files are deleted on `remove_project_reference`,** but only when the resolved path is inside `project.root_path`. External paths (e.g. a path accidentally set to an absolute path outside the project) are silently skipped without deletion.
-- **Board bake files are deleted on `delete_ref_segment`** (`<id>_preview.png`, `<id>_background.png`, `<id>_thumb.png`, `<id>_ref_raw.png`). This is not reversible via the undo mechanism — undo is only for `apply_*` operations, not `delete_ref_segment`.
+- **On `delete_ref_segment`**: `<id>_background.png`, `<id>_thumb.png`, and `<id>_ref_raw.png` are always removed. `<id>_preview.png` is removed **only** for legacy-baked shots (no PSD, has provenance). Shots with a PSD or `source_file_path` keep their preview (PSD-backed shots get a fresh PSD composite regenerated). This is not reversible via the undo mechanism — undo is only for `apply_*` operations.
 - **Export files are never deleted by the application.** Exports overwrite existing output files at the same path.
 
-### 19.4 `mutate_project` coverage
+### 19.5 `mutate_project` coverage
 
 `project_transaction.mutate_project` protects **in-memory** state (`project.shots` and `project.settings`) only. It does not roll back filesystem side-effects (PNG writes, file deletions). Methods wrapped with it in `backend_service`:
 
@@ -805,6 +821,6 @@ This section maps each asset type to its on-disk location, the module that owns 
 - `method_upload_project_reference`
 - `method_upload_reference_video`
 
-### 19.5 Missing-file reporting
+### 19.6 Missing-file reporting
 
 `export_utils.missing_files(project)` iterates all shots and checks whether the files referenced by `preview_image_path`, `thumbnail_path`, `source_file_path`, `annotation_path`, and each entry in `reference_image_paths` actually exist on disk. It returns a list of `{shot_id, field, path}` dicts — one entry per broken reference. Used by `method_get_missing_files` in the backend service.

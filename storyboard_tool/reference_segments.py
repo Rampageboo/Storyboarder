@@ -49,7 +49,13 @@ def _undo_root(project: Project) -> Path:
 
 
 def _board_bake_filenames(shot: Shot) -> list[str]:
-    """The per-board files a reference bake overwrites (preview, background, thumb)."""
+    """Files captured by the undo snapshot for a reference bake.
+
+    Includes ``_preview.png`` so that undo can restore a shot that was baked
+    under the old model (where reference apply wrote the preview directly).
+    New bakes no longer write the preview, but the snapshot is kept inclusive
+    so legacy undo tokens still work correctly.
+    """
     return [
         f"{shot.shot_id}_preview.png",
         board_background_filename(shot.shot_id),
@@ -281,6 +287,20 @@ def _clear_shot_preview_paths(shot: Shot) -> None:
     shot.source_sync_mtime = 0.0
 
 
+def _shot_preview_is_legacy_baked(project: Project, shot: Shot) -> bool:
+    """True when the preview file is a legacy reference bake with no separate artist source.
+
+    Used to decide whether it is safe to delete ``_preview.png`` when clearing a
+    segment bake.  A shot is considered legacy-baked when it carries reference
+    provenance (ref_segment_id stamped by an old bake) but has no linked PSD /
+    source file that would be the true owner of the preview.
+    """
+    if pm.shot_has_psd_canvas(project, shot) or shot.source_file_path:
+        return False
+    cam = shot.camera_data or {}
+    return bool(str(cam.get("ref_segment_id", "") or "").strip())
+
+
 def _clear_ref_segment_bake_for_shot(
     project: Project,
     shot: Shot,
@@ -288,23 +308,35 @@ def _clear_ref_segment_bake_for_shot(
     segment_ref_path: str,
 ) -> None:
     del seg_id, segment_ref_path  # matching is done by callers before this runs
-    _strip_ref_segment_provenance(shot)
 
+    # Cache the legacy-bake check BEFORE stripping provenance — the check reads
+    # camera_data["ref_segment_id"] which _strip_ref_segment_provenance clears.
+    has_psd = pm.shot_has_psd_canvas(project, shot)
+    is_legacy_baked = (not has_psd) and _shot_preview_is_legacy_baked(project, shot)
+
+    _strip_ref_segment_provenance(shot)
     shot.ref_video_path = ""
     shot.ref_video_time = 0.0
     shot.ref_segment_time = 0.0
 
     shot_dir = pm.get_shot_dir(project, shot)
-    for name in _board_bake_filenames(shot):
-        (shot_dir / name).unlink(missing_ok=True)
+    # Always remove reference-owned assets.
+    (shot_dir / board_background_filename(shot.shot_id)).unlink(missing_ok=True)
+    (shot_dir / f"{shot.shot_id}_thumb.png").unlink(missing_ok=True)
     (shot_dir / f"{shot.shot_id}_ref_raw.png").unlink(missing_ok=True)
 
-    if pm.shot_has_psd_canvas(project, shot):
+    if has_psd:
+        # PSD-backed board: regenerate preview from the Photoshop document.
         _refresh_shot_preview_from_psd(project, shot)
         return
 
-    # For non-PSD boards, do not recreate a per-shot solid preview; the canvas
-    # background is a global UI backdrop.
+    if is_legacy_baked:
+        # Legacy baked board (old model wrote the reference into preview directly):
+        # safe to delete the preview so the board shows as blank after clearing.
+        (shot_dir / f"{shot.shot_id}_preview.png").unlink(missing_ok=True)
+
+    # For non-PSD boards (new model or cleared legacy), do not recreate a
+    # per-shot solid preview; the canvas background is a global UI backdrop.
     _clear_shot_preview_paths(shot)
 
 
@@ -904,10 +936,9 @@ def apply_ref_segment_to_boards(
         raw_path = shot_dir / f"{shot.shot_id}_ref_raw.png"
         extract_video_frame_to_png(video_path, video_time, raw_path)
         try:
-            preview_path = pm._apply_reference_frame_to_shot(project, shot, raw_path, fit_mode)
+            pm._apply_reference_frame_to_shot(project, shot, raw_path, fit_mode)
         finally:
             raw_path.unlink(missing_ok=True)
-        shot.source_sync_mtime = preview_path.stat().st_mtime
         shot.ref_video_path = video_rel
         shot.ref_video_time = round(video_time, 3)
         shot.ref_segment_time = round(segment_time, 3)
@@ -1059,8 +1090,7 @@ def apply_ref_segment_3d_to_boards(
             continue
         if index not in eligible_preview_indices:
             continue
-        composed = pm._apply_reference_frame_to_shot(project, shot, preview_path, fit_mode)
-        shot.source_sync_mtime = composed.stat().st_mtime
+        pm._apply_reference_frame_to_shot(project, shot, preview_path, fit_mode)
 
     _persist_ref_segment_apply(
         project,
@@ -1152,10 +1182,9 @@ def apply_model_captures_to_boards(
         raw_path = shot_dir / f"{shot.shot_id}_ref_raw.png"
         try:
             save_png_data_url(str(capture.get("data_url") or ""), raw_path)
-            preview_path = pm._apply_model_capture_to_shot(project, shot, raw_path, fit_mode)
+            pm._apply_model_capture_to_shot(project, shot, raw_path, fit_mode)
         finally:
             raw_path.unlink(missing_ok=True)
-        shot.source_sync_mtime = preview_path.stat().st_mtime
         shot.ref_video_path = model_rel
         shot.ref_video_time = round(anim_time, 3)
         shot.ref_segment_time = round(segment_offset, 3)
@@ -1234,8 +1263,7 @@ def apply_ref_segment_image_to_boards(
     for index in range(min_index, max_index + 1):
         shot = shots[index]
         segment_time = segment_offset
-        preview_path = pm._apply_reference_frame_to_shot(project, shot, image_path, fit_mode)
-        shot.source_sync_mtime = preview_path.stat().st_mtime
+        pm._apply_reference_frame_to_shot(project, shot, image_path, fit_mode)
         shot.ref_video_path = image_rel
         shot.ref_video_time = 0.0
         shot.ref_segment_time = round(segment_time, 3)

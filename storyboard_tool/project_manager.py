@@ -374,24 +374,65 @@ def _save_board_background_copy(source_path: Path, destination_path: Path) -> Pa
     return destination_path
 
 
+def _refresh_thumbnail_for_shot(project: Project, shot: Shot) -> Path | None:
+    """Regenerate the shot thumbnail without modifying the artist artwork preview.
+
+    Prefers the existing artist preview when it is non-solid; falls back to the
+    reference background plate so the filmstrip shows something useful even when
+    no artwork has been drawn yet.
+    """
+    shot_dir = get_shot_dir(project, shot)
+    thumb_path = shot_dir / f"{shot.shot_id}_thumb.png"
+
+    preview_path = resolve_shot_preview_path(project, shot)
+    if preview_path is not None and preview_path.is_file() and not is_solid_color_image(preview_path):
+        source = preview_path
+    else:
+        bg_path = get_shot_board_background_path(project, shot)
+        if bg_path is None:
+            return None
+        source = bg_path
+
+    thumbnail = create_thumbnail(source, thumb_path)
+    shot.thumbnail_path = thumbnail.relative_to(project.root_path).as_posix()
+    return thumbnail
+
+
 def _apply_reference_frame_to_shot(
     project: Project,
     shot: Shot,
     source_path: Path,
     fit_mode: str,
 ) -> Path:
+    """Write a reference frame as the board background plate only.
+
+    This never touches ``<shot_id>_preview.png`` (the artist's drawing) or
+    ``source_file_path`` / PSD metadata.  The background file is written
+    atomically via a temp file so a failed compose leaves the previous
+    background intact.  Provenance metadata (ref_segment_id, etc.) is stamped
+    by the caller after this returns.
+    """
     from PIL import Image
 
     width, height = get_canvas_size(project)
     bg_color = get_canvas_color(project)
     shot_dir = get_shot_dir(project, shot)
-    preview_path = shot_dir / f"{shot.shot_id}_preview.png"
-    with Image.open(source_path) as image:
-        composed = compose_image_to_canvas(image, width, height, fit_mode, bg_color)
-        composed.save(preview_path, "PNG")
-    _save_board_background_copy(preview_path, shot_dir / board_background_filename(shot.shot_id))
-    _set_shot_preview_paths(project, shot, preview_path)
-    return preview_path
+    background_path = shot_dir / board_background_filename(shot.shot_id)
+    background_path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = background_path.with_suffix(".tmp.png")
+    try:
+        with Image.open(source_path) as image:
+            composed = compose_image_to_canvas(image, width, height, fit_mode, bg_color)
+            composed.save(tmp_path, "PNG")
+        # Validate: ensure the temp file is a readable PNG before committing.
+        with Image.open(tmp_path):
+            pass
+        os.replace(tmp_path, background_path)
+    except BaseException:
+        tmp_path.unlink(missing_ok=True)
+        raise
+    _refresh_thumbnail_for_shot(project, shot)
+    return background_path
 
 
 def _apply_model_capture_to_shot(
@@ -400,26 +441,38 @@ def _apply_model_capture_to_shot(
     source_path: Path,
     fit_mode: str,
 ) -> Path:
-    """Write a browser-rendered GLB capture to board preview/background.
+    """Write a browser-rendered GLB capture as the board background plate only.
 
-  When the PNG already matches project canvas dimensions, preserve pixels exactly
-  (no compose pass that can shift colors). Smaller captures still go through fit compose.
+    When the PNG already matches project canvas dimensions, pixels are preserved
+    exactly (no compose pass that can shift colors).  Smaller captures go through
+    the compose path.  Like ``_apply_reference_frame_to_shot``, this never writes
+    ``_preview.png`` or changes ``source_file_path``.
     """
     from PIL import Image
 
     width, height = get_canvas_size(project)
     shot_dir = get_shot_dir(project, shot)
-    preview_path = shot_dir / f"{shot.shot_id}_preview.png"
+    background_path = shot_dir / board_background_filename(shot.shot_id)
     mode = normalize_reference_fit_mode(fit_mode)
-    with Image.open(source_path) as image:
-        if image.size == (width, height) and mode in {"fit", "stretch"}:
-            rgb = image.convert("RGB")
-            rgb.save(preview_path, "PNG")
-        else:
-            return _apply_reference_frame_to_shot(project, shot, source_path, fit_mode)
-    _save_board_background_copy(preview_path, shot_dir / board_background_filename(shot.shot_id))
-    _set_shot_preview_paths(project, shot, preview_path)
-    return preview_path
+    background_path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = background_path.with_suffix(".tmp.png")
+    try:
+        with Image.open(source_path) as image:
+            if image.size == (width, height) and mode in {"fit", "stretch"}:
+                rgb = image.convert("RGB")
+                rgb.save(tmp_path, "PNG")
+            else:
+                bg_color = get_canvas_color(project)
+                composed = compose_image_to_canvas(image, width, height, mode, bg_color)
+                composed.save(tmp_path, "PNG")
+        with Image.open(tmp_path):
+            pass
+        os.replace(tmp_path, background_path)
+    except BaseException:
+        tmp_path.unlink(missing_ok=True)
+        raise
+    _refresh_thumbnail_for_shot(project, shot)
+    return background_path
 
 
 def add_reference_image_stream(
