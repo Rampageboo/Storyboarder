@@ -9,7 +9,19 @@ import {
   type PropsWithChildren,
   type SetStateAction,
 } from 'react'
-import { createProject, getProject, openProject, saveProject, updateShot } from '../api'
+import {
+  addShot,
+  createProject,
+  createShotCanvas,
+  deleteRefSegment,
+  deleteShot,
+  getProject,
+  openProject,
+  openShotSource,
+  saveProject,
+  syncShot,
+  updateShot,
+} from '../api'
 import { browseFolder, getAppSession, isNoProjectOpenError, updateAppSession, type AppSession } from '../api'
 import type { ProjectPathRequest, ProjectPayload, Shot, ShotUpdate } from '../types'
 import { ProjectContext } from './useProject'
@@ -18,11 +30,18 @@ export interface ProjectContextValue {
   project: ProjectPayload | null
   selectedShotId: string | null
   setSelectedShotId: (shotId: string | null) => void
+  replaceProject: (payload: ProjectPayload, preferredShotId?: string | null) => void
+  refreshProjectFromBridge: (pluginSelectedShotId?: string | null) => Promise<void>
   setProject: Dispatch<SetStateAction<ProjectPayload | null>>
   reloadProject: () => Promise<void>
   newProject: (body?: ProjectPathRequest) => Promise<void>
   openProjectFromDialog: () => Promise<void>
   saveProject: () => Promise<void>
+  addShotAfterSelection: () => Promise<void>
+  deleteSelectedShot: () => Promise<void>
+  deleteActiveRefSegment: () => Promise<void>
+  syncSelectedShot: () => Promise<void>
+  openSelectedShotSource: () => Promise<void>
   initialLoading: boolean
   projectActionBusy: boolean
   getDraft: (shotId: string) => ShotUpdate | undefined
@@ -87,6 +106,22 @@ function preferredShotId(payload: ProjectPayload, wanted?: string | null): strin
   return payload.shots[0]?.shot_id ?? null
 }
 
+function projectVisualEpoch(payload: ProjectPayload | null): number {
+  if (!payload) return 0
+  let hash = payload.dirty ? 17 : 0
+  hash = (hash * 31 + payload.shots.length) >>> 0
+  for (const shot of payload.shots) {
+    hash = (hash * 31 + shot.shot_id.length) >>> 0
+    hash = (hash * 31 + String(shot.preview_disk_mtime ?? '').length) >>> 0
+    hash = (hash * 31 + String(shot.thumbnail_disk_mtime ?? '').length) >>> 0
+    hash = (hash * 31 + String(shot.image_path ?? '').length) >>> 0
+    hash = (hash * 31 + String(shot.preview_image_path ?? '').length) >>> 0
+    hash = (hash * 31 + String(shot.source_file_path ?? '').length) >>> 0
+  }
+  hash = (hash * 31 + JSON.stringify(payload.settings?.ref_segments ?? []).length) >>> 0
+  return hash
+}
+
 export function ProjectProvider({ children }: PropsWithChildren) {
   const [project, setProject] = useState<ProjectPayload | null>(null)
   const [selectedShotId, setSelectedShotId] = useState<string | null>(null)
@@ -95,7 +130,6 @@ export function ProjectProvider({ children }: PropsWithChildren) {
   const [projectActionBusy, setProjectActionBusy] = useState(false)
   const [drafts, setDrafts] = useState<Record<string, ShotUpdate>>({})
   const [savingShots, setSavingShots] = useState<Record<string, boolean>>({})
-  const [visualEpoch, setVisualEpoch] = useState(0)
   const [segmentRange, setSegmentRange] = useState<{ anchorShotId: string | null; endShotId: string | null }>({
     anchorShotId: null,
     endShotId: null,
@@ -113,11 +147,7 @@ export function ProjectProvider({ children }: PropsWithChildren) {
     draftsRef.current = drafts
   })
 
-  const [prevProject, setPrevProject] = useState(project)
-  if (project !== prevProject) {
-    setPrevProject(project)
-    if (project) setVisualEpoch((v) => v + 1)
-  }
+  const visualEpoch = useMemo(() => projectVisualEpoch(project), [project])
 
   useEffect(() => {
     if (!project?.project_json_path || !selectedShotId) return
@@ -183,6 +213,20 @@ export function ProjectProvider({ children }: PropsWithChildren) {
       setSelectedShotId(preferredShotId(payload, selected))
     },
     [resetEditState],
+  )
+
+  const replaceProject = useCallback((payload: ProjectPayload, selected?: string | null) => {
+    setProject(payload)
+    setLastError(null)
+    setSelectedShotId((current) => preferredShotId(payload, selected === undefined ? current : selected))
+  }, [])
+
+  const refreshProjectFromBridge = useCallback(
+    async (pluginSelectedShotId?: string | null) => {
+      const payload = await getProject()
+      replaceProject(payload, pluginSelectedShotId || undefined)
+    },
+    [replaceProject],
   )
 
   const editShotField = useCallback(<K extends keyof ShotUpdate>(shotId: string, key: K, value: ShotUpdate[K]) => {
@@ -337,16 +381,64 @@ export function ProjectProvider({ children }: PropsWithChildren) {
     }
   }, [flushDirtyShots])
 
+  const addShotAfterSelection = useCallback(async () => {
+    const current = projectRef.current
+    const afterId = current && selectedShotId ? selectedShotId : undefined
+    const payload = await addShot(afterId ? { after_shot_id: afterId } : {})
+    const nextIndex = afterId
+      ? Math.min(payload.shots.findIndex((shot) => shot.shot_id === afterId) + 1, payload.shots.length - 1)
+      : payload.shots.length - 1
+    replaceProject(payload, payload.shots[nextIndex]?.shot_id ?? null)
+  }, [replaceProject, selectedShotId])
+
+  const deleteSelectedShot = useCallback(async () => {
+    const current = projectRef.current
+    if (!current || !selectedShotId) return
+    const selectedIndex = current.shots.findIndex((shot) => shot.shot_id === selectedShotId)
+    const payload = await deleteShot(selectedShotId)
+    const nextIndex = Math.min(Math.max(selectedIndex, 0), payload.shots.length - 1)
+    replaceProject(payload, payload.shots[nextIndex]?.shot_id ?? null)
+  }, [replaceProject, selectedShotId])
+
+  const deleteActiveRefSegment = useCallback(async () => {
+    if (!activeAppliedSegmentId) return
+    const segmentId = activeAppliedSegmentId
+    dismissRefSegmentUi()
+    replaceProject(await deleteRefSegment(segmentId))
+  }, [activeAppliedSegmentId, dismissRefSegmentUi, replaceProject])
+
+  const syncSelectedShot = useCallback(async () => {
+    if (!selectedShotId) return
+    replaceProject(await syncShot(selectedShotId), selectedShotId)
+  }, [replaceProject, selectedShotId])
+
+  const openSelectedShotSource = useCallback(async () => {
+    const current = projectRef.current
+    if (!current || !selectedShotId) return
+    const shot = current.shots.find((item) => item.shot_id === selectedShotId)
+    if (shot && !shot.source_file_path) {
+      replaceProject(await createShotCanvas(selectedShotId, {}), selectedShotId)
+    }
+    await openShotSource(selectedShotId)
+  }, [replaceProject, selectedShotId])
+
   const value = useMemo<ProjectContextValue>(
     () => ({
       project,
       selectedShotId,
       setSelectedShotId,
+      replaceProject,
+      refreshProjectFromBridge,
       setProject,
       reloadProject,
       newProject: newProjectAction,
       openProjectFromDialog,
       saveProject: saveProjectAction,
+      addShotAfterSelection,
+      deleteSelectedShot,
+      deleteActiveRefSegment,
+      syncSelectedShot,
+      openSelectedShotSource,
       initialLoading,
       projectActionBusy,
       getDraft,
@@ -375,7 +467,7 @@ export function ProjectProvider({ children }: PropsWithChildren) {
       clearError,
       reportError,
     }),
-    [project, selectedShotId, reloadProject, newProjectAction, openProjectFromDialog, saveProjectAction, initialLoading, projectActionBusy, getDraft, editShotField, isShotDirty, dirtyShotIds, savingShots, saveShot, flushDirtyShots, visualEpoch, segmentRange, setSegmentAnchor, setSegmentEnd, pickSegmentShot, clearSegmentRange, activeAppliedSegmentId, setActiveAppliedSegmentId, clearActiveAppliedSegment, refSegmentInspectOpen, openRefSegmentInspect, closeRefSegmentInspect, dismissRefSegmentUi, refApplyUndoToken, lastError, clearError, reportError],
+    [project, selectedShotId, replaceProject, refreshProjectFromBridge, reloadProject, newProjectAction, openProjectFromDialog, saveProjectAction, addShotAfterSelection, deleteSelectedShot, deleteActiveRefSegment, syncSelectedShot, openSelectedShotSource, initialLoading, projectActionBusy, getDraft, editShotField, isShotDirty, dirtyShotIds, savingShots, saveShot, flushDirtyShots, visualEpoch, segmentRange, setSegmentAnchor, setSegmentEnd, pickSegmentShot, clearSegmentRange, activeAppliedSegmentId, setActiveAppliedSegmentId, clearActiveAppliedSegment, refSegmentInspectOpen, openRefSegmentInspect, closeRefSegmentInspect, dismissRefSegmentUi, refApplyUndoToken, lastError, clearError, reportError],
   )
 
   return <ProjectContext.Provider value={value}>{children}</ProjectContext.Provider>

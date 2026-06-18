@@ -1,5 +1,4 @@
 import { useEffect, useLayoutEffect, useRef } from 'react'
-import { addShot, createShotCanvas, deleteRefSegment, deleteShot, openShotSource, syncShot } from '../api'
 import { useProject } from '../state/useProject'
 
 function isTypingTarget(target: EventTarget | null): boolean {
@@ -23,13 +22,17 @@ export function useGlobalShortcuts() {
     project,
     selectedShotId,
     setSelectedShotId,
-    setProject,
     saveProject,
     flushDirtyShots,
     reportError,
     projectActionBusy,
     activeAppliedSegmentId,
     dismissRefSegmentUi,
+    addShotAfterSelection,
+    deleteSelectedShot,
+    deleteActiveRefSegment,
+    syncSelectedShot,
+    openSelectedShotSource,
   } = useProject()
 
   const runningRef = useRef(false)
@@ -93,54 +96,31 @@ export function useGlobalShortcuts() {
           event.preventDefault()
           if (activeAppliedSegmentId) {
             if (!window.confirm('Delete this applied reference segment and clear its generated board backgrounds/previews?')) break
-            const segmentId = activeAppliedSegmentId
             dismissRefSegmentUi()
-            void run(async () => {
-              setProject(await deleteRefSegment(segmentId))
-            })
+            void run(deleteActiveRefSegment)
             break
           }
           if (!selectedShotId) break
           if (!window.confirm('Delete the selected board?')) break
-          void run(async () => {
-            const payload = await deleteShot(selectedShotId)
-            setProject(payload)
-            const nextIndex = Math.min(idx, payload.shots.length - 1)
-            setSelectedShotId(payload.shots[nextIndex]?.shot_id ?? null)
-          })
+          void run(deleteSelectedShot)
           break
         case 'r':
         case 'R':
           if (!selectedShotId) break
           event.preventDefault()
-          void run(async () => {
-            setProject(await syncShot(selectedShotId))
-          })
+          void run(syncSelectedShot)
           break
         case 'o':
         case 'O': {
           if (!selectedShotId) break
           event.preventDefault()
-          const shot = shots.find((s) => s.shot_id === selectedShotId)
-          void run(async () => {
-            if (shot && !shot.source_file_path) setProject(await createShotCanvas(selectedShotId, {}))
-            await openShotSource(selectedShotId)
-          })
+          void run(openSelectedShotSource)
           break
         }
         case 'n':
         case 'N':
           event.preventDefault()
-          void run(async () => {
-            const afterId = selectedShotId || undefined
-            const payload = await addShot(afterId ? { after_shot_id: afterId } : {})
-            setProject(payload)
-            const newIndex = afterId
-              ? Math.min(payload.shots.findIndex((s) => s.shot_id === afterId) + 1, payload.shots.length - 1)
-              : payload.shots.length - 1
-            const newId = payload.shots[newIndex]?.shot_id
-            if (newId) setSelectedShotId(newId)
-          })
+          void run(addShotAfterSelection)
           break
         default:
           break
@@ -149,5 +129,16 @@ export function useGlobalShortcuts() {
 
     document.addEventListener('keydown', onKeyDown)
     return () => document.removeEventListener('keydown', onKeyDown)
-  }, [flushDirtyShots, saveProject, setProject, setSelectedShotId, reportError, dismissRefSegmentUi])
+  }, [
+    flushDirtyShots,
+    saveProject,
+    setSelectedShotId,
+    reportError,
+    dismissRefSegmentUi,
+    addShotAfterSelection,
+    deleteSelectedShot,
+    deleteActiveRefSegment,
+    syncSelectedShot,
+    openSelectedShotSource,
+  ])
 }
