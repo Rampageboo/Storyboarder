@@ -14,7 +14,7 @@ from typing import Any
 
 from fastapi import FastAPI, HTTPException
 
-from . import live_bridge, project_manager, session_store
+from . import live_bridge, project_manager, session_store, shot_service
 from .models import Project, SHOT_STATUSES, Shot
 
 
@@ -55,15 +55,18 @@ def _require_project(app: FastAPI) -> Project:
     return project
 
 
-def _find_shot(project: Project, shot_id: str) -> Shot:
-    return project.shots[_find_shot_index(project, shot_id)]
-
-
 def _find_shot_index(project: Project, shot_id: str) -> int:
-    for index, shot in enumerate(project.shots):
-        if shot.shot_id == shot_id:
-            return index
-    raise HTTPException(status_code=404, detail=f"Shot not found: {shot_id}")
+    try:
+        return shot_service.find_shot_index(project, shot_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+def _find_shot(project: Project, shot_id: str) -> Shot:
+    try:
+        return shot_service.find_shot(project, shot_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
 def _track_project(app: FastAPI, project: Project) -> None:

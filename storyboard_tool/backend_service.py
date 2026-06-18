@@ -8,10 +8,10 @@ from typing import Any, BinaryIO
 
 from fastapi import FastAPI, HTTPException
 
-from . import app_state, project_manager, reference_segments, session_store
+from . import app_state, project_manager, project_transaction, reference_segments, session_store, shot_service
 from .export_utils import missing_files
 from .linked_sync import sync_project
-from .models import SHOT_STATUSES, Shot
+from .models import Shot
 from .service_exports import ExportServiceMixin
 from .system_utils import (
     browse_blender_executable,
@@ -334,49 +334,36 @@ class StoryboardBackendService(ExportServiceMixin):
 
     def method_add_shot(self, after_shot_id: str | None = None) -> dict[str, Any]:
         project = app_state._require_project(self.app)
-        after_index = None
-        if after_shot_id:
-            after_index = app_state._find_shot_index(project, after_shot_id)
-        shot = project_manager.add_shot(project, after_index=after_index)
+        try:
+            shot = shot_service.create_shot(project, after_shot_id or None)
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
         app_state._autosave(self.app)
         return {"shot": shot.to_dict(), **app_state._project_payload(project, self.app.state.dirty)}
 
     def method_duplicate_shot(self, shot_id: str) -> dict[str, Any]:
         project = app_state._require_project(self.app)
-        duplicate = project_manager.duplicate_shot(project, app_state._find_shot_index(project, shot_id))
+        try:
+            duplicate = shot_service.duplicate_shot(project, shot_id)
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
         app_state._autosave(self.app)
         return {"shot": duplicate.to_dict(), **app_state._project_payload(project, self.app.state.dirty)}
 
     def method_update_shot(self, shot_id: str, payload: dict[str, Any]) -> dict[str, Any]:
         project = app_state._require_project(self.app)
         shot = app_state._find_shot(project, shot_id)
-        data = payload if isinstance(payload, dict) else {}
-        shot.title = str(data.get("title", shot.title))
-        shot.scene = str(data.get("scene", shot.scene))
-        shot.sequence = str(data.get("sequence", shot.sequence))
-        shot.description = str(data.get("description", shot.description))
-        shot.action_note = str(data.get("action_note", shot.action_note))
-        shot.camera_note = str(data.get("camera_note", shot.camera_note))
-        shot.character_note = str(data.get("character_note", shot.character_note))
-        shot.dialogue = str(data.get("dialogue", shot.dialogue))
-        shot.lighting_note = str(data.get("lighting_note", shot.lighting_note))
-        shot.transition_note = str(data.get("transition_note", shot.transition_note))
-        shot.duration_seconds = max(0.1, float(data.get("duration_seconds", shot.duration_seconds)))
-        shot.camera_data = data.get("camera_data") if isinstance(data.get("camera_data"), dict) else shot.camera_data
-        tags = data.get("tags")
-        shot.tags = [str(tag).strip() for tag in tags if str(tag).strip()] if isinstance(tags, list) else shot.tags
-        status = str(data.get("status", shot.status))
-        shot.status = status if status in SHOT_STATUSES else "Draft"
+        shot_service.update_shot(shot, payload if isinstance(payload, dict) else {})
         app_state._autosave(self.app)
         return app_state._project_payload(project, self.app.state.dirty)
 
     def method_delete_shot(self, shot_id: str) -> dict[str, Any]:
         project = app_state._require_project(self.app)
-        index = app_state._find_shot_index(project, shot_id)
         try:
-            project_manager.delete_shot(project, index)
-        except Exception as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
+            with project_transaction.mutate_project(project):
+                shot_service.delete_shot(project, shot_id)
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
         app_state._autosave(self.app)
         return app_state._project_payload(project, self.app.state.dirty)
 
@@ -385,7 +372,8 @@ class StoryboardBackendService(ExportServiceMixin):
         if not isinstance(shot, dict):
             raise HTTPException(status_code=400, detail="Shot payload required.")
         try:
-            project_manager.restore_shot(project, shot, int(index))
+            with project_transaction.mutate_project(project):
+                project_manager.restore_shot(project, shot, int(index))
         except Exception as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         app_state._autosave(self.app)
@@ -396,8 +384,9 @@ class StoryboardBackendService(ExportServiceMixin):
         if not isinstance(shot_ids, list):
             raise HTTPException(status_code=400, detail="Shot order required.")
         try:
-            project_manager.reorder_shots(project, [str(item) for item in shot_ids])
-        except Exception as exc:
+            with project_transaction.mutate_project(project):
+                shot_service.reorder_shots(project, shot_ids)
+        except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         app_state._autosave(self.app)
         return app_state._project_payload(project, self.app.state.dirty)
@@ -417,12 +406,13 @@ class StoryboardBackendService(ExportServiceMixin):
         anchor = app_state._find_shot_index(project, anchor_shot_id)
         end = app_state._find_shot_index(project, end_shot_id)
         try:
-            result = project_manager.apply_ref_segment_to_boards(
-                project,
-                anchor,
-                end,
-                segment_id or None,
-            )
+            with project_transaction.mutate_project(project):
+                result = project_manager.apply_ref_segment_to_boards(
+                    project,
+                    anchor,
+                    end,
+                    segment_id or None,
+                )
         except Exception as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         app_state._autosave(self.app)
@@ -438,12 +428,13 @@ class StoryboardBackendService(ExportServiceMixin):
         anchor = app_state._find_shot_index(project, anchor_shot_id)
         end = app_state._find_shot_index(project, end_shot_id)
         try:
-            result = project_manager.apply_ref_segment_image_to_boards(
-                project,
-                anchor,
-                end,
-                segment_id or None,
-            )
+            with project_transaction.mutate_project(project):
+                result = project_manager.apply_ref_segment_image_to_boards(
+                    project,
+                    anchor,
+                    end,
+                    segment_id or None,
+                )
         except Exception as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         app_state._autosave(self.app)
@@ -460,13 +451,14 @@ class StoryboardBackendService(ExportServiceMixin):
         anchor = app_state._find_shot_index(project, anchor_shot_id)
         end = app_state._find_shot_index(project, end_shot_id)
         try:
-            result = project_manager.apply_ref_segment_3d_to_boards(
-                project,
-                anchor,
-                end,
-                segment_id or None,
-                camera_name=str(camera_name or ""),
-            )
+            with project_transaction.mutate_project(project):
+                result = project_manager.apply_ref_segment_3d_to_boards(
+                    project,
+                    anchor,
+                    end,
+                    segment_id or None,
+                    camera_name=str(camera_name or ""),
+                )
         except Exception as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         app_state._autosave(self.app)
@@ -482,14 +474,15 @@ class StoryboardBackendService(ExportServiceMixin):
     ) -> dict[str, Any]:
         project = app_state._require_project(self.app)
         try:
-            result = reference_segments.apply_model_captures_to_boards(
-                project,
-                anchor_shot_id,
-                end_shot_id,
-                segment_id,
-                camera_name,
-                captures,
-            )
+            with project_transaction.mutate_project(project):
+                result = reference_segments.apply_model_captures_to_boards(
+                    project,
+                    anchor_shot_id,
+                    end_shot_id,
+                    segment_id,
+                    camera_name,
+                    captures,
+                )
         except Exception as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         app_state._autosave(self.app)
@@ -512,7 +505,8 @@ class StoryboardBackendService(ExportServiceMixin):
     def method_restore_ref_apply(self, token: str) -> dict[str, Any]:
         project = app_state._require_project(self.app)
         try:
-            result = project_manager.restore_boards_from_undo(project, token)
+            with project_transaction.mutate_project(project):
+                result = project_manager.restore_boards_from_undo(project, token)
         except Exception as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         app_state._autosave(self.app)
@@ -521,7 +515,8 @@ class StoryboardBackendService(ExportServiceMixin):
     def method_delete_ref_segment(self, segment_id: str) -> dict[str, Any]:
         project = app_state._refresh_project_from_disk(self.app)
         try:
-            result = project_manager.delete_ref_segment(project, segment_id)
+            with project_transaction.mutate_project(project):
+                result = project_manager.delete_ref_segment(project, segment_id)
         except Exception as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         app_state._autosave(self.app)
@@ -853,13 +848,14 @@ class StoryboardBackendService(ExportServiceMixin):
             height if height is not None else default_h,
         )
         try:
-            project_manager.create_canvas_for_shot(
-                project,
-                shot,
-                canvas_width,
-                canvas_height,
-                background_color=background_color,
-            )
+            with project_transaction.mutate_project(project):
+                project_manager.create_canvas_for_shot(
+                    project,
+                    shot,
+                    canvas_width,
+                    canvas_height,
+                    background_color=background_color,
+                )
         except Exception as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         app_state._autosave(self.app)
@@ -869,7 +865,8 @@ class StoryboardBackendService(ExportServiceMixin):
         project = app_state._require_project(self.app)
         shot = app_state._find_shot(project, shot_id)
         try:
-            project_manager.save_drawing_for_shot(project, shot, str(image_data or ""))
+            with project_transaction.mutate_project(project):
+                project_manager.save_drawing_for_shot(project, shot, str(image_data or ""))
         except Exception as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         app_state._autosave(self.app)
