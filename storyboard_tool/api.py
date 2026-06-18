@@ -6,9 +6,9 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI, File, HTTPException, UploadFile
+from fastapi import FastAPI, File, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, RedirectResponse
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
@@ -244,6 +244,15 @@ def create_app(base_dir: Path, bridge_port: int = 8000) -> FastAPI:
         if meta.get("filename"):
             kwargs["filename"] = meta["filename"]
         return FileResponse(path, **kwargs)
+
+    @app.exception_handler(HTTPException)
+    async def _structured_error_handler(request: Request, exc: HTTPException) -> JSONResponse:
+        # When detail is already a flat dict (from app_error()), return it directly so
+        # the response is {"detail": "...", "code": "..."}.  For plain-string detail
+        # (legacy HTTPException raises) produce the same {"detail": "..."} as FastAPI's
+        # default handler, so all existing callers continue to work.
+        body = exc.detail if isinstance(exc.detail, dict) else {"detail": exc.detail}
+        return JSONResponse(content=body, status_code=exc.status_code)
 
     app.add_middleware(
         CORSMiddleware,

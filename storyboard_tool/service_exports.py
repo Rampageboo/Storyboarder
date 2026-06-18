@@ -6,6 +6,7 @@ from typing import Any
 from fastapi import HTTPException
 
 from . import app_state, project_manager
+from .errors import AppErrorCode, app_error
 from .export_utils import (
     export_contact_sheet,
     export_image_sequence,
@@ -30,7 +31,7 @@ class ExportServiceMixin:
         try:
             _export_storyboard_pdf(project, output_path, layout=chosen)
         except Exception as exc:
-            raise HTTPException(status_code=500, detail=str(exc)) from exc
+            raise app_error(AppErrorCode.EXPORT_FAILED, str(exc), status=500) from exc
         project.settings["pdf_layout"] = chosen
         project_manager.save_settings(project)
         return {"path": str(output_path), "download_url": "/api/export/pdf"}
@@ -41,7 +42,7 @@ class ExportServiceMixin:
         try:
             export_shot_list_csv(project, output_path)
         except Exception as exc:
-            raise HTTPException(status_code=500, detail=str(exc)) from exc
+            raise app_error(AppErrorCode.EXPORT_FAILED, str(exc), status=500) from exc
         return {"path": str(output_path), "download_url": "/api/export/shot-list"}
 
     def method_export_timing(self) -> dict[str, str]:
@@ -50,7 +51,7 @@ class ExportServiceMixin:
         try:
             export_timing_json(project, output_path)
         except Exception as exc:
-            raise HTTPException(status_code=500, detail=str(exc)) from exc
+            raise app_error(AppErrorCode.EXPORT_FAILED, str(exc), status=500) from exc
         return {"path": str(output_path), "download_url": "/api/export/timing"}
 
     def method_export_contact_sheet(self) -> dict[str, str]:
@@ -59,7 +60,7 @@ class ExportServiceMixin:
         try:
             export_contact_sheet(project, output_path)
         except Exception as exc:
-            raise HTTPException(status_code=500, detail=str(exc)) from exc
+            raise app_error(AppErrorCode.EXPORT_FAILED, str(exc), status=500) from exc
         return {"path": str(output_path), "download_url": "/api/export/contact-sheet"}
 
     def method_export_image_sequence(self) -> dict[str, str]:
@@ -68,7 +69,7 @@ class ExportServiceMixin:
         try:
             export_image_sequence(project, output_dir)
         except Exception as exc:
-            raise HTTPException(status_code=500, detail=str(exc)) from exc
+            raise app_error(AppErrorCode.EXPORT_FAILED, str(exc), status=500) from exc
         return {"path": str(output_dir)}
 
     def method_get_scene3d_file(self) -> dict[str, str]:
@@ -76,9 +77,9 @@ class ExportServiceMixin:
         try:
             path = project_manager.get_scene3d_file_path(project)
         except (FileNotFoundError, ValueError) as exc:
-            raise HTTPException(status_code=404, detail=str(exc)) from exc
+            raise app_error(AppErrorCode.MEDIA_NOT_FOUND, str(exc), status=404) from exc
         if path is None:
-            raise HTTPException(status_code=404, detail="No Blender scene imported.")
+            raise app_error(AppErrorCode.MEDIA_NOT_FOUND, "No Blender scene imported.", status=404)
         media_type = "model/gltf-binary" if path.suffix.lower() == ".glb" else "model/gltf+json"
         return {"path": str(path), "media_type": media_type, "filename": path.name}
 
@@ -87,7 +88,7 @@ class ExportServiceMixin:
         shot = app_state._find_shot(project, shot_id)
         image_path = project_manager.resolve_shot_preview_path(project, shot)
         if image_path is None:
-            raise HTTPException(status_code=404, detail="No image for this shot.")
+            raise app_error(AppErrorCode.MEDIA_NOT_FOUND, "No image for this shot.", status=404)
         return {"path": str(image_path), "media_type": "", "filename": image_path.name}
 
     def method_get_shot_thumbnail(self, shot_id: str) -> dict[str, str]:
@@ -95,7 +96,7 @@ class ExportServiceMixin:
         shot = app_state._find_shot(project, shot_id)
         image_path = project_manager.resolve_shot_thumbnail_path(project, shot)
         if image_path is None:
-            raise HTTPException(status_code=404, detail="No thumbnail for this shot.")
+            raise app_error(AppErrorCode.MEDIA_NOT_FOUND, "No thumbnail for this shot.", status=404)
         return {"path": str(image_path), "media_type": "", "filename": image_path.name}
 
     def method_get_shot_board_background(self, shot_id: str) -> dict[str, str]:
@@ -103,7 +104,7 @@ class ExportServiceMixin:
         shot = app_state._find_shot(project, shot_id)
         background_path = project_manager.get_shot_board_background_path(project, shot)
         if background_path is None or not background_path.is_file():
-            raise HTTPException(status_code=404, detail="No board background for this shot.")
+            raise app_error(AppErrorCode.MEDIA_NOT_FOUND, "No board background for this shot.", status=404)
         return {"path": str(background_path), "media_type": "", "filename": background_path.name}
 
     def method_get_project_file(self, path: str) -> dict[str, str]:
