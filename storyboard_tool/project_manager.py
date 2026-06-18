@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import json
+import os
 import shutil
+import tempfile
 from pathlib import Path
 from typing import Any, BinaryIO
 
@@ -148,13 +150,27 @@ def open_project(project_json_path: Path) -> Project:
     return project
 
 
+def _atomic_write_json(path: Path, data: dict) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp_name = tempfile.mkstemp(dir=str(path.parent), prefix=f"{path.name}.", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as file:
+            json.dump(data, file, indent=2, ensure_ascii=False)
+        os.replace(tmp_name, path)
+    except BaseException:
+        try:
+            os.unlink(tmp_name)
+        except OSError:
+            pass
+        raise
+
+
 def save_project(project: Project) -> None:
     _ensure_project_dirs(project.root_path)
     if project.settings.get("backup_on_save", True):
         _write_backup(project)
     # project.json is a lightweight manifest (version only); shots live in shots.json.
-    payload = {"version": PROJECT_JSON_VERSION}
-    project.json_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    _atomic_write_json(project.json_path, {"version": PROJECT_JSON_VERSION})
     # Canonical shots.json + regenerated readable shots.csv compatibility snapshot.
     save_shots(project.root_path, project.shots)
     save_settings(project)
@@ -164,7 +180,7 @@ def save_settings(project: Project) -> None:
     settings = DEFAULT_SETTINGS.copy()
     settings.update(project.settings)
     project.settings = settings
-    project.settings_path.write_text(json.dumps(settings, indent=2), encoding="utf-8")
+    _atomic_write_json(project.settings_path, settings)
 
 
 def add_shot(project: Project, *, after_index: int | None = None) -> Shot:
