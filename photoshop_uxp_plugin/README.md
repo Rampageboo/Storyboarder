@@ -20,7 +20,7 @@ Photoshop panel for drawing storyboards without switching back to Storyboard Too
 6. Click **Save & next shot**:
    - Exports `shot_XXX_preview.png` for Storyboard Tool
    - Saves the open document with Photoshop's native save (use **Ctrl+S** for the PSD on disk)
-   - Updates `shots.csv` on disk
+   - Reports the export to the Storyboard Tool backend, which updates `shots.json` and regenerates `shots.csv`
    - Closes the current document and opens the next shot in the **same Photoshop window**
    - Creates a new shot automatically when you reach the end (toggle **Auto-add shot at end**)
 

@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import sys
 import threading
-import time
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
@@ -160,6 +159,17 @@ class LiveBridgeUpdateRequest(BaseModel):
 
 class PluginHeartbeatRequest(BaseModel):
     open_shot_ids: list[str] = Field(default_factory=list)
+    selected_shot_id: str | None = None
+
+
+class PluginShotEventRequest(BaseModel):
+    source_file_path: str | None = None
+    preview_image_path: str | None = None
+
+
+class PluginNextShotRequest(BaseModel):
+    current_shot_id: str | None = None
+    auto_add: bool = False
 
 
 class AddShotRequest(BaseModel):
@@ -217,6 +227,8 @@ def create_app(base_dir: Path, bridge_port: int = 8000) -> FastAPI:
     app.state.bridge_port = bridge_port
     app.state.plugin_last_seen = 0.0
     app.state.plugin_open_shot_ids = []
+    app.state.plugin_selected_shot_id = ""
+    app.state.plugin_last_exported_preview = {}
     app.state.live_focus_shot_id = ""
     app.state.live_focus_token = 0
 
@@ -313,10 +325,31 @@ def create_app(base_dir: Path, bridge_port: int = 8000) -> FastAPI:
 
     @app.post("/api/bridge/plugin-heartbeat")
     def plugin_heartbeat(payload: PluginHeartbeatRequest | None = None) -> dict[str, str]:
-        app.state.plugin_last_seen = time.time()
-        if payload is not None:
-            app.state.plugin_open_shot_ids = [str(item) for item in payload.open_shot_ids if item]
-        return {"ok": "true"}
+        return _svc().method_plugin_heartbeat(payload.model_dump() if payload is not None else {})
+
+    @app.get("/api/plugin/context")
+    def plugin_context() -> dict[str, Any]:
+        return _svc().method_plugin_context()
+
+    @app.post("/api/plugin/heartbeat")
+    def plugin_api_heartbeat(payload: PluginHeartbeatRequest | None = None) -> dict[str, str]:
+        return _svc().method_plugin_heartbeat(payload.model_dump() if payload is not None else {})
+
+    @app.post("/api/plugin/shots/{shot_id}/export-preview")
+    def plugin_export_preview(shot_id: str, request: PluginShotEventRequest | None = None) -> dict[str, Any]:
+        return _svc().method_plugin_export_preview(shot_id, request.model_dump() if request is not None else {})
+
+    @app.post("/api/plugin/shots/{shot_id}/psd-saved")
+    def plugin_psd_saved(shot_id: str, request: PluginShotEventRequest | None = None) -> dict[str, Any]:
+        return _svc().method_plugin_psd_saved(shot_id, request.model_dump() if request is not None else {})
+
+    @app.post("/api/plugin/shots/{shot_id}/focus")
+    def plugin_focus_shot(shot_id: str) -> dict[str, Any]:
+        return _svc().method_plugin_focus_shot(shot_id)
+
+    @app.post("/api/plugin/shots/next")
+    def plugin_next_shot(request: PluginNextShotRequest) -> dict[str, Any]:
+        return _svc().method_plugin_next_shot(request.current_shot_id, request.auto_add)
 
     @app.get("/api/project/missing-files")
     def missing_project_files() -> dict[str, Any]:

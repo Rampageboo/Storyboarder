@@ -161,16 +161,31 @@ def _plugin_link_state(app: FastAPI) -> tuple[bool, float | None, list[str]]:
     return plugin_linked, age, open_shot_ids
 
 
+def _plugin_selected_shot_id(app: FastAPI) -> str:
+    selected = str(getattr(app.state, "plugin_selected_shot_id", "") or "")
+    if selected:
+        return selected
+    heartbeat = live_bridge.read_plugin_heartbeat()
+    if isinstance(heartbeat, dict):
+        return str(heartbeat.get("selected_shot_id") or "")
+    return ""
+
+
 def _bridge_status_payload(app: FastAPI) -> dict[str, Any]:
     live = _touch_live_bridge(app)
     project = app.state.project
     plugin_linked, age, open_shot_ids = _plugin_link_state(app)
+    last_exported = getattr(app.state, "plugin_last_exported_preview", {})
+    if not isinstance(last_exported, dict):
+        last_exported = {}
     return {
         "app_running": True,
         "project_open": project is not None,
         "plugin_linked": plugin_linked,
         "plugin_last_seen_seconds_ago": age,
+        "plugin_selected_shot_id": _plugin_selected_shot_id(app),
         "plugin_open_shot_ids": open_shot_ids,
+        "plugin_last_exported_preview": last_exported,
         "bridge_url": live.get("bridge_url", f"http://127.0.0.1:{app.state.bridge_port}/api/bridge/live"),
         "global_bridge_path": live.get("global_bridge_path", str(live_bridge.global_bridge_file_path())),
         "shared_bridge_path": live.get("shared_bridge_path", str(live_bridge.shared_bridge_file_path())),

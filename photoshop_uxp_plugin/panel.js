@@ -13,7 +13,8 @@ const BRIDGE_STALE_MS = 8000;
 const OVERLAY_LAYER_PREFIX = "SB ref:";
 const SB_BG_LAYER_NAME = "SB bg";
 const DRAWING_LAYER_NAME = "Layer 1";
-const OVERLAY_OPACITY = 45;
+const TEMPLATE_LAYER_NAMES = ["Rough", "Clean", "Notes"];
+const DEFAULT_OVERLAY_OPACITY = 45;
 const SHOT_CSV_COLUMNS = [
   "order",
   "shot_id",
@@ -70,10 +71,15 @@ function init() {
   $("chooseFolder").addEventListener("click", () => runPanelAction(chooseShotFolder));
   $("shotSelect").addEventListener("change", () => runPanelAction(switchToSelectedShot));
   $("openShot").addEventListener("click", () => runPanelAction(switchToSelectedShot));
+  $("previousShot")?.addEventListener("click", () => runPanelAction(goToPreviousShot));
+  $("nextShot")?.addEventListener("click", () => runPanelAction(goToNextShot));
   $("overlayPrevious").addEventListener("click", () => runPanelAction(overlayPreviousShots));
+  $("overlayNext")?.addEventListener("click", () => runPanelAction(overlayNextShots));
   $("clearOverlay").addEventListener("click", () => runPanelAction(clearOverlayLayers));
   $("overlayCount")?.addEventListener("change", () => clampOverlayCountInput());
   $("overlayCount")?.addEventListener("input", () => clampOverlayCountInput());
+  $("overlayOpacity")?.addEventListener("change", () => clampOverlayOpacityInput());
+  $("overlayOpacity")?.addEventListener("input", () => clampOverlayOpacityInput());
   $("applyBackground").addEventListener("click", () => runPanelAction(applyCanvasBackground));
   $("saveAndStay").addEventListener("click", () => runPanelAction(saveCurrentShot));
   $("saveAndNext").addEventListener("click", () => runPanelAction(saveAndGoNext));
@@ -313,11 +319,12 @@ async function ensureSharedBridgeDir() {
 
 async function sendPluginHeartbeat(live) {
   const openShotIds = getOpenShotIds();
+  const selectedShotId = detectShotFromDocument() || live?.selected_shot_id || "";
   const payload = JSON.stringify({
     at: new Date().toISOString(),
     plugin: "storyboard-bridge",
     project_root: live?.project_root || "",
-    selected_shot_id: live?.selected_shot_id || "",
+    selected_shot_id: selectedShotId,
     open_shot_ids: openShotIds,
   });
   try {
@@ -331,10 +338,12 @@ async function sendPluginHeartbeat(live) {
   const port = Number(live?.port || 0);
   const urls = [];
   if (port > 0) {
+    urls.push(`http://127.0.0.1:${port}/api/plugin/heartbeat`);
+    urls.push(`http://localhost:${port}/api/plugin/heartbeat`);
     urls.push(`http://127.0.0.1:${port}/api/bridge/plugin-heartbeat`);
     urls.push(`http://localhost:${port}/api/bridge/plugin-heartbeat`);
   }
-  const body = JSON.stringify({ open_shot_ids: openShotIds });
+  const body = JSON.stringify({ open_shot_ids: openShotIds, selected_shot_id: selectedShotId });
   for (const url of urls) {
     try {
       await fetch(url, {
@@ -389,11 +398,13 @@ async function pollStoryboardBridge() {
     return;
   }
 
+  await cacheBridgeEndpoints(live, live.bridge_url || "");
   await sendPluginHeartbeat(live);
   await applyLiveBridge(live);
 }
 
 async function applyLiveBridge(live) {
+  const context = await requestPluginContext();
   const signature = [
     live.updated_at,
     live.project_root,
@@ -411,6 +422,10 @@ async function applyLiveBridge(live) {
   if (!root) {
     setLinkedUi(false);
     setLinkStatus("Folder access failed — use Advanced", true);
+    if (context) {
+      applyPluginContext(context);
+      return;
+    }
     canvasColor = normalizeHexColor(live.canvas_background_color);
     const fallbackSize = normalizeCanvasSize(live.canvas_width, live.canvas_height);
     canvasWidth = fallbackSize.width;
@@ -424,8 +439,14 @@ async function applyLiveBridge(live) {
   if (!isSame || linkedProjectRootPath !== live.project_root) {
     linkedProjectRootPath = live.project_root;
     projectRoot = root;
-    projectData = await loadProjectJson();
-    populateShotSelect();
+    if (context) {
+      applyPluginContext(context);
+    } else {
+      projectData = await loadProjectJson();
+      populateShotSelect();
+    }
+  } else if (context) {
+    applyPluginContext(context);
   }
 
   // Prefer the shot the artist is actually editing (the active Photoshop tab) so
@@ -438,10 +459,13 @@ async function applyLiveBridge(live) {
     shotFolder = await getShotFolderEntry(shotId);
   }
 
-  const nextColor = normalizeHexColor(live.canvas_background_color);
+  const nextColor = normalizeHexColor(context?.canvas?.background_color || live.canvas_background_color);
   const colorChanged = nextColor !== canvasColor;
   canvasColor = nextColor;
-  const nextSize = normalizeCanvasSize(live.canvas_width || canvasWidth, live.canvas_height || canvasHeight);
+  const nextSize = normalizeCanvasSize(
+    context?.canvas?.width || live.canvas_width || canvasWidth,
+    context?.canvas?.height || live.canvas_height || canvasHeight,
+  );
   canvasWidth = nextSize.width;
   canvasHeight = nextSize.height;
   updateColorSwatch();
@@ -743,12 +767,26 @@ function updateOverlayCountLimits() {
   if (!input) {
     return;
   }
-  const previousAvailable = Math.max(0, currentShotIndex());
-  const maxSelectable = Math.max(1, previousAvailable);
+  const shots = projectData?.shots || [];
+  const index = currentShotIndex();
+  const previousAvailable = Math.max(0, index);
+  const nextCount = index >= 0 ? Math.max(0, shots.length - index - 1) : 0;
+  const nextAvailable = nextCount > 0;
+  const maxSelectable = Math.max(1, previousAvailable, nextCount);
   input.setAttribute("data-max", String(maxSelectable));
-  input.disabled = previousAvailable === 0;
+  input.disabled = previousAvailable === 0 && nextCount === 0;
   $("overlayPrevious").disabled = previousAvailable === 0;
+  if ($("overlayNext")) {
+    $("overlayNext").disabled = !nextAvailable;
+  }
+  if ($("previousShot")) {
+    $("previousShot").disabled = previousAvailable === 0;
+  }
+  if ($("nextShot")) {
+    $("nextShot").disabled = !nextAvailable && !isAutoAddShotEnabled();
+  }
   clampOverlayCountInput();
+  clampOverlayOpacityInput();
 }
 
 function clampOverlayCountInput() {
@@ -763,6 +801,16 @@ function clampOverlayCountInput() {
   return clamped;
 }
 
+function clampOverlayOpacityInput() {
+  const input = $("overlayOpacity");
+  if (!input) {
+    return DEFAULT_OVERLAY_OPACITY;
+  }
+  const parsed = Math.max(1, Math.min(100, parseInt(input.value || `${DEFAULT_OVERLAY_OPACITY}`, 10) || DEFAULT_OVERLAY_OPACITY));
+  input.value = String(parsed);
+  return parsed;
+}
+
 function getPreviousShotsForOverlay(count) {
   const shots = projectData?.shots || [];
   const index = currentShotIndex();
@@ -771,6 +819,32 @@ function getPreviousShotsForOverlay(count) {
   }
   const start = Math.max(0, index - count);
   return shots.slice(start, index);
+}
+
+function getNextShotsForOverlay(count) {
+  const shots = projectData?.shots || [];
+  const index = currentShotIndex();
+  if (index < 0 || index >= shots.length - 1) {
+    return [];
+  }
+  return shots.slice(index + 1, Math.min(shots.length, index + 1 + count));
+}
+
+async function goToPreviousShot() {
+  const shots = projectData?.shots || [];
+  const index = currentShotIndex();
+  if (index <= 0) {
+    throw new Error("No previous shot.");
+  }
+  await switchToShot(shots[index - 1].shot_id);
+}
+
+async function goToNextShot() {
+  const shot = await resolveNextShot(currentShotId());
+  if (!shot) {
+    throw new Error("No next shot.");
+  }
+  await switchToShot(shot.shot_id);
 }
 
 function isValidShotId(value) {
@@ -921,6 +995,29 @@ async function addShotToProject() {
 }
 
 async function resolveNextShot(shotId) {
+  if (linkedFromStoryboard) {
+    const payload = await requestStoryboardApi("/api/plugin/shots/next", {
+      method: "POST",
+      body: JSON.stringify({
+        current_shot_id: shotId,
+        auto_add: isAutoAddShotEnabled(),
+      }),
+    });
+    if (payload?.context) {
+      applyPluginContext(payload.context);
+    } else {
+      await refreshProjectDataFromBackend();
+    }
+    if (payload?.shot?.shot_id) {
+      try {
+        await ensureShotStructure(payload.shot.shot_id);
+      } catch {
+        // Backend-created shot folders are the source of truth in linked mode.
+      }
+      return normalizeShotFromBackend(payload.shot);
+    }
+    return null;
+  }
   const shots = projectData?.shots || [];
   const index = shots.findIndex((shot) => shot.shot_id === shotId);
   if (index >= 0 && index < shots.length - 1) {
@@ -1063,10 +1160,26 @@ function hasDrawingLayer(doc) {
   return false;
 }
 
-async function ensureDrawingLayerInModal(doc) {
-  if (!doc || hasDrawingLayer(doc)) {
+function findLayerByName(doc, name) {
+  const target = String(name || "");
+  const walk = (layers) => {
+    for (const layer of layers || []) {
+      if (String(layer.name || "") === target) {
+        return layer;
+      }
+      if (layer.layers?.length) {
+        const found = walk(layer.layers);
+        if (found) {
+          return found;
+        }
+      }
+    }
     return null;
-  }
+  };
+  return walk(doc?.layers);
+}
+
+async function createNamedLayerAtTopInModal(doc, name) {
   await photoshop.action.batchPlay(
     [
       {
@@ -1076,13 +1189,43 @@ async function ensureDrawingLayerInModal(doc) {
     ],
     { synchronousExecution: true },
   );
-  await renameActiveLayer(DRAWING_LAYER_NAME);
+  await renameActiveLayer(name);
   const layer = app.activeDocument.activeLayers[0] || null;
   if (layer) {
-    await layer.move(app.activeDocument, photoshop.constants.ElementPlacement.PLACEATBEGINNING);
-    app.activeDocument.activeLayers = [layer];
+    await layer.move(doc, photoshop.constants.ElementPlacement.PLACEATBEGINNING);
   }
   return layer;
+}
+
+async function ensureLayerTemplateInModal(doc) {
+  if (!doc) {
+    return [];
+  }
+  const created = [];
+  for (const name of [...TEMPLATE_LAYER_NAMES].reverse()) {
+    if (!findLayerByName(doc, name)) {
+      const layer = await createNamedLayerAtTopInModal(doc, name);
+      if (layer) {
+        created.push(layer);
+      }
+    }
+  }
+  const rough = findLayerByName(doc, "Rough") || created[created.length - 1] || null;
+  if (rough) {
+    app.activeDocument.activeLayers = [rough];
+  }
+  return created;
+}
+
+async function ensureDrawingLayerInModal(doc) {
+  const created = await ensureLayerTemplateInModal(doc);
+  if (created.length) {
+    return created[created.length - 1];
+  }
+  if (!doc || hasDrawingLayer(doc)) {
+    return null;
+  }
+  return createNamedLayerAtTopInModal(doc, DRAWING_LAYER_NAME);
 }
 
 async function deleteLayersInModal(layers) {
@@ -1509,13 +1652,14 @@ async function moveLayerBelowReference(layer, referenceLayer) {
   await layer.move(app.activeDocument, constants.ElementPlacement.PLACEATEND);
 }
 
-async function overlayPreviousShotsInModal(doc, previousShots) {
+async function overlayShotsInModal(doc, shots, label) {
   await clearOverlayLayersInModal(doc);
   const backgroundLayer = findBackgroundLayer(doc);
   let anchor = backgroundLayer;
   let placed = 0;
+  const opacity = clampOverlayOpacityInput();
 
-  for (const shot of previousShots) {
+  for (const shot of shots) {
     const entry = await resolveShotImageEntry(shot);
     if (!entry) {
       continue;
@@ -1524,14 +1668,18 @@ async function overlayPreviousShotsInModal(doc, previousShots) {
     if (!placedLayer) {
       continue;
     }
-    await renameActiveLayer(`${OVERLAY_LAYER_PREFIX} ${formatShotIdLabel(shot.shot_id)}`);
-    await setActiveLayerOpacity(OVERLAY_OPACITY);
+    await renameActiveLayer(`${OVERLAY_LAYER_PREFIX} ${label} ${formatShotIdLabel(shot.shot_id)}`);
+    await setActiveLayerOpacity(opacity);
     const layer = app.activeDocument.activeLayers[0] || placedLayer;
     await moveLayerBelowReference(layer, anchor);
     anchor = layer;
     placed += 1;
   }
   return placed;
+}
+
+async function overlayPreviousShotsInModal(doc, previousShots) {
+  return overlayShotsInModal(doc, previousShots, "previous");
 }
 
 async function overlayPreviousShots() {
@@ -1556,6 +1704,30 @@ async function overlayPreviousShots() {
     throw new Error("Previous shots have no preview or PSD files to overlay.");
   }
   setStatus(`Stacked ${placed} previous shot(s) under the canvas.`);
+}
+
+async function overlayNextShots() {
+  if (!app.activeDocument) {
+    throw new Error("Open a shot canvas first.");
+  }
+  const count = clampOverlayCountInput();
+  const nextShots = getNextShotsForOverlay(count);
+  if (!nextShots.length) {
+    throw new Error("No next shots available to overlay.");
+  }
+
+  let placed = 0;
+  await runModal("Overlay next shots", async () => {
+    const doc = app.activeDocument;
+    if (!doc) {
+      throw new Error("No active Photoshop document.");
+    }
+    placed = await overlayShotsInModal(doc, nextShots, "next");
+  });
+  if (!placed) {
+    throw new Error("Next shots have no preview or PSD files to overlay.");
+  }
+  setStatus(`Stacked ${placed} next shot(s) under the canvas.`);
 }
 
 async function clearOverlayLayers() {
@@ -1774,6 +1946,13 @@ async function saveActiveDocumentToFolder(folder, shotId) {
 async function storyboardApiOrigins() {
   const cache = await loadBridgeCache();
   const origins = [];
+  if (cache?.bridge_url) {
+    try {
+      origins.push(new URL(cache.bridge_url).origin);
+    } catch {
+      // Ignore invalid cached URLs.
+    }
+  }
   const port = Number(cache?.port || 0);
   if (port > 0) {
     origins.push(`http://127.0.0.1:${port}`);
@@ -1783,6 +1962,125 @@ async function storyboardApiOrigins() {
     origins.push(`http://127.0.0.1:${candidate}`);
   }
   return [...new Set(origins)];
+}
+
+async function requestStoryboardApi(path, options = {}) {
+  for (const origin of await storyboardApiOrigins()) {
+    try {
+      const response = await fetch(`${origin}${path}`, {
+        cache: "no-store",
+        ...options,
+        headers: {
+          ...(options.body ? { "Content-Type": "application/json" } : {}),
+          ...(options.headers || {}),
+        },
+      });
+      if (!response.ok) {
+        continue;
+      }
+      return await response.json();
+    } catch {
+      // Try the next origin.
+    }
+  }
+  return null;
+}
+
+function normalizeShotFromBackend(raw = {}) {
+  return {
+    shot_id: String(raw.shot_id || "").trim().toLowerCase(),
+    title: String(raw.title || ""),
+    scene: String(raw.scene || ""),
+    sequence: String(raw.sequence || ""),
+    description: String(raw.description || ""),
+    action_note: String(raw.action_note || ""),
+    camera_note: String(raw.camera_note || ""),
+    character_note: String(raw.character_note || ""),
+    dialogue: String(raw.dialogue || ""),
+    lighting_note: String(raw.lighting_note || ""),
+    transition_note: String(raw.transition_note || ""),
+    duration_seconds: Number.parseFloat(raw.duration_seconds || "3") || 3,
+    camera_data: raw.camera_data && typeof raw.camera_data === "object" ? raw.camera_data : {},
+    tags: Array.isArray(raw.tags) ? raw.tags : [],
+    comments: Array.isArray(raw.comments) ? raw.comments : [],
+    status: String(raw.status || "Draft"),
+    image_path: String(raw.image_path || ""),
+    preview_image_path: String(raw.preview_image_path || raw.image_path || ""),
+    thumbnail_path: String(raw.thumbnail_path || ""),
+    source_file_path: String(raw.source_file_path || ""),
+    source_sync_mtime: Number.parseFloat(raw.source_sync_mtime || "0") || 0,
+    annotation_path: String(raw.annotation_path || ""),
+    reference_image_paths: Array.isArray(raw.reference_image_paths) ? raw.reference_image_paths : [],
+    ref_video_path: String(raw.ref_video_path || ""),
+    ref_video_time: Number.parseFloat(raw.ref_video_time || "0") || 0,
+    ref_segment_time: Number.parseFloat(raw.ref_segment_time || "0") || 0,
+    psd_exists: Boolean(raw.psd_exists),
+    preview_exists: Boolean(raw.preview_exists),
+    thumbnail_exists: Boolean(raw.thumbnail_exists),
+    source_path_missing: Boolean(raw.source_path_missing),
+    preview_out_of_date: Boolean(raw.preview_out_of_date),
+    broken_or_zero_byte_psd: Boolean(raw.broken_or_zero_byte_psd),
+    last_exported_preview_time: raw.last_exported_preview_time || null,
+    paths: raw.paths && typeof raw.paths === "object" ? raw.paths : {},
+    has_board_background: Boolean(raw.has_board_background),
+    has_artwork_preview: Boolean(raw.has_artwork_preview),
+  };
+}
+
+function projectDataFromPluginContext(context) {
+  return {
+    version: 3,
+    name: String(context?.project_name || ""),
+    settings: {},
+    shots: Array.isArray(context?.shots)
+      ? context.shots.map(normalizeShotFromBackend).filter((shot) => shot.shot_id)
+      : [],
+  };
+}
+
+async function requestPluginContext() {
+  const payload = await requestStoryboardApi("/api/plugin/context");
+  return payload && Array.isArray(payload.shots) ? payload : null;
+}
+
+function applyPluginContext(context) {
+  if (!context) {
+    return;
+  }
+  projectData = projectDataFromPluginContext(context);
+  populateShotSelect();
+  if (context.canvas) {
+    canvasColor = normalizeHexColor(context.canvas.background_color);
+    const size = normalizeCanvasSize(context.canvas.width, context.canvas.height);
+    canvasWidth = size.width;
+    canvasHeight = size.height;
+    updateColorSwatch();
+  }
+  const shotId = detectShotFromDocument() || context.selected_shot_id || "";
+  if (shotId) {
+    setSelectedShotId(shotId);
+  }
+}
+
+async function refreshProjectDataFromBackend() {
+  const context = await requestPluginContext();
+  if (context) {
+    applyPluginContext(context);
+    return true;
+  }
+  return false;
+}
+
+async function notifyBackendShotFocus(shotId) {
+  if (!linkedFromStoryboard || !shotId) {
+    return;
+  }
+  const context = await requestStoryboardApi(`/api/plugin/shots/${encodeURIComponent(shotId)}/focus`, {
+    method: "POST",
+  });
+  if (context?.shots) {
+    applyPluginContext(context);
+  }
 }
 
 // Ask Storyboard Tool to rebuild a Photoshop-unopenable PSD. preserveLayers keeps
@@ -2009,6 +2307,7 @@ async function saveAndGoNext() {
   shotFolder = nextFolder;
   canvasColor = nextColor;
   updateColorSwatch();
+  await notifyBackendShotFocus(nextShot.shot_id);
 
   if (createdNewNext) {
     await updateProjectAfterSave(nextShot.shot_id, nextFolder);
@@ -2071,6 +2370,7 @@ async function switchToShot(shotId) {
       await ensureDrawingLayerInModal(app.activeDocument);
     });
     setStatus(synced ? `Background synced for ${shotId}.` : `Already working on ${shotId}.`);
+    await notifyBackendShotFocus(shotId);
     return;
   }
 
@@ -2121,6 +2421,7 @@ async function switchToShot(shotId) {
   $("folderLabel").textContent = `Folder: ${shotFolder.nativePath || shotFolder.name}`;
   canvasColor = nextColor;
   updateColorSwatch();
+  await notifyBackendShotFocus(shotId);
 
   if (createdNew) {
     await updateProjectAfterSave(shotId, folder);
@@ -2182,6 +2483,21 @@ async function updateProjectAfterSave(shotId = currentShotId(), folder = null) {
   }
   if (psdFile) {
     await writeBridgeFiles(shotId, `shots/${shotId}/${shotId}.psd`, resolvedFolder);
+  }
+  if (linkedFromStoryboard) {
+    const payload = await requestStoryboardApi(`/api/plugin/shots/${encodeURIComponent(shotId)}/export-preview`, {
+      method: "POST",
+      body: JSON.stringify({
+        source_file_path: psdFile ? `shots/${shotId}/${shotId}.psd` : "",
+        preview_image_path: previewFile ? `shots/${shotId}/${shotId}_preview.png` : "",
+      }),
+    });
+    if (payload?.context) {
+      applyPluginContext(payload.context);
+    } else {
+      await refreshProjectDataFromBackend();
+    }
+    return;
   }
   let mtime = 0;
   if (previewFile) {

@@ -58,12 +58,14 @@ sp-button {
   margin-top: 14px;
 }
 
-#overlayCount {
+#overlayCount,
+#overlayOpacity {
   width: 100%;
   margin: 0 0 10px;
 }
 
 #overlayPrevious,
+#overlayNext,
 #clearOverlay {
   margin-bottom: 10px;
 }
@@ -97,6 +99,17 @@ sp-textfield {
   color: #f3f3f3;
   padding: 6px 8px;
   box-sizing: border-box;
+}
+
+.button-row {
+  display: flex;
+  gap: 8px;
+  margin: 0 0 10px;
+}
+
+.button-row sp-button {
+  flex: 1;
+  margin-bottom: 0 !important;
 }
 
 .link-status {

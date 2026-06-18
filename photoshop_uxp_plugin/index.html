@@ -25,14 +25,21 @@
         <div class="panel-group">
           <sp-label for="shotSelect">Shot</sp-label>
           <select id="shotSelect" class="shot-select"></select>
+          <div class="button-row">
+            <sp-button id="previousShot" variant="secondary">Previous</sp-button>
+            <sp-button id="nextShot" variant="secondary">Next</sp-button>
+          </div>
           <sp-button id="openShot" variant="secondary">Open canvas</sp-button>
         </div>
 
         <div class="panel-group">
           <span class="group-label">References</span>
-          <sp-label for="overlayCount">Overlay previous</sp-label>
+          <sp-label for="overlayCount">Overlay count</sp-label>
           <sp-textfield id="overlayCount" class="overlay-count" value="1" placeholder="1"></sp-textfield>
-          <sp-button id="overlayPrevious" variant="secondary">Stack refs</sp-button>
+          <sp-label for="overlayOpacity">Opacity</sp-label>
+          <sp-textfield id="overlayOpacity" class="overlay-count" value="45" placeholder="45"></sp-textfield>
+          <sp-button id="overlayPrevious" variant="secondary">Previous overlay</sp-button>
+          <sp-button id="overlayNext" variant="secondary">Next overlay</sp-button>
           <sp-button id="clearOverlay" variant="secondary">Clear overlay</sp-button>
         </div>
       </div>
