@@ -2,7 +2,7 @@ import { useMemo } from 'react'
 import type { Shot } from '../types'
 import { useProject } from '../state/useProject'
 import { shotDisplayLabel } from '../utils/shotDisplay'
-import { shotHasPreview, shotThumbVersion } from '../utils/shotPreview'
+import { shotHasBoardBackground, shotShouldOverlayPreview, shotThumbVersion } from '../utils/shotPreview'
 import { ShotThumb } from './ShotThumb'
 import './NeighborContext.css'
 
@@ -31,7 +31,12 @@ function NeighborCard({
     <button type="button" className="neighbor" onClick={() => onSelect(shot.shot_id)} title={shotDisplayLabel(shot)}>
       <div className="neighbor-label">{label}</div>
       <div className="neighbor-thumb">
-        <ShotThumb shotId={shot.shot_id} version={shotThumbVersion(shot, visualEpoch, index)} hasImage={shotHasPreview(shot)} />
+        <ShotThumb
+          shotId={shot.shot_id}
+          version={shotThumbVersion(shot, visualEpoch, index)}
+          hasImage={shotShouldOverlayPreview(shot)}
+          hasBg={shotHasBoardBackground(shot)}
+        />
       </div>
       <div className="neighbor-name">{shotDisplayLabel(shot)}</div>
     </button>

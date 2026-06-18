@@ -114,9 +114,11 @@ function projectVisualEpoch(payload: ProjectPayload | null): number {
     hash = (hash * 31 + shot.shot_id.length) >>> 0
     hash = (hash * 31 + String(shot.preview_disk_mtime ?? '').length) >>> 0
     hash = (hash * 31 + String(shot.thumbnail_disk_mtime ?? '').length) >>> 0
+    hash = (hash * 31 + String(shot.board_background_disk_mtime ?? '').length) >>> 0
     hash = (hash * 31 + String(shot.image_path ?? '').length) >>> 0
     hash = (hash * 31 + String(shot.preview_image_path ?? '').length) >>> 0
     hash = (hash * 31 + String(shot.source_file_path ?? '').length) >>> 0
+    hash = (hash * 31 + (shot.has_board_background ? 1 : 0)) >>> 0
   }
   hash = (hash * 31 + JSON.stringify(payload.settings?.ref_segments ?? []).length) >>> 0
   return hash

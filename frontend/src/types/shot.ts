@@ -45,8 +45,10 @@ export interface Shot {
   ref_segment_time: number
   preview_disk_mtime?: number
   thumbnail_disk_mtime?: number
+  board_background_disk_mtime?: number
   has_board_background?: boolean
   has_artwork_preview?: boolean
+  preview_has_transparency?: boolean
 }
 
 export interface ShotUpdate {

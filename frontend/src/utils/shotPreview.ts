@@ -32,6 +32,29 @@ export function shotHasBoardVisual(
   return shotHasPreview(shot) || shotHasBoardBackground(shot)
 }
 
+/** True when the preview file is safe to draw over a fresher board background. */
+export function shotShouldOverlayPreview(
+  shot: Pick<
+    Shot,
+    | 'image_path'
+    | 'preview_image_path'
+    | 'thumbnail_path'
+    | 'has_artwork_preview'
+    | 'has_board_background'
+    | 'preview_disk_mtime'
+    | 'board_background_disk_mtime'
+    | 'preview_has_transparency'
+  >,
+): boolean {
+  if (!shotHasPreview(shot)) return false
+  const previewMtime = Number(shot.preview_disk_mtime || 0)
+  const backgroundMtime = Number(shot.board_background_disk_mtime || 0)
+  if (shot.has_board_background === true && backgroundMtime > previewMtime && shot.preview_has_transparency !== true) {
+    return false
+  }
+  return true
+}
+
 /**
  * Cache-bust version key for any board visual (artwork or background plate).
  * Returns a stable `empty-{epoch}` string when the shot has no visual at all,
@@ -47,11 +70,13 @@ export function shotDisplayVersion(
     | 'has_board_background'
     | 'preview_disk_mtime'
     | 'thumbnail_disk_mtime'
+    | 'board_background_disk_mtime'
   >,
   visualEpoch: number,
   index: number,
 ): string | number {
   if (!shotHasBoardVisual(shot)) return `empty-${visualEpoch}`
+  if (shot.has_board_background === true && shot.board_background_disk_mtime) return shot.board_background_disk_mtime
   return shot.preview_disk_mtime || shot.thumbnail_disk_mtime || `${visualEpoch}-${index}`
 }
 
@@ -69,6 +94,7 @@ export function shotThumbVersion(
     | 'has_board_background'
     | 'preview_disk_mtime'
     | 'thumbnail_disk_mtime'
+    | 'board_background_disk_mtime'
   >,
   visualEpoch: number,
   index: number,

@@ -15,7 +15,7 @@ import {
 } from '../api'
 import { useProject } from '../state/useProject'
 import { shotDisplayLabel } from '../utils/shotDisplay'
-import { shotHasPreview } from '../utils/shotPreview'
+import { shotHasPreview, shotShouldOverlayPreview } from '../utils/shotPreview'
 import './CanvasBoard.css'
 
 type SyncResult = { synced?: boolean; message?: string }
@@ -48,24 +48,25 @@ export function CanvasBoard() {
   const hasSource = !!sourcePath
   const hasPreview = shot ? shotHasPreview(shot) : false
   const hasBoardBg = shot?.has_board_background === true
-  const hasArtworkImage = !!shot?.image_path
+  const hasArtworkImage = hasPreview
   const hasVisual = (hasArtworkImage || hasBoardBg) && !loadFailed
+  const canvasAspect = `${Number(project?.settings?.canvas_width || 1920)} / ${Number(project?.settings?.canvas_height || 1080)}`
 
-  const imgSrc = useMemo(() => {
+  const artworkSrc = useMemo(() => {
     if (!shot) return ''
-    if (shot.image_path) {
-      const v = shot.preview_disk_mtime || shot.thumbnail_disk_mtime || bust || 0
-      return `${shotImageUrl(shot.shot_id)}?v=${encodeURIComponent(String(v))}`
-    }
-    if (shot.has_board_background === true) {
-      const v = shot.thumbnail_disk_mtime || bust || 0
-      return `${shotBoardBackgroundUrl(shot.shot_id)}?v=${encodeURIComponent(String(v))}`
-    }
-    return ''
+    if (!shotShouldOverlayPreview(shot)) return ''
+    const v = shot.preview_disk_mtime || shot.thumbnail_disk_mtime || bust || 0
+    return `${shotImageUrl(shot.shot_id)}?v=${encodeURIComponent(String(v))}`
+  }, [shot, bust])
+
+  const backgroundSrc = useMemo(() => {
+    if (!shot || shot.has_board_background !== true) return ''
+    const v = shot.board_background_disk_mtime || shot.thumbnail_disk_mtime || bust || 0
+    return `${shotBoardBackgroundUrl(shot.shot_id)}?v=${encodeURIComponent(String(v))}`
   }, [shot, bust])
 
   // Clear the failed-load flag when the visual source identity changes.
-  const loadFailedKey = `${selectedShotId}:${shot?.image_path ?? ''}:${shot?.preview_disk_mtime ?? ''}:${hasBoardBg ? '1' : '0'}`
+  const loadFailedKey = `${selectedShotId}:${shot?.image_path ?? ''}:${shot?.preview_image_path ?? ''}:${shot?.preview_disk_mtime ?? ''}:${shot?.board_background_disk_mtime ?? ''}:${shot?.preview_has_transparency ? '1' : '0'}:${hasBoardBg ? '1' : '0'}`
   const [prevLoadFailedKey, setPrevLoadFailedKey] = useState(loadFailedKey)
   if (loadFailedKey !== prevLoadFailedKey) {
     setPrevLoadFailedKey(loadFailedKey)
@@ -415,13 +416,30 @@ export function CanvasBoard() {
       <div className="canvas-body">
         {hasVisual ? (
           <div className="canvas-media">
-            <img
-              className="canvas-image"
-              src={imgSrc}
-              alt={shotDisplayLabel(shot)}
-              onError={() => setLoadFailed(true)}
-              onLoad={() => setLoadFailed(false)}
-            />
+            <div className="canvas-composite" style={{ aspectRatio: canvasAspect }} aria-label={shotDisplayLabel(shot)}>
+              {backgroundSrc ? (
+                <img
+                  className="canvas-image canvas-image-bg"
+                  src={backgroundSrc}
+                  alt=""
+                  onError={() => {
+                    if (!artworkSrc) setLoadFailed(true)
+                  }}
+                  onLoad={() => setLoadFailed(false)}
+                />
+              ) : null}
+              {artworkSrc ? (
+                <img
+                  className="canvas-image canvas-image-artwork"
+                  src={artworkSrc}
+                  alt=""
+                  onError={() => {
+                    if (!backgroundSrc) setLoadFailed(true)
+                  }}
+                  onLoad={() => setLoadFailed(false)}
+                />
+              ) : null}
+            </div>
           </div>
         ) : !hasSource && !hasPreview && !hasBoardBg ? (
           <div className="canvas-placeholder">

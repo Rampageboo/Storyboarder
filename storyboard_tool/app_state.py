@@ -32,7 +32,7 @@ def _project_payload(project: Project, dirty: bool) -> dict[str, Any]:
 
 
 def _shot_payload(project: Project, shot: Shot) -> dict[str, Any]:
-    from .image_utils import is_solid_color_image
+    from .image_utils import image_has_transparency, is_solid_color_image
 
     data = shot.to_dict()
     preview_path = project_manager.resolve_shot_preview_path(project, shot)
@@ -41,11 +41,16 @@ def _shot_payload(project: Project, shot: Shot) -> dict[str, Any]:
     thumb_path = project_manager.resolve_shot_thumbnail_path(project, shot)
     if thumb_path is not None:
         data["thumbnail_disk_mtime"] = thumb_path.stat().st_mtime
-    data["has_board_background"] = project_manager.get_shot_board_background_path(project, shot) is not None
+    board_background_path = project_manager.get_shot_board_background_path(project, shot)
+    data["has_board_background"] = board_background_path is not None
+    if board_background_path is not None:
+        data["board_background_disk_mtime"] = board_background_path.stat().st_mtime
     if preview_path is not None and preview_path.is_file():
         data["has_artwork_preview"] = not is_solid_color_image(preview_path)
+        data["preview_has_transparency"] = image_has_transparency(preview_path)
     else:
         data["has_artwork_preview"] = False
+        data["preview_has_transparency"] = False
     return data
 
 

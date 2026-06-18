@@ -202,6 +202,23 @@ def is_solid_color_image(path: Path, sample_points: int = 12) -> bool:
         return False
 
 
+def image_has_transparency(path: Path) -> bool:
+    if not path.is_file():
+        return False
+    try:
+        with Image.open(path) as image:
+            if image.mode in ("RGBA", "LA"):
+                alpha = image.getchannel("A")
+                extrema = alpha.getextrema()
+                return bool(extrema and extrema[0] < 255)
+            if image.mode == "P":
+                transparency = image.info.get("transparency")
+                return transparency is not None
+            return False
+    except OSError:
+        return False
+
+
 def create_solid_preview_png(
     destination_path: Path,
     width: int,
