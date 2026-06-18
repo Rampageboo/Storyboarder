@@ -200,7 +200,7 @@ class StoryboardBackendService(ExportServiceMixin):
             shot.source_sync_mtime = source_path.stat().st_mtime
         try:
             project_manager.relink_preview_image(project, shot, preview_rel)
-        except Exception as exc:
+        except (ValueError, FileNotFoundError) as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         exported = getattr(self.app.state, "plugin_last_exported_preview", None)
         if not isinstance(exported, dict):

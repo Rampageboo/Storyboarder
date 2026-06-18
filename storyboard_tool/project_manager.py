@@ -504,17 +504,17 @@ def import_source_file_stream(
     return destination
 
 
-def relink_preview_image(project: Project, shot: Shot, relative_path: str) -> Path:
-    candidate = (project.root_path / relative_path).resolve()
+def relink_preview_image(project: Project, shot: Shot, preview_rel: str) -> Path:
+    preview_text = str(preview_rel or "").strip()
+    if not preview_text:
+        raise ValueError("Preview path is required.")
+    candidate = (project.root_path / preview_text).resolve()
     root = project.root_path.resolve()
     if root not in candidate.parents and candidate != root:
-        raise ValueError("Preview path must be inside the project folder.")
-    if not candidate.exists() or not candidate.is_file():
-        raise FileNotFoundError(f"Preview image not found: {relative_path}")
-    shot.preview_image_path = candidate.relative_to(project.root_path).as_posix()
-    shot.image_path = shot.preview_image_path
-    thumbnail_path = create_thumbnail(candidate, get_shot_dir(project, shot) / f"{shot.shot_id}_thumb.png")
-    shot.thumbnail_path = thumbnail_path.relative_to(project.root_path).as_posix()
+        raise ValueError("Preview path must be inside the project.")
+    if not candidate.is_file():
+        raise FileNotFoundError(f"Preview not found: {preview_rel}")
+    _set_shot_preview_paths(project, shot, candidate)
     return candidate
 
 

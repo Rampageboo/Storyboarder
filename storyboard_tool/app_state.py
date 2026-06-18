@@ -140,14 +140,20 @@ def _plugin_open_shot_ids(app: FastAPI, plugin_linked: bool, file_seen: float, h
     """Shot ids the plugin reports as open Photoshop tabs (heartbeat file or HTTP)."""
     if not plugin_linked:
         return []
+
+    def normalize_ids(value: Any) -> list[str]:
+        if isinstance(value, list):
+            return [str(item) for item in value if item]
+        return []
+
     heartbeat = live_bridge.read_plugin_heartbeat()
     file_ids = heartbeat.get("open_shot_ids") if isinstance(heartbeat, dict) else None
-    if isinstance(file_ids, list):
-        return [str(item) for item in file_ids if item]
     http_ids = getattr(app.state, "plugin_open_shot_ids", None)
-    if isinstance(http_ids, list):
-        return [str(item) for item in http_ids if item]
-    return []
+
+    file_open_ids = normalize_ids(file_ids)
+    http_open_ids = normalize_ids(http_ids)
+    primary, fallback = (file_open_ids, http_open_ids) if file_seen >= http_seen else (http_open_ids, file_open_ids)
+    return primary or fallback
 
 
 def _plugin_link_state(app: FastAPI) -> tuple[bool, float | None, list[str]]:
