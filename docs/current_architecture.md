@@ -1,6 +1,6 @@
 # Storyboarder — Current Architecture
 
-> Last updated: 2026-06-18
+> Last updated: 2026-06-19
 > Reflects the codebase after the desktop-only refactor, architecture cleanup,
 > Photoshop plugin API, shot-service extraction, and project-transaction safety
 > commits. For earlier history see [code-review-and-refactor.md](code-review-and-refactor.md).
@@ -354,6 +354,7 @@ with project_transaction.mutate_project(project):
 - `method_restore_ref_apply`
 - `method_delete_ref_segment`
 - `method_delete_project_reference` (modifies shots + settings when clearing segment references)
+- `method_import_scene3d` (settings only — reverts `settings.scene3d` if file write or save fails)
 - `method_create_shot_canvas`
 - `method_save_shot_drawing`
 
@@ -516,28 +517,107 @@ When the plugin is linked and has a shot open as a tab, `method_open_source` swi
 
 ## 14. Scene3D TypeScript Source and Generated Runtime Bundle
 
+### Pipeline overview
+
+```
+User imports GLB   → /api/project/scene3d/import  → external_tools.import_scene3d_stream()
+                                                     → writes scene3d/scene.glb
+                                                     → updates settings.scene3d
+User opens Blender → /api/project/scene3d/open-blender → external_tools.open_blender_scene()
+                                                          → launches blender.exe
+
+ ┌── Scene3DPanel.tsx ──────────────────────────────────────────────────────┐
+ │  Loads workspace bundle lazily via                                        │
+ │    import('/static/runtime/scene3d_workspace.js')                        │
+ │  Scene3DEditor (workspace) ← user interacts → camera/view state          │
+ │  captureToBoard()          → captureFrameDataUrl()  → PNG data URL        │
+ │    → uploadShotImage()     → /api/shots/{id}/image  → persists preview   │
+ │    → updateShot()          → /api/shots/{id}        → saves camera_data  │
+ └──────────────────────────────────────────────────────────────────────────┘
+
+ ┌── ReferenceAssignmentPopover3dApply.tsx ─────────────────────────────────┐
+ │  applyModelCaptures()                                                     │
+ │    ReferenceModelPreview.captureFrame()  → one PNG per board             │
+ │    → /api/project/ref-segment/apply-model-captures                       │
+ │         → reference_segments.apply_model_captures_to_boards()            │
+ │              → validates PNG data URLs, stamps provenance, saves images  │
+ └──────────────────────────────────────────────────────────────────────────┘
+```
+
+**Key constraint: all 3D rendering is TypeScript-only.** Python never drives Three.js. The backend
+`apply_model_captures_to_boards` receives pre-rendered PNG data URLs from the frontend and stamps
+provenance/metadata, applies compositing, and persists board images. It does not render GLBs.
+
 ### Source
 
 `frontend/src/scene3d/` — TypeScript, part of the `frontend/` project.
 
 The canonical implementation of the 3D workspace lives in `frontend/src/scene3d/workspace/`. It is compiled separately from the main React bundle.
 
-Key source files:
+**Top-level scene3d modules** (imported directly by React components)
+
+| File | Role |
+|---|---|
+| `scene3dTypes.ts` | Shared types: `Scene3dReferenceView`, `Scene3dCaptureRequest`, `RefSegmentModelCapture` |
+| `threeRuntime.ts` | Singleton loader for the Three.js vendor bundle; single source of truth for dynamic import URLs |
+| `previewStyle.ts` | Canonical wireframe / object-color preview logic shared between React and workspace bundle |
+| `scenePreviewSettings.ts` | Thin wrapper: resolves `Scene3dPreviewSettings` from `ProjectSettings` |
+| `glbScene.ts` | GLB scene loading helper (used by `referenceGlbRenderer.ts`) |
+| `referenceGlbRenderer.ts` | Self-contained WebGL renderer for the reference model preview canvas |
+| `capture.ts` | Canvas readback helpers (`captureCanvasPng`, `isBlankCanvas`) |
+| `applyModelCaptures.ts` | Render one GLB frame per board in range; pure function, no project writes |
+
+**Workspace bundle modules** (compiled to `scene3d_workspace.js`)
 
 | File | Role |
 |---|---|
 | `workspace/staticEntry.ts` | Bundle entry; re-exports all public API |
-| `workspace/workspaceEditor.ts` | `Scene3DEditor` class — the main public object |
+| `workspace/workspaceEditor.ts` | `Scene3DEditor` class — the main public object constructed by `Scene3DPanel` |
 | `workspace/workspaceBridge.ts` | Three.js renderer and scene setup |
 | `workspace/workspaceCamera.ts` | Camera helpers, focal-length conversion |
-| `workspace/workspaceCapture.ts` | PNG rendering (`captureRendererPng`) |
+| `workspace/workspaceCapture.ts` | PNG rendering (`captureRendererPng`); re-exports `capture.ts` helpers |
 | `workspace/workspaceGlb.ts` / `workspaceGlbLoad.ts` | GLB parsing and Three.js loading |
 | `workspace/workspacePrimitives.ts` | Primitive mesh factory |
 | `workspace/workspaceState.ts` | Scene serialisation / deserialisation |
 | `workspace/workspaceAnimation.ts` | Timeline playback |
 | `workspace/workspaceLighting.ts` | Light creation and calibration |
 | `workspace/workspaceMaterials.ts` | Material system |
-| `scene3d/previewStyle.ts` | Canonical wireframe / preview-color logic (imported directly by React components) |
+
+**React integration components**
+
+| Component | Role |
+|---|---|
+| `Scene3DPanel.tsx` | Panel UI: import GLB, open workspace overlay, capture to board, save scene settings. Owns the `Scene3DEditor` instance lifecycle. |
+| `ReferenceModelPreview.tsx` | Inline 3D preview canvas using `ReferenceGlbRenderer`. Also exposes `captureFrame()` via ref handle for the assignment popover. |
+| `ReferenceAssignmentPopover3dApply.tsx` | Assignment popover; orchestrates per-board captures via `applyModelCaptures` and calls the backend apply endpoint. |
+
+**Utility helper**
+
+| File | Role |
+|---|---|
+| `utils/scene3dView.ts` | Pure helpers: `resolveScene3dReferenceView` (workspace view → shot/settings priority chain), `describeScene3dView` |
+
+### Backend Scene3D endpoints
+
+| Endpoint | Handler | What it does |
+|---|---|---|
+| `POST /api/project/scene3d/import` | `method_import_scene3d` | Write GLB to `scene3d/`, update `settings.scene3d`; wrapped in `mutate_project` |
+| `POST /api/project/scene3d/open-blender` | `method_open_blender_scene` | Launch Blender with `scene3d/scene.blend`; copies template if missing |
+| `GET /api/project/scene3d/file` | `method_get_scene3d_file` | Serve the linked GLB file for the workspace renderer |
+| `POST /api/project/ref-segment/apply-model-captures` | `method_apply_ref_segment_model_captures` | Accept pre-rendered PNG data URLs; stamp provenance, composite board images |
+
+`method_import_scene3d` is wrapped in `project_transaction.mutate_project` so an invalid import (bad extension, file write error) leaves `settings.scene3d` unchanged.
+
+The backend module that owns 3D-specific file paths and Blender launch logic is `storyboard_tool/external_tools.py`. It is re-exported through `project_manager.py`.
+
+### On-disk Scene3D structure
+
+```
+Storyboard_Project/
+  scene3d/
+    scene.glb     (or scene.gltf) — linked GLB imported by the user
+    scene.blend   — Blender project file (copied from assets/scene_template.blend on first open)
+```
 
 ### Build
 
@@ -547,15 +627,15 @@ npm run build:workspace
 # → storyboard_tool/web/static/runtime/scene3d_workspace.js
 ```
 
-Uses `vite.workspace.config.ts`. Output format is ESM. Three.js imports resolve through the import map in `frontend/index.html` at runtime and are kept external to the bundle.
+Uses `vite.workspace.config.ts`. Output format is ESM. `/static/vendor/three/` imports are kept external (resolved via the import map in `frontend/index.html` at runtime).
 
 ### Runtime usage
 
-`Scene3DPanel.tsx` loads the workspace bundle lazily:
+`Scene3DPanel.tsx` loads the workspace bundle lazily via `loadScene3DEditorClass()` in `workspace/loadScene3DEditor.ts`:
 
 ```typescript
-const workspace = await import('/static/runtime/scene3d_workspace.js');
-const editor = await workspace.initWorkspaceEditorThree(container, glbUrl, sceneData);
+const Scene3DEditor = await loadScene3DEditorClass()
+const editor = new Scene3DEditor(rootEl, { onApplyShotCamera, onCaptureToBoard, … })
 ```
 
 The bundle is served by FastAPI at `GET /static/runtime/scene3d_workspace.js`.

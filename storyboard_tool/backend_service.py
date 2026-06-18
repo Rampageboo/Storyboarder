@@ -923,14 +923,12 @@ class StoryboardBackendService(ExportServiceMixin):
     def method_import_scene3d(self, filename: str, data: list[int] | bytes | bytearray) -> dict[str, Any]:
         project = app_state._require_project(self.app)
         try:
-            scene_settings = project_manager.import_scene3d_stream(
-                project,
-                _upload_stream(data),
-                str(filename or "scene.glb"),
-            )
-        except (FileNotFoundError, ValueError) as exc:
-            logger.exception("Failed to import Scene3D file: %s", filename)
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
+            with project_transaction.mutate_project(project):
+                scene_settings = project_manager.import_scene3d_stream(
+                    project,
+                    _upload_stream(data),
+                    str(filename or "scene.glb"),
+                )
         except Exception as exc:
             logger.exception("Failed to import Scene3D file: %s", filename)
             raise HTTPException(status_code=400, detail=str(exc)) from exc

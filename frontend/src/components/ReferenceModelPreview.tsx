@@ -4,11 +4,7 @@ import { projectFileUrl } from '../api'
 
 import { ReferenceGlbRenderer } from '../scene3d/referenceGlbRenderer'
 
-import {
-  defaultPreviewSettings,
-  resolveScene3dPreviewSettings,
-  type Scene3dPreviewSettings,
-} from '../scene3d/scenePreviewSettings'
+import { resolveScene3dPreviewSettings } from '../scene3d/scenePreviewSettings'
 
 import type { Scene3dCaptureRequest, Scene3dReferenceView } from '../scene3d/scene3dTypes'
 
@@ -44,15 +40,15 @@ const ReferenceModelPreviewCanvas = forwardRef<ReferenceModelPreviewHandle, Omit
     const canvasRef = useRef<HTMLCanvasElement | null>(null)
     const rendererRef = useRef<ReferenceGlbRenderer | null>(null)
     const [failed, setFailed] = useState(false)
-    const [previewSettings, setPreviewSettings] = useState<Scene3dPreviewSettings>(() => defaultPreviewSettings())
+    // Derived from project settings — no state needed; useMemo recalculates when scene3d sub-fields change.
+    const previewSettings = useMemo(
+      () => resolveScene3dPreviewSettings(project?.settings ?? null),
+      // eslint-disable-next-line react-hooks/exhaustive-deps -- intentionally tracks scene3d sub-fields plus the settings ref
+      [project?.settings?.scene3d?.wireframe_mode, project?.settings?.scene3d?.object_color_preview, project?.settings],
+    )
     const previewUrl = useMemo(() => `${projectFileUrl(path)}&preview=model`, [path])
     const viewKey = useMemo(() => (view ? JSON.stringify(view) : ''), [view])
     const previewSettingsKey = useMemo(() => JSON.stringify(previewSettings), [previewSettings])
-
-    useEffect(() => {
-      // eslint-disable-next-line react-hooks/set-state-in-effect
-      setPreviewSettings(resolveScene3dPreviewSettings(project?.settings ?? null))
-    }, [project?.settings?.scene3d?.wireframe_mode, project?.settings?.scene3d?.object_color_preview, project?.settings])
 
     useEffect(() => {
       const canvas = canvasRef.current

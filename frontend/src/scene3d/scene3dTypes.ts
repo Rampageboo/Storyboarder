@@ -24,11 +24,6 @@ export interface Scene3dCaptureRequest {
   height?: number
 }
 
-export interface Scene3dCaptureResult {
-  dataUrl: string
-  animationTime: number
-}
-
 export interface RefSegmentModelCapture {
   shot_id: string
   data_url: string
