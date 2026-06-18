@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import os
 import re
 from io import BytesIO
 from pathlib import Path
@@ -256,14 +257,18 @@ def copy_and_convert_image(source_path: Path, destination_path: Path) -> Path:
         raise ValueError("Unsupported image format. Use PNG, JPG, JPEG, or TIFF.")
 
     destination_path.parent.mkdir(parents=True, exist_ok=True)
-    destination_path = destination_path.with_suffix(".png")
-
-    with Image.open(source_path) as image:
-        if image.mode not in ("RGB", "RGBA"):
-            image = image.convert("RGBA")
-        image.save(destination_path, "PNG")
-
-    return destination_path
+    final = destination_path.with_suffix(".png")
+    tmp = final.with_suffix(".tmp.png")
+    try:
+        with Image.open(source_path) as image:
+            if image.mode not in ("RGB", "RGBA"):
+                image = image.convert("RGBA")
+            image.save(tmp, "PNG")
+        os.replace(tmp, final)
+    except BaseException:
+        tmp.unlink(missing_ok=True)
+        raise
+    return final
 
 
 def copy_and_convert_image_stream(
@@ -275,24 +280,35 @@ def copy_and_convert_image_stream(
         raise ValueError("Unsupported image format. Use PNG, JPG, JPEG, or TIFF.")
 
     destination_path.parent.mkdir(parents=True, exist_ok=True)
-    destination_path = destination_path.with_suffix(".png")
-
-    with Image.open(source_stream) as image:
-        if image.mode not in ("RGB", "RGBA"):
-            image = image.convert("RGBA")
-        image.save(destination_path, "PNG")
-
-    return destination_path
+    final = destination_path.with_suffix(".png")
+    tmp = final.with_suffix(".tmp.png")
+    try:
+        with Image.open(source_stream) as image:
+            if image.mode not in ("RGB", "RGBA"):
+                image = image.convert("RGBA")
+            image.save(tmp, "PNG")
+        os.replace(tmp, final)
+    except BaseException:
+        tmp.unlink(missing_ok=True)
+        raise
+    return final
 
 
 def create_thumbnail(source_path: Path, thumbnail_path: Path) -> Path:
     thumbnail_path.parent.mkdir(parents=True, exist_ok=True)
-    with Image.open(source_path) as image:
-        image.thumbnail(THUMBNAIL_SIZE)
-        if image.mode not in ("RGB", "RGBA"):
-            image = image.convert("RGBA")
-        image.save(thumbnail_path.with_suffix(".png"), "PNG")
-    return thumbnail_path.with_suffix(".png")
+    final = thumbnail_path.with_suffix(".png")
+    tmp = final.with_suffix(".tmp.png")
+    try:
+        with Image.open(source_path) as image:
+            image.thumbnail(THUMBNAIL_SIZE)
+            if image.mode not in ("RGB", "RGBA"):
+                image = image.convert("RGBA")
+            image.save(tmp, "PNG")
+        os.replace(tmp, final)
+    except BaseException:
+        tmp.unlink(missing_ok=True)
+        raise
+    return final
 
 
 def create_blank_canvas(
@@ -315,10 +331,17 @@ def save_png_data_url(data_url: str, destination_path: Path) -> Path:
     if not data_url.startswith(prefix):
         raise ValueError("Expected a PNG data URL.")
     destination_path.parent.mkdir(parents=True, exist_ok=True)
-    raw = base64.b64decode(data_url[len(prefix) :])
-    with Image.open(BytesIO(raw)) as image:
-        image.save(destination_path.with_suffix(".png"), "PNG")
-    return destination_path.with_suffix(".png")
+    raw = base64.b64decode(data_url[len(prefix):])
+    final = destination_path.with_suffix(".png")
+    tmp = final.with_suffix(".tmp.png")
+    try:
+        with Image.open(BytesIO(raw)) as image:
+            image.save(tmp, "PNG")
+        os.replace(tmp, final)
+    except BaseException:
+        tmp.unlink(missing_ok=True)
+        raise
+    return final
 
 
 def create_placeholder_if_needed() -> str:

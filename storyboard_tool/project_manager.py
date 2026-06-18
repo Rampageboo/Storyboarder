@@ -238,6 +238,57 @@ def reorder_shots(project: Project, shot_ids: list[str]) -> None:
     project.shots = [by_id[shot_id] for shot_id in shot_ids]
 
 
+def validate_project_integrity(project: Project) -> list[dict]:
+    """Check project data for structural and ownership violations.
+
+    Returns a list of issue dicts (empty list = clean).  Missing generated files
+    such as thumbnails and notes are not flagged — they are recoverable.  Designed
+    to be non-fatal: it reports issues rather than raising.
+    """
+    issues: list[dict] = []
+    seen_ids: set[str] = set()
+    root = project.root_path.resolve()
+
+    for shot in project.shots:
+        if shot.shot_id in seen_ids:
+            issues.append({"kind": "duplicate_shot_id", "shot_id": shot.shot_id})
+        seen_ids.add(shot.shot_id)
+
+        if not get_shot_dir(project, shot).is_dir():
+            issues.append({"kind": "missing_shot_dir", "shot_id": shot.shot_id,
+                           "path": str(get_shot_dir(project, shot))})
+
+        # image_path / preview_image_path must never be the background plate.
+        bg_filename = board_background_filename(shot.shot_id)
+        for field in ("image_path", "preview_image_path"):
+            value = getattr(shot, field, "") or ""
+            if value and Path(value).name == bg_filename:
+                issues.append({"kind": "metadata_points_to_background",
+                               "shot_id": shot.shot_id, "field": field, "value": value})
+
+        # All metadata paths must stay inside the project root (no traversal).
+        for field in ("image_path", "preview_image_path", "thumbnail_path", "source_file_path"):
+            value = getattr(shot, field, "") or ""
+            if not value:
+                continue
+            try:
+                resolved = (project.root_path / value).resolve()
+                if resolved != root and root not in resolved.parents:
+                    issues.append({"kind": "path_traversal", "shot_id": shot.shot_id,
+                                   "field": field, "value": value})
+            except (ValueError, OSError):
+                issues.append({"kind": "invalid_path", "shot_id": shot.shot_id,
+                               "field": field, "value": value})
+
+        # source_file_path: warn if linked but missing on disk.
+        if shot.source_file_path:
+            if not (project.root_path / shot.source_file_path).is_file():
+                issues.append({"kind": "missing_source_file", "shot_id": shot.shot_id,
+                               "path": shot.source_file_path})
+
+    return issues
+
+
 def move_shot_up(project: Project, index: int) -> int:
     _require_index(project, index)
     if index <= 0:
@@ -596,8 +647,14 @@ def import_source_file_stream(
     suffix = Path(filename).suffix or ".psd"
     shot_dir = get_shot_dir(project, shot)
     destination = shot_dir / f"{shot.shot_id}{suffix}"
-    with destination.open("wb") as file:
-        shutil.copyfileobj(source_stream, file)
+    tmp = destination.with_suffix(suffix + ".tmp")
+    try:
+        with tmp.open("wb") as file:
+            shutil.copyfileobj(source_stream, file)
+        os.replace(tmp, destination)
+    except BaseException:
+        tmp.unlink(missing_ok=True)
+        raise
     shot.source_file_path = destination.relative_to(project.root_path).as_posix()
     if is_psd_path(destination):
         preview_path = export_psd_composite_to_png(destination, shot_dir / f"{shot.shot_id}_preview.png")

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import os
+import tempfile
 from pathlib import Path
 from typing import Any
 
@@ -64,7 +66,17 @@ def write_session(base_dir: Path, session: dict[str, Any]) -> Path:
     if not isinstance(recent, list):
         payload["recent_projects"] = []
     path = session_file(base_dir)
-    path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    fd, tmp_name = tempfile.mkstemp(dir=str(directory), prefix="session.", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as f:
+            json.dump(payload, f, indent=2)
+        os.replace(tmp_name, path)
+    except BaseException:
+        try:
+            os.unlink(tmp_name)
+        except OSError:
+            pass
+        raise
     return path
 
 
