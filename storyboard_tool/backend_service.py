@@ -2,11 +2,14 @@ from __future__ import annotations
 
 import io
 import json
+import logging
 import time
 from pathlib import Path
 from typing import Any, BinaryIO
 
 from fastapi import FastAPI, HTTPException
+
+logger = logging.getLogger(__name__)
 
 from . import app_state, project_manager, project_transaction, reference_segments, session_store, shot_service
 from .export_utils import missing_files
@@ -107,6 +110,7 @@ class StoryboardBackendService(ExportServiceMixin):
                 project_manager.open_project(Path(project_json_path).expanduser()),
             )
         except Exception as exc:
+            logger.exception("Failed to open project: %s", project_json_path)
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         app_state._remember_recent(self.app.state.project)
         app_state._persist_app_session(self.app)
@@ -119,6 +123,7 @@ class StoryboardBackendService(ExportServiceMixin):
         try:
             project_manager.save_project(project)
         except Exception as exc:
+            logger.exception("Failed to save project")
             raise HTTPException(status_code=500, detail=str(exc)) from exc
         self.app.state.dirty = False
         return app_state._project_payload(project, self.app.state.dirty)
@@ -731,6 +736,7 @@ class StoryboardBackendService(ExportServiceMixin):
         try:
             opened = project_manager.open_project_file(project, rel_path, project.settings.get("photoshop_path", ""))
         except Exception as exc:
+            logger.exception("Failed to open preview for shot %s", shot_id)
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return {"path": str(opened)}
 
@@ -759,6 +765,7 @@ class StoryboardBackendService(ExportServiceMixin):
                 shot=shot,
             )
         except Exception as exc:
+            logger.exception("Failed to open source file for shot %s", shot_id)
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return {"path": str(opened)}
 
@@ -791,6 +798,7 @@ class StoryboardBackendService(ExportServiceMixin):
         try:
             opened = project_manager.open_blender_scene(project)
         except Exception as exc:
+            logger.exception("Failed to open Blender scene")
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         app_state._touch_live_bridge(self.app)
         return {

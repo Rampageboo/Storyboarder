@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 from typing import Any
 
 from fastapi import HTTPException
+
+logger = logging.getLogger(__name__)
 
 from . import app_state, project_manager
 from .export_utils import (
@@ -30,6 +33,7 @@ class ExportServiceMixin:
         try:
             _export_storyboard_pdf(project, output_path, layout=chosen)
         except Exception as exc:
+            logger.exception("PDF export failed (layout=%s)", chosen)
             raise HTTPException(status_code=500, detail=str(exc)) from exc
         project.settings["pdf_layout"] = chosen
         project_manager.save_settings(project)
@@ -41,6 +45,7 @@ class ExportServiceMixin:
         try:
             export_shot_list_csv(project, output_path)
         except Exception as exc:
+            logger.exception("Shot list export failed")
             raise HTTPException(status_code=500, detail=str(exc)) from exc
         return {"path": str(output_path), "download_url": "/api/export/shot-list"}
 
@@ -50,6 +55,7 @@ class ExportServiceMixin:
         try:
             export_timing_json(project, output_path)
         except Exception as exc:
+            logger.exception("Timing export failed")
             raise HTTPException(status_code=500, detail=str(exc)) from exc
         return {"path": str(output_path), "download_url": "/api/export/timing"}
 
@@ -59,6 +65,7 @@ class ExportServiceMixin:
         try:
             export_contact_sheet(project, output_path)
         except Exception as exc:
+            logger.exception("Contact sheet export failed")
             raise HTTPException(status_code=500, detail=str(exc)) from exc
         return {"path": str(output_path), "download_url": "/api/export/contact-sheet"}
 
@@ -68,6 +75,7 @@ class ExportServiceMixin:
         try:
             export_image_sequence(project, output_dir)
         except Exception as exc:
+            logger.exception("Image sequence export failed")
             raise HTTPException(status_code=500, detail=str(exc)) from exc
         return {"path": str(output_dir)}
 

@@ -14,6 +14,7 @@ from pydantic import BaseModel, Field
 
 from . import app_state, project_manager
 from .backend_service import StoryboardBackendService
+from .logging_config import setup_logging
 
 # Photoshop plugin treats bridge files older than ~8s as stale (see BRIDGE_STALE_MS in panel.js).
 _BRIDGE_REFRESH_SECONDS = 1.5
@@ -191,6 +192,8 @@ def _model_captures_payload(captures: list[RefSegment3dCapture]) -> list[dict[st
 
 
 def create_app(base_dir: Path, bridge_port: int = 8000) -> FastAPI:
+    setup_logging()
+
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         stop_event = threading.Event()
