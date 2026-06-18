@@ -173,7 +173,7 @@ class TestExportError(unittest.TestCase):
 
     def test_export_shot_list_failure_returns_export_failed(self) -> None:
         with patch(
-            "storyboard_tool.service_exports.export_shot_list_csv",
+            "storyboard_tool.export_service.export_shot_list",
             side_effect=RuntimeError("disk full"),
         ):
             response = _quiet(lambda: self.client.post("/api/export/shot-list"))
@@ -184,7 +184,7 @@ class TestExportError(unittest.TestCase):
 
     def test_export_timing_failure_returns_export_failed(self) -> None:
         with patch(
-            "storyboard_tool.service_exports.export_timing_json",
+            "storyboard_tool.export_service.export_timing",
             side_effect=OSError("permission denied"),
         ):
             response = _quiet(lambda: self.client.post("/api/export/timing"))

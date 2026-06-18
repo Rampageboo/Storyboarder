@@ -226,14 +226,14 @@ This is the single business-logic entry point. Every `method_*` handler correspo
 | Project/file CRUD | `project_manager.py` |
 | Reference workflows | `reference_segments.py` |
 | Auto-sync (PSD/PNG) | `linked_sync.py` |
-| Export generation | `service_exports.py` + `export_utils.py` |
+| Export generation | `export_service.py` + `export_utils.py` |
 | Photoshop bridge | `live_bridge.py`, `bridge.py` |
 | Image processing | `image_utils.py` |
 | Video processing | `video_utils.py` |
 | File dialogs | `system_utils.py` |
 | App/project state helpers | `app_state.py` |
 
-`StoryboardBackendService` inherits from `ExportServiceMixin` (`service_exports.py`), which provides all `method_export_*` and `method_download_*` handlers.
+`StoryboardBackendService` inherits from `ExportServiceMixin` (`service_exports.py`), which adapts backend `method_export_*` and `method_download_*` handlers to the canonical export logic in `export_service.py`.
 
 ---
 

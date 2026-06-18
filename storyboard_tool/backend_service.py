@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import io
 import json
+import logging
 import time
 from pathlib import Path
 from typing import Any, BinaryIO
@@ -26,6 +27,8 @@ from .system_utils import (
     validate_photoshop_path,
     validate_project_json_path,
 )
+
+logger = logging.getLogger(__name__)
 
 
 def _normalize_upload_bytes(data: list[int] | bytes | bytearray) -> bytes:
@@ -94,6 +97,7 @@ class StoryboardBackendService(ExportServiceMixin):
                 ),
             )
         except Exception as exc:
+            logger.exception("Failed to create project: %s", root)
             raise app_error(AppErrorCode.PROJECT_OPEN_FAILED, str(exc)) from exc
         app_state._remember_recent(self.app.state.project)
         app_state._persist_app_session(self.app)
@@ -108,6 +112,7 @@ class StoryboardBackendService(ExportServiceMixin):
                 project_manager.open_project(Path(project_json_path).expanduser()),
             )
         except Exception as exc:
+            logger.exception("Failed to open project: %s", project_json_path)
             raise app_error(AppErrorCode.PROJECT_OPEN_FAILED, str(exc)) from exc
         app_state._remember_recent(self.app.state.project)
         app_state._persist_app_session(self.app)
@@ -120,6 +125,7 @@ class StoryboardBackendService(ExportServiceMixin):
         try:
             project_manager.save_project(project)
         except Exception as exc:
+            logger.exception("Failed to save project")
             raise app_error(AppErrorCode.PROJECT_SAVE_FAILED, str(exc), status=500) from exc
         self.app.state.dirty = False
         return app_state._project_payload(project, self.app.state.dirty)
@@ -719,6 +725,7 @@ class StoryboardBackendService(ExportServiceMixin):
         try:
             project_manager.relink_preview_image(project, shot, relative_path)
         except Exception as exc:
+            logger.exception("Failed to relink preview for shot %s", shot_id)
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         app_state._autosave(self.app)
         return app_state._project_payload(project, self.app.state.dirty)
@@ -732,6 +739,7 @@ class StoryboardBackendService(ExportServiceMixin):
         try:
             opened = project_manager.open_project_file(project, rel_path, project.settings.get("photoshop_path", ""))
         except Exception as exc:
+            logger.exception("Failed to open preview for shot %s", shot_id)
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return {"path": str(opened)}
 
@@ -760,6 +768,7 @@ class StoryboardBackendService(ExportServiceMixin):
                 shot=shot,
             )
         except Exception as exc:
+            logger.exception("Failed to open source file for shot %s", shot_id)
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return {"path": str(opened)}
 
@@ -772,8 +781,10 @@ class StoryboardBackendService(ExportServiceMixin):
                 project, shot, preserve_layers=bool(preserve_layers)
             )
         except (ValueError, FileNotFoundError) as exc:
+            logger.exception("Failed to recover source file for shot %s", shot_id)
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         except Exception as exc:  # noqa: BLE001 - surface rebuild failures to the caller
+            logger.exception("Failed to recover source file for shot %s", shot_id)
             raise HTTPException(status_code=400, detail=f"PSD recovery failed: {exc}") from exc
         app_state._autosave(self.app)
         return {"result": result, **app_state._project_payload(project, self.app.state.dirty)}
@@ -792,6 +803,7 @@ class StoryboardBackendService(ExportServiceMixin):
         try:
             opened = project_manager.open_blender_scene(project)
         except Exception as exc:
+            logger.exception("Failed to open Blender scene")
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         app_state._touch_live_bridge(self.app)
         return {
@@ -878,6 +890,7 @@ class StoryboardBackendService(ExportServiceMixin):
         try:
             results = sync_project(project, force=bool(force))
         except Exception as exc:
+            logger.exception("Failed to sync all shots")
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         if results:
             app_state._autosave(self.app)
@@ -918,8 +931,10 @@ class StoryboardBackendService(ExportServiceMixin):
                 str(filename or "scene.glb"),
             )
         except (FileNotFoundError, ValueError) as exc:
+            logger.exception("Failed to import Scene3D file: %s", filename)
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         except Exception as exc:
+            logger.exception("Failed to import Scene3D file: %s", filename)
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         app_state._touch_live_bridge(self.app)
         payload = app_state._project_payload(project, self.app.state.dirty)

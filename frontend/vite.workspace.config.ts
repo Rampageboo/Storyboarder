@@ -11,6 +11,7 @@ const rootDir = path.dirname(fileURLToPath(import.meta.url))
  * Vendor /static/ imports are kept external (served at runtime).
  */
 export default defineConfig({
+  publicDir: false,
   build: {
     lib: {
       entry: path.resolve(rootDir, 'src/scene3d/workspace/staticEntry.ts'),
