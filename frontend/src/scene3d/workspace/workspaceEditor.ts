@@ -48,7 +48,8 @@ import {
   createPrimitiveMesh,
   WORKSPACE_PRIMITIVE_TYPE_SET,
 } from './workspacePrimitives'
-import type { WorkspacePrimitiveType } from './workspaceTypes'
+import type { WorkspacePrimitiveType, WorkspaceTransformMode } from './workspaceTypes'
+import type { Scene3dWireframeMode } from '../previewStyleBridge'
 import { captureRendererPng } from './workspaceCapture'
 import {
   exportViewState,
@@ -159,7 +160,7 @@ export class Scene3DEditor {
   mode: 'builtin' | 'blender'
   objects: Map<string, ThreeObject>
   selectedId: string | null
-  transformMode: string
+  transformMode: WorkspaceTransformMode
   shotCameraHelper: ThreeObject
   animationId: number | null
   clock: ThreeObject
@@ -174,7 +175,7 @@ export class Scene3DEditor {
   importedLightCount: number
   objectColorPreview: boolean
   previewMaterials: Set<unknown>
-  wireframeMode: string
+  wireframeMode: Scene3dWireframeMode
   wireframeResources: ThreeObject
   animationTime: number
   animationDuration: number
@@ -186,6 +187,7 @@ export class Scene3DEditor {
   _probePosB: ThreeObject
   _sceneSettingsSaveTimer: number | null
   _suppressViewChange: boolean
+  _disposed: boolean
   renderer: ThreeObject
   scene: ThreeObject
   camera: ThreeObject
@@ -232,7 +234,7 @@ export class Scene3DEditor {
     this.mode = 'builtin' as const
     this.objects = new Map()
     this.selectedId = null
-    this.transformMode = 'translate'
+    this.transformMode = 'translate' as WorkspaceTransformMode
     this.shotCameraHelper = null
     this.animationId = null
     this.clock = new THREE.Clock()
@@ -248,7 +250,7 @@ export class Scene3DEditor {
     this.importedLightCount = 0
     this.objectColorPreview = true
     this.previewMaterials = new Set()
-    this.wireframeMode = 'off'
+    this.wireframeMode = 'off' as Scene3dWireframeMode
     this.wireframeResources = createWireframeResources()
     this.animationTime = 0
     this.animationDuration = 0
@@ -260,6 +262,7 @@ export class Scene3DEditor {
     this._probePosB = new THREE.Vector3()
     this._sceneSettingsSaveTimer = null
     this._suppressViewChange = false
+    this._disposed = false
 
     // Initialized via _buildDom / _initThree
     this.renderer = null
@@ -465,7 +468,7 @@ export class Scene3DEditor {
   _bindUi(): void {
     this.rootEl.querySelectorAll('[data-mode]').forEach((button) => {
       const btn = button as HTMLButtonElement
-      btn.addEventListener('click', () => this.setTransformMode(btn.dataset.mode!))
+      btn.addEventListener('click', () => this.setTransformMode(btn.dataset.mode! as WorkspaceTransformMode))
     })
     this.rootEl.querySelectorAll('[data-add]').forEach((button) => {
       const btn = button as HTMLButtonElement
@@ -576,7 +579,7 @@ export class Scene3DEditor {
       reloadGlb: () => this.reloadBlenderScene(),
       goToStart: () => this.goToAnimationStart(),
       stepAnimation: (delta: number) => this.stepAnimation(delta),
-      setTransformMode: (mode: string) => this.setTransformMode(mode),
+      setTransformMode: (mode: WorkspaceTransformMode) => this.setTransformMode(mode),
       deleteSelected: () => this.deleteSelected(),
       focusSelected: () => this.focusSelected(),
     })
@@ -596,7 +599,7 @@ export class Scene3DEditor {
     }
   }
 
-  setTransformMode(mode: string): void {
+  setTransformMode(mode: WorkspaceTransformMode): void {
     this.transformMode = mode
     this.transform.setMode(mode)
     this.rootEl.querySelectorAll('[data-mode]').forEach((button) => {
@@ -641,8 +644,8 @@ export class Scene3DEditor {
     this._applyWireframeMode()
   }
 
-  _normalizeWireframeMode(mode: unknown): string {
-    return normalizeWireframeMode(mode)
+  _normalizeWireframeMode(mode: unknown): Scene3dWireframeMode {
+    return normalizeWireframeMode(mode) as Scene3dWireframeMode
   }
 
   setWireframeMode(mode: string, { persist = true, notify = false } = {}): void {
@@ -1399,13 +1402,23 @@ export class Scene3DEditor {
   }
 
   dispose(): void {
+    if (this._disposed) return
+    this._disposed = true
+
     if (this.animationId) cancelAnimationFrame(this.animationId)
     this.animationId = null
+
+    if (this._sceneSettingsSaveTimer != null) {
+      window.clearTimeout(this._sceneSettingsSaveTimer)
+      this._sceneSettingsSaveTimer = null
+    }
+
     this._resizeObserver?.disconnect()
     if (this._keydownHandler) window.removeEventListener('keydown', this._keydownHandler)
     if (this._pointerdownHandler && this.renderer?.domElement) {
       this.renderer.domElement.removeEventListener('pointerdown', this._pointerdownHandler)
     }
+
     this.clearBlenderScene()
     this.clearObjects()
     this.transform?.dispose()
@@ -1415,6 +1428,7 @@ export class Scene3DEditor {
     this.pmremGenerator?.dispose()
     this.pmremGenerator = null
     this._clearWireframeOverlays()
+
     if (this.renderer) {
       this.renderer.dispose()
       if (this.renderer.domElement.parentNode) {

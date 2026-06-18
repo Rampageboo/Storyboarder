@@ -107,8 +107,13 @@ export function Scene3DPanel() {
   const projectRef = useRef<ProjectPayload | null>(null)
   const selectedShotIdRef = useRef<string | null>(null)
 
-  projectRef.current = project
-  selectedShotIdRef.current = selectedShotId
+  useEffect(() => {
+    projectRef.current = project
+  }, [project])
+
+  useEffect(() => {
+    selectedShotIdRef.current = selectedShotId
+  }, [selectedShotId])
 
   const scene = useMemo(() => sceneSettings(project), [project?.settings?.scene3d])
   const scenePath = typeof scene.file_path === 'string' ? scene.file_path : ''

@@ -21,6 +21,15 @@ Shared 3D/GLB runtime modules remain JavaScript under `storyboard_tool/web/stati
 
 | React component | Runtime module |
 | --- | --- |
-| `Scene3DPanel.tsx` | `/static/runtime/scene3d.js` + `/static/runtime/scene3d_workspace.js` |
+| `Scene3DPanel.tsx` | `/static/runtime/scene3d.js` (1-line shim) → `/static/runtime/scene3d_workspace.js` |
 | `ReferenceModelPreview.tsx` | `frontend/src/scene3d/` + `/static/runtime/scene3d_preview_style.js` |
 | `index.html` import map | `/static/vendor/three/three.module.js` |
+
+## Generated files policy
+
+`storyboard_tool/web/static/runtime/scene3d_workspace.js` is **generated output** — do not hand-edit it.
+
+- **Source of truth:** `frontend/src/scene3d/workspace/*.ts`
+- **Regenerate:** `npm run build:workspace` (or `npm run build` which includes it)
+- The file is committed so the Python desktop app can serve it without a separate build step.
+- `storyboard_tool/web/static/runtime/scene3d.js` is a 1-line re-export shim — also do not edit directly.
