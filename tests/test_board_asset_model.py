@@ -650,7 +650,62 @@ class TestDeleteRefSegment(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
-# F. Thumbnail reflects background when no artwork exists
+# F. Canvas creation preserves asset ownership
+# ---------------------------------------------------------------------------
+
+
+class TestCreateCanvasAssetOwnership(unittest.TestCase):
+    def setUp(self) -> None:
+        self._tmp = tempfile.mkdtemp()
+
+    def tearDown(self) -> None:
+        shutil.rmtree(self._tmp, ignore_errors=True)
+
+    def test_create_canvas_with_background_does_not_create_artwork_metadata(self) -> None:
+        project = _make_project(self._tmp)
+        shot = project_manager.add_shot(project)
+        shot.image_path = ""
+        shot.preview_image_path = ""
+        shot.thumbnail_path = ""
+
+        shot_dir = project_manager.get_shot_dir(project, shot)
+        bg = shot_dir / board_background_filename(shot.shot_id)
+        bg.write_bytes(MINI_PNG)
+
+        psd_path = project_manager.create_canvas_for_shot(project, shot)
+
+        self.assertEqual(shot.image_path, "")
+        self.assertEqual(shot.preview_image_path, "")
+        self.assertTrue(bg.is_file(), "background file must remain after canvas creation")
+        self.assertTrue(psd_path.is_file(), "PSD must be created")
+        self.assertEqual(shot.source_file_path, psd_path.relative_to(project.root_path).as_posix())
+        self.assertGreater(shot.source_sync_mtime, 0)
+        self.assertNotIn(
+            "metadata_points_to_background",
+            {issue["kind"] for issue in project_manager.validate_project_integrity(project)},
+        )
+
+    def test_create_canvas_with_artwork_preview_does_not_replace_it_with_background(self) -> None:
+        project = _make_project(self._tmp)
+        shot = project_manager.add_shot(project)
+        preview_path = _write_artist_preview(project, shot)
+        original_rel = preview_path.relative_to(project.root_path).as_posix()
+        original_bytes = preview_path.read_bytes()
+
+        shot_dir = project_manager.get_shot_dir(project, shot)
+        bg = shot_dir / board_background_filename(shot.shot_id)
+        bg.write_bytes(MINI_PNG)
+
+        project_manager.create_canvas_for_shot(project, shot)
+
+        self.assertEqual(shot.image_path, original_rel)
+        self.assertEqual(shot.preview_image_path, original_rel)
+        self.assertEqual(preview_path.read_bytes(), original_bytes)
+        self.assertTrue(bg.is_file(), "background file must remain after canvas creation")
+
+
+# ---------------------------------------------------------------------------
+# G. Thumbnail reflects background when no artwork exists
 # ---------------------------------------------------------------------------
 
 

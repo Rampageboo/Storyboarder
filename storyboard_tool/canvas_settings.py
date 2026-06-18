@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import shutil
 from pathlib import Path
 
 from .image_utils import (
@@ -189,15 +188,9 @@ def create_canvas_for_shot(
         background_color=color,
     )
     _pm().sync_psd_board_background(project, shot, psd_path)
-    preview_path = shot_dir / f"{shot.shot_id}_preview.png"
     if background_path is not None:
         bg_dest = shot_dir / board_background_filename(shot.shot_id)
         _pm()._save_board_background_copy(background_path, bg_dest)
-        if not preview_path.is_file() or is_solid_color_image(preview_path):
-            source = bg_dest if bg_dest.is_file() else background_path
-            if source.resolve() != preview_path.resolve():
-                shutil.copy2(source, preview_path)
-        _pm()._set_shot_preview_paths(project, shot, preview_path)
     else:
         # No per-shot default background PNG; the canvas background is a UI backdrop.
         # The PSD already contains the background color layer.
