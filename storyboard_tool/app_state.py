@@ -15,6 +15,7 @@ from typing import Any
 from fastapi import FastAPI, HTTPException
 
 from . import live_bridge, project_manager, session_store, shot_service
+from .errors import AppErrorCode, app_error
 from .models import Project, SHOT_STATUSES, Shot
 
 
@@ -51,7 +52,7 @@ def _shot_payload(project: Project, shot: Shot) -> dict[str, Any]:
 def _require_project(app: FastAPI) -> Project:
     project = app.state.project
     if project is None:
-        raise HTTPException(status_code=400, detail="No project opened.")
+        raise app_error(AppErrorCode.PROJECT_NOT_OPEN, "No project opened.")
     return project
 
 
@@ -59,14 +60,14 @@ def _find_shot_index(project: Project, shot_id: str) -> int:
     try:
         return shot_service.find_shot_index(project, shot_id)
     except ValueError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
+        raise app_error(AppErrorCode.SHOT_NOT_FOUND, str(exc), status=404) from exc
 
 
 def _find_shot(project: Project, shot_id: str) -> Shot:
     try:
         return shot_service.find_shot(project, shot_id)
     except ValueError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
+        raise app_error(AppErrorCode.SHOT_NOT_FOUND, str(exc), status=404) from exc
 
 
 def _track_project(app: FastAPI, project: Project) -> None:

@@ -9,6 +9,7 @@ from typing import Any, BinaryIO
 from fastapi import FastAPI, HTTPException
 
 from . import app_state, project_manager, project_transaction, reference_segments, session_store, shot_service
+from .errors import AppErrorCode, app_error
 from .export_utils import missing_files
 from .linked_sync import sync_project
 from .models import Shot
@@ -93,7 +94,7 @@ class StoryboardBackendService(ExportServiceMixin):
                 ),
             )
         except Exception as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
+            raise app_error(AppErrorCode.PROJECT_OPEN_FAILED, str(exc)) from exc
         app_state._remember_recent(self.app.state.project)
         app_state._persist_app_session(self.app)
         app_state._touch_live_bridge(self.app)
@@ -107,7 +108,7 @@ class StoryboardBackendService(ExportServiceMixin):
                 project_manager.open_project(Path(project_json_path).expanduser()),
             )
         except Exception as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
+            raise app_error(AppErrorCode.PROJECT_OPEN_FAILED, str(exc)) from exc
         app_state._remember_recent(self.app.state.project)
         app_state._persist_app_session(self.app)
         app_state._touch_live_bridge(self.app)
@@ -119,7 +120,7 @@ class StoryboardBackendService(ExportServiceMixin):
         try:
             project_manager.save_project(project)
         except Exception as exc:
-            raise HTTPException(status_code=500, detail=str(exc)) from exc
+            raise app_error(AppErrorCode.PROJECT_SAVE_FAILED, str(exc), status=500) from exc
         self.app.state.dirty = False
         return app_state._project_payload(project, self.app.state.dirty)
 
@@ -337,7 +338,7 @@ class StoryboardBackendService(ExportServiceMixin):
         try:
             shot = shot_service.create_shot(project, after_shot_id or None)
         except ValueError as exc:
-            raise HTTPException(status_code=404, detail=str(exc)) from exc
+            raise app_error(AppErrorCode.SHOT_NOT_FOUND, str(exc), status=404) from exc
         app_state._autosave(self.app)
         return {"shot": shot.to_dict(), **app_state._project_payload(project, self.app.state.dirty)}
 
@@ -346,7 +347,7 @@ class StoryboardBackendService(ExportServiceMixin):
         try:
             duplicate = shot_service.duplicate_shot(project, shot_id)
         except ValueError as exc:
-            raise HTTPException(status_code=404, detail=str(exc)) from exc
+            raise app_error(AppErrorCode.SHOT_NOT_FOUND, str(exc), status=404) from exc
         app_state._autosave(self.app)
         return {"shot": duplicate.to_dict(), **app_state._project_payload(project, self.app.state.dirty)}
 
@@ -363,31 +364,31 @@ class StoryboardBackendService(ExportServiceMixin):
             with project_transaction.mutate_project(project):
                 shot_service.delete_shot(project, shot_id)
         except ValueError as exc:
-            raise HTTPException(status_code=404, detail=str(exc)) from exc
+            raise app_error(AppErrorCode.SHOT_NOT_FOUND, str(exc), status=404) from exc
         app_state._autosave(self.app)
         return app_state._project_payload(project, self.app.state.dirty)
 
     def method_restore_shot(self, shot: dict[str, Any], index: int = 0) -> dict[str, Any]:
         project = app_state._require_project(self.app)
         if not isinstance(shot, dict):
-            raise HTTPException(status_code=400, detail="Shot payload required.")
+            raise app_error(AppErrorCode.INVALID_REQUEST, "Shot payload required.")
         try:
             with project_transaction.mutate_project(project):
                 project_manager.restore_shot(project, shot, int(index))
         except Exception as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
+            raise app_error(AppErrorCode.INVALID_REQUEST, str(exc)) from exc
         app_state._autosave(self.app)
         return app_state._project_payload(project, self.app.state.dirty)
 
     def method_reorder_shots(self, shot_ids: list[str]) -> dict[str, Any]:
         project = app_state._require_project(self.app)
         if not isinstance(shot_ids, list):
-            raise HTTPException(status_code=400, detail="Shot order required.")
+            raise app_error(AppErrorCode.INVALID_REQUEST, "Shot order required.")
         try:
             with project_transaction.mutate_project(project):
                 shot_service.reorder_shots(project, shot_ids)
         except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
+            raise app_error(AppErrorCode.INVALID_REQUEST, str(exc)) from exc
         app_state._autosave(self.app)
         return app_state._project_payload(project, self.app.state.dirty)
 
@@ -414,7 +415,7 @@ class StoryboardBackendService(ExportServiceMixin):
                     segment_id or None,
                 )
         except Exception as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
+            raise app_error(AppErrorCode.REF_APPLY_FAILED, str(exc)) from exc
         app_state._autosave(self.app)
         return {**result, **app_state._project_payload(project, self.app.state.dirty)}
 
@@ -436,7 +437,7 @@ class StoryboardBackendService(ExportServiceMixin):
                     segment_id or None,
                 )
         except Exception as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
+            raise app_error(AppErrorCode.REF_APPLY_FAILED, str(exc)) from exc
         app_state._autosave(self.app)
         return {**result, **app_state._project_payload(project, self.app.state.dirty)}
 
@@ -460,7 +461,7 @@ class StoryboardBackendService(ExportServiceMixin):
                     camera_name=str(camera_name or ""),
                 )
         except Exception as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
+            raise app_error(AppErrorCode.REF_APPLY_FAILED, str(exc)) from exc
         app_state._autosave(self.app)
         return {**result, **app_state._project_payload(project, self.app.state.dirty)}
 
@@ -484,7 +485,7 @@ class StoryboardBackendService(ExportServiceMixin):
                     captures,
                 )
         except Exception as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
+            raise app_error(AppErrorCode.REF_APPLY_FAILED, str(exc)) from exc
         app_state._autosave(self.app)
         return {**result, **app_state._project_payload(project, self.app.state.dirty)}
 
@@ -499,7 +500,7 @@ class StoryboardBackendService(ExportServiceMixin):
         try:
             token = project_manager.snapshot_boards_for_undo(project, lo, hi)
         except Exception as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
+            raise app_error(AppErrorCode.REF_APPLY_FAILED, str(exc)) from exc
         return {"undo_token": token}
 
     def method_restore_ref_apply(self, token: str) -> dict[str, Any]:
@@ -508,7 +509,7 @@ class StoryboardBackendService(ExportServiceMixin):
             with project_transaction.mutate_project(project):
                 result = project_manager.restore_boards_from_undo(project, token)
         except Exception as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
+            raise app_error(AppErrorCode.REF_APPLY_FAILED, str(exc)) from exc
         app_state._autosave(self.app)
         return {**result, **app_state._project_payload(project, self.app.state.dirty)}
 
@@ -518,7 +519,7 @@ class StoryboardBackendService(ExportServiceMixin):
             with project_transaction.mutate_project(project):
                 result = project_manager.delete_ref_segment(project, segment_id)
         except Exception as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
+            raise app_error(AppErrorCode.REF_APPLY_FAILED, str(exc)) from exc
         app_state._autosave(self.app)
         return {**result, **app_state._project_payload(project, self.app.state.dirty)}
 
@@ -727,7 +728,7 @@ class StoryboardBackendService(ExportServiceMixin):
         shot = app_state._find_shot(project, shot_id)
         rel_path = shot.preview_image_path or shot.image_path
         if not rel_path:
-            raise HTTPException(status_code=400, detail="No preview image linked.")
+            raise app_error(AppErrorCode.MEDIA_NOT_FOUND, "No preview image linked.")
         try:
             opened = project_manager.open_project_file(project, rel_path, project.settings.get("photoshop_path", ""))
         except Exception as exc:
@@ -744,7 +745,7 @@ class StoryboardBackendService(ExportServiceMixin):
         project = app_state._require_project(self.app)
         shot = app_state._find_shot(project, shot_id)
         if not shot.source_file_path:
-            raise HTTPException(status_code=400, detail="No source file linked. Create a PS canvas first.")
+            raise app_error(AppErrorCode.MEDIA_NOT_FOUND, "No source file linked. Create a PS canvas first.")
         # If the plugin already has this shot open as a tab, switch to it instead
         # of launching Photoshop again (which creates a confusing duplicate).
         plugin_linked, _age, open_shot_ids = app_state._plugin_link_state(self.app)
