@@ -7,6 +7,7 @@ import {
   recoverShotSource,
   relinkPreview,
   removeShotImage,
+  shotBoardBackgroundUrl,
   shotImageUrl,
   syncShot,
   uploadShotImage,
@@ -14,6 +15,7 @@ import {
 } from '../api'
 import { useProject } from '../state/useProject'
 import { shotDisplayLabel } from '../utils/shotDisplay'
+import { shotHasPreview } from '../utils/shotPreview'
 import './CanvasBoard.css'
 
 type SyncResult = { synced?: boolean; message?: string }
@@ -44,17 +46,26 @@ export function CanvasBoard() {
   const sourcePath = shot?.source_file_path || ''
   const previewPath = shot?.preview_image_path || shot?.image_path || ''
   const hasSource = !!sourcePath
-  const hasPreview = !!previewPath
-  const hasImage = !!shot?.image_path && !loadFailed
+  const hasPreview = shot ? shotHasPreview(shot) : false
+  const hasBoardBg = shot?.has_board_background === true
+  const hasArtworkImage = !!shot?.image_path
+  const hasVisual = (hasArtworkImage || hasBoardBg) && !loadFailed
 
   const imgSrc = useMemo(() => {
-    if (!shot || !shot.image_path) return ''
-    const v = shot.preview_disk_mtime || shot.thumbnail_disk_mtime || bust || 0
-    return `${shotImageUrl(shot.shot_id)}?v=${encodeURIComponent(String(v))}`
+    if (!shot) return ''
+    if (shot.image_path) {
+      const v = shot.preview_disk_mtime || shot.thumbnail_disk_mtime || bust || 0
+      return `${shotImageUrl(shot.shot_id)}?v=${encodeURIComponent(String(v))}`
+    }
+    if (shot.has_board_background === true) {
+      const v = shot.thumbnail_disk_mtime || bust || 0
+      return `${shotBoardBackgroundUrl(shot.shot_id)}?v=${encodeURIComponent(String(v))}`
+    }
+    return ''
   }, [shot, bust])
 
-  // Clear the failed-load flag when the preview identity changes.
-  const loadFailedKey = `${selectedShotId}:${shot?.image_path ?? ''}:${shot?.preview_disk_mtime ?? ''}`
+  // Clear the failed-load flag when the visual source identity changes.
+  const loadFailedKey = `${selectedShotId}:${shot?.image_path ?? ''}:${shot?.preview_disk_mtime ?? ''}:${hasBoardBg ? '1' : '0'}`
   const [prevLoadFailedKey, setPrevLoadFailedKey] = useState(loadFailedKey)
   if (loadFailedKey !== prevLoadFailedKey) {
     setPrevLoadFailedKey(loadFailedKey)
@@ -270,7 +281,7 @@ export function CanvasBoard() {
               setLoadFailed(false)
               setBust((x) => x + 1)
             }}
-            disabled={disabled || !shot.image_path}
+            disabled={disabled || (!hasArtworkImage && !hasBoardBg)}
             title="Reload preview from server"
           >
             Refresh
@@ -343,6 +354,9 @@ export function CanvasBoard() {
         <div className="canvas-status-chips">
           <span className={`canvas-chip ${hasSource ? 'ok' : 'missing'}`}>Source: {hasSource ? 'linked' : 'missing'}</span>
           <span className={`canvas-chip ${hasPreview ? 'ok' : 'missing'}`}>Preview: {hasPreview ? 'linked' : 'missing'}</span>
+          {hasBoardBg ? (
+            <span className="canvas-chip ok">Ref background: linked</span>
+          ) : null}
         </div>
       </div>
 
@@ -399,7 +413,7 @@ export function CanvasBoard() {
       ) : null}
 
       <div className="canvas-body">
-        {hasImage ? (
+        {hasVisual ? (
           <div className="canvas-media">
             <img
               className="canvas-image"
@@ -409,7 +423,7 @@ export function CanvasBoard() {
               onLoad={() => setLoadFailed(false)}
             />
           </div>
-        ) : !hasSource && !hasPreview ? (
+        ) : !hasSource && !hasPreview && !hasBoardBg ? (
           <div className="canvas-placeholder">
             <p>Start drawing this shot</p>
             <p className="canvas-empty-hint">Create a blank PSD canvas, upload an image, or upload an existing PSD.</p>

@@ -8,7 +8,7 @@ import {
   segmentMarkerTooltip,
   type RefSegmentRecord,
 } from '../utils/refSegmentDisplay'
-import { shotHasPreview, shotThumbVersion } from '../utils/shotPreview'
+import { shotHasBoardBackground, shotHasPreview, shotDisplayVersion } from '../utils/shotPreview'
 import { ShotThumb } from './ShotThumb'
 import './BoardStrip.css'
 
@@ -327,8 +327,9 @@ export function BoardStrip() {
                   <div className="board-strip-thumb">
                     <ShotThumb
                       shotId={shot.shot_id}
-                      version={shotThumbVersion(shot, visualEpoch, index)}
+                      version={shotDisplayVersion(shot, visualEpoch, index)}
                       hasImage={shotHasPreview(shot)}
+                      hasBg={shotHasBoardBackground(shot)}
                     />
                     <span className="board-strip-index">#{index + 1}</span>
                     {hasDraft ? (

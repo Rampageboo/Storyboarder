@@ -196,6 +196,44 @@ class TestImageReferenceApply(unittest.TestCase):
         thumb = shot_dir / f"{shot.shot_id}_thumb.png"
         self.assertTrue(thumb.is_file(), "thumbnail must be created after apply")
 
+    def test_display_path_updated_when_no_artwork(self) -> None:
+        """When the board has no existing artwork, display paths must point to the background
+        so the filmstrip / board view shows the reference instead of a blank."""
+        project = _make_project(self._tmp)
+        shot = project_manager.add_shot(project)
+        ref_rel, _ = _make_ref_image(project)
+        _add_image_segment(project, shot, ref_rel)
+        # Ensure no pre-existing artwork
+        shot.preview_image_path = ""
+        shot.image_path = ""
+
+        reference_segments.apply_ref_segment_image_to_boards(project, 0, 0, segment_id="seg_test")
+
+        self.assertTrue(
+            shot.preview_image_path or shot.image_path,
+            "display path must be set after reference apply when no artwork exists",
+        )
+        # The display path must point to a file that exists
+        display_rel = shot.preview_image_path or shot.image_path
+        self.assertTrue(
+            (project.root_path / display_rel).is_file(),
+            "display path must reference an existing file",
+        )
+
+    def test_display_path_not_changed_when_artwork_present(self) -> None:
+        """When the board already has artwork, display paths must not be changed by apply."""
+        project = _make_project(self._tmp)
+        shot = project_manager.add_shot(project)
+        ref_rel, _ = _make_ref_image(project)
+        _add_image_segment(project, shot, ref_rel)
+        preview_path = _write_artist_preview(project, shot)
+        original_rel = preview_path.relative_to(project.root_path).as_posix()
+
+        reference_segments.apply_ref_segment_image_to_boards(project, 0, 0, segment_id="seg_test")
+
+        self.assertEqual(shot.preview_image_path, original_rel)
+        self.assertEqual(shot.image_path, original_rel)
+
     def test_no_source_sync_mtime_contamination(self) -> None:
         """source_sync_mtime tracks PSD sync; reference apply must not stamp it."""
         project = _make_project(self._tmp)

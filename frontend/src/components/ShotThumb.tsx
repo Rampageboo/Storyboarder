@@ -1,33 +1,41 @@
 import { useState } from 'react'
-import { shotImageUrl, shotThumbnailUrl } from '../api'
+import { shotBoardBackgroundUrl, shotImageUrl, shotThumbnailUrl } from '../api'
 import './ShotThumb.css'
 
-type ThumbStage = 'thumb' | 'image' | 'failed'
+type ThumbStage = 'thumb' | 'image' | 'background' | 'failed'
 
-/** Thumbnail with silent fallback: thumbnail → full image → empty placeholder. */
+/** Thumbnail with silent fallback: thumbnail → full image → board background → empty placeholder. */
 export function ShotThumb({
   shotId,
   version,
   hasImage,
+  hasBg = false,
 }: {
   shotId: string
   version: string | number
   hasImage: boolean
+  hasBg?: boolean
 }) {
-  const resetKey = `${shotId}:${String(version)}:${hasImage ? '1' : '0'}`
+  const resetKey = `${shotId}:${String(version)}:${hasImage ? '1' : '0'}:${hasBg ? '1' : '0'}`
   const [prevResetKey, setPrevResetKey] = useState(resetKey)
-  const [stage, setStage] = useState<ThumbStage>(hasImage ? 'thumb' : 'failed')
+  const [stage, setStage] = useState<ThumbStage>(hasImage ? 'thumb' : hasBg ? 'background' : 'failed')
   const [loaded, setLoaded] = useState(false)
 
   if (resetKey !== prevResetKey) {
     setPrevResetKey(resetKey)
-    setStage(hasImage ? 'thumb' : 'failed')
+    setStage(hasImage ? 'thumb' : hasBg ? 'background' : 'failed')
     setLoaded(false)
   }
 
-  const showImage = hasImage && stage !== 'failed'
+  const showImage = (hasImage || hasBg) && stage !== 'failed'
   const imageSrc = showImage
-    ? `${stage === 'thumb' ? shotThumbnailUrl(shotId) : shotImageUrl(shotId)}?v=${encodeURIComponent(String(version))}`
+    ? `${
+        stage === 'thumb'
+          ? shotThumbnailUrl(shotId)
+          : stage === 'image'
+            ? shotImageUrl(shotId)
+            : shotBoardBackgroundUrl(shotId)
+      }?v=${encodeURIComponent(String(version))}`
     : ''
 
   return (
@@ -44,7 +52,11 @@ export function ShotThumb({
           onLoad={() => setLoaded(true)}
           onError={() => {
             setLoaded(false)
-            setStage((current) => (current === 'thumb' ? 'image' : 'failed'))
+            setStage((current) => {
+              if (current === 'thumb') return 'image'
+              if (current === 'image') return hasBg ? 'background' : 'failed'
+              return 'failed'
+            })
           }}
         />
       ) : null}
