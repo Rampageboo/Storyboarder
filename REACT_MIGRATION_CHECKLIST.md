@@ -1,6 +1,6 @@
 # React Frontend Migration Checklist
 
-**Migration complete (Phase 6).** React is the only UI. See [docs/typescript_policy.md](docs/typescript_policy.md) for the TypeScript policy.
+**Migration complete.** React is the only UI. See [docs/typescript_policy.md](docs/typescript_policy.md) for the TypeScript policy.
 
 ## Architecture
 
@@ -8,11 +8,12 @@
   `base: '/react/'` (see [frontend/vite.config.ts](frontend/vite.config.ts)).
 - **Serving:** FastAPI serves the React build at `GET /` and `GET /react` via `_react_index_response()`,
   and assets via `GET /react/{asset_path:path}` in [storyboard_tool/api.py](storyboard_tool/api.py).
-- **Reference windows:** workflows live in React (References drawer + assignment modal + 3D Scene panel).
-  `/ref-segment`, `/ref-scene3d`, `/ref-video` redirect (302) to `/` for bookmark/bridge compatibility.
-- **Shared runtime:** `static/runtime/scene3d_workspace.js` (compiled from `frontend/src/scene3d/workspace/`) and `static/runtime/reference_model_preview.js`;
+- **Reference workflows:** live entirely in React (References drawer + assignment modal + 3D Scene panel).
+  `/ref-video` redirects to `/` so the desktop bridge can open a second pywebview window.
+- **Shared runtime:** `static/runtime/scene3d_workspace.js` (compiled from `frontend/src/scene3d/workspace/`);
   `static/vendor/three/*` unchanged.
-- **Removed:** legacy HTML (`index.html`, `ref_segment.html`), `GET /legacy`, and all legacy static JS/CSS.
+- **Removed:** legacy HTML (`index.html`, `ref_segment.html`), `GET /legacy`, all legacy static JS/CSS,
+  and old standalone reference window routes (`/ref-segment`, `/ref-scene3d`).
 
 See [docs/react_migration_cleanup_plan.md](docs/react_migration_cleanup_plan.md) for the final file tree.
 
@@ -26,7 +27,7 @@ cd ..
 python main.py     # opens desktop window; internal server starts automatically
 ```
 
-For React dev mode with hot reload (backend must be running on :8000 for the `/api` proxy):
+For React dev mode with hot reload (desktop backend must be running for the `/api` proxy):
 
 ```bash
 cd frontend
@@ -41,8 +42,8 @@ Run after `npm run build` + `python main.py`.
 - [ ] `GET /` → React index served (200).
 - [ ] `GET /react` → React index served (200); assets under `/react/assets/` return 200.
 - [ ] `GET /legacy` → 404.
-- [ ] `/ref-segment`, `/ref-scene3d`, `/ref-video` → 302 redirect to `/`.
-- [ ] `/static/runtime/scene3d_workspace.js` and `/static/runtime/reference_model_preview.js` return 200.
+- [ ] `/ref-video` → 302 redirect to `/`.
+- [ ] `/static/runtime/scene3d_workspace.js` returns 200.
 
 ### Reference segments (in React — no standalone windows)
 - [ ] Import image, video, and GLB references; assign to board range; Apply / Reapply / Undo / Delete.
@@ -63,7 +64,7 @@ Run these before release or after backend/frontend changes:
 python -m py_compile storyboard_tool/api.py storyboard_tool/backend_service.py storyboard_tool/project_manager.py storyboard_tool/reference_segments.py
 cd frontend; npm run build
 python scripts/validate_migration.py
-$env:PYTHONPATH='d:\Storyboarder'; python tests/test_smoke.py
+python -m unittest discover -s tests -p "test_smoke.py"
 ```
 
 Automated checks cover route serving, runtime static files, API smoke paths, and reference-segment delete behavior. Manual checklist items above still require a running app (`python main.py`).

@@ -1,4 +1,9 @@
-"""Browser startup smoke via Playwright.
+"""Internal desktop server integration tests via Playwright headless Chromium.
+
+These tests validate that the internal FastAPI server (started by the desktop
+shell) correctly serves the React bundle and handles API calls. They are
+developer integration tests — Playwright is used as a headless driver, not to
+test a user-facing browser workflow.
 
 Requires dev dependencies::
 
@@ -24,14 +29,14 @@ PLAYWRIGHT_AVAILABLE = find_spec("playwright") is not None
 
 
 @unittest.skipUnless(PLAYWRIGHT_AVAILABLE, "playwright is not installed")
-class BrowserStartupTests(unittest.TestCase):
+class InternalDesktopServerTests(unittest.TestCase):
     def test_index_loads_and_new_project_path(self) -> None:
         from playwright.sync_api import sync_playwright
 
         with tempfile.TemporaryDirectory() as tmp:
             app = api_module.create_app(Path(tmp))
             with contextlib.redirect_stderr(io.StringIO()):
-                _thread, port = desktop.start_server(app, host="127.0.0.1", port=0)
+                _thread, port = desktop.start_internal_server(app, host="127.0.0.1", port=0)
 
             base_url = f"http://127.0.0.1:{port}"
             console_errors: list[str] = []
@@ -103,7 +108,7 @@ class BrowserStartupTests(unittest.TestCase):
             self.assertFalse(console_errors, console_errors)
 
 
-class BrowserDevRequirementsTests(unittest.TestCase):
+class DevRequirementsTests(unittest.TestCase):
     def test_requirements_dev_lists_playwright(self) -> None:
         text = Path("requirements-dev.txt").read_text(encoding="utf-8")
         self.assertIn("playwright", text.lower())

@@ -1083,7 +1083,7 @@ def apply_model_captures_to_boards(
     camera_name: str,
     captures: list[dict[str, Any]],
 ) -> dict[str, Any]:
-    """Finalize browser-rendered GLB captures: snapshot, save board images, stamp provenance."""
+    """Finalize desktop-rendered GLB captures: snapshot, save board images, stamp provenance."""
     from datetime import datetime, timezone
 
     shots = project.shots

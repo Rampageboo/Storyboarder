@@ -263,10 +263,9 @@ def create_app(base_dir: Path, bridge_port: int = 8000) -> FastAPI:
     def index() -> FileResponse:
         return _react_index_response(react_dist)
 
-    @app.get("/ref-segment")
-    @app.get("/ref-scene3d")
     @app.get("/ref-video")
-    def ref_window_redirect() -> RedirectResponse:
+    def ref_video_redirect() -> RedirectResponse:
+        # bridge.py opens a second pywebview window at /ref-video; redirect to the React SPA.
         return RedirectResponse(url="/", status_code=302)
 
     @app.get("/react")
@@ -402,7 +401,7 @@ def create_app(base_dir: Path, bridge_port: int = 8000) -> FastAPI:
 
     @app.post("/api/project/ref-segment/apply-model-captures")
     def apply_ref_segment_model_captures(request: ApplyRefSegmentRequest) -> dict[str, Any]:
-        """Finalize browser-rendered GLB captures — validate, snapshot, save boards, stamp metadata."""
+        """Finalize desktop-rendered GLB captures — validate, snapshot, save boards, stamp metadata."""
         return _svc().method_apply_ref_segment_model_captures(
             request.anchor_shot_id,
             request.end_shot_id,

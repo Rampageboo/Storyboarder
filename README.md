@@ -28,7 +28,7 @@ A minimal local storyboard planning app with a React + Vite frontend and a Pytho
 - Auto-sync preview thumbnails from saved PSD or PNG files using file modification time checks
 - Add lightweight annotations over the preview: arrows, lines, boxes, circles, text, and highlights
 - Save annotations separately from the original image
-- Play a simple duration-based animatic in the browser
+- Play a simple duration-based animatic in the desktop app
 - Use the bottom thumbnail timeline to select, arrange, and edit shot duration
 - Scrub the animatic with the progress bar above the frame strip
 - Export storyboard PDFs with one-shot, two-shot, or thumbnail layouts

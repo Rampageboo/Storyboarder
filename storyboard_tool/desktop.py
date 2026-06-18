@@ -134,8 +134,6 @@ def start_internal_server(app, host: str = _HOST, port: int = _PORT) -> tuple[th
     return thread, port
 
 
-# Back-compat alias — prefer start_internal_server in new code.
-start_server = start_internal_server
 
 
 def webview_storage_path() -> Path:

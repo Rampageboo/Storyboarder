@@ -98,7 +98,7 @@ core/canvas_size.js → theme → toolbar_menus → exports_ui.js → status →
 ## 3. 已运行的检查
 
 - 后端:`python -m unittest tests.test_smoke` → **30/30 OK**
-- 浏览器(需 dev 依赖):`pip install -r requirements-dev.txt && playwright install chromium` → `tests.test_browser_startup` → **2/2 OK**
+- 桌面服务器集成(需 dev 依赖):`pip install -r requirements-dev.txt && playwright install chromium` → `tests.test_internal_desktop_server` → **2/2 OK**
 - 合计 discover `tests/test_*.py` → **32/32 OK**
 - 前端:`node --check`;字符串 smoke 覆盖 `main_module.js` / `init_globals.js` / `index.html` import map
 
@@ -118,7 +118,7 @@ core/canvas_size.js → theme → toolbar_menus → exports_ui.js → status →
 ### 5.0 浏览器 smoke ✅
 
 - 新增 [`requirements-dev.txt`](requirements-dev.txt)(`playwright>=1.40`)
-- 新增 [`tests/test_browser_startup.py`](tests/test_browser_startup.py):启动 uvicorn → 打开 `/` → 断言 overlay 完成、关键全局函数、REST 新建项目
+- 新增 [`tests/test_internal_desktop_server.py`](tests/test_internal_desktop_server.py):启动内部服务器 → 打开 `/` → 断言 overlay 完成、关键全局函数、REST 新建项目
 - 未安装 playwright 时自动 skip,不影响 CI 最小路径
 
 ### 5.1 P9 Layer2 ✅
@@ -135,7 +135,7 @@ core/canvas_size.js → theme → toolbar_menus → exports_ui.js → status →
 ### 5.2 P9 Layer3 — API 与分发层 ✅
 
 - `core/api.js`、`core/dispatch.js` 改为 `export`,由 `init_globals.js` 桥接
-- `test_browser_startup` 门禁通过
+- `test_internal_desktop_server` 门禁通过
 
 ### 5.3 P7 剩余拆分 ✅
 

@@ -54,13 +54,18 @@ class StoryboardSmokeTests(unittest.TestCase):
                 response = client.get("/legacy")
                 self.assertEqual(response.status_code, 404)
 
-            # Phase 5: retired standalone reference windows redirect to the main React UI.
+            # /ref-video redirects to / so bridge.py can open a second pywebview window.
             with contextlib.redirect_stderr(io.StringIO()):
-                for route in ("/ref-segment", "/ref-scene3d", "/ref-video"):
+                response = client.get("/ref-video", follow_redirects=False)
+                self.assertEqual(response.status_code, 302)
+                self.assertEqual(response.headers.get("location"), "/")
+
+            # /ref-segment and /ref-scene3d were removed (dead standalone window routes).
+            with contextlib.redirect_stderr(io.StringIO()):
+                for route in ("/ref-segment", "/ref-scene3d"):
                     with self.subTest(route=route):
                         response = client.get(route, follow_redirects=False)
-                        self.assertEqual(response.status_code, 302)
-                        self.assertEqual(response.headers.get("location"), "/")
+                        self.assertEqual(response.status_code, 404)
 
             if react_index.is_file():
                 with contextlib.redirect_stderr(io.StringIO()):
@@ -86,13 +91,15 @@ class StoryboardSmokeTests(unittest.TestCase):
                     response = client.get(route)
                     self.assertEqual(response.status_code, 200)
 
-    def test_deleted_runtime_shims_return_404(self) -> None:
+    def test_deleted_runtime_files_return_404(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             app = api_module.create_app(Path(tmp))
             client = TestClient(app, raise_server_exceptions=False)
             for route in (
                 "/static/runtime/scene3d.js",
                 "/static/runtime/scene3d_preview_style.js",
+                "/static/runtime/favicon.svg",
+                "/static/runtime/icons.svg",
             ):
                 with self.subTest(route=route):
                     response = client.get(route)
@@ -259,11 +266,11 @@ class StoryboardSmokeTests(unittest.TestCase):
             self.assertNotEqual(path, blocker / "webview")
             self.assertEqual(stderr.getvalue().count("Webview storage path unavailable"), 1)
 
-    def test_start_server_accepts_ephemeral_port(self) -> None:
+    def test_start_internal_server_accepts_ephemeral_port(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             app = api_module.create_app(Path(tmp))
             with contextlib.redirect_stderr(io.StringIO()):
-                thread, port = desktop.start_server(app, port=0)
+                thread, port = desktop.start_internal_server(app, port=0)
 
             self.assertGreater(port, 0)
             self.assertTrue(thread.is_alive())
