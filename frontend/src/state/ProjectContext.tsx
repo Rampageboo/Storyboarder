@@ -224,7 +224,8 @@ export function ProjectProvider({ children }: PropsWithChildren) {
   const refreshProjectFromBridge = useCallback(
     async (pluginSelectedShotId?: string | null) => {
       const payload = await getProject()
-      replaceProject(payload, pluginSelectedShotId || undefined)
+      const pluginSelectionValid = !!pluginSelectedShotId && payload.shots.some((shot) => shot.shot_id === pluginSelectedShotId)
+      replaceProject(payload, pluginSelectionValid ? pluginSelectedShotId : undefined)
     },
     [replaceProject],
   )
