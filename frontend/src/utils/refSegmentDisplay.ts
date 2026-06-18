@@ -152,7 +152,7 @@ function parseSegmentRecord(
     sourceType,
     typeLabel: segmentTypeLabel(sourceType),
     sourceTitle: resolveSourceTitle(seg, links),
-    sourcePath: String(seg.reference_path || ''),
+    sourcePath: segmentReferencePath(seg, links),
     needsRepair,
     record: seg,
   }

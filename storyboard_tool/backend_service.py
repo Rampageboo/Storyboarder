@@ -628,19 +628,13 @@ class StoryboardBackendService(ExportServiceMixin):
             if value:
                 project_manager.set_active_reference_model(project, value)
             else:
-                project.settings["reference_model_path"] = ""
-                if str(project.settings.get("reference_segment_mode") or "") == "model":
-                    project.settings["reference_segment_mode"] = "video"
-                project_manager.save_settings(project)
+                project_manager.clear_active_reference_model(project)
         if "reference_image_path" in data:
             value = str(data.get("reference_image_path") or "").strip()
             if value:
                 project_manager.set_active_reference_image(project, value)
             else:
-                project.settings["reference_image_path"] = ""
-                if str(project.settings.get("reference_segment_mode") or "") == "image":
-                    project.settings["reference_segment_mode"] = "video"
-                project_manager.save_settings(project)
+                project_manager.clear_active_reference_image(project)
         if "reference_segment_mode" in data:
             mode = str(data.get("reference_segment_mode") or "").strip().lower()
             if mode in {"video", "model", "image"}:
@@ -795,7 +789,8 @@ class StoryboardBackendService(ExportServiceMixin):
     def method_delete_project_reference(self, ref_id: str) -> dict[str, Any]:
         project = app_state._require_project(self.app)
         try:
-            project_manager.remove_project_reference(project, ref_id)
+            with project_transaction.mutate_project(project):
+                project_manager.remove_project_reference(project, ref_id)
         except Exception as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         app_state._autosave(self.app)

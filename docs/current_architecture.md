@@ -350,9 +350,10 @@ with project_transaction.mutate_project(project):
 - `method_delete_shot`
 - `method_restore_shot`
 - `method_reorder_shots`
-- `method_apply_ref_segment` (all variants)
+- `method_apply_ref_segment` (all variants — video, image, 3D, model captures)
 - `method_restore_ref_apply`
 - `method_delete_ref_segment`
+- `method_delete_project_reference` (modifies shots + settings when clearing segment references)
 - `method_create_shot_canvas`
 - `method_save_shot_drawing`
 
@@ -364,7 +365,7 @@ This is an in-memory guard only. It does not protect against failures that occur
 
 `storyboard_tool/reference_segments.py`
 
-Handles all workflows for applying reference material to shot ranges.
+Owns all reference domain business logic. `project_manager.py` re-exports every public function from this module so callers can import from either name.
 
 **Apply modes**
 
@@ -383,9 +384,68 @@ Before any apply, `snapshot_boards_for_undo()` copies the affected preview PNGs 
 
 Each applied shot's `camera_data` field receives:
 - `ref_segment_id` — which segment was applied
-- `ref_source_type` — `"image"`, `"video"`, `"3d"`, or `"builtin"`
+- `ref_source_type` — `"image"`, `"video"`, or `"model"`
 - `ref_applied_at` — ISO timestamp
 - `ref_frame_time` — source frame time (video/3D only)
+
+`delete_ref_segment` reads and clears this provenance to determine which boards to reset.
+
+**Active reference helpers**
+
+| Function | Purpose |
+|---|---|
+| `set_active_reference_video(project, path)` | Set active video + update legacy fields; saves settings |
+| `clear_active_reference_video(project)` | Clear video path + per-shot ref fields; saves settings |
+| `set_active_reference_model(project, path)` | Set active model + scene3d metadata; saves settings |
+| `clear_active_reference_model(project)` | Clear model path; reset mode to `"video"` if needed; saves settings |
+| `set_active_reference_image(project, path)` | Set active image; saves settings |
+| `clear_active_reference_image(project)` | Clear image path; reset mode to `"video"` if needed; saves settings |
+
+**Reference library helpers**
+
+| Function | Purpose |
+|---|---|
+| `normalize_reference_links(value)` | Parse and deduplicate `reference_links` list |
+| `ensure_reference_library(settings)` | Promote legacy path fields into `reference_links` |
+| `import_project_reference_stream(project, stream, name)` | Write file to `references/`, append to library |
+| `remove_project_reference(project, ref_id)` | Delete file + clear segment references that pointed to it |
+
+**Segment helpers**
+
+| Function | Purpose |
+|---|---|
+| `normalize_ref_segments(settings)` | Parse modern `ref_segments` list or migrate legacy single-segment format |
+| `find_ref_segment(project, segment_id)` | Look up segment by id, fall back to active, then to first |
+| `sync_ref_segment_settings(project)` | Keep legacy `ref_segment` / `ref_segment_video` keys in sync with `ref_segments` list |
+| `resolve_segment_reference(project, segment)` | Return `(rel_path, source_type)` for a segment, resolving by `reference_id` or `reference_path` |
+| `_segment_board_range(shots, anchor_idx, end_idx)` | Clamp and normalise an index pair; raises if shots is empty |
+| `_segment_board_range_by_shot_id(shots, anchor_id, end_id)` | Like above but looks up by shot id |
+
+**What this module does NOT own**
+
+- Generic project persistence (`project_manager.save_project`, `save_shots`) — called as side effects only
+- HTTP route parsing (no FastAPI imports)
+- Photoshop plugin bridge logic
+- Frontend display calculation (see `frontend/src/utils/refSegmentDisplay.ts`)
+- Board image compositing primitives (`_apply_reference_frame_to_shot`, `_apply_model_capture_to_shot` live in `project_manager.py` because they depend on canvas geometry helpers)
+
+**Frontend reference helpers**
+
+`frontend/src/utils/refSegmentDisplay.ts` — pure TypeScript display helpers.
+
+| Export | Purpose |
+|---|---|
+| `resolveVisibleSegmentMarkerSpans` | Compute filmstrip marker spans (applied vs pending) for a shot array |
+| `findRefSegment` | Look up a segment record by id |
+| `segmentBoardIndexRange` | Resolve anchor/end shot ids to `{lo, hi}` indices |
+| `segmentsOverlapBoardRange` | Test whether two segment records overlap |
+| `isShotAppliedToSegment` | Test whether a shot has provenance from a given segment |
+| `segmentHasPendingBoards` | True if any board in the segment range is not yet applied |
+| `refSegmentsWithoutOverlap` | Optimistic client-side dedup before a new apply (mirrors backend delete logic) |
+| `segmentTypeLabel`, `segmentCssType` | Display label / CSS class for a source type |
+| `segmentMarkerTooltip` | Tooltip string for a marker span |
+
+These helpers are pure functions with no side effects and are safe to call in `useMemo`.
 
 ---
 

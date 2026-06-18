@@ -711,6 +711,8 @@ from .reference_segments import (  # noqa: E402
     apply_ref_segment_3d_to_boards,
     apply_ref_segment_image_to_boards,
     apply_ref_segment_to_boards,
+    clear_active_reference_image,
+    clear_active_reference_model,
     clear_active_reference_video,
     delete_ref_segment,
     ensure_reference_library,

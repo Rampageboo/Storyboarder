@@ -717,6 +717,20 @@ def clear_active_reference_video(project: Project) -> None:
     pm.save_settings(project)
 
 
+def clear_active_reference_model(project: Project) -> None:
+    project.settings["reference_model_path"] = ""
+    if str(project.settings.get("reference_segment_mode") or "") == "model":
+        project.settings["reference_segment_mode"] = "video"
+    pm.save_settings(project)
+
+
+def clear_active_reference_image(project: Project) -> None:
+    project.settings["reference_image_path"] = ""
+    if str(project.settings.get("reference_segment_mode") or "") == "image":
+        project.settings["reference_segment_mode"] = "video"
+    pm.save_settings(project)
+
+
 def _set_active_reference_video(project: Project, relative_path: str, *, save: bool = True) -> None:
     project.settings["reference_video_path"] = pm._normalize_rel_path(relative_path)
     project.settings["reference_segment_mode"] = "video"
