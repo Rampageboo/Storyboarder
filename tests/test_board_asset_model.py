@@ -196,9 +196,10 @@ class TestImageReferenceApply(unittest.TestCase):
         thumb = shot_dir / f"{shot.shot_id}_thumb.png"
         self.assertTrue(thumb.is_file(), "thumbnail must be created after apply")
 
-    def test_display_path_updated_when_no_artwork(self) -> None:
-        """When the board has no existing artwork, display paths must point to the background
-        so the filmstrip / board view shows the reference instead of a blank."""
+    def test_display_paths_not_set_to_background_when_no_artwork(self) -> None:
+        """image_path / preview_image_path must stay empty after reference apply when no
+        artwork exists.  The frontend reads has_board_background for display fallback;
+        metadata paths must only ever reference artist artwork."""
         project = _make_project(self._tmp)
         shot = project_manager.add_shot(project)
         ref_rel, _ = _make_ref_image(project)
@@ -209,15 +210,15 @@ class TestImageReferenceApply(unittest.TestCase):
 
         reference_segments.apply_ref_segment_image_to_boards(project, 0, 0, segment_id="seg_test")
 
-        self.assertTrue(
-            shot.preview_image_path or shot.image_path,
-            "display path must be set after reference apply when no artwork exists",
+        self.assertEqual(
+            shot.image_path,
+            "",
+            "image_path must not be set to the background plate",
         )
-        # The display path must point to a file that exists
-        display_rel = shot.preview_image_path or shot.image_path
-        self.assertTrue(
-            (project.root_path / display_rel).is_file(),
-            "display path must reference an existing file",
+        self.assertEqual(
+            shot.preview_image_path,
+            "",
+            "preview_image_path must not be set to the background plate",
         )
 
     def test_display_path_not_changed_when_artwork_present(self) -> None:

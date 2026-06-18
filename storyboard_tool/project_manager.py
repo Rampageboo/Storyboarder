@@ -375,22 +375,17 @@ def _save_board_background_copy(source_path: Path, destination_path: Path) -> Pa
 
 
 def _refresh_thumbnail_for_shot(project: Project, shot: Shot) -> Path | None:
-    """Refresh the thumbnail and, when no artist artwork exists, update display paths.
+    """Refresh the ``_thumb.png`` cache for a shot.  Never touches metadata paths.
 
-    Two cases:
+    ``image_path`` / ``preview_image_path`` are artist-artwork fields and are
+    never written here.  The frontend uses the separate ``has_board_background``
+    flag (computed in ``app_state``) to decide when to render the background
+    plate as a display fallback.
 
-    1. Artist artwork present (non-solid ``_preview.png`` or ``image_path`` file):
-       thumbnail is regenerated from the artwork; ``preview_image_path`` /
-       ``image_path`` are left completely untouched.
-
-    2. No artwork (empty or solid preview): the reference background plate is used
-       for the thumbnail AND for ``image_path`` / ``preview_image_path`` so the
-       filmstrip and board view have something to display.  This is the spec-
-       permitted "show background as visual" path — it is safe because there is
-       no existing artwork to overwrite.  When artist artwork later arrives (PSD
-       export, drawing save, image import) ``_set_shot_preview_paths`` replaces
-       these paths with the artwork path.  When the segment is deleted
-       ``_clear_shot_preview_paths`` blanks them.
+    Priority:
+    1. Non-solid artist artwork (``_preview.png`` or current ``image_path``).
+    2. Reference background plate (``_background.png``).
+    3. Nothing available — returns ``None``.
     """
     shot_dir = get_shot_dir(project, shot)
     thumb_path = shot_dir / f"{shot.shot_id}_thumb.png"
@@ -413,12 +408,6 @@ def _refresh_thumbnail_for_shot(project: Project, shot: Shot) -> Path | None:
 
     thumbnail = create_thumbnail(bg_path, thumb_path)
     shot.thumbnail_path = thumbnail.relative_to(project.root_path).as_posix()
-    # No artist artwork exists: expose the background plate as the display image
-    # so the filmstrip / board view shows the reference.  This is not "lying"
-    # about artwork ownership — it is the spec-allowed display-fallback path.
-    bg_rel = bg_path.relative_to(project.root_path).as_posix()
-    shot.image_path = bg_rel
-    shot.preview_image_path = bg_rel
     return thumbnail
 
 
