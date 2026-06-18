@@ -16,9 +16,9 @@
 
       <div id="linkedPanel" hidden>
         <div class="panel-group panel-group-save">
-          <span class="group-label">Save</span>
-          <sp-button id="saveAndNext" variant="cta">Save &amp; next</sp-button>
-          <sp-button id="saveAndStay" variant="primary">Save</sp-button>
+          <span class="group-label">Preview export</span>
+          <sp-button id="saveAndNext" variant="cta">Export &amp; next</sp-button>
+          <sp-button id="saveAndStay" variant="primary">Export preview</sp-button>
           <sp-checkbox id="autoAddShot" checked>Auto-add at end</sp-checkbox>
         </div>
 
@@ -58,5 +58,6 @@
       <sp-detail id="status" class="meta" hidden></sp-detail>
     </sp-body>
     <script src="panel.js"></script>
+    <script src="panel_storage_adapter.js"></script>
   </body>
 </html>
