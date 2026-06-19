@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import sys
 import tempfile
 import threading
@@ -19,6 +20,7 @@ _PORT = 0  # 0 = resolved dynamically at startup; see resolve_server_port()
 ICON_PATH = Path(__file__).resolve().parent / "assets" / "icon.ico"
 APP_USER_MODEL_ID = "StoryboardTool.StoryboardTool.1"
 _WEBVIEW_STORAGE_WARNED_PATHS: set[str] = set()
+_LOGGER = logging.getLogger(__name__)
 
 
 def _configure_windows_taskbar_identity() -> None:
@@ -56,26 +58,23 @@ def _configure_windows_asyncio_noise() -> None:
     import asyncio
     import asyncio.proactor_events
 
-    def _ignore_connection_reset(loop, context) -> None:
-        exc = context.get("exception")
-        if isinstance(exc, (ConnectionResetError, BrokenPipeError)):
-            return
-        if isinstance(exc, OSError) and getattr(exc, "winerror", None) in (10053, 10054):
-            return
-        message = str(context.get("message", ""))
-        if "_call_connection_lost" in message:
-            return
-        loop.default_exception_handler(context)
-
     try:
         asyncio.get_event_loop().set_exception_handler(_ignore_connection_reset)
     except RuntimeError:
         pass
 
-    if getattr(asyncio.proactor_events._ProactorBasePipeTransport, "_storyboard_patched", False):
+    transport_cls = getattr(asyncio.proactor_events, "_ProactorBasePipeTransport", None)
+    if transport_cls is None:
+        _LOGGER.warning("asyncio proactor transport patch skipped: _ProactorBasePipeTransport is unavailable")
         return
 
-    _orig_call_connection_lost = asyncio.proactor_events._ProactorBasePipeTransport._call_connection_lost
+    if getattr(transport_cls, "_storyboard_patched", False):
+        return
+
+    _orig_call_connection_lost = getattr(transport_cls, "_call_connection_lost", None)
+    if _orig_call_connection_lost is None:
+        _LOGGER.warning("asyncio proactor transport patch skipped: _call_connection_lost is unavailable")
+        return
 
     def _quiet_call_connection_lost(self, exc):
         try:
@@ -94,8 +93,8 @@ def _configure_windows_asyncio_noise() -> None:
                 return
             raise
 
-    asyncio.proactor_events._ProactorBasePipeTransport._call_connection_lost = _quiet_call_connection_lost
-    asyncio.proactor_events._ProactorBasePipeTransport._storyboard_patched = True
+    transport_cls._call_connection_lost = _quiet_call_connection_lost
+    transport_cls._storyboard_patched = True
 
 
 def _ignore_connection_reset(loop, context) -> None:
