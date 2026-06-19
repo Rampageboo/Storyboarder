@@ -96,7 +96,7 @@ class StoryboardBackendService(ExportServiceMixin):
                     canvas_height=canvas_height if canvas_height is not None else 1080,
                 ),
             )
-        except Exception as exc:
+        except (FileNotFoundError, ValueError) as exc:
             logger.exception("Failed to create project: %s", root)
             raise app_error(AppErrorCode.PROJECT_OPEN_FAILED, str(exc)) from exc
         app_state._remember_recent(self.app.state.project)
@@ -111,7 +111,7 @@ class StoryboardBackendService(ExportServiceMixin):
                 self.app,
                 project_manager.open_project(Path(project_json_path).expanduser()),
             )
-        except Exception as exc:
+        except (FileNotFoundError, ValueError) as exc:
             logger.exception("Failed to open project: %s", project_json_path)
             raise app_error(AppErrorCode.PROJECT_OPEN_FAILED, str(exc)) from exc
         app_state._remember_recent(self.app.state.project)
@@ -384,7 +384,7 @@ class StoryboardBackendService(ExportServiceMixin):
         try:
             with project_transaction.mutate_project(project):
                 project_manager.restore_shot(project, shot, int(index))
-        except Exception as exc:
+        except (KeyError, ValueError) as exc:
             raise app_error(AppErrorCode.INVALID_REQUEST, str(exc)) from exc
         app_state._autosave(self.app)
         return app_state._project_payload(project, self.app.state.dirty)
@@ -406,7 +406,7 @@ class StoryboardBackendService(ExportServiceMixin):
         shot = app_state._find_shot(project, shot_id)
         try:
             project_manager.import_image_for_shot(project, shot, Path(str(source_path)).expanduser())
-        except Exception as exc:
+        except (FileNotFoundError, ValueError) as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         app_state._autosave(self.app)
         return app_state._project_payload(project, self.app.state.dirty)
@@ -423,7 +423,7 @@ class StoryboardBackendService(ExportServiceMixin):
                     end,
                     segment_id or None,
                 )
-        except Exception as exc:
+        except (FileNotFoundError, ValueError) as exc:
             raise app_error(AppErrorCode.REF_APPLY_FAILED, str(exc)) from exc
         app_state._autosave(self.app)
         return {**result, **app_state._project_payload(project, self.app.state.dirty)}
@@ -445,7 +445,7 @@ class StoryboardBackendService(ExportServiceMixin):
                     end,
                     segment_id or None,
                 )
-        except Exception as exc:
+        except (FileNotFoundError, ValueError) as exc:
             raise app_error(AppErrorCode.REF_APPLY_FAILED, str(exc)) from exc
         app_state._autosave(self.app)
         return {**result, **app_state._project_payload(project, self.app.state.dirty)}
@@ -469,7 +469,7 @@ class StoryboardBackendService(ExportServiceMixin):
                     segment_id or None,
                     camera_name=str(camera_name or ""),
                 )
-        except Exception as exc:
+        except (FileNotFoundError, ValueError) as exc:
             raise app_error(AppErrorCode.REF_APPLY_FAILED, str(exc)) from exc
         app_state._autosave(self.app)
         return {**result, **app_state._project_payload(project, self.app.state.dirty)}
@@ -493,7 +493,7 @@ class StoryboardBackendService(ExportServiceMixin):
                     camera_name,
                     captures,
                 )
-        except Exception as exc:
+        except (KeyError, FileNotFoundError, ValueError) as exc:
             raise app_error(AppErrorCode.REF_APPLY_FAILED, str(exc)) from exc
         app_state._autosave(self.app)
         return {**result, **app_state._project_payload(project, self.app.state.dirty)}
@@ -508,7 +508,7 @@ class StoryboardBackendService(ExportServiceMixin):
         lo, hi = (anchor, end) if anchor <= end else (end, anchor)
         try:
             token = project_manager.snapshot_boards_for_undo(project, lo, hi)
-        except Exception as exc:
+        except (FileNotFoundError, ValueError) as exc:
             raise app_error(AppErrorCode.REF_APPLY_FAILED, str(exc)) from exc
         return {"undo_token": token}
 
@@ -517,7 +517,7 @@ class StoryboardBackendService(ExportServiceMixin):
         try:
             with project_transaction.mutate_project(project):
                 result = project_manager.restore_boards_from_undo(project, token)
-        except Exception as exc:
+        except (FileNotFoundError, ValueError) as exc:
             raise app_error(AppErrorCode.REF_APPLY_FAILED, str(exc)) from exc
         app_state._autosave(self.app)
         return {**result, **app_state._project_payload(project, self.app.state.dirty)}
@@ -527,7 +527,7 @@ class StoryboardBackendService(ExportServiceMixin):
         try:
             with project_transaction.mutate_project(project):
                 result = project_manager.delete_ref_segment(project, segment_id)
-        except Exception as exc:
+        except (KeyError, FileNotFoundError, ValueError) as exc:
             raise app_error(AppErrorCode.REF_APPLY_FAILED, str(exc)) from exc
         app_state._autosave(self.app)
         return {**result, **app_state._project_payload(project, self.app.state.dirty)}
@@ -551,7 +551,7 @@ class StoryboardBackendService(ExportServiceMixin):
             app_state._autosave(self.app)
         try:
             result = project_manager.sync_shot(project, shot, force=bool(force))
-        except Exception as exc:
+        except (FileNotFoundError, ValueError) as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         if result.get("synced"):
             app_state._autosave(self.app)
@@ -721,7 +721,7 @@ class StoryboardBackendService(ExportServiceMixin):
         shot = app_state._find_shot(project, shot_id)
         try:
             project_manager.relink_preview_image(project, shot, relative_path)
-        except Exception as exc:
+        except (FileNotFoundError, ValueError) as exc:
             logger.exception("Failed to relink preview for shot %s", shot_id)
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         app_state._autosave(self.app)
@@ -735,7 +735,7 @@ class StoryboardBackendService(ExportServiceMixin):
             raise app_error(AppErrorCode.MEDIA_NOT_FOUND, "No preview image linked.")
         try:
             opened = project_manager.open_project_file(project, rel_path, project.settings.get("photoshop_path", ""))
-        except Exception as exc:
+        except (FileNotFoundError, ValueError) as exc:
             logger.exception("Failed to open preview for shot %s", shot_id)
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return {"path": str(opened)}
@@ -764,7 +764,7 @@ class StoryboardBackendService(ExportServiceMixin):
                 project.settings.get("photoshop_path", ""),
                 shot=shot,
             )
-        except Exception as exc:
+        except (FileNotFoundError, ValueError) as exc:
             logger.exception("Failed to open source file for shot %s", shot_id)
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return {"path": str(opened)}
@@ -791,7 +791,7 @@ class StoryboardBackendService(ExportServiceMixin):
         try:
             with project_transaction.mutate_project(project):
                 project_manager.remove_project_reference(project, ref_id)
-        except Exception as exc:
+        except (KeyError, ValueError) as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         app_state._autosave(self.app)
         return app_state._project_payload(project, self.app.state.dirty)
@@ -800,7 +800,7 @@ class StoryboardBackendService(ExportServiceMixin):
         project = app_state._require_project(self.app)
         try:
             opened = project_manager.open_blender_scene(project)
-        except Exception as exc:
+        except (FileNotFoundError, ValueError) as exc:
             logger.exception("Failed to open Blender scene")
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         app_state._touch_live_bridge(self.app)
@@ -867,7 +867,7 @@ class StoryboardBackendService(ExportServiceMixin):
                     canvas_height,
                     background_color=background_color,
                 )
-        except Exception as exc:
+        except (FileNotFoundError, ValueError) as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         app_state._autosave(self.app)
         return app_state._project_payload(project, self.app.state.dirty)
@@ -878,7 +878,7 @@ class StoryboardBackendService(ExportServiceMixin):
         try:
             with project_transaction.mutate_project(project):
                 project_manager.save_drawing_for_shot(project, shot, str(image_data or ""))
-        except Exception as exc:
+        except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         app_state._autosave(self.app)
         return app_state._project_payload(project, self.app.state.dirty)
@@ -887,7 +887,7 @@ class StoryboardBackendService(ExportServiceMixin):
         project = app_state._refresh_project_from_disk(self.app)
         try:
             results = sync_project(project, force=bool(force))
-        except Exception as exc:
+        except (FileNotFoundError, ValueError) as exc:
             logger.exception("Failed to sync all shots")
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         if results:
@@ -903,7 +903,7 @@ class StoryboardBackendService(ExportServiceMixin):
                     _upload_stream(data),
                     str(filename or "reference"),
                 )
-        except Exception as exc:
+        except (FileNotFoundError, ValueError) as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         app_state._autosave(self.app)
         return {"reference": entry, **app_state._project_payload(project, self.app.state.dirty)}
@@ -917,7 +917,7 @@ class StoryboardBackendService(ExportServiceMixin):
                     _upload_stream(data),
                     str(filename or "reference.mp4"),
                 )
-        except Exception as exc:
+        except (FileNotFoundError, ValueError) as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         app_state._autosave(self.app)
         return app_state._project_payload(project, self.app.state.dirty)
@@ -931,7 +931,7 @@ class StoryboardBackendService(ExportServiceMixin):
                     _upload_stream(data),
                     str(filename or "scene.glb"),
                 )
-        except Exception as exc:
+        except (FileNotFoundError, ValueError) as exc:
             logger.exception("Failed to import Scene3D file: %s", filename)
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         app_state._touch_live_bridge(self.app)
@@ -949,7 +949,7 @@ class StoryboardBackendService(ExportServiceMixin):
         suffix = Path(str(filename or "")).suffix
         try:
             project_manager.import_image_stream_for_shot(project, shot, _upload_stream(data), suffix)
-        except Exception as exc:
+        except (FileNotFoundError, ValueError) as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         app_state._autosave(self.app)
         return app_state._project_payload(project, self.app.state.dirty)
@@ -965,7 +965,7 @@ class StoryboardBackendService(ExportServiceMixin):
         suffix = Path(str(filename or "")).suffix
         try:
             project_manager.add_reference_image_stream(project, shot, _upload_stream(data), suffix)
-        except Exception as exc:
+        except (FileNotFoundError, ValueError) as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         app_state._autosave(self.app)
         return app_state._project_payload(project, self.app.state.dirty)
@@ -985,7 +985,7 @@ class StoryboardBackendService(ExportServiceMixin):
                 _upload_stream(data),
                 str(filename or f"{shot_id}.psd"),
             )
-        except Exception as exc:
+        except (FileNotFoundError, ValueError) as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         app_state._autosave(self.app)
         return app_state._project_payload(project, self.app.state.dirty)
@@ -995,6 +995,7 @@ class StoryboardBackendService(ExportServiceMixin):
         try:
             selected = picker(initial_dir)
         except Exception as exc:
+            logger.exception("Could not open %s picker", kind)
             raise HTTPException(status_code=500, detail=f"Could not open picker: {exc}") from exc
         if not selected:
             return {"path": "", "cancelled": True}

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import sys
 import threading
 from contextlib import asynccontextmanager
@@ -14,6 +15,7 @@ from pydantic import BaseModel, Field
 
 from . import app_state, project_manager
 from .backend_service import StoryboardBackendService
+from .errors import AppErrorCode
 from .logging_config import setup_logging
 from .schemas import (
     LiveBridgeUpdateRequest,
@@ -165,6 +167,7 @@ class AddShotRequest(BaseModel):
 
 
 _REACT_BUILD_HINT = "React build not found. Run: cd frontend && npm run build"
+logger = logging.getLogger(__name__)
 
 
 def _react_index_response(react_dist: Path) -> FileResponse:
@@ -243,6 +246,17 @@ def create_app(base_dir: Path, bridge_port: int = 8000) -> FastAPI:
         # default handler, so all existing callers continue to work.
         body = exc.detail if isinstance(exc.detail, dict) else {"detail": exc.detail}
         return JSONResponse(content=body, status_code=exc.status_code)
+
+    @app.exception_handler(Exception)
+    async def _unexpected_error_handler(request: Request, exc: Exception) -> JSONResponse:
+        logger.exception("Unhandled API exception for %s %s", request.method, request.url.path)
+        return JSONResponse(
+            status_code=500,
+            content={
+                "detail": "Internal error. See logs/desktop.log.",
+                "code": AppErrorCode.INTERNAL_ERROR,
+            },
+        )
 
     app.add_middleware(
         CORSMiddleware,

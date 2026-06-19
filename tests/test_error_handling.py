@@ -106,6 +106,21 @@ class TestNoRawTracebackInResponse(unittest.TestCase):
         self.assertNotIn("  File ", detail)
         self.assertIn("intentional export error for test", detail)
 
+    def test_unexpected_backend_error_returns_internal_error(self) -> None:
+        _quiet(lambda: self._client.post("/api/project/new", json={"path": self._tmp}))
+
+        with patch(
+            "storyboard_tool.project_manager.open_blender_scene",
+            side_effect=RuntimeError("unexpected blender crash"),
+        ):
+            response = _quiet(lambda: self._client.post("/api/project/scene3d/open-blender"))
+
+        self.assertEqual(response.status_code, 500)
+        body = response.json()
+        self.assertEqual(body.get("code"), "INTERNAL_ERROR")
+        self.assertEqual(body.get("detail"), "Internal error. See logs/desktop.log.")
+        self.assertNotIn("unexpected blender crash", body.get("detail", ""))
+
 
 class TestBackendExceptionLogging(unittest.TestCase):
     def setUp(self) -> None:
