@@ -11,7 +11,14 @@ const SB_POLL_MS = 1500;
 const BRIDGE_CACHE_FILE = "storyboard_bridge_cache.json";
 const BRIDGE_STALE_MS = 8000;
 const OVERLAY_LAYER_PREFIX = "SB ref:";
+// Two distinct "background" layers, easy to confuse:
+//   CANVAS_BG_LAYER_NAME ("Background") — the solid canvas-colour base at the very
+//     bottom (the locked Photoshop Background, or a layer we explicitly named so).
+//   SB_BG_LAYER_NAME ("SB bg") — the board reference image, a LINKED smart object
+//     sitting directly above the canvas base and below the artwork.
+// Both are hidden from the storyboard preview export; neither is the artist's art.
 const SB_BG_LAYER_NAME = "SB bg";
+const CANVAS_BG_LAYER_NAME = "Background";
 const DRAWING_LAYER_NAME = "Layer 1";
 const TEMPLATE_LAYER_NAMES = ["Rough"];
 const DEFAULT_OVERLAY_OPACITY = 45;
@@ -1277,9 +1284,31 @@ function collectOverlayLayers(layers, output = []) {
   return output;
 }
 
+// ── Layer roles ─────────────────────────────────────────────────────────────
+function isCanvasBackgroundLayer(layer) {
+  if (!layer) {
+    return false;
+  }
+  return Boolean(layer.isBackgroundLayer) || String(layer.name || "") === CANVAS_BG_LAYER_NAME;
+}
+
+function isBoardBackgroundLayer(layer) {
+  return Boolean(layer) && String(layer.name || "") === SB_BG_LAYER_NAME;
+}
+
+function isOverlayLayer(layer) {
+  return Boolean(layer) && String(layer.name || "").startsWith(OVERLAY_LAYER_PREFIX);
+}
+
+// Any layer the plugin manages on the artist's behalf — i.e. NOT their artwork:
+// the canvas-colour base, the board reference, or an onion-skin overlay.
+function isManagedLayer(layer) {
+  return isCanvasBackgroundLayer(layer) || isBoardBackgroundLayer(layer) || isOverlayLayer(layer);
+}
+
 function collectBoardBackgroundLayers(layers, output = []) {
   for (const layer of layers || []) {
-    if (String(layer.name || "") === SB_BG_LAYER_NAME) {
+    if (isBoardBackgroundLayer(layer)) {
       output.push(layer);
     }
     if (layer.layers?.length) {
@@ -1290,11 +1319,12 @@ function collectBoardBackgroundLayers(layers, output = []) {
 }
 
 function collectExportHiddenLayers(doc) {
+  // Hide everything that is not the artist's artwork so the exported preview is
+  // strokes only: canvas base, board reference, and onion-skin overlays.
   const output = [];
   const walk = (layers) => {
     for (const layer of layers || []) {
-      const name = String(layer.name || "");
-      if (name === SB_BG_LAYER_NAME || name.startsWith(OVERLAY_LAYER_PREFIX)) {
+      if (isManagedLayer(layer)) {
         output.push(layer);
       }
       if (layer.layers?.length) {
@@ -1303,6 +1333,8 @@ function collectExportHiddenLayers(doc) {
     }
   };
   walk(doc?.layers);
+  // Safety net: some documents expose the locked base only via doc.backgroundLayer
+  // and may not enumerate it above — make sure it is hidden regardless.
   const canvasLayer = findBackgroundLayer(doc);
   if (canvasLayer && !output.includes(canvasLayer)) {
     output.push(canvasLayer);
@@ -1343,15 +1375,11 @@ function restoreActiveLayersByIds(doc, ids) {
 }
 
 function hasDrawingLayer(doc) {
+  // A "drawing" layer is anything that is not a plugin-managed layer.
   for (const layer of doc?.layers || []) {
-    if (layer.isBackgroundLayer) {
-      continue;
+    if (!isManagedLayer(layer)) {
+      return true;
     }
-    const name = String(layer.name || "");
-    if (name === "Background" || name === SB_BG_LAYER_NAME || name.startsWith(OVERLAY_LAYER_PREFIX)) {
-      continue;
-    }
-    return true;
   }
   return false;
 }
@@ -1516,58 +1544,132 @@ async function placeFileEntryAsLayer(entry) {
 
 async function placeFileEntryAsLinkedLayer(entry) {
   const token = await fs.createSessionToken(entry);
-  const descriptor = {
-    _obj: "placeEvent",
-    null: { _path: token, _kind: "local" },
-    linked: true,
-    freeTransformCenterState: { _enum: "quadCenterState", _value: "QCSAverage" },
-  };
-  try {
-    await photoshop.action.batchPlay(
-      [{ ...descriptor, Lnkd: true }],
-      { synchronousExecution: true },
-    );
-  } catch {
-    await photoshop.action.batchPlay(
-      [descriptor],
-      { synchronousExecution: true },
-    );
-  }
-  const layer = app.activeDocument.activeLayers[0];
-  await ensureActivePlacedLayerLinkedToEntry(entry, layer);
-  return layer;
+  // Place as a LINKED smart object. Photoshop resolves the session token to the
+  // entry's REAL absolute path at place-time and bakes THAT path into the PSD's
+  // linked-SO record (not the ephemeral token), so the link survives close+reopen
+  // as long as the source stays at `<shot>/<shot>_background.png` (a permanent
+  // location). `linked: true` is the ONE key that distinguishes linked from
+  // embedded — the old `Lnkd: true` was a redundant alias of the same typeID, and
+  // the placedLayerConvertToLinked/relink fallbacks only masked failures, so both
+  // are gone. Verification now happens via readSmartObjectLinkInfo after placing.
+  await photoshop.action.batchPlay(
+    [
+      {
+        _obj: "placeEvent",
+        ID: 1,
+        null: { _path: token, _kind: "local" },
+        linked: true,
+        freeTransformCenterState: { _enum: "quadCenterState", _value: "QCSAverage" },
+        offset: {
+          _obj: "offset",
+          horizontal: { _unit: "pixelsUnit", _value: 0 },
+          vertical: { _unit: "pixelsUnit", _value: 0 },
+        },
+      },
+    ],
+    { synchronousExecution: true },
+  );
+  return app.activeDocument.activeLayers[0];
 }
 
-async function ensureActivePlacedLayerLinkedToEntry(entry, layer) {
+// Read a layer's smart-object link state via batchPlay (the UXP DOM exposes no
+// smart-object link API). Returns the GROUND TRUTH of what Photoshop actually
+// stored, so the plugin can report it instead of silently shipping a broken link.
+async function readSmartObjectLinkInfo(layer) {
+  const empty = { isSmartObject: false, linked: false, linkMissing: false, linkPath: "" };
+  if (!app.activeDocument || !layer) {
+    return empty;
+  }
+  try {
+    const [result] = await photoshop.action.batchPlay(
+      [
+        {
+          _obj: "get",
+          _target: [
+            { _property: "smartObject" },
+            { _ref: "layer", _id: layer.id },
+          ],
+        },
+      ],
+      { synchronousExecution: true },
+    );
+    const so = result && result.smartObject;
+    if (!so) {
+      return empty;
+    }
+    let linkPath = "";
+    try {
+      // Broken links sometimes omit `link` entirely — gate truth on linkMissing,
+      // never on the presence of `link`.
+      if (so.link && so.link._path) {
+        linkPath = String(so.link._path);
+      }
+    } catch {
+      // `link` absent/unreadable on a broken link.
+    }
+    return {
+      isSmartObject: true,
+      linked: Boolean(so.linked),
+      linkMissing: Boolean(so.linkMissing),
+      linkPath,
+    };
+  } catch {
+    // `get smartObject` rejects when the layer is not a smart object at all.
+    return empty;
+  }
+}
+
+// Surface the real link state of the `SB bg` layer to the status line + console so
+// the artist (and we) can SEE whether linking actually took, instead of guessing.
+async function reportBoardBackgroundLinkStatus(layer) {
+  const info = await readSmartObjectLinkInfo(layer);
+  if (!info.isSmartObject) {
+    setStatus("⚠ SB bg is not a smart object (raster/embedded) — NOT linked.");
+  } else if (!info.linked) {
+    setStatus("⚠ SB bg placed as EMBEDDED, not linked.");
+  } else if (info.linkMissing) {
+    setStatus("⚠ SB bg link is MISSING/broken — check the background file path.");
+  } else {
+    setStatus(`SB bg linked → ${info.linkPath || "(linked, path hidden)"}`);
+  }
+  console.log("[SB bg] link status", info);
+  return info;
+}
+
+// Relink an EXISTING placed smart-object layer to `entry`. Only works when the
+// layer is already a smart object; a raster `SB bg` (e.g. baked by an older backend
+// build) cannot be relinked, so we return false and let the caller delete + re-place
+// it as a fresh linked smart object.
+async function relinkLayerToEntry(entry, layer) {
   const doc = app.activeDocument;
   if (!doc || !entry || !layer) {
     return false;
   }
+  const before = await readSmartObjectLinkInfo(layer);
+  if (!before.isSmartObject) {
+    return false;
+  }
   const previousActiveIds = captureActiveLayerIds(doc);
   const token = await fs.createSessionToken(entry);
-  const commands = ["placedLayerConvertToLinked", "placedLayerRelinkToFile"];
   try {
     doc.activeLayers = [layer];
-    for (const command of commands) {
-      try {
-        await photoshop.action.batchPlay(
-          [
-            {
-              _obj: command,
-              null: { _path: token, _kind: "local" },
-            },
-          ],
-          { synchronousExecution: true },
-        );
-        return true;
-      } catch {
-        // Try the next linked-SO command. Photoshop/UXP support varies by version.
-      }
-    }
+    await photoshop.action.batchPlay(
+      [
+        {
+          _obj: "placedLayerRelinkToFile",
+          layerID: layer.id,
+          null: { _path: token, _kind: "local" },
+        },
+      ],
+      { synchronousExecution: true },
+    );
+  } catch {
+    return false;
   } finally {
     restoreActiveLayersByIds(doc, previousActiveIds);
   }
-  return false;
+  const after = await readSmartObjectLinkInfo(layer);
+  return after.isSmartObject && after.linked && !after.linkMissing;
 }
 
 function layerPixelSize(layer) {
@@ -1622,7 +1724,7 @@ async function resolveBoardBackgroundEntry(shotId) {
 
 function findBoardBackgroundLayer(doc) {
   for (const layer of doc.layers || []) {
-    if (String(layer.name || "") === SB_BG_LAYER_NAME) {
+    if (isBoardBackgroundLayer(layer)) {
       return layer;
     }
   }
@@ -1656,6 +1758,9 @@ async function setLayerVisibilityInModal(layer, visible) {
   );
 }
 
+// Single source of truth for the `SB bg` reference position: directly above the
+// canvas-colour base (`Background`), and therefore below the artwork. Callers
+// invoke this instead of moving `SB bg` themselves.
 async function ensureBoardBackgroundStackOrderInModal(doc) {
   const background = findBackgroundLayer(doc);
   const sbBg = findBoardBackgroundLayer(doc);
@@ -1725,11 +1830,13 @@ async function importBoardBackgroundInModal(shotId, entry = null, options = {}) 
       restoreActiveLayersByIds(doc, previousActiveIds);
       return false;
     }
-    if (await ensureActivePlacedLayerLinkedToEntry(resolvedEntry, existingLayer)) {
+    if (await relinkLayerToEntry(resolvedEntry, existingLayer)) {
+      await reportBoardBackgroundLinkStatus(existingLayer);
       await ensureBoardBackgroundStackOrderInModal(doc);
       restoreActiveLayersByIds(doc, previousActiveIds);
       return true;
     }
+    // Not a relinkable smart object (raster `SB bg` from an older build) — replace.
     await removeBoardBackgroundLayerInModal(doc);
   }
   const placedLayer = await placeFileEntryAsLinkedLayer(resolvedEntry);
@@ -1737,16 +1844,11 @@ async function importBoardBackgroundInModal(shotId, entry = null, options = {}) 
     await fitLayerToDocumentInModal(placedLayer);
   }
   await renameActiveLayer(SB_BG_LAYER_NAME);
-  const canvasLayer = findBackgroundLayer(doc);
-  if (placedLayer) {
-    if (canvasLayer) {
-      // Above the canvas-color fill, below the drawing (panel top = front).
-      await placedLayer.move(canvasLayer, photoshop.constants.ElementPlacement.PLACEBEFORE);
-    } else {
-      await placedLayer.move(doc, photoshop.constants.ElementPlacement.PLACEATEND);
-    }
-  }
+  // Position is owned by the single stack-order authority below — no inline move.
   await ensureBoardBackgroundStackOrderInModal(doc);
+  if (placedLayer) {
+    await reportBoardBackgroundLinkStatus(placedLayer);
+  }
   restoreActiveLayersByIds(doc, previousActiveIds);
   return true;
 }
@@ -3023,7 +3125,7 @@ function findBackgroundLayer(doc) {
   }
 
   for (const layer of doc.layers || []) {
-    if (layer.isBackgroundLayer || layer.name === "Background") {
+    if (isCanvasBackgroundLayer(layer)) {
       return layer;
     }
   }
@@ -3038,7 +3140,7 @@ async function createCanvasBackgroundLayerInModal(doc) {
     [{ _obj: "make", _target: [{ _ref: "layer" }] }],
     { synchronousExecution: true },
   );
-  await renameActiveLayer("Background");
+  await renameActiveLayer(CANVAS_BG_LAYER_NAME);
   const layer = doc.activeLayers[0] || null;
   if (layer) {
     await layer.move(doc, photoshop.constants.ElementPlacement.PLACEATEND);

@@ -13,7 +13,6 @@ from .image_utils import (
     copy_and_convert_image,
     copy_and_convert_image_stream,
     create_thumbnail,
-    ensure_psd_board_background_layer,
     export_psd_composite_to_png,
     is_psd_path,
     is_solid_color_image,
@@ -361,10 +360,19 @@ def get_shot_board_background_path(project: Project, shot: Shot) -> Path | None:
 
 
 def sync_psd_board_background(project: Project, shot: Shot, psd_path: Path) -> bool:
-    background_path = get_shot_board_background_path(project, shot)
-    if background_path is None:
-        return False
-    return ensure_psd_board_background_layer(psd_path, background_path)
+    # The Photoshop plugin now OWNS the in-PSD `SB bg` layer and maintains it as a
+    # linked smart object pointing at `<shot>_background.png`. The backend must not
+    # bake a raster `SB bg` into the PSD here, for two reasons:
+    #   1. A psd_tools raster layer is not a smart object and collides with /
+    #      overwrites the plugin's linked layer, so the artist's PSD opens unlinked.
+    #   2. `ensure_psd_board_background_layer` re-opens and `psd.save()`s the file
+    #      via psd_tools; that round-trip rasterises (destroys) any linked smart
+    #      object the plugin already saved, and is a prime suspect for the
+    #      "PSD won't reopen" corruption.
+    # The reference image itself still lives on disk as `<shot>_background.png`
+    # (written by `_save_board_background_copy`); the plugin's linked smart object
+    # picks up changes from that file. So there is nothing for the backend to do.
+    return False
 
 
 def recover_shot_source_psd(project: Project, shot: Shot, *, preserve_layers: bool = True) -> dict[str, Any]:
