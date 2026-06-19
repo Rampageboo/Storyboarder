@@ -42,10 +42,8 @@ from .image_utils import (
     compose_image_to_canvas,
     copy_and_convert_image,
     copy_and_convert_image_stream,
-    create_thumbnail,
     export_psd_composite_to_png,
     is_psd_path,
-    is_solid_color_image,
     normalize_reference_fit_mode,
     save_png_data_url,
 )
@@ -57,35 +55,42 @@ from .shot_store import (
     new_shot_id,
     save_shots,
     save_shots_json,
-    shots_csv_mtime,
     shots_csv_path,
-    shots_json_mtime,
     shots_json_path,
 )
 
+# ── Boundary modules extracted from this file ────────────────────────────────
+# These modules were factored out of project_manager.py to reduce its scope.
+# Their public names are imported here so all existing callers can continue to
+# use ``project_manager.<name>`` unchanged.
 
-PROJECT_JSON_VERSION = 3
-DEFAULT_SETTINGS = {
-    "autosave": True,
-    "pdf_layout": "two_per_page",
-    "recent_projects": [],
-    "backup_on_save": True,
-    "photoshop_path": "",
-    "blender_path": "",
-    "canvas_background_color": "#E8E8E8",
-    "canvas_width": 1920,
-    "canvas_height": 1080,
-    "reference_video_path": "",
-    "reference_model_path": "",
-    "reference_image_path": "",
-    "reference_segment_mode": "video",
-    "reference_links": [],
-    "ref_segment": {},
-    "ref_segments": [],
-    "active_ref_segment_id": "",
-    "ref_segment_video": {},
-    "ref_segment_apply": {},
-}
+from .project_storage import (  # noqa: E402
+    PROJECT_JSON_VERSION,
+    DEFAULT_SETTINGS,
+    ensure_project_dirs as _ensure_project_dirs,
+    atomic_write_json as _atomic_write_json,
+    load_settings as _load_settings,
+    save_settings,
+    project_disk_mtime,
+)
+from .shot_files import (  # noqa: E402
+    get_shot_dir,
+    shot_has_psd_canvas,
+    resolve_project_relative_path,
+)
+from .shot_assets import (  # noqa: E402
+    get_shot_board_background_path,
+    remove_board_background_for_shot,
+    relink_preview_image,
+    relink_shot_preview_from_disk,
+    resolve_shot_preview_path,
+    resolve_shot_thumbnail_path,
+    _set_shot_preview_paths,
+    _save_board_background_copy,
+    _refresh_thumbnail_for_shot,
+)
+from .asset_validation import validate_project_integrity  # noqa: E402
+
 
 
 def create_project(
@@ -109,17 +114,6 @@ def create_project(
     save_project(project)
     ensure_project_blend_file(project)
     return project
-
-
-def project_disk_mtime(project: Project) -> float:
-    # Canonical inputs: project.json (manifest), settings.json, shots.json.
-    manifest_mtime = project.json_path.stat().st_mtime if project.json_path.is_file() else 0.0
-    settings_mtime = project.settings_path.stat().st_mtime if project.settings_path.is_file() else 0.0
-    shots_mtime = shots_json_mtime(project.root_path)
-    # shots.csv only matters for legacy projects that have not migrated to shots.json yet.
-    if shots_mtime <= 0.0:
-        shots_mtime = shots_csv_mtime(project.root_path)
-    return max(manifest_mtime, settings_mtime, shots_mtime)
 
 
 def reload_project_if_changed(project: Project, loaded_mtime: float) -> tuple[Project, float, bool]:
@@ -189,21 +183,6 @@ def open_project(project_json_path: Path) -> Project:
     return project
 
 
-def _atomic_write_json(path: Path, data: dict) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    fd, tmp_name = tempfile.mkstemp(dir=str(path.parent), prefix=f"{path.name}.", suffix=".tmp")
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as file:
-            json.dump(data, file, indent=2, ensure_ascii=False)
-        os.replace(tmp_name, path)
-    except BaseException:
-        try:
-            os.unlink(tmp_name)
-        except OSError:
-            pass
-        raise
-
-
 def save_project(project: Project) -> None:
     _ensure_project_dirs(project.root_path)
     if project.settings.get("backup_on_save", True):
@@ -213,13 +192,6 @@ def save_project(project: Project) -> None:
     # Canonical shots.json + regenerated readable shots.csv compatibility snapshot.
     save_shots(project.root_path, project.shots)
     save_settings(project)
-
-
-def save_settings(project: Project) -> None:
-    settings = DEFAULT_SETTINGS.copy()
-    settings.update(project.settings)
-    project.settings = settings
-    _atomic_write_json(project.settings_path, settings)
 
 
 def add_shot(project: Project, *, after_index: int | None = None) -> Shot:
@@ -277,57 +249,6 @@ def reorder_shots(project: Project, shot_ids: list[str]) -> None:
     project.shots = [by_id[shot_id] for shot_id in shot_ids]
 
 
-def validate_project_integrity(project: Project) -> list[dict]:
-    """Check project data for structural and ownership violations.
-
-    Returns a list of issue dicts (empty list = clean).  Missing generated files
-    such as thumbnails and notes are not flagged — they are recoverable.  Designed
-    to be non-fatal: it reports issues rather than raising.
-    """
-    issues: list[dict] = []
-    seen_ids: set[str] = set()
-    root = project.root_path.resolve()
-
-    for shot in project.shots:
-        if shot.shot_id in seen_ids:
-            issues.append({"kind": "duplicate_shot_id", "shot_id": shot.shot_id})
-        seen_ids.add(shot.shot_id)
-
-        if not get_shot_dir(project, shot).is_dir():
-            issues.append({"kind": "missing_shot_dir", "shot_id": shot.shot_id,
-                           "path": str(get_shot_dir(project, shot))})
-
-        # image_path / preview_image_path must never be the background plate.
-        bg_filename = board_background_filename(shot.shot_id)
-        for field in ("image_path", "preview_image_path"):
-            value = getattr(shot, field, "") or ""
-            if value and Path(value).name == bg_filename:
-                issues.append({"kind": "metadata_points_to_background",
-                               "shot_id": shot.shot_id, "field": field, "value": value})
-
-        # All metadata paths must stay inside the project root (no traversal).
-        for field in ("image_path", "preview_image_path", "thumbnail_path", "source_file_path"):
-            value = getattr(shot, field, "") or ""
-            if not value:
-                continue
-            try:
-                resolved = (project.root_path / value).resolve()
-                if resolved != root and root not in resolved.parents:
-                    issues.append({"kind": "path_traversal", "shot_id": shot.shot_id,
-                                   "field": field, "value": value})
-            except (ValueError, OSError):
-                issues.append({"kind": "invalid_path", "shot_id": shot.shot_id,
-                               "field": field, "value": value})
-
-        # source_file_path: warn if linked but missing on disk.
-        if shot.source_file_path:
-            if not (project.root_path / shot.source_file_path).is_file():
-                issues.append({"kind": "missing_source_file", "shot_id": shot.shot_id,
-                               "path": shot.source_file_path})
-
-    return issues
-
-
 def move_shot_up(project: Project, index: int) -> int:
     _require_index(project, index)
     if index <= 0:
@@ -373,30 +294,6 @@ def remove_image_for_shot(project: Project, shot: Shot) -> None:
     shot.image_path = ""
     shot.preview_image_path = ""
     shot.thumbnail_path = ""
-
-
-def remove_board_background_for_shot(project: Project, shot: Shot) -> None:
-    """Drop only the reference background, preserving the artist's drawing.
-
-    Unlike ``remove_image_for_shot``, this leaves ``preview_image_path`` /
-    ``image_path`` / ``thumbnail_path`` intact so a board the artist has drawn on
-    keeps its illustration when its reference is removed.
-    """
-    shot_dir = get_shot_dir(project, shot)
-    (shot_dir / board_background_filename(shot.shot_id)).unlink(missing_ok=True)
-
-
-def get_shot_board_background_path(project: Project, shot: Shot) -> Path | None:
-    # The board background reference is ONLY the dedicated background file — never
-    # the shot preview. The preview is the artist's drawing; treating it as the
-    # background lets `ensure_psd_board_background_layer` bake the drawing into the
-    # PSD as an `SB bg` layer, which the preview composite then hides → blank. This
-    # mirrors the Photoshop plugin's `resolveBoardBackgroundEntry`.
-    shot_dir = get_shot_dir(project, shot)
-    dedicated = shot_dir / board_background_filename(shot.shot_id)
-    if dedicated.is_file():
-        return dedicated
-    return None
 
 
 def sync_psd_board_background(project: Project, shot: Shot, psd_path: Path) -> bool:
@@ -463,51 +360,6 @@ def recover_shot_source_psd(project: Project, shot: Shot, *, preserve_layers: bo
         "width": info["width"],
         "height": info["height"],
     }
-
-
-def _save_board_background_copy(source_path: Path, destination_path: Path) -> Path:
-    destination_path.parent.mkdir(parents=True, exist_ok=True)
-    if source_path.resolve() == destination_path.resolve():
-        return destination_path
-    shutil.copy2(source_path, destination_path)
-    return destination_path
-
-
-def _refresh_thumbnail_for_shot(project: Project, shot: Shot) -> Path | None:
-    """Refresh the ``_thumb.png`` cache for a shot.  Never touches metadata paths.
-
-    ``image_path`` / ``preview_image_path`` are artist-artwork fields and are
-    never written here.  The frontend uses the separate ``has_board_background``
-    flag (computed in ``app_state``) to decide when to render the background
-    plate as a display fallback.
-
-    Priority:
-    1. Non-solid artist artwork (``_preview.png`` or current ``image_path``).
-    2. Reference background plate (``_background.png``).
-    3. Nothing available — returns ``None``.
-    """
-    shot_dir = get_shot_dir(project, shot)
-    thumb_path = shot_dir / f"{shot.shot_id}_thumb.png"
-
-    preview_path = resolve_shot_preview_path(project, shot)
-    has_artwork = (
-        preview_path is not None
-        and preview_path.is_file()
-        and not is_solid_color_image(preview_path)
-    )
-
-    if has_artwork:
-        thumbnail = create_thumbnail(preview_path, thumb_path)
-        shot.thumbnail_path = thumbnail.relative_to(project.root_path).as_posix()
-        return thumbnail
-
-    bg_path = get_shot_board_background_path(project, shot)
-    if bg_path is None:
-        return None
-
-    thumbnail = create_thumbnail(bg_path, thumb_path)
-    shot.thumbnail_path = thumbnail.relative_to(project.root_path).as_posix()
-    return thumbnail
 
 
 def _apply_reference_frame_to_shot(
@@ -606,26 +458,6 @@ def _normalize_rel_path(path: str) -> str:
     return str(path or "").replace("\\", "/").strip()
 
 
-def resolve_project_relative_path(
-    project: Project,
-    rel_path: str,
-    *,
-    required_suffixes: tuple[str, ...] | None = None,
-) -> Path:
-    path_text = str(rel_path or "").strip()
-    if not path_text:
-        raise ValueError("Project-relative path is required.")
-    resolved = (project.root_path / path_text).resolve()
-    root = project.root_path.resolve()
-    if resolved != root and root not in resolved.parents:
-        raise ValueError("Path must be inside the project.")
-    if required_suffixes is not None:
-        suffixes = tuple(str(suffix).lower() for suffix in required_suffixes)
-        if resolved.suffix.lower() not in suffixes:
-            raise ValueError(f"Path must use one of these extensions: {', '.join(required_suffixes)}")
-    return resolved
-
-
 def collect_reference_image_paths(project: Project) -> set[str]:
     referenced: set[str] = set()
     for shot in project.shots:
@@ -711,22 +543,6 @@ def import_source_file_stream(
     return destination
 
 
-def relink_preview_image(project: Project, shot: Shot, preview_rel: str) -> Path:
-    candidate = resolve_project_relative_path(project, preview_rel)
-    # The background plate must never become the artwork preview.  Accepting it
-    # here would let the plugin (or any caller) set image_path /
-    # preview_image_path to the background file — exactly the corruption the
-    # asset ownership model is designed to prevent.
-    if candidate.name == board_background_filename(shot.shot_id):
-        raise ValueError(
-            f"Background plate cannot be used as preview metadata: {preview_rel}"
-        )
-    if not candidate.is_file():
-        raise FileNotFoundError(f"Preview not found: {preview_rel}")
-    _set_shot_preview_paths(project, shot, candidate)
-    return candidate
-
-
 def save_drawing_for_shot(project: Project, shot: Shot, data_url: str) -> Path:
     shot_dir = get_shot_dir(project, shot)
     preview_path = save_png_data_url(data_url, shot_dir / f"{shot.shot_id}_preview.png")
@@ -738,74 +554,9 @@ def sync_shot(project: Project, shot: Shot, force: bool = False) -> dict[str, ob
     return sync_shot_from_linked_files(project, shot, force=force)
 
 
-def get_shot_dir(project: Project, shot: Shot) -> Path:
-    return project.shots_dir / shot.shot_id
-
-
-def shot_has_psd_canvas(project: Project, shot: Shot) -> bool:
-    """True when the shot folder contains a linked Photoshop canvas."""
-    if shot.source_file_path:
-        path = project.root_path / shot.source_file_path
-        if path.is_file() and is_psd_path(path):
-            return True
-    fallback = get_shot_dir(project, shot) / f"{shot.shot_id}.psd"
-    return fallback.is_file() and is_psd_path(fallback)
-
-
 def _require_index(project: Project, index: int) -> None:
     if index < 0 or index >= len(project.shots):
         raise IndexError("Shot index out of range.")
-
-
-def _ensure_project_dirs(root: Path) -> None:
-    root.mkdir(parents=True, exist_ok=True)
-    for dirname in ("shots", "references", "exports", "scripts", "backups", "scene3d"):
-        (root / dirname).mkdir(exist_ok=True)
-
-
-def relink_shot_preview_from_disk(project: Project, shot: Shot) -> bool:
-    """Restore preview metadata when the PNG exists on disk but paths were cleared."""
-    if shot.preview_image_path or shot.image_path:
-        return False
-    preview_path = resolve_shot_preview_path(project, shot)
-    if preview_path is None or is_solid_color_image(preview_path):
-        return False
-    _set_shot_preview_paths(project, shot, preview_path)
-    return True
-
-
-def resolve_shot_preview_path(project: Project, shot: Shot) -> Path | None:
-    """Find the best on-disk preview image for a shot."""
-    candidates: list[Path] = []
-    if shot.preview_image_path:
-        candidates.append(project.root_path / shot.preview_image_path)
-    if shot.image_path and shot.image_path != shot.preview_image_path:
-        candidates.append(project.root_path / shot.image_path)
-    shot_dir = get_shot_dir(project, shot)
-    candidates.append(shot_dir / f"{shot.shot_id}_preview.png")
-    for path in candidates:
-        if path.is_file():
-            return path
-    return None
-
-
-def resolve_shot_thumbnail_path(project: Project, shot: Shot) -> Path | None:
-    """Find the best on-disk thumbnail for timeline / filmstrip display."""
-    candidates: list[Path] = []
-    if shot.thumbnail_path:
-        candidates.append(project.root_path / shot.thumbnail_path)
-    shot_dir = get_shot_dir(project, shot)
-    candidates.append(shot_dir / f"{shot.shot_id}_thumb.png")
-    preview_path = resolve_shot_preview_path(project, shot)
-    if preview_path is not None:
-        candidates.append(preview_path)
-    background_path = get_shot_board_background_path(project, shot)
-    if background_path is not None:
-        candidates.append(background_path)
-    for path in candidates:
-        if path.is_file():
-            return path
-    return None
 
 
 def _ensure_shot_files(project: Project, shot: Shot) -> None:
@@ -821,28 +572,6 @@ def _ensure_shot_files(project: Project, shot: Shot) -> None:
     if not notes_path.exists():
         notes_path.write_text(json.dumps(shot.to_dict(), indent=2), encoding="utf-8")
     relink_shot_preview_from_disk(project, shot)
-
-
-def _set_shot_preview_paths(project: Project, shot: Shot, preview_path: Path) -> None:
-    shot.image_path = preview_path.relative_to(project.root_path).as_posix()
-    shot.preview_image_path = shot.image_path
-    thumbnail_path = create_thumbnail(preview_path, get_shot_dir(project, shot) / f"{shot.shot_id}_thumb.png")
-    shot.thumbnail_path = thumbnail_path.relative_to(project.root_path).as_posix()
-
-
-def _load_settings(project: Project) -> dict:
-    if not project.settings_path.exists():
-        return DEFAULT_SETTINGS.copy()
-    try:
-        loaded = json.loads(project.settings_path.read_text(encoding="utf-8"))
-    except json.JSONDecodeError:
-        return DEFAULT_SETTINGS.copy()
-    settings = DEFAULT_SETTINGS.copy()
-    if isinstance(loaded, dict):
-        settings.update(loaded)
-    settings["reference_links"] = normalize_reference_links(settings.get("reference_links"))
-    ensure_reference_library(settings)
-    return settings
 
 
 # ---------------------------------------------------------------------------
