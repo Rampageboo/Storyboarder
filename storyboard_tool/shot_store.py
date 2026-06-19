@@ -10,12 +10,35 @@ from typing import Any
 
 from .models import Shot
 
-# Storage model:
-#   shots.json — canonical internal shot storage (structured; the source of truth).
-#   shots.csv  — generated, human-readable compatibility snapshot. NOT authoritative
-#                once shots.json exists. CSV import/editing is future work and must go
-#                through an explicit preview/diff before it is allowed to overwrite
-#                shots.json.
+# ── Storage boundary ──────────────────────────────────────────────────────────
+#
+# Canonical store (shots.json)
+#   Written by:  backend only — project_manager.save_project / save_shots.
+#   Read by:     backend open_project (first priority).
+#   Format:      {"version": 1, "shots": [...]}
+#   Guarantee:   atomic write (temp-file replace); never leaves a partial file.
+#
+# Compatibility snapshot (shots.csv)
+#   Written by:  save_shots() after every canonical write, as a human-readable
+#                side effect.  Also written by the Photoshop plugin in
+#                standalone/offline mode ONLY (when not linked to the backend).
+#   Read by:     open_project only when shots.json is absent (legacy projects).
+#                If shots.json exists, shots.csv is IGNORED for data loading.
+#   Rule:        shots.csv must NEVER be the active source of truth once
+#                shots.json exists.  It is a generated export surface, not a
+#                second store.  CSV import/editing goes through an explicit
+#                preview/diff step — never a silent overwrite of shots.json.
+#
+# Legacy inline shots (project.json "shots" key)
+#   Read by:     open_project only when BOTH shots.json and shots.csv are absent.
+#   Written by:  old application versions only — no current code path writes this.
+#
+# Plugin standalone/offline writes
+#   The Photoshop plugin may write shots.csv and project.json when it is NOT
+#   linked to the running backend.  These writes are fallback paths for offline
+#   workflows; they are suppressed in backend-linked mode by panel_storage_adapter.js
+#   (see FALLBACK-OFFLINE-ONLY comments there).  The backend never reads these
+#   plugin-written files preferentially over its own canonical shots.json.
 SHOTS_CSV_NAME = "shots.csv"
 SHOTS_JSON_NAME = "shots.json"
 SHOTS_JSON_VERSION = 1
@@ -62,11 +85,17 @@ def new_shot_id() -> str:
 
 
 def load_shots_csv(path: Path) -> list[Shot]:
+    """Load shots from the legacy shots.csv.
+
+    COMPAT-READ: called ONLY when shots.json is absent (legacy project migration).
+    Do not call this when shots.json exists; shots.json is the authoritative source.
+
+    Row order in the file is the timeline order. The order column is rewritten on
+    save for human reference in Excel and must not be used to resort rows on load.
+    """
     if not path.is_file():
         return []
 
-    # Row order in the file is the timeline order. The order column is rewritten on
-    # save for human reference in Excel and must not be used to resort rows on load.
     shots: list[Shot] = []
     with path.open("r", newline="", encoding="utf-8-sig") as file:
         reader = csv.DictReader(file)
@@ -79,6 +108,13 @@ def load_shots_csv(path: Path) -> list[Shot]:
 
 
 def save_shots_csv(project_root: Path, shots: list[Shot]) -> Path:
+    """Write the compatibility CSV snapshot from the current canonical shot list.
+
+    COMPAT-GENERATED: this is a human-readable side effect of a canonical save,
+    NOT an independent store.  It must not be edited in place and treated as truth
+    while shots.json exists.  Always call save_shots() instead of calling this
+    directly, so shots.json and shots.csv are kept in sync.
+    """
     path = shots_csv_path(project_root)
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", newline="", encoding="utf-8") as file:

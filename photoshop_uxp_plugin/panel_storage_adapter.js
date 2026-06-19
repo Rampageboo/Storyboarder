@@ -196,17 +196,26 @@
   }
 
   if (typeof loadProjectJson === "function") {
+    // Read priority mirrors the backend open_project() load chain:
+    //   1. shots.json  — canonical; always preferred when it exists.
+    //   2. shots.csv   — COMPAT-READ: legacy projects only; ignored when shots.json exists.
+    //   3. inline shots in project.json — COMPAT-READ: very old projects only.
+    // Once shots.json is written (by saveProjectJson in standalone mode, or by the
+    // backend migration on first open), subsequent loads skip paths 2 and 3.
     loadProjectJson = async function loadCanonicalProjectData() {
       requireProjectRoot();
       const manifest = (await readJsonFile(projectRoot, "project.json")) || {};
       const jsonShots = await loadShotsJson();
       if (jsonShots !== null) {
+        // Canonical path — shots.csv and inline shots are intentionally not consulted.
         return {
           version: Number.parseInt(manifest.version, 10) || PROJECT_JSON_VERSION,
           shots: jsonShots,
         };
       }
 
+      // COMPAT-READ: legacy CSV-only project; the backend would migrate this to
+      // shots.json on its next open_project() call.
       const csvShots = await loadShotsCsv();
       if (csvShots) {
         return {
@@ -215,6 +224,7 @@
         };
       }
 
+      // COMPAT-READ: very old project.json with an inline "shots" key.
       const inlineShots = Array.isArray(manifest.shots) ? manifest.shots : [];
       return {
         version: Number.parseInt(manifest.version, 10) || PROJECT_JSON_VERSION,

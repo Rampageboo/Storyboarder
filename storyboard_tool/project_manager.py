@@ -1,3 +1,33 @@
+"""Project management — the single backend entry point for all project I/O.
+
+Storage boundary
+----------------
+Canonical store:
+  project.json   — lightweight manifest (version key only; NO inline shots).
+  shots.json     — all shot metadata; the source of truth.  Written atomically
+                   by save_shots_json / save_shots.  Read first in open_project.
+  settings.json  — project-wide settings (canvas size, color, paths, etc.).
+
+Compatibility / generated outputs:
+  shots.csv      — regenerated from shots.json on every save.  Human-readable
+                   export surface and legacy fallback for old projects.  Ignored
+                   by open_project when shots.json is present.
+  canvas_color.txt / storyboard_bridge.json — generated from settings for the
+                   Photoshop plugin's file-based IPC.  Not read as metadata.
+
+Asset files (never in project metadata):
+  shots/<id>/<id>_preview.png  — artist artwork; set via relink_preview_image.
+  shots/<id>/<id>_background.png — reference plate; owned by plugin SB bg layer.
+  shots/<id>/<id>_thumb.png    — display cache; regenerated on demand.
+  shots/<id>/<id>.psd          — source canvas; path stored in source_file_path.
+
+Ownership rules:
+  - Backend is the SOLE WRITER of canonical project metadata in linked mode.
+  - Plugin may write shots.csv / project.json only in standalone/offline mode
+    (enforced by panel_storage_adapter.js; see FALLBACK-OFFLINE-ONLY comments).
+  - image_path / preview_image_path must never point to _background.png.
+  - source_file_path must always be a .psd path.
+"""
 from __future__ import annotations
 
 import json
@@ -115,18 +145,27 @@ def open_project(project_json_path: Path) -> Project:
     project.settings = _load_settings(project)
     sync_ref_segment_settings(project)
 
-    # Load shots by priority: canonical shots.json first, then the legacy shots.csv,
-    # then any inline shots embedded in an old project.json, then empty. Migration only
-    # ever WRITES the new canonical shots.json — it never deletes the legacy sources.
+    # ── Shot load priority (storage boundary) ──────────────────────────────
+    # 1. shots.json  — canonical; always preferred when it exists.
+    # 2. shots.csv   — COMPAT-READ: legacy projects only; once shots.json is
+    #                  written, CSV is ignored for loading on subsequent opens.
+    # 3. project.json "shots" key — COMPAT-READ: very old projects; no current
+    #                  code path writes inline shots here.
+    # 4. Empty list  — brand-new project.
+    # Migration is non-destructive: it only ADDS shots.json; it never deletes
+    # the legacy sources (CSV, inline shots) until the project is saved normally.
     json_path = shots_json_path(project.root_path)
     csv_path = shots_csv_path(project.root_path)
     needs_json_migration = False
     if json_path.is_file():
+        # Canonical path — shots.csv is intentionally not consulted.
         project.shots = load_shots_json(json_path)
     elif csv_path.is_file():
+        # COMPAT-READ: legacy CSV-only project; migrate to shots.json below.
         project.shots = load_shots_csv(csv_path)
         needs_json_migration = True
     else:
+        # COMPAT-READ: very old project.json with inline shots key.
         shots_data = payload.get("shots")
         if isinstance(shots_data, list):
             project.shots = [Shot.from_dict(item) for item in shots_data if isinstance(item, dict)]
@@ -137,8 +176,9 @@ def open_project(project_json_path: Path) -> Project:
     for shot in project.shots:
         _ensure_shot_files(project, shot)
 
-    # Non-destructive migration: write only the canonical shots.json. The legacy
-    # shots.csv and any inline project.json shots are left intact until the next save.
+    # Non-destructive migration: write the canonical shots.json so future opens
+    # take the canonical path. Legacy sources (CSV, inline shots) are left on
+    # disk until a full save_project() call regenerates them from canonical data.
     if needs_json_migration:
         save_shots_json(project.root_path, project.shots)
     save_settings(project)
