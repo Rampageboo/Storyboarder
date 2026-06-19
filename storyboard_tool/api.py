@@ -181,6 +181,14 @@ def _model_captures_payload(captures: list[RefSegment3dCapture]) -> list[dict[st
     return [capture.model_dump() for capture in captures]
 
 
+async def _read_upload(file: UploadFile, fallback_name: str) -> tuple[str, bytes]:
+    try:
+        data = await file.read()
+    finally:
+        await file.close()
+    return file.filename or fallback_name, data
+
+
 def create_app(base_dir: Path, bridge_port: int = 8000) -> FastAPI:
     setup_logging()
 
@@ -411,11 +419,8 @@ def create_app(base_dir: Path, bridge_port: int = 8000) -> FastAPI:
 
     @app.post("/api/project/references")
     async def upload_project_reference(file: UploadFile = File(...)) -> dict[str, Any]:
-        try:
-            data = await file.read()
-        finally:
-            await file.close()
-        return _svc().method_upload_project_reference(file.filename or "reference", data)
+        filename, data = await _read_upload(file, "reference")
+        return _svc().method_upload_project_reference(filename, data)
 
     @app.delete("/api/project/references/{ref_id}")
     def delete_project_reference(ref_id: str) -> dict[str, Any]:
@@ -423,11 +428,8 @@ def create_app(base_dir: Path, bridge_port: int = 8000) -> FastAPI:
 
     @app.post("/api/project/reference-video")
     async def upload_reference_video(file: UploadFile = File(...)) -> dict[str, Any]:
-        try:
-            data = await file.read()
-        finally:
-            await file.close()
-        return _svc().method_upload_reference_video(file.filename or "reference.mp4", data)
+        filename, data = await _read_upload(file, "reference.mp4")
+        return _svc().method_upload_reference_video(filename, data)
 
     @app.post("/api/project/ref-segment/apply-3d")
     def apply_ref_segment_3d(request: ApplyRefSegmentRequest) -> dict[str, Any]:
@@ -483,11 +485,8 @@ def create_app(base_dir: Path, bridge_port: int = 8000) -> FastAPI:
 
     @app.post("/api/project/scene3d/import")
     async def import_scene3d(file: UploadFile = File(...)) -> dict[str, Any]:
-        try:
-            data = await file.read()
-        finally:
-            await file.close()
-        return _svc().method_import_scene3d(file.filename or "scene.glb", data)
+        filename, data = await _read_upload(file, "scene.glb")
+        return _svc().method_import_scene3d(filename, data)
 
     @app.get("/api/project/scene3d/file")
     def get_scene3d_file() -> FileResponse:
@@ -539,19 +538,13 @@ def create_app(base_dir: Path, bridge_port: int = 8000) -> FastAPI:
 
     @app.post("/api/shots/{shot_id}/image")
     async def import_image(shot_id: str, file: UploadFile = File(...)) -> dict[str, Any]:
-        try:
-            data = await file.read()
-        finally:
-            await file.close()
-        return _svc().method_import_shot_image(shot_id, file.filename or "", data)
+        filename, data = await _read_upload(file, "")
+        return _svc().method_import_shot_image(shot_id, filename, data)
 
     @app.post("/api/shots/{shot_id}/references")
     async def add_reference_image(shot_id: str, file: UploadFile = File(...)) -> dict[str, Any]:
-        try:
-            data = await file.read()
-        finally:
-            await file.close()
-        return _svc().method_add_shot_reference_image(shot_id, file.filename or "", data)
+        filename, data = await _read_upload(file, "")
+        return _svc().method_add_shot_reference_image(shot_id, filename, data)
 
     @app.delete("/api/shots/{shot_id}/references")
     def remove_reference_image(shot_id: str, request: RemoveReferenceRequest) -> dict[str, Any]:
@@ -563,11 +556,8 @@ def create_app(base_dir: Path, bridge_port: int = 8000) -> FastAPI:
 
     @app.post("/api/shots/{shot_id}/source")
     async def import_source_file(shot_id: str, file: UploadFile = File(...)) -> dict[str, Any]:
-        try:
-            data = await file.read()
-        finally:
-            await file.close()
-        return _svc().method_import_shot_source(shot_id, file.filename or f"{shot_id}.psd", data)
+        filename, data = await _read_upload(file, f"{shot_id}.psd")
+        return _svc().method_import_shot_source(shot_id, filename, data)
 
     @app.post("/api/shots/{shot_id}/relink-preview")
     def relink_preview(shot_id: str, request: RelinkRequest) -> dict[str, Any]:
