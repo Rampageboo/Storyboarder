@@ -433,6 +433,33 @@ class StoryboardSmokeTests(unittest.TestCase):
             self.assertEqual(rest.json()["settings"]["reference_segment_mode"], "video")
             self.assertEqual(read_saved_mode(), "video")
 
+    def test_update_settings_persists_canvas_color_and_scene3d_together(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            app = api_module.create_app(Path(tmp))
+            client = TestClient(app, raise_server_exceptions=False)
+            with contextlib.redirect_stderr(io.StringIO()):
+                created = client.post("/api/project/new", json={"path": tmp})
+            self.assertEqual(created.status_code, 200)
+
+            scene3d = {"file_path": "scene3d/scene.glb", "camera_name": "Camera_A"}
+            with contextlib.redirect_stderr(io.StringIO()):
+                rest = client.patch(
+                    "/api/project/settings",
+                    json={
+                        "canvas_background_color": "#112233",
+                        "scene3d": scene3d,
+                    },
+                )
+            self.assertEqual(rest.status_code, 200, rest.text)
+            settings = rest.json()["settings"]
+            self.assertEqual(settings["canvas_background_color"], "#112233")
+            self.assertEqual(settings["scene3d"], scene3d)
+
+            settings_json = Path(tmp) / "Storyboard_Project" / "settings.json"
+            saved = json.loads(settings_json.read_text(encoding="utf-8"))
+            self.assertEqual(saved["canvas_background_color"], "#112233")
+            self.assertEqual(saved["scene3d"], scene3d)
+
     def test_project_lifecycle_new_save_open(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             app = api_module.create_app(Path(tmp))

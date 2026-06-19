@@ -12,6 +12,7 @@ from fastapi import FastAPI, HTTPException
 from . import app_state, project_manager, project_transaction, reference_segments, session_store, shot_service
 from .errors import AppErrorCode, app_error
 from .export_utils import missing_files
+from .image_utils import normalize_hex_color
 from .linked_sync import sync_project
 from .models import Shot
 from .service_exports import ExportServiceMixin
@@ -639,7 +640,6 @@ class StoryboardBackendService(ExportServiceMixin):
             mode = str(data.get("reference_segment_mode") or "").strip().lower()
             if mode in {"video", "model", "image"}:
                 project.settings["reference_segment_mode"] = mode
-                project_manager.save_settings(project)
         if "reference_links" in data:
             project.settings["reference_links"] = project_manager.normalize_reference_links(data.get("reference_links"))
         if "ref_segment" in data:
@@ -671,14 +671,13 @@ class StoryboardBackendService(ExportServiceMixin):
             )
             self.app.state.dirty = True
         if "canvas_background_color" in data:
-            project_manager.persist_canvas_color(project, str(data["canvas_background_color"]))
-        elif "scene3d" in data:
+            color = normalize_hex_color(str(data["canvas_background_color"]))
+            project.settings["canvas_background_color"] = color
+            project_manager.write_canvas_color_files(project, color)
+        if "scene3d" in data:
             project.settings["scene3d"] = data["scene3d"]
-            project_manager.save_settings(project)
-            project_manager.write_bridge_file(project)
-        else:
-            project_manager.save_settings(project)
-            project_manager.write_bridge_file(project)
+        project_manager.save_settings(project)
+        project_manager.write_bridge_file(project)
         app_state._touch_live_bridge(self.app)
         return app_state._project_payload(project, self.app.state.dirty)
 
