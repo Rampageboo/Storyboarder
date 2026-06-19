@@ -13,7 +13,7 @@ const BRIDGE_STALE_MS = 8000;
 const OVERLAY_LAYER_PREFIX = "SB ref:";
 const SB_BG_LAYER_NAME = "SB bg";
 const DRAWING_LAYER_NAME = "Layer 1";
-const TEMPLATE_LAYER_NAMES = ["Rough", "Clean", "Notes"];
+const TEMPLATE_LAYER_NAMES = ["Rough"];
 const DEFAULT_OVERLAY_OPACITY = 45;
 const QUICK_STATUS_OPTIONS = ["Draft", "In Progress", "Review", "Approved"];
 const SHOT_CSV_COLUMNS = [
@@ -1516,18 +1516,58 @@ async function placeFileEntryAsLayer(entry) {
 
 async function placeFileEntryAsLinkedLayer(entry) {
   const token = await fs.createSessionToken(entry);
-  await photoshop.action.batchPlay(
-    [
-      {
-        _obj: "placeEvent",
-        null: { _path: token, _kind: "local" },
-        linked: true,
-        freeTransformCenterState: { _enum: "quadCenterState", _value: "QCSAverage" },
-      },
-    ],
-    { synchronousExecution: true },
-  );
-  return app.activeDocument.activeLayers[0];
+  const descriptor = {
+    _obj: "placeEvent",
+    null: { _path: token, _kind: "local" },
+    linked: true,
+    freeTransformCenterState: { _enum: "quadCenterState", _value: "QCSAverage" },
+  };
+  try {
+    await photoshop.action.batchPlay(
+      [{ ...descriptor, Lnkd: true }],
+      { synchronousExecution: true },
+    );
+  } catch {
+    await photoshop.action.batchPlay(
+      [descriptor],
+      { synchronousExecution: true },
+    );
+  }
+  const layer = app.activeDocument.activeLayers[0];
+  await ensureActivePlacedLayerLinkedToEntry(entry, layer);
+  return layer;
+}
+
+async function ensureActivePlacedLayerLinkedToEntry(entry, layer) {
+  const doc = app.activeDocument;
+  if (!doc || !entry || !layer) {
+    return false;
+  }
+  const previousActiveIds = captureActiveLayerIds(doc);
+  const token = await fs.createSessionToken(entry);
+  const commands = ["placedLayerConvertToLinked", "placedLayerRelinkToFile"];
+  try {
+    doc.activeLayers = [layer];
+    for (const command of commands) {
+      try {
+        await photoshop.action.batchPlay(
+          [
+            {
+              _obj: command,
+              null: { _path: token, _kind: "local" },
+            },
+          ],
+          { synchronousExecution: true },
+        );
+        return true;
+      } catch {
+        // Try the next linked-SO command. Photoshop/UXP support varies by version.
+      }
+    }
+  } finally {
+    restoreActiveLayersByIds(doc, previousActiveIds);
+  }
+  return false;
 }
 
 function layerPixelSize(layer) {
@@ -1667,7 +1707,7 @@ async function finalizeRecoveredShotInModal(shotId) {
   await ensureDrawingLayerInModal(doc);
 }
 
-async function importBoardBackgroundInModal(shotId, entry = null) {
+async function importBoardBackgroundInModal(shotId, entry = null, options = {}) {
   const resolvedEntry = entry || (await resolveBoardBackgroundEntry(shotId));
   if (!resolvedEntry) {
     return false;
@@ -1680,9 +1720,17 @@ async function importBoardBackgroundInModal(shotId, entry = null) {
   const previousActiveIds = captureActiveLayerIds(doc);
   const existingLayer = findBoardBackgroundLayer(doc);
   if (existingLayer) {
-    await ensureBoardBackgroundStackOrderInModal(doc);
-    restoreActiveLayersByIds(doc, previousActiveIds);
-    return false;
+    if (!options.forceRelink) {
+      await ensureBoardBackgroundStackOrderInModal(doc);
+      restoreActiveLayersByIds(doc, previousActiveIds);
+      return false;
+    }
+    if (await ensureActivePlacedLayerLinkedToEntry(resolvedEntry, existingLayer)) {
+      await ensureBoardBackgroundStackOrderInModal(doc);
+      restoreActiveLayersByIds(doc, previousActiveIds);
+      return true;
+    }
+    await removeBoardBackgroundLayerInModal(doc);
   }
   const placedLayer = await placeFileEntryAsLinkedLayer(resolvedEntry);
   if (placedLayer) {
@@ -1744,6 +1792,9 @@ async function boardBackgroundRefreshNeeded(shotId, force = false) {
   if (!hasLayer) {
     return true;
   }
+  if (force) {
+    return true;
+  }
   const signature = await boardBackgroundSignature(entry);
   if (signature === null) {
     return false; // Cannot tell → assume unchanged, never loop.
@@ -1779,6 +1830,13 @@ async function syncBoardBackgroundFromDisk(shotId, force = false) {
   const signature = await boardBackgroundSignature(entry);
   const existingLayer = findBoardBackgroundLayer(doc);
   if (existingLayer) {
+    if (force) {
+      const relinked = await importBoardBackgroundInModal(shotId, entry, { forceRelink: true });
+      if (relinked && signature !== null) {
+        boardBackgroundSigByShot.set(shotId, signature);
+      }
+      return relinked;
+    }
     const updated = await updateLinkedSmartObjectInModal(existingLayer);
     await ensureBoardBackgroundStackOrderInModal(doc);
     if (updated) {
@@ -2581,9 +2639,9 @@ async function saveAndGoNext() {
     if (result.createdFresh) {
       canvasColor = nextColor;
       await applyCanvasBackgroundInModal();
-      await syncBoardBackgroundFromDisk(nextShotId, true);
       await ensureDrawingLayerInModal(app.activeDocument);
       await saveActiveDocumentToFolder(nextFolder, nextShotId);
+      await syncBoardBackgroundFromDisk(nextShotId, true);
       createdNewNext = true;
     } else {
       await syncBoardBackgroundFromDisk(nextShotId, true);
@@ -2699,9 +2757,9 @@ async function switchToShot(shotId) {
     if (result.createdFresh) {
       canvasColor = nextColor;
       await applyCanvasBackgroundInModal();
-      await syncBoardBackgroundFromDisk(shotId, true);
       await ensureDrawingLayerInModal(app.activeDocument);
       await saveActiveDocumentToFolder(folder, shotId);
+      await syncBoardBackgroundFromDisk(shotId, true);
       createdNew = true;
     } else {
       if (rebuiltInfo) {
@@ -2748,9 +2806,9 @@ async function createCanvasForShot(shotId) {
   await runModal(`Create ${shotId}`, async () => {
     await createCanvasDocumentInModal(shotId);
     await applyCanvasBackgroundInModal();
-    await syncBoardBackgroundFromDisk(shotId, true);
     await ensureDrawingLayerInModal(app.activeDocument);
     await saveActiveDocumentToFolder(folder, shotId);
+    await syncBoardBackgroundFromDisk(shotId, true);
     createdNew = true;
   });
   if (!createdNew) {
