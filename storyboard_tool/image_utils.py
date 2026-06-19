@@ -247,8 +247,14 @@ def create_blank_psd(
         rgb = hex_to_rgb(background_color)
     else:
         rgb = background_color
-    psd = PSDImage.new("RGB", (width, height), color=rgb)
-    psd.save(destination_path)
+    tmp_path = destination_path.with_suffix(".tmp.psd")
+    try:
+        psd = PSDImage.new("RGB", (width, height), color=rgb)
+        psd.save(tmp_path)
+        os.replace(tmp_path, destination_path)
+    except BaseException:
+        tmp_path.unlink(missing_ok=True)
+        raise
     return destination_path
 
 
