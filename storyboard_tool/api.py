@@ -11,159 +11,42 @@ from fastapi import FastAPI, File, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, Field
 
 from . import app_state, project_manager, runtime_state
 from .backend_service import StoryboardBackendService
 from .errors import AppErrorCode
 from .logging_config import setup_logging
 from .schemas import (
+    AddShotRequest,
+    AnnotationSaveRequest,
+    AppSessionUpdateRequest,
+    ApplyRefSegmentRequest,
+    CanvasColorRequest,
+    CanvasRequest,
+    CommentRequest,
+    CommentResolveRequest,
+    DrawingSaveRequest,
+    ImportImagePathRequest,
     LiveBridgeUpdateRequest,
+    OpenProjectRequest,
+    PdfExportRequest,
     PluginHeartbeatRequest,
     PluginNextShotRequest,
     PluginShotEventRequest,
+    ProjectPathRequest,
+    RefSegment3dCapture,
+    RelinkRequest,
+    RemoveReferenceRequest,
+    ReorderShotsRequest,
+    RestoreRefApplyRequest,
+    RestoreShotRequest,
+    SetReferencePathsRequest,
+    SettingsUpdateRequest,
+    ShotUpdateRequest,
 )
 
 # Photoshop plugin treats bridge files older than ~8s as stale (see BRIDGE_STALE_MS in panel.js).
 _BRIDGE_REFRESH_SECONDS = 1.5
-
-
-class ProjectPathRequest(BaseModel):
-    path: str | None = None
-    canvas_width: int | None = None
-    canvas_height: int | None = None
-
-
-class OpenProjectRequest(BaseModel):
-    project_json_path: str
-
-
-class ShotUpdateRequest(BaseModel):
-    title: str = ""
-    scene: str = ""
-    sequence: str = ""
-    description: str = ""
-    action_note: str = ""
-    camera_note: str = ""
-    character_note: str = ""
-    dialogue: str = ""
-    lighting_note: str = ""
-    transition_note: str = ""
-    duration_seconds: float = 3.0
-    camera_data: dict[str, Any] = Field(default_factory=dict)
-    tags: list[str] = Field(default_factory=list)
-    status: str = "Draft"
-
-
-class CommentRequest(BaseModel):
-    text: str
-
-
-class CommentResolveRequest(BaseModel):
-    resolved: bool = True
-
-
-class AnnotationSaveRequest(BaseModel):
-    annotations: list[dict[str, Any]] = Field(default_factory=list)
-
-
-class RelinkRequest(BaseModel):
-    relative_path: str
-
-
-class RemoveReferenceRequest(BaseModel):
-    path: str
-
-
-class SetReferencePathsRequest(BaseModel):
-    paths: list[str] = Field(default_factory=list)
-
-
-class CanvasRequest(BaseModel):
-    width: int = 1920
-    height: int = 1080
-    background_color: str | None = None
-
-
-class DrawingSaveRequest(BaseModel):
-    image_data: str
-
-
-class PdfExportRequest(BaseModel):
-    layout: str = "two_per_page"
-
-
-class SettingsUpdateRequest(BaseModel):
-    photoshop_path: str | None = None
-    blender_path: str | None = None
-    canvas_background_color: str | None = None
-    canvas_width: int | None = None
-    canvas_height: int | None = None
-    apply_canvas_size_to_blank_shots: bool | None = None
-    scene3d: dict[str, Any] | None = None
-    reference_video_path: str | None = None
-    reference_model_path: str | None = None
-    reference_image_path: str | None = None
-    reference_segment_mode: str | None = None
-    reference_links: list[dict[str, Any]] | None = None
-    ref_segment: dict[str, Any] | None = None
-    ref_segments: list[dict[str, Any]] | None = None
-    active_ref_segment_id: str | None = None
-    ref_segment_video: dict[str, Any] | None = None
-
-
-class SetActiveReferenceVideoRequest(BaseModel):
-    path: str
-
-
-class CanvasColorRequest(BaseModel):
-    color: str
-
-
-class RestoreRefApplyRequest(BaseModel):
-    token: str
-
-
-class AppSessionUpdateRequest(BaseModel):
-    last_project_json_path: str | None = None
-    selected_shot_id: str | None = None
-    recent_projects: list[str] | None = None
-    timeline_scroll_left: int | None = None
-    status_filter: str | None = None
-    revision_only: bool | None = None
-    advanced_panel_open: bool | None = None
-    ui_theme: str | None = None
-
-
-class RestoreShotRequest(BaseModel):
-    shot: dict[str, Any]
-    index: int = 0
-
-
-class ReorderShotsRequest(BaseModel):
-    shot_ids: list[str]
-
-
-class ImportImagePathRequest(BaseModel):
-    source_path: str
-
-
-class RefSegment3dCapture(BaseModel):
-    shot_id: str
-    data_url: str
-    animation_time: float | None = None
-
-
-class ApplyRefSegmentRequest(BaseModel):
-    anchor_shot_id: str
-    end_shot_id: str
-    segment_id: str | None = None
-    camera_name: str | None = None
-    captures: list[RefSegment3dCapture] = Field(default_factory=list)
-
-
-class AddShotRequest(BaseModel):
-    after_shot_id: str | None = None
 
 
 _REACT_BUILD_HINT = "React build not found. Run: cd frontend && npm run build"
