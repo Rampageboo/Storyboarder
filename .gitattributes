@@ -1,2 +1,31 @@
-# Auto detect text files and perform LF normalization
-* text=auto
+# Normalize text files to LF in the repo AND the working tree.
+# `eol=lf` forces LF on checkout on every platform, so a Windows clone no longer
+# gets CRLF (which previously caused line-ending churn and a stray NUL byte during
+# tool-driven edits). Run `git add --renormalize .` once to convert existing files.
+* text=auto eol=lf
+
+# Pinned vendor copies and generated bundles: leave bytes exactly as-is.
+storyboard_tool/web/static/vendor/** -text
+storyboard_tool/web/static/runtime/** -text
+
+# Windows scripts must stay CRLF.
+*.bat   text eol=crlf
+*.cmd   text eol=crlf
+*.vbs   text eol=crlf
+*.ps1   text eol=crlf
+
+# Binary assets — never touch line endings.
+*.png   binary
+*.jpg   binary
+*.jpeg  binary
+*.gif   binary
+*.tif   binary
+*.tiff  binary
+*.ico   binary
+*.psd   binary
+*.glb   binary
+*.gltf  binary
+*.blend binary
+*.pdf   binary
+*.mp4   binary
+*.mov   binary
