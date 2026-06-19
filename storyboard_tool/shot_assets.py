@@ -16,9 +16,9 @@ Key invariant enforced by this module:
 """
 from __future__ import annotations
 
-import shutil
 from pathlib import Path
 
+from .file_transactions import atomic_copy_file
 from .image_utils import board_background_filename, create_thumbnail, is_solid_color_image
 from .models import Project, Shot
 from .shot_files import get_shot_dir, resolve_project_relative_path
@@ -95,12 +95,8 @@ def remove_board_background_for_shot(project: Project, shot: Shot) -> None:
 
 
 def _save_board_background_copy(source_path: Path, destination_path: Path) -> Path:
-    """Copy the board background file to its canonical location."""
-    destination_path.parent.mkdir(parents=True, exist_ok=True)
-    if source_path.resolve() == destination_path.resolve():
-        return destination_path
-    shutil.copy2(source_path, destination_path)
-    return destination_path
+    """Copy the board background file to its canonical location atomically."""
+    return atomic_copy_file(source_path, destination_path)
 
 
 def _set_shot_preview_paths(project: Project, shot: Shot, preview_path: Path) -> None:
@@ -109,14 +105,24 @@ def _set_shot_preview_paths(project: Project, shot: Shot, preview_path: Path) ->
     This is the single write point for artwork metadata paths.  Callers must
     ensure preview_path is never the _background.png file; use relink_preview_image
     for the validated external entry point.
+
+    Thumbnail generation is treated as a recoverable cache step: if it fails
+    (e.g. disk full, PIL error), image_path and preview_image_path are still
+    committed (the preview file exists at this point) and thumbnail_path is
+    left at its previous value so the frontend can regenerate it on demand.
     """
+    # Set critical artwork metadata first — the preview file is safely on disk.
     shot.image_path = preview_path.relative_to(project.root_path).as_posix()
     shot.preview_image_path = shot.image_path
-    thumbnail_path = create_thumbnail(
-        preview_path,
-        get_shot_dir(project, shot) / f"{shot.shot_id}_thumb.png",
-    )
-    shot.thumbnail_path = thumbnail_path.relative_to(project.root_path).as_posix()
+    # Thumbnail is a display cache; failure must not roll back the artwork paths above.
+    try:
+        thumbnail_path = create_thumbnail(
+            preview_path,
+            get_shot_dir(project, shot) / f"{shot.shot_id}_thumb.png",
+        )
+        shot.thumbnail_path = thumbnail_path.relative_to(project.root_path).as_posix()
+    except Exception:  # noqa: BLE001
+        pass  # thumbnail_path stays at prior value; frontend regenerates on next load
 
 
 def _refresh_thumbnail_for_shot(project: Project, shot: Shot) -> Path | None:

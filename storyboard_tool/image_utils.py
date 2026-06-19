@@ -138,11 +138,17 @@ def export_psd_composite_to_png(psd_path: Path, destination_path: Path) -> Path:
 
     destination_path.parent.mkdir(parents=True, exist_ok=True)
     destination_path = destination_path.with_suffix(".png")
+    tmp = destination_path.with_suffix(".tmp.png")
     psd = PSDImage.open(psd_path)
     image = psd.composite(layer_filter=preview_export_layer_filter)
     if image.mode not in ("RGB", "RGBA"):
         image = image.convert("RGBA")
-    image.save(destination_path, "PNG")
+    try:
+        image.save(tmp, "PNG")
+        os.replace(tmp, destination_path)
+    except BaseException:
+        tmp.unlink(missing_ok=True)
+        raise
     return destination_path
 
 
