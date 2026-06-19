@@ -310,7 +310,7 @@
     // FALLBACK-OFFLINE-ONLY: the local create path below runs only when the
     // panel is in standalone/offline mode (linkedFromStoryboard === false).
     addShotToProject = async function addShotViaBackendWhenLinked() {
-      if (linkedFromStoryboard) {
+      if (isBackendLinkedMode()) {
         const created = await requestBackendAddShot();
         if (created) {
           return created;
