@@ -8,7 +8,7 @@ from typing import Any, BinaryIO
 
 from fastapi import FastAPI, HTTPException
 
-from . import app_state, project_manager, project_transaction, reference_segments, session_store, shot_service
+from . import app_state, project_manager, project_transaction, reference_segments, runtime_state, session_store, shot_service
 from .errors import AppErrorCode, app_error
 from .export_utils import missing_files
 from .image_utils import normalize_hex_color
@@ -139,7 +139,7 @@ class StoryboardBackendService(ExportServiceMixin):
 
     def method_bridge_relink(self) -> dict[str, Any]:
         app_state._require_project(self.app)
-        app_state._touch_live_bridge(self.app, selected_shot_id=self.app.state.live_selected_shot_id)
+        app_state._touch_live_bridge(self.app, selected_shot_id=runtime_state.live_selected_shot_id(self.app))
         return app_state._bridge_status_payload(self.app)
 
     def method_touch_live_bridge(self, selected_shot_id: str | None = None) -> dict[str, Any]:
@@ -582,8 +582,7 @@ class StoryboardBackendService(ExportServiceMixin):
 
     def _request_plugin_focus(self, shot_id: str) -> None:
         """Ask the connected plugin to switch to an already-open shot tab."""
-        self.app.state.live_focus_shot_id = shot_id
-        self.app.state.live_focus_token = int(getattr(self.app.state, "live_focus_token", 0) or 0) + 1
+        runtime_state.request_live_focus(self.app, shot_id)
         app_state._touch_live_bridge(self.app, selected_shot_id=shot_id)
 
     def method_open_source(self, shot_id: str) -> dict[str, str]:

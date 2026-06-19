@@ -14,7 +14,7 @@ from typing import Any
 
 from fastapi import FastAPI, HTTPException
 
-from . import live_bridge, project_manager, session_store, shot_service
+from . import live_bridge, project_manager, runtime_state, session_store, shot_service
 from .errors import AppErrorCode, app_error
 from .models import Project, SHOT_STATUSES, Shot
 
@@ -134,14 +134,14 @@ def _remember_recent(project: Project) -> None:
 
 def _touch_live_bridge(app: FastAPI, *, selected_shot_id: str | None = None) -> dict[str, Any]:
     if selected_shot_id is not None:
-        app.state.live_selected_shot_id = selected_shot_id
+        runtime_state.set_live_selected_shot_id(app, selected_shot_id)
     return live_bridge.publish(
         app.state.base_dir,
         app.state.project,
-        selected_shot_id=str(app.state.live_selected_shot_id or ""),
+        selected_shot_id=runtime_state.live_selected_shot_id(app),
         port=int(app.state.bridge_port),
-        focus_shot_id=str(getattr(app.state, "live_focus_shot_id", "") or ""),
-        focus_token=int(getattr(app.state, "live_focus_token", 0) or 0),
+        focus_shot_id=runtime_state.live_focus_shot_id(app),
+        focus_token=runtime_state.live_focus_token(app),
     )
 
 
@@ -157,7 +157,7 @@ def _plugin_open_shot_ids(app: FastAPI, plugin_linked: bool, file_seen: float, h
 
     heartbeat = live_bridge.read_plugin_heartbeat()
     file_ids = heartbeat.get("open_shot_ids") if isinstance(heartbeat, dict) else None
-    http_ids = getattr(app.state, "plugin_open_shot_ids", None)
+    http_ids = runtime_state.plugin_open_shot_ids(app)
 
     file_open_ids = normalize_ids(file_ids)
     http_open_ids = normalize_ids(http_ids)
@@ -167,7 +167,7 @@ def _plugin_open_shot_ids(app: FastAPI, plugin_linked: bool, file_seen: float, h
 
 def _plugin_link_state(app: FastAPI) -> tuple[bool, float | None, list[str]]:
     """(linked, seconds_since_seen, open_shot_ids) — shared by status + open-source."""
-    http_seen = float(getattr(app.state, "plugin_last_seen", 0.0) or 0.0)
+    http_seen = runtime_state.plugin_last_seen(app)
     file_seen = live_bridge.read_plugin_heartbeat_mtime()
     last_seen = max(http_seen, file_seen)
     age = round(time.time() - last_seen, 1) if last_seen else None
@@ -182,7 +182,7 @@ def _plugin_selected_shot_id(
     file_seen: float | None = None,
     http_seen: float | None = None,
 ) -> str:
-    http_seen_value = float(getattr(app.state, "plugin_last_seen", 0.0) or 0.0) if http_seen is None else http_seen
+    http_seen_value = runtime_state.plugin_last_seen(app) if http_seen is None else http_seen
     file_seen_value = live_bridge.read_plugin_heartbeat_mtime() if file_seen is None else file_seen
     if plugin_linked is None:
         last_seen = max(http_seen_value, file_seen_value)
@@ -191,7 +191,7 @@ def _plugin_selected_shot_id(
     if not plugin_linked:
         return ""
 
-    http_selected = str(getattr(app.state, "plugin_selected_shot_id", "") or "")
+    http_selected = runtime_state.plugin_selected_shot_id(app)
     heartbeat = live_bridge.read_plugin_heartbeat()
     file_selected = str(heartbeat.get("selected_shot_id") or "") if isinstance(heartbeat, dict) else ""
     primary, fallback = (file_selected, http_selected) if file_seen_value >= http_seen_value else (http_selected, file_selected)
@@ -201,12 +201,10 @@ def _plugin_selected_shot_id(
 def _bridge_status_payload(app: FastAPI) -> dict[str, Any]:
     live = _touch_live_bridge(app)
     project = app.state.project
-    http_seen = float(getattr(app.state, "plugin_last_seen", 0.0) or 0.0)
+    http_seen = runtime_state.plugin_last_seen(app)
     file_seen = live_bridge.read_plugin_heartbeat_mtime()
     plugin_linked, age, open_shot_ids = _plugin_link_state(app)
-    last_exported = getattr(app.state, "plugin_last_exported_preview", {})
-    if not isinstance(last_exported, dict):
-        last_exported = {}
+    last_exported = runtime_state.plugin_last_exported_preview(app)
     return {
         "app_running": True,
         "project_open": project is not None,
@@ -215,7 +213,7 @@ def _bridge_status_payload(app: FastAPI) -> dict[str, Any]:
         "plugin_selected_shot_id": _plugin_selected_shot_id(app, plugin_linked, file_seen, http_seen),
         "plugin_open_shot_ids": open_shot_ids,
         "plugin_last_exported_preview": last_exported,
-        "plugin_project_revision": int(getattr(app.state, "plugin_project_revision", 0) or 0),
+        "plugin_project_revision": runtime_state.plugin_project_revision(app),
         "bridge_url": live.get("bridge_url", f"http://127.0.0.1:{app.state.bridge_port}/api/bridge/live"),
         "global_bridge_path": live.get("global_bridge_path", str(live_bridge.global_bridge_file_path())),
         "shared_bridge_path": live.get("shared_bridge_path", str(live_bridge.shared_bridge_file_path())),

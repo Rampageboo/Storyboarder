@@ -13,7 +13,7 @@ from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from . import app_state, project_manager
+from . import app_state, project_manager, runtime_state
 from .backend_service import StoryboardBackendService
 from .errors import AppErrorCode
 from .logging_config import setup_logging
@@ -224,15 +224,7 @@ def create_app(base_dir: Path, bridge_port: int = 8000) -> FastAPI:
     app.state.project = None
     app.state.project_disk_mtime = 0.0
     app.state.dirty = False
-    app.state.live_selected_shot_id = ""
-    app.state.bridge_port = bridge_port
-    app.state.plugin_last_seen = 0.0
-    app.state.plugin_open_shot_ids = []
-    app.state.plugin_selected_shot_id = ""
-    app.state.plugin_last_exported_preview = {}
-    app.state.plugin_project_revision = 0
-    app.state.live_focus_shot_id = ""
-    app.state.live_focus_token = 0
+    runtime_state.init_bridge_state(app, bridge_port)
 
     def _svc() -> StoryboardBackendService:
         return StoryboardBackendService(app)

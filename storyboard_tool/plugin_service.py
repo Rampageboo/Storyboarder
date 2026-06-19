@@ -1,12 +1,11 @@
 from __future__ import annotations
 
-import time
 from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI, HTTPException
 
-from . import app_state, project_manager
+from . import app_state, project_manager, runtime_state
 from .models import Shot
 
 
@@ -17,18 +16,10 @@ class PluginBridgeService:
         self.app = app
 
     def mark_project_changed(self) -> None:
-        self.app.state.plugin_project_revision = int(getattr(self.app.state, "plugin_project_revision", 0) or 0) + 1
+        runtime_state.mark_plugin_project_changed(self.app)
 
     def heartbeat(self, payload: dict[str, Any] | None = None) -> dict[str, str]:
-        data = payload if isinstance(payload, dict) else {}
-        self.app.state.plugin_last_seen = time.time()
-        selected = str(data.get("selected_shot_id") or "").strip()
-        if selected:
-            self.app.state.plugin_selected_shot_id = selected
-            self.app.state.live_selected_shot_id = selected
-        open_ids = data.get("open_shot_ids")
-        if isinstance(open_ids, list):
-            self.app.state.plugin_open_shot_ids = [str(item) for item in open_ids if item]
+        runtime_state.record_plugin_heartbeat(self.app, payload)
         return {"ok": "true"}
 
     def context(self) -> dict[str, Any]:
@@ -39,12 +30,12 @@ class PluginBridgeService:
         canvas_width, canvas_height = project_manager.get_canvas_size(project)
         selected_shot_id = str(
             app_state._plugin_selected_shot_id(self.app)
-            or getattr(self.app.state, "live_selected_shot_id", "")
+            or runtime_state.live_selected_shot_id(self.app)
             or ""
         )
         if selected_shot_id and all(shot.shot_id != selected_shot_id for shot in project.shots):
             selected_shot_id = ""
-        focused_shot_id = str(getattr(self.app.state, "live_focus_shot_id", "") or "")
+        focused_shot_id = runtime_state.live_focus_shot_id(self.app)
         shots = [self.shot_payload(project, shot) for shot in project.shots]
         selected_index = next(
             (index for index, shot in enumerate(project.shots) if shot.shot_id == selected_shot_id),
@@ -96,11 +87,7 @@ class PluginBridgeService:
             project_manager.relink_preview_image(project, shot, preview_rel)
         except (ValueError, FileNotFoundError) as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-        exported = getattr(self.app.state, "plugin_last_exported_preview", None)
-        if not isinstance(exported, dict):
-            exported = {}
-            self.app.state.plugin_last_exported_preview = exported
-        exported[shot.shot_id] = time.time()
+        runtime_state.mark_plugin_preview_exported(self.app, shot.shot_id)
         app_state._autosave(self.app)
         self.mark_project_changed()
         return {
@@ -128,15 +115,14 @@ class PluginBridgeService:
     def focus_shot(self, shot_id: str) -> dict[str, Any]:
         project = app_state._require_project(self.app)
         app_state._find_shot(project, shot_id)
-        self.app.state.plugin_selected_shot_id = shot_id
-        self.app.state.live_selected_shot_id = shot_id
+        runtime_state.set_plugin_and_live_selected_shot_id(self.app, shot_id)
         app_state._persist_app_session(self.app, selected_shot_id=shot_id)
         app_state._touch_live_bridge(self.app, selected_shot_id=shot_id)
         return self.context()
 
     def next_shot(self, current_shot_id: str | None = None, auto_add: bool = False) -> dict[str, Any]:
         project = app_state._require_project(self.app)
-        current = str(current_shot_id or getattr(self.app.state, "plugin_selected_shot_id", "") or "").strip()
+        current = str(current_shot_id or runtime_state.plugin_selected_shot_id(self.app) or "").strip()
         index = app_state._find_shot_index(project, current) if current else -1
         created = None
         if index >= 0 and index + 1 < len(project.shots):
@@ -148,8 +134,7 @@ class PluginBridgeService:
             self.mark_project_changed()
         else:
             return {"shot": None, "created": False, "context": self.context()}
-        self.app.state.plugin_selected_shot_id = next_shot.shot_id
-        self.app.state.live_selected_shot_id = next_shot.shot_id
+        runtime_state.set_plugin_and_live_selected_shot_id(self.app, next_shot.shot_id)
         app_state._touch_live_bridge(self.app, selected_shot_id=next_shot.shot_id)
         return {
             "shot": self.shot_payload(project, next_shot),
@@ -196,9 +181,7 @@ class PluginBridgeService:
         psd_size = psd.stat().st_size if psd and psd.is_file() else 0
         psd_mtime = psd.stat().st_mtime if psd and psd.is_file() else 0.0
         preview_mtime = preview.stat().st_mtime if preview and preview.is_file() else 0.0
-        last_exported = getattr(self.app.state, "plugin_last_exported_preview", {})
-        if not isinstance(last_exported, dict):
-            last_exported = {}
+        last_exported = runtime_state.plugin_last_exported_preview(self.app)
         return {
             "psd_exists": bool(psd and psd.is_file()),
             "preview_exists": bool(preview and preview.is_file()),
