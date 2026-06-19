@@ -665,6 +665,14 @@ def import_source_file_stream(
 
 def relink_preview_image(project: Project, shot: Shot, preview_rel: str) -> Path:
     candidate = resolve_project_relative_path(project, preview_rel)
+    # The background plate must never become the artwork preview.  Accepting it
+    # here would let the plugin (or any caller) set image_path /
+    # preview_image_path to the background file — exactly the corruption the
+    # asset ownership model is designed to prevent.
+    if candidate.name == board_background_filename(shot.shot_id):
+        raise ValueError(
+            f"Background plate cannot be used as preview metadata: {preview_rel}"
+        )
     if not candidate.is_file():
         raise FileNotFoundError(f"Preview not found: {preview_rel}")
     _set_shot_preview_paths(project, shot, candidate)

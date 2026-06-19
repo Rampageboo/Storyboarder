@@ -225,6 +225,9 @@
 
   if (typeof saveShotsCsv === "function") {
     const saveShotsCsvFallback = saveShotsCsv;
+    // FALLBACK-OFFLINE-ONLY: shots.csv writes are suppressed in backend-linked
+    // mode.  The backend owns canonical metadata; the plugin must not write
+    // project files directly when linked.
     saveShotsCsv = async function saveShotsCsvOnlyWhenStandalone(shots) {
       if (isBackendLinkedMode()) {
         await refreshProjectDataFromBackendIfAvailable();
@@ -235,6 +238,10 @@
   }
 
   if (typeof saveProjectJson === "function") {
+    // FALLBACK-OFFLINE-ONLY: project.json / shots.json writes are suppressed in
+    // backend-linked mode.  In linked mode the backend is the single writer of
+    // canonical project metadata.  Standalone/offline mode may still write these
+    // files for round-trip compatibility.
     saveProjectJson = async function saveCanonicalProjectData() {
       if (isBackendLinkedMode()) {
         await refreshProjectDataFromBackendIfAvailable();
@@ -295,14 +302,27 @@
   }
 
   if (typeof addShotToProject === "function") {
+    // In backend-linked mode the backend is the only writer of shot metadata.
+    // If the backend call fails, this throws so the user knows the request did
+    // not go through — it must never silently fall through to a local metadata
+    // write while linked.
+    //
+    // FALLBACK-OFFLINE-ONLY: the local create path below runs only when the
+    // panel is in standalone/offline mode (linkedFromStoryboard === false).
     addShotToProject = async function addShotViaBackendWhenLinked() {
       if (linkedFromStoryboard) {
         const created = await requestBackendAddShot();
         if (created) {
           return created;
         }
+        // Backend was reachable enough to attempt but returned no shot — surface
+        // an error instead of falling through to a local metadata write.
+        throw new Error(
+          "Could not add shot: Storyboard Tool backend is unavailable. Try relinking.",
+        );
       }
 
+      // FALLBACK-OFFLINE-ONLY: standalone mode — backend is not connected.
       requireProjectRoot();
       const shot = createEmptyShot(nextShotId());
       projectData.shots.push(shot);
