@@ -5,7 +5,7 @@ import re
 import shutil
 import uuid
 from pathlib import Path
-from typing import Any, BinaryIO
+from typing import Any, BinaryIO, Callable
 
 from . import project_manager as pm
 from .image_utils import (
@@ -876,6 +876,70 @@ def _persist_ref_segment_apply(
     save_shots(project.root_path, project.shots)
 
 
+def _apply_ref_segment_template(
+    project: Project,
+    *,
+    min_index: int,
+    max_index: int,
+    seg: dict[str, Any],
+    segment_id: str | None,
+    source_type: str,
+    prepare_apply: Callable[[str | None], dict[str, Any]],
+    apply_board: Callable[[int, Shot, float], tuple[float | None, dict[str, Any]]],
+    after_loop: Callable[[], None] | None = None,
+    include_undo_token: bool = True,
+) -> dict[str, Any]:
+    shots = project.shots
+    undo_token = snapshot_boards_for_undo(project, min_index, max_index) if include_undo_token else None
+    prepared = prepare_apply(undo_token)
+    applied: list[dict[str, Any]] = []
+    segment_offset = 0.0
+    stamp_segment_id = str(prepared.get("stamp_segment_id", seg.get("id", segment_id or "")) or "")
+    stamp_applied_at = prepared.get("stamp_applied_at")
+
+    for index in range(min_index, max_index + 1):
+        shot = shots[index]
+        segment_time = segment_offset
+        frame_time, row_extra = apply_board(index, shot, segment_time)
+        _stamp_ref_segment_provenance(
+            shot,
+            stamp_segment_id,
+            source_type,
+            frame_time=frame_time,
+            applied_at=stamp_applied_at if isinstance(stamp_applied_at, str) else None,
+        )
+        applied_row = {
+            "shot_id": shot.shot_id,
+            "board_index": index,
+            "segment_time": round(segment_time, 3),
+        }
+        applied_row.update(row_extra)
+        applied.append(applied_row)
+        segment_offset += max(0.1, float(shot.duration_seconds or 3))
+
+    if after_loop is not None:
+        after_loop()
+
+    _persist_ref_segment_apply(
+        project,
+        seg=seg,
+        segment_id=segment_id,
+        min_index=min_index,
+        max_index=max_index,
+        apply_meta=prepared["apply_meta"],
+        segment_patch=prepared.get("segment_patch"),
+    )
+    result = {
+        "board_count": len(applied),
+        "segment_duration": round(segment_offset, 3),
+    }
+    result.update(prepared.get("result_extra", {}))
+    result["applied"] = applied
+    if include_undo_token:
+        result["undo_token"] = undo_token
+    return result
+
+
 def apply_ref_segment_to_boards(
     project: Project,
     anchor_index: int,
@@ -888,102 +952,88 @@ def apply_ref_segment_to_boards(
 
     shots = project.shots
     min_index, max_index = _segment_board_range(shots, anchor_index, end_index)
-
     video_seg = find_ref_segment(project, segment_id) or {}
     video_rel, video_path = _validate_segment_reference(project, video_seg, "video")
+    state: dict[str, Any] = {}
 
-    undo_token = snapshot_boards_for_undo(project, min_index, max_index)
-
-    video_duration = get_video_duration(video_path)
-    video_mtime = video_path.stat().st_mtime
-    segment_offset = 0.0
-    storyboard_duration = _segment_storyboard_duration(shots, min_index, max_index)
-
-    try:
-        video_start = max(0.0, float(video_seg.get("video_start", 0.0) or 0.0))
-    except (TypeError, ValueError):
-        video_start = 0.0
-    if not video_seg:
-        legacy = project.settings.get("ref_segment_video") or {}
+    def prepare_apply(_undo_token: str | None) -> dict[str, Any]:
+        video_duration = get_video_duration(video_path)
+        video_mtime = video_path.stat().st_mtime
+        storyboard_duration = _segment_storyboard_duration(shots, min_index, max_index)
         try:
-            video_start = max(0.0, float(legacy.get("start", 0.0) or 0.0))
+            video_start = max(0.0, float(video_seg.get("video_start", 0.0) or 0.0))
         except (TypeError, ValueError):
             video_start = 0.0
-    if video_duration > 0:
-        if storyboard_duration >= video_duration:
-            video_start = 0.0
-        else:
-            video_start = min(video_start, max(0.0, video_duration - storyboard_duration))
-        video_span = max(0.001, min(storyboard_duration, video_duration - video_start))
-    else:
-        video_span = max(0.001, storyboard_duration)
-    fit_mode = normalize_reference_fit_mode(str(video_seg.get("fit_mode", "") or "fit"))
-    applied: list[dict[str, Any]] = []
-
-    for index in range(min_index, max_index + 1):
-        shot = shots[index]
-        segment_time = segment_offset
-        if storyboard_duration > 0:
-            ratio = segment_time / storyboard_duration
-            video_time = video_start + ratio * video_span
-        else:
-            video_time = video_start
+        if not video_seg:
+            legacy = project.settings.get("ref_segment_video") or {}
+            try:
+                video_start = max(0.0, float(legacy.get("start", 0.0) or 0.0))
+            except (TypeError, ValueError):
+                video_start = 0.0
         if video_duration > 0:
-            video_time = min(video_time, max(0.0, video_duration - 0.001))
+            if storyboard_duration >= video_duration:
+                video_start = 0.0
+            else:
+                video_start = min(video_start, max(0.0, video_duration - storyboard_duration))
+            video_span = max(0.001, min(storyboard_duration, video_duration - video_start))
+        else:
+            video_span = max(0.001, storyboard_duration)
+        fit_mode = normalize_reference_fit_mode(str(video_seg.get("fit_mode", "") or "fit"))
+        state.update(
+            video_duration=video_duration,
+            storyboard_duration=storyboard_duration,
+            video_start=video_start,
+            video_span=video_span,
+            fit_mode=fit_mode,
+        )
+        return {
+            "apply_meta": {
+                "segment_id": video_seg.get("id", segment_id or ""),
+                "anchor_shot_id": shots[min_index].shot_id,
+                "end_shot_id": shots[max_index].shot_id,
+                "reference_video_path": video_rel,
+                "video_mtime": video_mtime,
+                "video_start": round(video_start, 3),
+                "storyboard_duration": round(storyboard_duration, 3),
+                "fit_mode": fit_mode,
+                "applied_at": datetime.now(timezone.utc).isoformat(),
+            },
+            "segment_patch": {"video_start": round(video_start, 3)},
+            "result_extra": {"video_duration": round(video_duration, 3)},
+        }
+
+    def apply_board(index: int, shot: Shot, segment_time: float) -> tuple[float, dict[str, Any]]:
+        if state["storyboard_duration"] > 0:
+            ratio = segment_time / state["storyboard_duration"]
+            video_time = state["video_start"] + ratio * state["video_span"]
+        else:
+            video_time = state["video_start"]
+        if state["video_duration"] > 0:
+            video_time = min(video_time, max(0.0, state["video_duration"] - 0.001))
         else:
             video_time = 0.0
         shot_dir = pm.get_shot_dir(project, shot)
         raw_path = shot_dir / f"{shot.shot_id}_ref_raw.png"
         extract_video_frame_to_png(video_path, video_time, raw_path)
         try:
-            pm._apply_reference_frame_to_shot(project, shot, raw_path, fit_mode)
+            pm._apply_reference_frame_to_shot(project, shot, raw_path, state["fit_mode"])
         finally:
             raw_path.unlink(missing_ok=True)
         shot.ref_video_path = video_rel
         shot.ref_video_time = round(video_time, 3)
         shot.ref_segment_time = round(segment_time, 3)
-        _stamp_ref_segment_provenance(
-            shot,
-            str(video_seg.get("id", segment_id or "") or ""),
-            "video",
-            frame_time=video_time,
-        )
-        applied.append(
-            {
-                "shot_id": shot.shot_id,
-                "board_index": index,
-                "segment_time": round(segment_time, 3),
-                "video_time": round(video_time, 3),
-            }
-        )
-        segment_offset += max(0.1, float(shot.duration_seconds or 3))
+        return video_time, {"video_time": round(video_time, 3)}
 
-    _persist_ref_segment_apply(
+    return _apply_ref_segment_template(
         project,
-        seg=video_seg,
-        segment_id=segment_id,
         min_index=min_index,
         max_index=max_index,
-        apply_meta={
-            "segment_id": video_seg.get("id", segment_id or ""),
-            "anchor_shot_id": shots[min_index].shot_id,
-            "end_shot_id": shots[max_index].shot_id,
-            "reference_video_path": video_rel,
-            "video_mtime": video_mtime,
-            "video_start": round(video_start, 3),
-            "storyboard_duration": round(storyboard_duration, 3),
-            "fit_mode": fit_mode,
-            "applied_at": datetime.now(timezone.utc).isoformat(),
-        },
-        segment_patch={"video_start": round(video_start, 3)},
+        seg=video_seg,
+        segment_id=segment_id,
+        source_type="video",
+        prepare_apply=prepare_apply,
+        apply_board=apply_board,
     )
-    return {
-        "board_count": len(applied),
-        "segment_duration": round(segment_offset, 3),
-        "video_duration": round(video_duration, 3),
-        "applied": applied,
-        "undo_token": undo_token,
-    }
 
 
 def apply_ref_segment_3d_to_boards(
@@ -1008,53 +1058,69 @@ def apply_ref_segment_3d_to_boards(
 
     shots = project.shots
     min_index, max_index = _segment_board_range(shots, anchor_index, end_index)
-
     model_seg = find_ref_segment(project, segment_id) or {}
     model_rel, model_path = _validate_segment_reference(project, model_seg, "model")
+    state: dict[str, Any] = {}
 
-    model_mtime = model_path.stat().st_mtime
-    segment_offset = 0.0
-    storyboard_duration = _segment_storyboard_duration(shots, min_index, max_index)
-
-    try:
-        anim_start = max(0.0, float(model_seg.get("video_start", 0.0) or 0.0))
-    except (TypeError, ValueError):
-        anim_start = 0.0
-    if not model_seg:
-        legacy = project.settings.get("ref_segment_video") or {}
+    def prepare_apply(_undo_token: str | None) -> dict[str, Any]:
+        model_mtime = model_path.stat().st_mtime
+        storyboard_duration = _segment_storyboard_duration(shots, min_index, max_index)
         try:
-            anim_start = max(0.0, float(legacy.get("start", 0.0) or 0.0))
+            anim_start = max(0.0, float(model_seg.get("video_start", 0.0) or 0.0))
         except (TypeError, ValueError):
             anim_start = 0.0
-
-    anim_span = max(0.001, storyboard_duration)
-    fit_mode = normalize_reference_fit_mode(str(model_seg.get("fit_mode", "") or "fit"))
-    applied: list[dict[str, Any]] = []
-
-    eligible_preview_indices: set[int] = set()
-    for index in range(min_index, max_index + 1):
-        shot = shots[index]
-        preview_rel = str(shot.preview_image_path or shot.image_path or "").strip()
-        if not preview_rel:
-            continue
-        preview_path = (project.root_path / preview_rel).resolve()
-        if not preview_path.is_file() or is_solid_color_image(preview_path):
-            continue
-        eligible_preview_indices.add(index)
-    if not eligible_preview_indices:
-        raise ValueError(
-            "3D reference apply needs existing non-empty board previews in range. "
-            "Capture a board preview first (Scene3D/Photoshop), or use image/video reference apply."
+        if not model_seg:
+            legacy = project.settings.get("ref_segment_video") or {}
+            try:
+                anim_start = max(0.0, float(legacy.get("start", 0.0) or 0.0))
+            except (TypeError, ValueError):
+                anim_start = 0.0
+        anim_span = max(0.001, storyboard_duration)
+        fit_mode = normalize_reference_fit_mode(str(model_seg.get("fit_mode", "") or "fit"))
+        eligible_preview_indices: set[int] = set()
+        for index in range(min_index, max_index + 1):
+            shot = shots[index]
+            preview_rel = str(shot.preview_image_path or shot.image_path or "").strip()
+            if not preview_rel:
+                continue
+            preview_path = (project.root_path / preview_rel).resolve()
+            if not preview_path.is_file() or is_solid_color_image(preview_path):
+                continue
+            eligible_preview_indices.add(index)
+        if not eligible_preview_indices:
+            raise ValueError(
+                "3D reference apply needs existing non-empty board previews in range. "
+                "Capture a board preview first (Scene3D/Photoshop), or use image/video reference apply."
+            )
+        state.update(
+            storyboard_duration=storyboard_duration,
+            anim_start=anim_start,
+            anim_span=anim_span,
+            fit_mode=fit_mode,
+            eligible_preview_indices=eligible_preview_indices,
         )
+        return {
+            "apply_meta": {
+                "segment_id": model_seg.get("id", segment_id or ""),
+                "anchor_shot_id": shots[min_index].shot_id,
+                "end_shot_id": shots[max_index].shot_id,
+                "source_type": "model",
+                "reference_model_path": model_rel,
+                "model_mtime": model_mtime,
+                "video_start": round(anim_start, 3),
+                "storyboard_duration": round(storyboard_duration, 3),
+                "fit_mode": fit_mode,
+                "applied_at": datetime.now(timezone.utc).isoformat(),
+            },
+            "segment_patch": {"video_start": round(anim_start, 3), "source_type": "model"},
+        }
 
-    for index in range(min_index, max_index + 1):
-        shot = shots[index]
-        segment_time = segment_offset
-        if storyboard_duration > 0:
-            ratio = segment_time / storyboard_duration
-            anim_time = anim_start + ratio * anim_span
+    def apply_board(index: int, shot: Shot, segment_time: float) -> tuple[float, dict[str, Any]]:
+        if state["storyboard_duration"] > 0:
+            ratio = segment_time / state["storyboard_duration"]
+            anim_time = state["anim_start"] + ratio * state["anim_span"]
         else:
-            anim_time = anim_start
+            anim_time = state["anim_start"]
         anim_time = max(0.0, anim_time)
         camera_data = dict(shot.camera_data or {})
         camera_data["scene3d_time"] = round(anim_time, 3)
@@ -1064,59 +1130,33 @@ def apply_ref_segment_3d_to_boards(
         shot.ref_video_path = model_rel
         shot.ref_video_time = round(anim_time, 3)
         shot.ref_segment_time = round(segment_time, 3)
-        _stamp_ref_segment_provenance(
-            shot,
-            str(model_seg.get("id", segment_id or "") or ""),
-            "model",
-            frame_time=anim_time,
-        )
-        applied.append(
-            {
-                "shot_id": shot.shot_id,
-                "board_index": index,
-                "segment_time": round(segment_time, 3),
-                "animation_time": round(anim_time, 3),
-            }
-        )
-        segment_offset += max(0.1, float(shot.duration_seconds or 3))
+        return anim_time, {"animation_time": round(anim_time, 3)}
 
-    for index in range(min_index, max_index + 1):
-        shot = shots[index]
-        preview_rel = str(shot.preview_image_path or shot.image_path or "").strip()
-        if not preview_rel:
-            continue
-        preview_path = (project.root_path / preview_rel).resolve()
-        if not preview_path.is_file():
-            continue
-        if index not in eligible_preview_indices:
-            continue
-        pm._apply_reference_frame_to_shot(project, shot, preview_path, fit_mode)
+    def after_loop() -> None:
+        for index in range(min_index, max_index + 1):
+            shot = shots[index]
+            preview_rel = str(shot.preview_image_path or shot.image_path or "").strip()
+            if not preview_rel:
+                continue
+            preview_path = (project.root_path / preview_rel).resolve()
+            if not preview_path.is_file():
+                continue
+            if index not in state["eligible_preview_indices"]:
+                continue
+            pm._apply_reference_frame_to_shot(project, shot, preview_path, state["fit_mode"])
 
-    _persist_ref_segment_apply(
+    return _apply_ref_segment_template(
         project,
-        seg=model_seg,
-        segment_id=segment_id,
         min_index=min_index,
         max_index=max_index,
-        apply_meta={
-            "segment_id": model_seg.get("id", segment_id or ""),
-            "anchor_shot_id": shots[min_index].shot_id,
-            "end_shot_id": shots[max_index].shot_id,
-            "source_type": "model",
-            "reference_model_path": model_rel,
-            "model_mtime": model_mtime,
-            "video_start": round(anim_start, 3),
-            "storyboard_duration": round(storyboard_duration, 3),
-            "fit_mode": fit_mode,
-            "applied_at": datetime.now(timezone.utc).isoformat(),
-        },
-        segment_patch={"video_start": round(anim_start, 3), "source_type": "model"},
+        seg=model_seg,
+        segment_id=segment_id,
+        source_type="model",
+        prepare_apply=prepare_apply,
+        apply_board=apply_board,
+        after_loop=after_loop,
+        include_undo_token=False,
     )
-    return {
-        "board_count": len(applied),
-        "segment_duration": round(segment_offset, 3),
-        "applied": applied,
-    }
 
 
 def apply_model_captures_to_boards(
@@ -1154,28 +1194,41 @@ def apply_model_captures_to_boards(
 
     model_seg = find_ref_segment(project, segment_id or None) or {}
     model_rel, model_path = _validate_segment_reference(project, model_seg, "model")
-
     fit_mode = normalize_reference_fit_mode(str(model_seg.get("fit_mode", "") or "fit"))
     seg_id = str(model_seg.get("id", segment_id or "") or "").strip()
-    undo_token = snapshot_boards_for_undo(project, min_index, max_index)
-    model_mtime = model_path.stat().st_mtime
-    storyboard_duration = _segment_storyboard_duration(shots, min_index, max_index)
-    applied_at = datetime.now(timezone.utc).isoformat()
-    applied: list[dict[str, Any]] = []
-    segment_offset = 0.0
     camera_name = str(camera_name or "").strip()
 
-    try:
-        video_start = max(0.0, float(model_seg.get("video_start", 0.0) or 0.0))
-    except (TypeError, ValueError):
-        video_start = 0.0
+    def prepare_apply(_undo_token: str | None) -> dict[str, Any]:
+        model_mtime = model_path.stat().st_mtime
+        storyboard_duration = _segment_storyboard_duration(shots, min_index, max_index)
+        applied_at = datetime.now(timezone.utc).isoformat()
+        try:
+            video_start = max(0.0, float(model_seg.get("video_start", 0.0) or 0.0))
+        except (TypeError, ValueError):
+            video_start = 0.0
+        return {
+            "apply_meta": {
+                "segment_id": seg_id,
+                "anchor_shot_id": shots[min_index].shot_id,
+                "end_shot_id": shots[max_index].shot_id,
+                "source_type": "model",
+                "reference_model_path": model_rel,
+                "model_mtime": model_mtime,
+                "video_start": round(video_start, 3),
+                "storyboard_duration": round(storyboard_duration, 3),
+                "fit_mode": fit_mode,
+                "applied_at": applied_at,
+            },
+            "segment_patch": {"video_start": round(video_start, 3), "source_type": "model"},
+            "stamp_segment_id": seg_id,
+            "stamp_applied_at": applied_at,
+        }
 
-    for index in range(min_index, max_index + 1):
-        shot = shots[index]
+    def apply_board(index: int, shot: Shot, segment_time: float) -> tuple[float, dict[str, Any]]:
         capture = capture_by_shot[shot.shot_id]
         animation_time = capture.get("animation_time")
         if animation_time is None:
-            anim_time = segment_offset
+            anim_time = segment_time
         else:
             anim_time = max(0.0, float(animation_time))
         shot_dir = pm.get_shot_dir(project, shot)
@@ -1193,49 +1246,18 @@ def apply_model_captures_to_boards(
         if camera_name:
             camera_data["scene3d_camera"] = camera_name
         shot.camera_data = camera_data
-        _stamp_ref_segment_provenance(
-            shot,
-            seg_id,
-            "model",
-            frame_time=anim_time,
-            applied_at=applied_at,
-        )
-        applied.append(
-            {
-                "shot_id": shot.shot_id,
-                "board_index": index,
-                "segment_time": round(segment_offset, 3),
-                "animation_time": round(anim_time, 3),
-            }
-        )
-        segment_offset += max(0.1, float(shot.duration_seconds or 3))
+        return anim_time, {"animation_time": round(anim_time, 3)}
 
-    _persist_ref_segment_apply(
+    return _apply_ref_segment_template(
         project,
-        seg=model_seg,
-        segment_id=segment_id or None,
         min_index=min_index,
         max_index=max_index,
-        apply_meta={
-            "segment_id": seg_id,
-            "anchor_shot_id": shots[min_index].shot_id,
-            "end_shot_id": shots[max_index].shot_id,
-            "source_type": "model",
-            "reference_model_path": model_rel,
-            "model_mtime": model_mtime,
-            "video_start": round(video_start, 3),
-            "storyboard_duration": round(storyboard_duration, 3),
-            "fit_mode": fit_mode,
-            "applied_at": applied_at,
-        },
-        segment_patch={"video_start": round(video_start, 3), "source_type": "model"},
+        seg=model_seg,
+        segment_id=segment_id or None,
+        source_type="model",
+        prepare_apply=prepare_apply,
+        apply_board=apply_board,
     )
-    return {
-        "board_count": len(applied),
-        "segment_duration": round(segment_offset, 3),
-        "applied": applied,
-        "undo_token": undo_token,
-    }
 
 
 def apply_ref_segment_image_to_boards(
@@ -1248,65 +1270,47 @@ def apply_ref_segment_image_to_boards(
 
     shots = project.shots
     min_index, max_index = _segment_board_range(shots, anchor_index, end_index)
-
     image_seg = find_ref_segment(project, segment_id) or {}
     image_rel, image_path = _validate_segment_reference(project, image_seg, "image")
+    state: dict[str, Any] = {}
 
-    undo_token = snapshot_boards_for_undo(project, min_index, max_index)
+    def prepare_apply(_undo_token: str | None) -> dict[str, Any]:
+        image_mtime = image_path.stat().st_mtime
+        storyboard_duration = _segment_storyboard_duration(shots, min_index, max_index)
+        fit_mode = normalize_reference_fit_mode(str(image_seg.get("fit_mode", "") or "fit"))
+        state.update(fit_mode=fit_mode)
+        return {
+            "apply_meta": {
+                "segment_id": image_seg.get("id", segment_id or ""),
+                "anchor_shot_id": shots[min_index].shot_id,
+                "end_shot_id": shots[max_index].shot_id,
+                "source_type": "image",
+                "reference_image_path": image_rel,
+                "image_mtime": image_mtime,
+                "storyboard_duration": round(storyboard_duration, 3),
+                "fit_mode": fit_mode,
+                "applied_at": datetime.now(timezone.utc).isoformat(),
+            },
+            "segment_patch": {"video_start": 0.0, "source_type": "image"},
+        }
 
-    image_mtime = image_path.stat().st_mtime
-    segment_offset = 0.0
-    storyboard_duration = _segment_storyboard_duration(shots, min_index, max_index)
-
-    fit_mode = normalize_reference_fit_mode(str(image_seg.get("fit_mode", "") or "fit"))
-    applied: list[dict[str, Any]] = []
-    for index in range(min_index, max_index + 1):
-        shot = shots[index]
-        segment_time = segment_offset
-        pm._apply_reference_frame_to_shot(project, shot, image_path, fit_mode)
+    def apply_board(_index: int, shot: Shot, segment_time: float) -> tuple[float, dict[str, Any]]:
+        pm._apply_reference_frame_to_shot(project, shot, image_path, state["fit_mode"])
         shot.ref_video_path = image_rel
         shot.ref_video_time = 0.0
         shot.ref_segment_time = round(segment_time, 3)
-        _stamp_ref_segment_provenance(
-            shot,
-            str(image_seg.get("id", segment_id or "") or ""),
-            "image",
-            frame_time=segment_time,
-        )
-        applied.append(
-            {
-                "shot_id": shot.shot_id,
-                "board_index": index,
-                "segment_time": round(segment_time, 3),
-            }
-        )
-        segment_offset += max(0.1, float(shot.duration_seconds or 3))
+        return segment_time, {}
 
-    _persist_ref_segment_apply(
+    return _apply_ref_segment_template(
         project,
-        seg=image_seg,
-        segment_id=segment_id,
         min_index=min_index,
         max_index=max_index,
-        apply_meta={
-            "segment_id": image_seg.get("id", segment_id or ""),
-            "anchor_shot_id": shots[min_index].shot_id,
-            "end_shot_id": shots[max_index].shot_id,
-            "source_type": "image",
-            "reference_image_path": image_rel,
-            "image_mtime": image_mtime,
-            "storyboard_duration": round(storyboard_duration, 3),
-            "fit_mode": fit_mode,
-            "applied_at": datetime.now(timezone.utc).isoformat(),
-        },
-        segment_patch={"video_start": 0.0, "source_type": "image"},
+        seg=image_seg,
+        segment_id=segment_id,
+        source_type="image",
+        prepare_apply=prepare_apply,
+        apply_board=apply_board,
     )
-    return {
-        "board_count": len(applied),
-        "segment_duration": round(segment_offset, 3),
-        "applied": applied,
-        "undo_token": undo_token,
-    }
 
 
 
