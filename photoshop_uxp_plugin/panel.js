@@ -1514,6 +1514,22 @@ async function placeFileEntryAsLayer(entry) {
   return app.activeDocument.activeLayers[0];
 }
 
+async function placeFileEntryAsLinkedLayer(entry) {
+  const token = await fs.createSessionToken(entry);
+  await photoshop.action.batchPlay(
+    [
+      {
+        _obj: "placeEvent",
+        null: { _path: token, _kind: "local" },
+        linked: true,
+        freeTransformCenterState: { _enum: "quadCenterState", _value: "QCSAverage" },
+      },
+    ],
+    { synchronousExecution: true },
+  );
+  return app.activeDocument.activeLayers[0];
+}
+
 function layerPixelSize(layer) {
   const bounds = layer?.bounds;
   if (!bounds) {
@@ -1634,8 +1650,13 @@ async function importBoardBackgroundInModal(shotId, entry = null) {
   }
 
   const previousActiveIds = captureActiveLayerIds(doc);
-  await removeBoardBackgroundLayerInModal(doc);
-  const placedLayer = await placeFileEntryAsLayer(resolvedEntry);
+  const existingLayer = findBoardBackgroundLayer(doc);
+  if (existingLayer) {
+    await ensureBoardBackgroundStackOrderInModal(doc);
+    restoreActiveLayersByIds(doc, previousActiveIds);
+    return false;
+  }
+  const placedLayer = await placeFileEntryAsLinkedLayer(resolvedEntry);
   if (placedLayer) {
     await fitLayerToDocumentInModal(placedLayer);
   }
@@ -1679,10 +1700,10 @@ async function boardBackgroundSignature(entry) {
   return null;
 }
 
-// Decide — without opening a modal — whether the board background layer needs
-// to be rebuilt. Adopts the on-disk signature as the baseline the first time so
-// passive re-syncs become no-ops until the file genuinely changes.
 async function boardBackgroundRefreshNeeded(shotId, force = false) {
+  // Linked `SB bg` layers should survive ordinary file changes. Photoshop owns
+  // linked-content refresh; the plugin only creates a missing layer or removes a
+  // stale layer when the source file disappears.
   const doc = app.activeDocument;
   if (!doc) {
     return false;
@@ -1692,7 +1713,7 @@ async function boardBackgroundRefreshNeeded(shotId, force = false) {
   if (!entry) {
     return hasLayer; // Stale layer with no source file → remove it.
   }
-  if (force || !hasLayer) {
+  if (!hasLayer) {
     return true;
   }
   const signature = await boardBackgroundSignature(entry);
@@ -1704,7 +1725,10 @@ async function boardBackgroundRefreshNeeded(shotId, force = false) {
     boardBackgroundSigByShot.set(shotId, signature);
     return false;
   }
-  return signature !== lastSignature;
+  if (signature !== lastSignature) {
+    boardBackgroundSigByShot.set(shotId, signature);
+  }
+  return false;
 }
 
 async function syncBoardBackgroundFromDisk(shotId, force = false) {
