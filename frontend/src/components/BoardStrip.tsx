@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type DragEvent } from 'react'
-import { deleteRefSegment, getMissingFiles } from '../api'
+import { getMissingFiles } from '../api'
 import { useProject } from '../state/useProject'
 import { shotDisplayLabel } from '../utils/shotDisplay'
 import {
@@ -36,7 +36,6 @@ export function BoardStrip() {
     project,
     selectedShotId,
     setSelectedShotId,
-    setProject,
     flushDirtyShots,
     addShotAfterSelection,
     deleteSelectedShot,
@@ -60,6 +59,7 @@ export function BoardStrip() {
     openRefSegmentInspect,
     closeRefSegmentInspect,
     dismissRefSegmentUi,
+    deleteRefSegmentUndoable,
     reportError,
   } = useProject()
   const [busy, setBusy] = useState(false)
@@ -145,14 +145,14 @@ export function BoardStrip() {
     setBusy(true)
     try {
       await flushDirtyShots()
-      setProject(await deleteRefSegment(segmentId))
+      await deleteRefSegmentUndoable(segmentId)
     } catch (error) {
       reportError(error)
     } finally {
       setSegmentDeleting(false)
       setBusy(false)
     }
-  }, [activeAppliedSegmentId, project, flushDirtyShots, setProject, dismissRefSegmentUi, reportError])
+  }, [activeAppliedSegmentId, project, flushDirtyShots, deleteRefSegmentUndoable, dismissRefSegmentUi, reportError])
 
   useEffect(() => {
     if (!selectedShotId || !viewportRef.current) return

@@ -21,13 +21,16 @@ import {
   openProject,
   openShotSource,
   reorderShots,
+  restoreRefApply,
   restoreShot,
   saveProject,
+  snapshotRefBoards,
   syncShot,
+  updateSettings,
   updateShot,
 } from '../api'
 import { browseFolder, getAppSession, isNoProjectOpenError, updateAppSession, type AppSession } from '../api'
-import type { ProjectPathRequest, ProjectPayload, Shot, ShotUpdate } from '../types'
+import type { ProjectPathRequest, ProjectPayload, SettingsUpdate, Shot, ShotUpdate } from '../types'
 import { ProjectContext } from './useProject'
 
 export interface ProjectContextValue {
@@ -46,6 +49,8 @@ export interface ProjectContextValue {
   moveSelectedShot: (direction: 'up' | 'down') => Promise<void>
   reorderBoards: (orderedIds: string[], selectId?: string | null) => Promise<void>
   deleteActiveRefSegment: () => Promise<void>
+  deleteRefSegmentUndoable: (segmentId: string) => Promise<void>
+  recordRefApply: (opts: { label: string; undoToken: string; redo: () => Promise<ProjectPayload> }) => void
   undo: () => Promise<void>
   redo: () => Promise<void>
   canUndo: boolean
@@ -533,12 +538,94 @@ export function ProjectProvider({ children }: PropsWithChildren) {
     })
   }, [replaceProject, selectedShotId, pushHistory])
 
+  // Record a reference apply/replace into the global undo stack. Undo restores the
+  // pre-apply boards via the apply's undo token (same as the footer button); redo re-runs
+  // the bake. The footer "Undo last apply" buttons remain as a resilient fallback.
+  const recordRefApply = useCallback(
+    (opts: { label: string; undoToken: string; redo: () => Promise<ProjectPayload> }) => {
+      let token = opts.undoToken
+      pushHistory({
+        label: opts.label,
+        undo: async () => {
+          let payload: ProjectPayload | null = null
+          if (token) {
+            try {
+              payload = await restoreRefApply(token)
+            } catch {
+              payload = null
+            }
+          }
+          if (!payload) payload = await getProject()
+          setRefApplyUndoToken(null)
+          return { payload }
+        },
+        redo: async () => {
+          const payload = await opts.redo()
+          const next = (payload as { undo_token?: unknown }).undo_token
+          token = typeof next === 'string' ? next : ''
+          setRefApplyUndoToken(token || null)
+          return { payload }
+        },
+      })
+    },
+    [pushHistory],
+  )
+
+  // Delete a reference segment as one undoable step: snapshot affected boards first, delete,
+  // then on undo restore those boards and re-insert the segment record into settings.
+  const deleteRefSegmentUndoable = useCallback(
+    async (segmentId: string) => {
+      const current = projectRef.current
+      if (!current) return
+      const records = (current.settings?.ref_segments ?? []) as Array<{
+        id?: string
+        anchor_shot_id?: string
+        end_shot_id?: string
+      }>
+      const record = records.find((seg) => seg?.id === segmentId)
+      const anchor = record?.anchor_shot_id ?? ''
+      const end = record?.end_shot_id ?? ''
+      let token: string | null = null
+      if (anchor && end) {
+        try {
+          token = (await snapshotRefBoards({ anchor_shot_id: anchor, end_shot_id: end })).undo_token
+        } catch {
+          token = null
+        }
+      }
+      replaceProject(await deleteRefSegment(segmentId))
+      if (!record || !token) return
+      let currentToken = token
+      pushHistory({
+        label: 'Delete reference',
+        undo: async () => {
+          const restored = await restoreRefApply(currentToken)
+          const merged = [...((restored.settings?.ref_segments as unknown[]) ?? []), record]
+          const payload = await updateSettings({ ref_segments: merged } as unknown as SettingsUpdate)
+          return { payload }
+        },
+        redo: async () => {
+          if (anchor && end) {
+            try {
+              currentToken = (await snapshotRefBoards({ anchor_shot_id: anchor, end_shot_id: end })).undo_token
+            } catch {
+              // keep the prior token; a later undo simply re-restores from it
+            }
+          }
+          const payload = await deleteRefSegment(segmentId)
+          return { payload }
+        },
+      })
+    },
+    [replaceProject, pushHistory],
+  )
+
   const deleteActiveRefSegment = useCallback(async () => {
     if (!activeAppliedSegmentId) return
     const segmentId = activeAppliedSegmentId
     dismissRefSegmentUi()
-    replaceProject(await deleteRefSegment(segmentId))
-  }, [activeAppliedSegmentId, dismissRefSegmentUi, replaceProject])
+    await deleteRefSegmentUndoable(segmentId)
+  }, [activeAppliedSegmentId, dismissRefSegmentUi, deleteRefSegmentUndoable])
 
   const syncSelectedShot = useCallback(async () => {
     if (!selectedShotId) return
@@ -572,6 +659,8 @@ export function ProjectProvider({ children }: PropsWithChildren) {
       moveSelectedShot,
       reorderBoards,
       deleteActiveRefSegment,
+      deleteRefSegmentUndoable,
+      recordRefApply,
       undo,
       redo,
       canUndo: undoStack.length > 0,
@@ -608,7 +697,7 @@ export function ProjectProvider({ children }: PropsWithChildren) {
       clearError,
       reportError,
     }),
-    [project, selectedShotId, replaceProject, refreshProjectFromBridge, reloadProject, newProjectAction, openProjectFromDialog, saveProjectAction, addShotAfterSelection, deleteSelectedShot, moveSelectedShot, reorderBoards, deleteActiveRefSegment, undo, redo, undoStack, redoStack, syncSelectedShot, openSelectedShotSource, initialLoading, projectActionBusy, getDraft, editShotField, isShotDirty, dirtyShotIds, savingShots, saveShot, flushDirtyShots, visualEpoch, segmentRange, setSegmentAnchor, setSegmentEnd, pickSegmentShot, clearSegmentRange, activeAppliedSegmentId, setActiveAppliedSegmentId, clearActiveAppliedSegment, refSegmentInspectOpen, openRefSegmentInspect, closeRefSegmentInspect, dismissRefSegmentUi, refApplyUndoToken, lastError, clearError, reportError],
+    [project, selectedShotId, replaceProject, refreshProjectFromBridge, reloadProject, newProjectAction, openProjectFromDialog, saveProjectAction, addShotAfterSelection, deleteSelectedShot, moveSelectedShot, reorderBoards, deleteActiveRefSegment, deleteRefSegmentUndoable, recordRefApply, undo, redo, undoStack, redoStack, syncSelectedShot, openSelectedShotSource, initialLoading, projectActionBusy, getDraft, editShotField, isShotDirty, dirtyShotIds, savingShots, saveShot, flushDirtyShots, visualEpoch, segmentRange, setSegmentAnchor, setSegmentEnd, pickSegmentShot, clearSegmentRange, activeAppliedSegmentId, setActiveAppliedSegmentId, clearActiveAppliedSegment, refSegmentInspectOpen, openRefSegmentInspect, closeRefSegmentInspect, dismissRefSegmentUi, refApplyUndoToken, lastError, clearError, reportError],
   )
 
   return <ProjectContext.Provider value={value}>{children}</ProjectContext.Provider>

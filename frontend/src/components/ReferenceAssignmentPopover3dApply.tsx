@@ -4,7 +4,6 @@ import {
   applyRefSegment,
   applyRefSegmentImage,
   applyRefSegmentModelCaptures,
-  deleteRefSegment,
   projectFileUrl,
   restoreRefApply,
   updateSettings,
@@ -125,6 +124,8 @@ export function ReferenceAssignmentPopover() {
     dismissRefSegmentUi,
     refSegmentInspectOpen,
     closeRefSegmentInspect,
+    recordRefApply,
+    deleteRefSegmentUndoable,
     refApplyUndoToken,
     setRefApplyUndoToken,
   } = useProject()
@@ -255,7 +256,7 @@ export function ReferenceAssignmentPopover() {
     })()
   }
 
-  async function applyModel(body: ApplyRefSegmentRequest): Promise<ProjectPayload> {
+  async function buildModelRequest(body: ApplyRefSegmentRequest): Promise<ApplyRefSegmentRequest> {
     if (!project) throw new Error('No project loaded.')
     if (!modelRef.current) throw new Error('3D preview is not ready yet.')
     if (lo < 0 || hi < 0) throw new Error('Select a valid board range first.')
@@ -279,11 +280,11 @@ export function ReferenceAssignmentPopover() {
     })
     setProgress('Finalizing 3D apply…')
     await nextFrame()
-    return applyRefSegmentModelCaptures({
+    return {
       ...body,
       camera_name: scene3dView?.mode === 'scene_camera' ? scene3dView.camera_name || '' : '',
       captures,
-    })
+    }
   }
 
   const apply = () => {
@@ -300,23 +301,34 @@ export function ReferenceAssignmentPopover() {
       video_start: clampStart(segmentStart, mediaDuration, durationSec, refMode),
       fit_mode: fitMode,
     }
+    const refType = selectedRef.type
+    const wasInspect = isInspectMode
     setBusy(true)
     setProgress('')
     void (async () => {
       try {
         await flushDirtyShots()
         const existing = refSegmentsWithoutOverlap(segments, seg, shots)
-        await updateSettings({ ref_segments: [...existing, seg], active_ref_segment_id: segId })
         const body: ApplyRefSegmentRequest = { anchor_shot_id: startShot, end_shot_id: endShot, segment_id: segId }
-        const payload = selectedRef.type === 'image' ? await applyRefSegmentImage(body) : selectedRef.type === 'model' ? await applyModel(body) : await applyRefSegment(body)
+        // Render model captures once so redo can re-send them without the 3D preview.
+        const bakeRequest: ApplyRefSegmentRequest = refType === 'model' ? await buildModelRequest(body) : body
+        const runBake = async (): Promise<ProjectPayload> => {
+          await updateSettings({ ref_segments: [...existing, seg], active_ref_segment_id: segId })
+          if (refType === 'image') return applyRefSegmentImage(bakeRequest)
+          if (refType === 'model') return applyRefSegmentModelCaptures(bakeRequest)
+          return applyRefSegment(bakeRequest)
+        }
+        const payload = await runBake()
         const result = payload as unknown as { board_count?: number; undo_token?: string }
         const count = result.board_count ?? boardCount
-        setRefApplyUndoToken(typeof result.undo_token === 'string' ? result.undo_token : null)
+        const token = typeof result.undo_token === 'string' ? result.undo_token : ''
+        setRefApplyUndoToken(token || null)
+        recordRefApply({ label: wasInspect ? 'Replace reference' : 'Apply reference', undoToken: token, redo: runBake })
         setProgress('Refreshing boards…')
         setProject(payload)
         await waitFrames(2)
         close()
-        setToast(`${isInspectMode ? 'Reapplied' : 'Applied'} to ${count} board${count === 1 ? '' : 's'}`)
+        setToast(`${wasInspect ? 'Reapplied' : 'Applied'} to ${count} board${count === 1 ? '' : 's'}`)
       } catch (error) {
         reportError(error)
       } finally {
@@ -335,7 +347,7 @@ export function ReferenceAssignmentPopover() {
     void (async () => {
       try {
         await flushDirtyShots()
-        setProject(await deleteRefSegment(id))
+        await deleteRefSegmentUndoable(id)
         setToast('Reference segment deleted.')
       } catch (error) {
         reportError(error)

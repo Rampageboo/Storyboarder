@@ -60,3 +60,11 @@ export function restoreRefApply(token: string): Promise<ProjectPayload> {
     body: { token },
   })
 }
+
+/** Snapshot the boards in a range before a destructive op; returns an undo token. */
+export function snapshotRefBoards(body: { anchor_shot_id: string; end_shot_id: string }): Promise<{ undo_token: string }> {
+  return requestJson<{ undo_token: string }>('/api/project/ref-segments/snapshot', {
+    method: 'POST',
+    body,
+  })
+}
