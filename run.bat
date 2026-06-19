@@ -6,6 +6,8 @@ cd /d "%~dp0"
 set "VENV_DIR=.venv"
 set "LOG_DIR=logs"
 set "LOG_FILE=%LOG_DIR%\desktop.log"
+set "REQ_FILE=requirements.lock.txt"
+if not exist "%REQ_FILE%" set "REQ_FILE=requirements.txt"
 
 if not exist "%LOG_DIR%" mkdir "%LOG_DIR%"
 
@@ -50,9 +52,9 @@ if errorlevel 1 (
 python -c "import fastapi, uvicorn, webview" >nul 2>nul
 if errorlevel 1 (
     echo Installing Python dependencies ^(first run or missing packages^)...
-    python -m pip install -r "requirements.txt"
+    python -m pip install -r "%REQ_FILE%"
     if errorlevel 1 (
-        echo Failed to install requirements.txt.
+        echo Failed to install %REQ_FILE%.
         pause
         exit /b 1
     )
