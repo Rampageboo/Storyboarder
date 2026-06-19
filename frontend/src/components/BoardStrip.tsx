@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
-import { addShot, deleteRefSegment, deleteShot, getMissingFiles, moveShotDown, moveShotUp } from '../api'
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type DragEvent } from 'react'
+import { deleteRefSegment, getMissingFiles } from '../api'
 import { useProject } from '../state/useProject'
 import { shotDisplayLabel } from '../utils/shotDisplay'
 import {
@@ -26,6 +26,11 @@ function scrollCardIntoViewport(viewport: HTMLElement, card: HTMLElement) {
   }
 }
 
+function dropIsAfter(e: DragEvent<HTMLButtonElement>): boolean {
+  const rect = e.currentTarget.getBoundingClientRect()
+  return e.clientX > rect.left + rect.width / 2
+}
+
 export function BoardStrip() {
   const {
     project,
@@ -33,6 +38,16 @@ export function BoardStrip() {
     setSelectedShotId,
     setProject,
     flushDirtyShots,
+    addShotAfterSelection,
+    deleteSelectedShot,
+    moveSelectedShot,
+    reorderBoards,
+    undo,
+    redo,
+    canUndo,
+    canRedo,
+    undoLabel,
+    redoLabel,
     isShotDirty,
     initialLoading,
     projectActionBusy,
@@ -50,6 +65,8 @@ export function BoardStrip() {
   const [busy, setBusy] = useState(false)
   const [segmentDeleting, setSegmentDeleting] = useState(false)
   const [missingShots, setMissingShots] = useState<Set<string>>(new Set())
+  const [dragShotId, setDragShotId] = useState<string | null>(null)
+  const [dropTarget, setDropTarget] = useState<{ id: string; after: boolean } | null>(null)
   const viewportRef = useRef<HTMLDivElement | null>(null)
   const markerClickTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
@@ -164,25 +181,20 @@ export function BoardStrip() {
     }
   }, [visualEpoch])
 
+  // These delegate to the history-aware project actions so the toolbar buttons and the
+  // keyboard shortcuts share one code path and both record undo/redo entries.
   const handleAdd = useCallback(async () => {
     if (!project) return
     setBusy(true)
     try {
       await flushDirtyShots()
-      const afterId = selectedShotId || undefined
-      const payload = await addShot(afterId ? { after_shot_id: afterId } : {})
-      setProject(payload)
-      const nextIndex = afterId
-        ? Math.min(payload.shots.findIndex((s) => s.shot_id === afterId) + 1, payload.shots.length - 1)
-        : payload.shots.length - 1
-      const nextId = payload.shots[nextIndex]?.shot_id
-      if (nextId) setSelectedShotId(nextId)
+      await addShotAfterSelection()
     } catch {
       // flush or structural op failed; state unchanged
     } finally {
       setBusy(false)
     }
-  }, [project, selectedShotId, setProject, setSelectedShotId, flushDirtyShots])
+  }, [project, flushDirtyShots, addShotAfterSelection])
 
   const handleDelete = useCallback(async () => {
     if (!project || !selectedShotId) return
@@ -190,46 +202,109 @@ export function BoardStrip() {
     setBusy(true)
     try {
       await flushDirtyShots()
-      const payload = await deleteShot(selectedShotId)
-      setProject(payload)
-      const nextIndex = Math.min(selectedIndex, payload.shots.length - 1)
-      setSelectedShotId(payload.shots[nextIndex]?.shot_id ?? null)
+      await deleteSelectedShot()
     } catch {
       // aborted
     } finally {
       setBusy(false)
     }
-  }, [project, selectedShotId, selectedIndex, setProject, setSelectedShotId, flushDirtyShots])
+  }, [project, selectedShotId, flushDirtyShots, deleteSelectedShot])
 
   const handleMoveUp = useCallback(async () => {
     if (!project || !selectedShotId) return
     setBusy(true)
     try {
       await flushDirtyShots()
-      const payload = await moveShotUp(selectedShotId)
-      setProject(payload)
-      setSelectedShotId(selectedShotId)
+      await moveSelectedShot('up')
     } catch {
       // aborted
     } finally {
       setBusy(false)
     }
-  }, [project, selectedShotId, setProject, setSelectedShotId, flushDirtyShots])
+  }, [project, selectedShotId, flushDirtyShots, moveSelectedShot])
 
   const handleMoveDown = useCallback(async () => {
     if (!project || !selectedShotId) return
     setBusy(true)
     try {
       await flushDirtyShots()
-      const payload = await moveShotDown(selectedShotId)
-      setProject(payload)
-      setSelectedShotId(selectedShotId)
+      await moveSelectedShot('down')
     } catch {
       // aborted
     } finally {
       setBusy(false)
     }
-  }, [project, selectedShotId, setProject, setSelectedShotId, flushDirtyShots])
+  }, [project, selectedShotId, flushDirtyShots, moveSelectedShot])
+
+  const handleUndo = useCallback(async () => {
+    setBusy(true)
+    try {
+      await undo()
+    } finally {
+      setBusy(false)
+    }
+  }, [undo])
+
+  const handleRedo = useCallback(async () => {
+    setBusy(true)
+    try {
+      await redo()
+    } finally {
+      setBusy(false)
+    }
+  }, [redo])
+
+  const handleDragStart = useCallback((e: DragEvent<HTMLButtonElement>, shotId: string) => {
+    if (disabled) {
+      e.preventDefault()
+      return
+    }
+    setDragShotId(shotId)
+    e.dataTransfer.effectAllowed = 'move'
+    try {
+      e.dataTransfer.setData('text/plain', shotId)
+    } catch {
+      // some environments disallow setData; drag still works via component state
+    }
+  }, [disabled])
+
+  const handleCardDragOver = useCallback((e: DragEvent<HTMLButtonElement>, shotId: string) => {
+    if (!dragShotId || dragShotId === shotId) return
+    e.preventDefault()
+    e.dataTransfer.dropEffect = 'move'
+    const after = dropIsAfter(e)
+    setDropTarget((prev) => (prev && prev.id === shotId && prev.after === after ? prev : { id: shotId, after }))
+  }, [dragShotId])
+
+  const handleDragEnd = useCallback(() => {
+    setDragShotId(null)
+    setDropTarget(null)
+  }, [])
+
+  const handleCardDrop = useCallback(
+    async (e: DragEvent<HTMLButtonElement>, shotId: string) => {
+      e.preventDefault()
+      const dragId = dragShotId
+      const after = dropIsAfter(e)
+      setDragShotId(null)
+      setDropTarget(null)
+      if (!dragId || dragId === shotId) return
+      const ids = shots.map((s) => s.shot_id).filter((id) => id !== dragId)
+      const targetIndex = ids.indexOf(shotId)
+      if (targetIndex < 0) return
+      ids.splice(after ? targetIndex + 1 : targetIndex, 0, dragId)
+      setBusy(true)
+      try {
+        await flushDirtyShots()
+        await reorderBoards(ids, dragId)
+      } catch (error) {
+        reportError(error)
+      } finally {
+        setBusy(false)
+      }
+    },
+    [dragShotId, shots, flushDirtyShots, reorderBoards, reportError],
+  )
 
   if (!project) return null
 
@@ -266,6 +341,22 @@ export function BoardStrip() {
           </span>
         )}
         <div className="board-strip-actions">
+          <button
+            type="button"
+            onClick={() => void handleUndo()}
+            disabled={!canUndo || disabled}
+            title={undoLabel ? `Undo: ${undoLabel} (Ctrl+Z)` : 'Nothing to undo'}
+          >
+            ⟲ Undo
+          </button>
+          <button
+            type="button"
+            onClick={() => void handleRedo()}
+            disabled={!canRedo || disabled}
+            title={redoLabel ? `Redo: ${redoLabel} (Ctrl+Shift+Z)` : 'Nothing to redo'}
+          >
+            ⟳ Redo
+          </button>
           <button type="button" onClick={() => void handleAdd()} disabled={disabled} title="Add board">
             + Add
           </button>
@@ -320,8 +411,20 @@ export function BoardStrip() {
                   type="button"
                   role="listitem"
                   data-shot-id={shot.shot_id}
-                  className={`board-strip-card ${isSelected ? 'is-selected' : ''}`}
+                  draggable={!disabled}
+                  className={[
+                    'board-strip-card',
+                    isSelected ? 'is-selected' : '',
+                    dragShotId === shot.shot_id ? 'is-dragging' : '',
+                    dropTarget?.id === shot.shot_id ? (dropTarget.after ? 'drop-after' : 'drop-before') : '',
+                  ]
+                    .filter(Boolean)
+                    .join(' ')}
                   onClick={() => setSelectedShotId(shot.shot_id)}
+                  onDragStart={(e) => handleDragStart(e, shot.shot_id)}
+                  onDragOver={(e) => handleCardDragOver(e, shot.shot_id)}
+                  onDrop={(e) => void handleCardDrop(e, shot.shot_id)}
+                  onDragEnd={handleDragEnd}
                   title={label}
                 >
                   <div className="board-strip-thumb">

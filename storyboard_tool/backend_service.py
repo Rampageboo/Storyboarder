@@ -248,7 +248,7 @@ class StoryboardBackendService(ExportServiceMixin):
         shot = app_state._find_shot(project, shot_id)
         try:
             project_manager.import_image_for_shot(project, shot, Path(str(source_path)).expanduser())
-        except (FileNotFoundError, ValueError) as exc:
+        except (OSError, ValueError) as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         app_state._autosave(self.app)
         return app_state._project_payload(project, self.app.state.dirty)
@@ -789,7 +789,7 @@ class StoryboardBackendService(ExportServiceMixin):
         suffix = Path(str(filename or "")).suffix
         try:
             project_manager.import_image_stream_for_shot(project, shot, _upload_stream(data), suffix)
-        except (FileNotFoundError, ValueError) as exc:
+        except (OSError, ValueError) as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         app_state._autosave(self.app)
         return app_state._project_payload(project, self.app.state.dirty)
@@ -805,7 +805,7 @@ class StoryboardBackendService(ExportServiceMixin):
         suffix = Path(str(filename or "")).suffix
         try:
             project_manager.add_reference_image_stream(project, shot, _upload_stream(data), suffix)
-        except (FileNotFoundError, ValueError) as exc:
+        except (OSError, ValueError) as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         app_state._autosave(self.app)
         return app_state._project_payload(project, self.app.state.dirty)
@@ -825,7 +825,7 @@ class StoryboardBackendService(ExportServiceMixin):
                 _upload_stream(data),
                 str(filename or f"{shot_id}.psd"),
             )
-        except (FileNotFoundError, ValueError) as exc:
+        except (OSError, ValueError) as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         app_state._autosave(self.app)
         return app_state._project_payload(project, self.app.state.dirty)

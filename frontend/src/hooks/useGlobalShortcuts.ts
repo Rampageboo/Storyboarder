@@ -33,6 +33,8 @@ export function useGlobalShortcuts() {
     deleteActiveRefSegment,
     syncSelectedShot,
     openSelectedShotSource,
+    undo,
+    redo,
   } = useProject()
 
   const runningRef = useRef(false)
@@ -74,6 +76,20 @@ export function useGlobalShortcuts() {
       }
 
       if (isTypingTarget(event.target)) return
+
+      // Undo / redo of board operations. Skipped above when focus is in a text field
+      // so the browser's native text undo still works while editing metadata.
+      if (mod && (event.key === 'z' || event.key === 'Z')) {
+        event.preventDefault()
+        void (event.shiftKey ? redo() : undo()).catch((error) => reportError(error))
+        return
+      }
+      if (mod && (event.key === 'y' || event.key === 'Y')) {
+        event.preventDefault()
+        void redo().catch((error) => reportError(error))
+        return
+      }
+
       if (mod || event.altKey) return
 
       const shots = project.shots
@@ -140,5 +156,7 @@ export function useGlobalShortcuts() {
     deleteActiveRefSegment,
     syncSelectedShot,
     openSelectedShotSource,
+    undo,
+    redo,
   ])
 }

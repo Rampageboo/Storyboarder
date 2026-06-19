@@ -193,5 +193,34 @@ class TestExportError(unittest.TestCase):
         self.assertEqual(body.get("code"), "EXPORT_FAILED")
 
 
+class TestCorruptUploadError(unittest.TestCase):
+    """A non-decodable image upload is a client error (400), not a server 500.
+
+    Pillow raises UnidentifiedImageError (an OSError subclass, NOT ValueError), so the
+    import handlers must catch OSError to classify bad uploads correctly. See
+    backend_service.method_import_shot_image.
+    """
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.client = _make_client(self._tmp.name)
+        response = _quiet(lambda: self.client.post("/api/project/new", json={"path": self._tmp.name}))
+        self.assertEqual(response.status_code, 200)
+        add = _quiet(lambda: self.client.post("/api/shots", json={}))
+        self.assertEqual(add.status_code, 200)
+        self.shot_id = add.json()["shot"]["shot_id"]
+
+    def tearDown(self) -> None:
+        self._tmp.cleanup()
+
+    def test_corrupt_image_upload_returns_400_not_500(self) -> None:
+        response = _quiet(lambda: self.client.post(
+            f"/api/shots/{self.shot_id}/image",
+            files={"file": ("broken.png", b"this is not a real image", "image/png")},
+        ))
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("detail", response.json())
+
+
 if __name__ == "__main__":
     unittest.main()

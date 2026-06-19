@@ -506,3 +506,17 @@
   background: var(--color-accent);
   color: #fff;
 }
+
+/* Drag-to-reorder feedback */
+.board-strip-card[draggable='true'] {
+  cursor: grab;
+}
+.board-strip-card.is-dragging {
+  opacity: 0.45;
+}
+.board-strip-card.drop-before {
+  box-shadow: inset 3px 0 0 0 #4a9eff;
+}
+.board-strip-card.drop-after {
+  box-shadow: inset -3px 0 0 0 #4a9eff;
+}

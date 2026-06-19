@@ -6,12 +6,14 @@ import tempfile
 import unittest
 import warnings
 from pathlib import Path
+from unittest import mock
 
 with warnings.catch_warnings():
     warnings.filterwarnings("ignore", message="Using `httpx` with `starlette.testclient`")
     from fastapi.testclient import TestClient
 
 from storyboard_tool import api as api_module
+from storyboard_tool import live_bridge
 from storyboard_tool.schemas import BridgeStatusResponse, PluginContextResponse
 
 
@@ -31,6 +33,16 @@ class PhotoshopBridgeContractTests(unittest.TestCase):
     def setUp(self) -> None:
         self._tmp = tempfile.TemporaryDirectory()
         self.root = Path(self._tmp.name)
+        # Isolate the machine-global bridge dir to a temp path. Otherwise this test
+        # reads C:/Users/Public/StoryboardTool/storyboard_plugin_heartbeat.json — a
+        # file a real running app instance keeps fresh — making plugin_linked flap
+        # True and the no-project contract assertion fail. See live_bridge dir helpers.
+        bridge_dir = self.root / "_bridge"
+        bridge_dir.mkdir(parents=True, exist_ok=True)
+        for name in ("global_bridge_dir", "shared_bridge_dir"):
+            patcher = mock.patch.object(live_bridge, name, return_value=bridge_dir)
+            patcher.start()
+            self.addCleanup(patcher.stop)
         self.app = api_module.create_app(self.root)
         self.client = TestClient(self.app, raise_server_exceptions=False)
 

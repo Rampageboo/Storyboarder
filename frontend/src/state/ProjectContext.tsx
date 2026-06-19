@@ -16,8 +16,12 @@ import {
   deleteRefSegment,
   deleteShot,
   getProject,
+  moveShotDown,
+  moveShotUp,
   openProject,
   openShotSource,
+  reorderShots,
+  restoreShot,
   saveProject,
   syncShot,
   updateShot,
@@ -39,7 +43,15 @@ export interface ProjectContextValue {
   saveProject: () => Promise<void>
   addShotAfterSelection: () => Promise<void>
   deleteSelectedShot: () => Promise<void>
+  moveSelectedShot: (direction: 'up' | 'down') => Promise<void>
+  reorderBoards: (orderedIds: string[], selectId?: string | null) => Promise<void>
   deleteActiveRefSegment: () => Promise<void>
+  undo: () => Promise<void>
+  redo: () => Promise<void>
+  canUndo: boolean
+  canRedo: boolean
+  undoLabel: string | null
+  redoLabel: string | null
   syncSelectedShot: () => Promise<void>
   openSelectedShotSource: () => Promise<void>
   initialLoading: boolean
@@ -124,6 +136,16 @@ function projectVisualEpoch(payload: ProjectPayload | null): number {
   return hash
 }
 
+/** One reversible board operation. undo/redo each perform a server mutation and
+ *  return the fresh project payload plus the shot id to select afterwards. */
+interface HistoryEntry {
+  label: string
+  undo: () => Promise<{ payload: ProjectPayload; select?: string | null }>
+  redo: () => Promise<{ payload: ProjectPayload; select?: string | null }>
+}
+
+const HISTORY_LIMIT = 50
+
 export function ProjectProvider({ children }: PropsWithChildren) {
   const [project, setProject] = useState<ProjectPayload | null>(null)
   const [selectedShotId, setSelectedShotId] = useState<string | null>(null)
@@ -139,14 +161,21 @@ export function ProjectProvider({ children }: PropsWithChildren) {
   const [refApplyUndoToken, setRefApplyUndoToken] = useState<string | null>(null)
   const [activeAppliedSegmentId, setActiveAppliedSegmentId] = useState<string | null>(null)
   const [refSegmentInspectOpen, setRefSegmentInspectOpen] = useState(false)
+  const [undoStack, setUndoStack] = useState<HistoryEntry[]>([])
+  const [redoStack, setRedoStack] = useState<HistoryEntry[]>([])
   const versionsRef = useRef<Record<string, number>>({})
   const projectRef = useRef<ProjectPayload | null>(null)
   const draftsRef = useRef<Record<string, ShotUpdate>>({})
+  const undoStackRef = useRef<HistoryEntry[]>([])
+  const redoStackRef = useRef<HistoryEntry[]>([])
+  const historyBusyRef = useRef(false)
 
   // Keep refs current after every render so stable callbacks always read latest values.
   useLayoutEffect(() => {
     projectRef.current = project
     draftsRef.current = drafts
+    undoStackRef.current = undoStack
+    redoStackRef.current = redoStack
   })
 
   const visualEpoch = useMemo(() => projectVisualEpoch(project), [project])
@@ -165,6 +194,13 @@ export function ProjectProvider({ children }: PropsWithChildren) {
     setLastError(error instanceof Error ? error.message : String(error))
   }, [])
 
+  // Push a reversible board operation onto the undo stack. Recording a new
+  // operation discards any pending redo branch, matching standard editor semantics.
+  const pushHistory = useCallback((entry: HistoryEntry) => {
+    setUndoStack((prev) => [...prev, entry].slice(-HISTORY_LIMIT))
+    setRedoStack([])
+  }, [])
+
   const resetEditState = useCallback(() => {
     versionsRef.current = {}
     draftsRef.current = {}
@@ -174,6 +210,8 @@ export function ProjectProvider({ children }: PropsWithChildren) {
     setRefApplyUndoToken(null)
     setActiveAppliedSegmentId(null)
     setRefSegmentInspectOpen(false)
+    setUndoStack([])
+    setRedoStack([])
   }, [])
 
   const setSegmentAnchor = useCallback((shotId: string | null) => {
@@ -227,6 +265,10 @@ export function ProjectProvider({ children }: PropsWithChildren) {
     async (pluginSelectedShotId?: string | null) => {
       const payload = await getProject()
       const pluginSelectionValid = !!pluginSelectedShotId && payload.shots.some((shot) => shot.shot_id === pluginSelectedShotId)
+      // A plugin-driven refresh means boards/metadata changed outside our control;
+      // discard history so undo/redo can never replay against a stale world.
+      setUndoStack([])
+      setRedoStack([])
       replaceProject(payload, pluginSelectionValid ? pluginSelectedShotId : undefined)
     },
     [replaceProject],
@@ -299,6 +341,42 @@ export function ProjectProvider({ children }: PropsWithChildren) {
       throw new Error(message)
     }
   }, [saveShot])
+
+  const undo = useCallback(async () => {
+    if (historyBusyRef.current) return
+    const entry = undoStackRef.current[undoStackRef.current.length - 1]
+    if (!entry) return
+    historyBusyRef.current = true
+    try {
+      await flushDirtyShots()
+      const { payload, select } = await entry.undo()
+      replaceProject(payload, select)
+      setUndoStack((prev) => prev.slice(0, -1))
+      setRedoStack((prev) => [...prev, entry])
+    } catch (error) {
+      setLastError(error instanceof Error ? error.message : String(error))
+    } finally {
+      historyBusyRef.current = false
+    }
+  }, [flushDirtyShots, replaceProject])
+
+  const redo = useCallback(async () => {
+    if (historyBusyRef.current) return
+    const entry = redoStackRef.current[redoStackRef.current.length - 1]
+    if (!entry) return
+    historyBusyRef.current = true
+    try {
+      await flushDirtyShots()
+      const { payload, select } = await entry.redo()
+      replaceProject(payload, select)
+      setRedoStack((prev) => prev.slice(0, -1))
+      setUndoStack((prev) => [...prev, entry])
+    } catch (error) {
+      setLastError(error instanceof Error ? error.message : String(error))
+    } finally {
+      historyBusyRef.current = false
+    }
+  }, [flushDirtyShots, replaceProject])
 
   const reloadProject = useCallback(async () => {
     setInitialLoading(true)
@@ -387,21 +465,73 @@ export function ProjectProvider({ children }: PropsWithChildren) {
   const addShotAfterSelection = useCallback(async () => {
     const current = projectRef.current
     const afterId = current && selectedShotId ? selectedShotId : undefined
-    const payload = await addShot(afterId ? { after_shot_id: afterId } : {})
-    const nextIndex = afterId
-      ? Math.min(payload.shots.findIndex((shot) => shot.shot_id === afterId) + 1, payload.shots.length - 1)
-      : payload.shots.length - 1
-    replaceProject(payload, payload.shots[nextIndex]?.shot_id ?? null)
-  }, [replaceProject, selectedShotId])
+    const addBody = afterId ? { after_shot_id: afterId } : {}
+    const indexAfter = (payload: ProjectPayload): number =>
+      afterId
+        ? Math.min(payload.shots.findIndex((shot) => shot.shot_id === afterId) + 1, payload.shots.length - 1)
+        : payload.shots.length - 1
+    const payload = await addShot(addBody)
+    let createdId = payload.shots[indexAfter(payload)]?.shot_id ?? null
+    replaceProject(payload, createdId)
+    if (!createdId) return
+    pushHistory({
+      label: 'Add board',
+      undo: async () => ({ payload: await deleteShot(createdId as string), select: afterId ?? null }),
+      redo: async () => {
+        const p = await addShot(addBody)
+        createdId = p.shots[indexAfter(p)]?.shot_id ?? createdId
+        return { payload: p, select: createdId }
+      },
+    })
+  }, [replaceProject, selectedShotId, pushHistory])
 
   const deleteSelectedShot = useCallback(async () => {
     const current = projectRef.current
     if (!current || !selectedShotId) return
     const selectedIndex = current.shots.findIndex((shot) => shot.shot_id === selectedShotId)
+    const removedShot = current.shots[selectedIndex]
+    if (!removedShot) return
     const payload = await deleteShot(selectedShotId)
     const nextIndex = Math.min(Math.max(selectedIndex, 0), payload.shots.length - 1)
     replaceProject(payload, payload.shots[nextIndex]?.shot_id ?? null)
+    pushHistory({
+      label: 'Delete board',
+      undo: async () => ({
+        payload: await restoreShot({ shot: removedShot, index: selectedIndex }),
+        select: removedShot.shot_id,
+      }),
+      redo: async () => {
+        const p = await deleteShot(removedShot.shot_id)
+        const ni = Math.min(Math.max(selectedIndex, 0), p.shots.length - 1)
+        return { payload: p, select: p.shots[ni]?.shot_id ?? null }
+      },
+    })
+  }, [replaceProject, selectedShotId, pushHistory])
+
+  // Single-step nudge via the ← / → buttons. Trivially reversible by pressing the
+  // other arrow, so this intentionally does NOT record an undo entry. Drag-to-reorder
+  // (reorderBoards) is the multi-position move that records history.
+  const moveSelectedShot = useCallback(async (direction: 'up' | 'down') => {
+    if (!selectedShotId) return
+    const payload = direction === 'up' ? await moveShotUp(selectedShotId) : await moveShotDown(selectedShotId)
+    replaceProject(payload, selectedShotId)
   }, [replaceProject, selectedShotId])
+
+  // Drag-to-reorder: persist an explicit board order and record it as one undoable step.
+  const reorderBoards = useCallback(async (orderedIds: string[], selectId?: string | null) => {
+    const current = projectRef.current
+    if (!current) return
+    const prevOrder = current.shots.map((shot) => shot.shot_id)
+    const unchanged = prevOrder.length === orderedIds.length && prevOrder.every((id, i) => id === orderedIds[i])
+    if (unchanged) return
+    const select = selectId ?? selectedShotId
+    replaceProject(await reorderShots({ shot_ids: orderedIds }), select)
+    pushHistory({
+      label: 'Reorder boards',
+      undo: async () => ({ payload: await reorderShots({ shot_ids: prevOrder }), select }),
+      redo: async () => ({ payload: await reorderShots({ shot_ids: orderedIds }), select }),
+    })
+  }, [replaceProject, selectedShotId, pushHistory])
 
   const deleteActiveRefSegment = useCallback(async () => {
     if (!activeAppliedSegmentId) return
@@ -439,7 +569,15 @@ export function ProjectProvider({ children }: PropsWithChildren) {
       saveProject: saveProjectAction,
       addShotAfterSelection,
       deleteSelectedShot,
+      moveSelectedShot,
+      reorderBoards,
       deleteActiveRefSegment,
+      undo,
+      redo,
+      canUndo: undoStack.length > 0,
+      canRedo: redoStack.length > 0,
+      undoLabel: undoStack[undoStack.length - 1]?.label ?? null,
+      redoLabel: redoStack[redoStack.length - 1]?.label ?? null,
       syncSelectedShot,
       openSelectedShotSource,
       initialLoading,
@@ -470,7 +608,7 @@ export function ProjectProvider({ children }: PropsWithChildren) {
       clearError,
       reportError,
     }),
-    [project, selectedShotId, replaceProject, refreshProjectFromBridge, reloadProject, newProjectAction, openProjectFromDialog, saveProjectAction, addShotAfterSelection, deleteSelectedShot, deleteActiveRefSegment, syncSelectedShot, openSelectedShotSource, initialLoading, projectActionBusy, getDraft, editShotField, isShotDirty, dirtyShotIds, savingShots, saveShot, flushDirtyShots, visualEpoch, segmentRange, setSegmentAnchor, setSegmentEnd, pickSegmentShot, clearSegmentRange, activeAppliedSegmentId, setActiveAppliedSegmentId, clearActiveAppliedSegment, refSegmentInspectOpen, openRefSegmentInspect, closeRefSegmentInspect, dismissRefSegmentUi, refApplyUndoToken, lastError, clearError, reportError],
+    [project, selectedShotId, replaceProject, refreshProjectFromBridge, reloadProject, newProjectAction, openProjectFromDialog, saveProjectAction, addShotAfterSelection, deleteSelectedShot, moveSelectedShot, reorderBoards, deleteActiveRefSegment, undo, redo, undoStack, redoStack, syncSelectedShot, openSelectedShotSource, initialLoading, projectActionBusy, getDraft, editShotField, isShotDirty, dirtyShotIds, savingShots, saveShot, flushDirtyShots, visualEpoch, segmentRange, setSegmentAnchor, setSegmentEnd, pickSegmentShot, clearSegmentRange, activeAppliedSegmentId, setActiveAppliedSegmentId, clearActiveAppliedSegment, refSegmentInspectOpen, openRefSegmentInspect, closeRefSegmentInspect, dismissRefSegmentUi, refApplyUndoToken, lastError, clearError, reportError],
   )
 
   return <ProjectContext.Provider value={value}>{children}</ProjectContext.Provider>
