@@ -1629,6 +1629,34 @@ async function ensureBoardBackgroundStackOrderInModal(doc) {
   }
 }
 
+async function updateLinkedSmartObjectInModal(layer) {
+  const doc = app.activeDocument;
+  if (!doc || !layer) {
+    return false;
+  }
+  const previousActiveIds = captureActiveLayerIds(doc);
+  try {
+    doc.activeLayers = [layer];
+    try {
+      await photoshop.action.batchPlay(
+        [{ _obj: "placedLayerUpdateModified" }],
+        { synchronousExecution: true },
+      );
+      return true;
+    } catch {
+      await photoshop.action.batchPlay(
+        [{ _obj: "placedLayerUpdateAllModified" }],
+        { synchronousExecution: true },
+      );
+      return true;
+    }
+  } catch {
+    return false;
+  } finally {
+    restoreActiveLayersByIds(doc, previousActiveIds);
+  }
+}
+
 async function finalizeRecoveredShotInModal(shotId) {
   const doc = app.activeDocument;
   if (!doc) {
@@ -1701,9 +1729,9 @@ async function boardBackgroundSignature(entry) {
 }
 
 async function boardBackgroundRefreshNeeded(shotId, force = false) {
-  // Linked `SB bg` layers should survive ordinary file changes. Photoshop owns
-  // linked-content refresh; the plugin only creates a missing layer or removes a
-  // stale layer when the source file disappears.
+  // Linked `SB bg` layers should survive ordinary file changes. A changed file
+  // asks Photoshop to update linked content in place; the plugin only creates a
+  // missing layer or removes a stale layer when the source file disappears.
   const doc = app.activeDocument;
   if (!doc) {
     return false;
@@ -1725,15 +1753,15 @@ async function boardBackgroundRefreshNeeded(shotId, force = false) {
     boardBackgroundSigByShot.set(shotId, signature);
     return false;
   }
-  if (signature !== lastSignature) {
-    boardBackgroundSigByShot.set(shotId, signature);
-  }
-  return false;
+  return signature !== lastSignature;
 }
 
 async function syncBoardBackgroundFromDisk(shotId, force = false) {
   const doc = app.activeDocument;
   if (!doc) {
+    return false;
+  }
+  if (detectShotFromDocument() !== shotId) {
     return false;
   }
 
@@ -1749,6 +1777,19 @@ async function syncBoardBackgroundFromDisk(shotId, force = false) {
   }
 
   const signature = await boardBackgroundSignature(entry);
+  const existingLayer = findBoardBackgroundLayer(doc);
+  if (existingLayer) {
+    const updated = await updateLinkedSmartObjectInModal(existingLayer);
+    await ensureBoardBackgroundStackOrderInModal(doc);
+    if (updated) {
+      if (signature !== null) {
+        boardBackgroundSigByShot.set(shotId, signature);
+      }
+      return true;
+    }
+    setStatus("SB bg link update failed; use manual relink/update.");
+    return false;
+  }
   const imported = await importBoardBackgroundInModal(shotId, entry);
   if (imported && signature !== null) {
     boardBackgroundSigByShot.set(shotId, signature);
