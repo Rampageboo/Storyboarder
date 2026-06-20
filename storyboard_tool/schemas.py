@@ -177,6 +177,17 @@ class SettingsUpdateRequest(BaseModel):
     ref_segment_video: dict[str, Any] | None = None
 
 
+class Scene2DCreateRequest(BaseModel):
+    title: str | None = None
+    description: str | None = None
+
+
+class Scene2DUpdateRequest(BaseModel):
+    title: str | None = None
+    description: str | None = None
+    can_be_reference: bool | None = None
+
+
 class CanvasColorRequest(BaseModel):
     color: str
 

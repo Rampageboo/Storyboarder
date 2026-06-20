@@ -8,7 +8,16 @@ from typing import Any, BinaryIO
 
 from fastapi import FastAPI, HTTPException
 
-from . import app_state, project_manager, project_transaction, reference_segments, runtime_state, session_store, shot_service
+from . import (
+    app_state,
+    project_manager,
+    project_transaction,
+    reference_segments,
+    runtime_state,
+    scene2d,
+    session_store,
+    shot_service,
+)
 from .errors import AppErrorCode, app_error
 from .external_tools import preheat_photoshop
 from .export_utils import missing_files
@@ -676,6 +685,88 @@ class StoryboardBackendService(ExportServiceMixin):
             "relative_path": opened.relative_to(project.root_path).as_posix() if opened.exists() else "",
             **app_state._project_payload(project, self.app.state.dirty),
         }
+
+    def method_list_scene2d(self) -> dict[str, Any]:
+        project = app_state._require_project(self.app)
+        return {"scenes": scene2d.list_scenes(project)}
+
+    def method_create_scene2d(self, data: dict[str, Any]) -> dict[str, Any]:
+        project = app_state._require_project(self.app)
+        try:
+            scene, scenes = scene2d.create_scene(
+                project,
+                title=str(data.get("title") or ""),
+                description=str(data.get("description") or ""),
+            )
+        except (FileNotFoundError, ValueError) as exc:
+            logger.exception("Failed to create Scene 2D")
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        app_state._touch_live_bridge(self.app)
+        return {"scene": scene, "scenes": scenes}
+
+    def method_update_scene2d(self, scene_id: str, data: dict[str, Any]) -> dict[str, Any]:
+        project = app_state._require_project(self.app)
+        try:
+            scene, scenes = scene2d.update_scene(project, scene_id, data)
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        app_state._touch_live_bridge(self.app)
+        return {"scene": scene, "scenes": scenes}
+
+    def method_delete_scene2d(self, scene_id: str) -> dict[str, Any]:
+        project = app_state._require_project(self.app)
+        try:
+            scenes = scene2d.delete_scene(project, scene_id)
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        app_state._touch_live_bridge(self.app)
+        return {"scenes": scenes}
+
+    def method_open_scene2d(self, scene_id: str) -> dict[str, Any]:
+        project = app_state._require_project(self.app)
+        try:
+            scene, opened, relative_path = scene2d.open_scene(project, scene_id)
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except ValueError as exc:
+            logger.exception("Failed to open Scene 2D %s", scene_id)
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        app_state._touch_live_bridge(self.app)
+        return {"path": opened, "relative_path": relative_path, "scene": scene}
+
+    def method_refresh_scene2d_preview(self, scene_id: str) -> dict[str, Any]:
+        project = app_state._require_project(self.app)
+        try:
+            scene, preview_exists, message = scene2d.refresh_preview(project, scene_id)
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {"scene": scene, "preview_exists": preview_exists, "message": message}
+
+    def method_add_scene2d_to_references(self, scene_id: str) -> dict[str, Any]:
+        project = app_state._require_project(self.app)
+        try:
+            reference, scene = scene2d.add_to_references(project, scene_id)
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        app_state._touch_live_bridge(self.app)
+        return {"reference": reference, "scene": scene, "project": app_state._project_payload(project, self.app.state.dirty)}
+
+    def method_get_scene2d_preview(self, scene_id: str) -> dict[str, str]:
+        project = app_state._require_project(self.app)
+        try:
+            return scene2d.preview_meta(project, scene_id)
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     def method_get_canvas_color(self) -> dict[str, str]:
         project = app_state._require_project(self.app)

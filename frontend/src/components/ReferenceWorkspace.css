@@ -117,6 +117,11 @@
   border-color: rgba(134, 46, 156, 0.4);
 }
 
+.refws-type-scene2d {
+  color: #a66b12;
+  border-color: rgba(232, 168, 56, 0.45);
+}
+
 .refws-name {
   flex: 1;
   min-width: 0;

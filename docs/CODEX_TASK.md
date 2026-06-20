@@ -1,250 +1,370 @@
-# CODEX_TASK.md — Photoshop UXP plugin UI cleanup
+# CODEX_TASK.md — Photoshop UXP: split one plugin package into two panels
 
 Repo: `Rampageboo/Storyboarder`.
 
 Work from the latest branch containing:
 
 ```text
-992156b486a3c42c29f7537f9f43b333f7723445
+70dbc21b87e4fb493b322c98598f93c80c70bde3
 ```
 
 ## Goal
 
-Clean up the Photoshop UXP plugin panel UI.
+Split the current Photoshop UXP plugin UI into two Photoshop panels inside the same plugin package.
 
-The plugin currently works, but the panel has become too long and cluttered. This task should reorganize the existing controls into clearer sections/views without changing workflow behavior.
-
-This is a UI organization task only.
-
-Do not change preview export behavior, PSD behavior, backend APIs, Storyboarder frontend, or project storage.
-
----
-
-## Required UI structure
-
-Reorganize the plugin into three logical views or sections:
-
-```text
-Main
-Settings
-Advanced
-```
-
-Use the simplest implementation that fits the current plain HTML/CSS/JS plugin structure.
-
-Do not add React, bundlers, or new dependencies.
-
----
-
-# 1. Main view
-
-The Main view is the default view.
-
-It should contain only high-frequency daily actions:
-
-## Header
-
-Show:
-
-```text
-Storyboard Bridge
-connection status
-current shot title / id
-```
-
-Keep the connection status visible.
-
-## Current shot card
-
-Keep the current shot card, but make it more compact.
-
-It should show:
-
-```text
-shot number / total
-shot title
-status
-duration
-action note
-quick note input
-```
-
-Do not make it taller than necessary.
-
-## Preview export
-
-Keep this section prominent:
-
-```text
-Export & next
-Export preview
-Auto-add at end
-Focus Storyboarder after preview export
-```
-
-Do not change the actual export logic.
-
-## Shot navigation
+Do not create a second plugin.
 
 Keep:
 
 ```text
+one manifest.json
+one plugin id
+one plugin version
+shared backend client
+shared plugin settings
+shared storage
+```
+
+Add a second panel entrypoint so Photoshop can show two panels:
+
+```text
+Storyboard Bridge
+Storyboard Work
+```
+
+This is a layout / panel architecture task only. Do not change export behavior, PSD behavior, backend APIs, or Storyboarder frontend.
+
+---
+
+# Target panel split
+
+## Panel 1 — Storyboard Bridge
+
+This panel corresponds to the current “current shot + export” layout.
+
+It should contain:
+
+```text
+Connection status
+Current shot card
+Shot title / id / index / status / duration
+Action note / camera note / latest notes if already shown
+Quick note input
+Add note button
+
+Preview export
+Export & next
+Export preview
+Auto-add at end
+Focus Storyboarder after preview export
+
+Plugin settings that are directly related to export/link behavior
+```
+
+This panel is about:
+
+```text
+What am I editing?
+What is the current shot state?
+Export preview back to Storyboarder.
+```
+
+Keep this panel compact, but it can be taller than the work panel.
+
+## Panel 2 — Storyboard Work
+
+This panel corresponds to the shot controls and onion skin controls.
+
+It should contain:
+
+```text
+Shot select
 Previous
 Next
 Open canvas
 Focus open tab
-```
 
-But keep this compact.
-
----
-
-# 2. Settings view
-
-Add a small settings entry point, preferably a gear button near the plugin header.
-
-Settings should contain plugin-local settings only:
-
-```text
-Focus Storyboarder after preview export
-Auto-add at end
-```
-
-If these checkboxes also remain in Main for convenience, avoid duplication where possible.
-
-Rules:
-
-* Plugin settings must still persist using the existing plugin settings store.
-* Do not move Storyboarder project settings into the Photoshop plugin.
-* Do not add Photoshop preheat here. Preheat belongs to Storyboarder Settings.
-
-Settings view should have a Back button.
-
----
-
-# 3. Advanced view
-
-Move low-frequency or technical controls here:
-
-```text
 Onion skin
 Overlay count
 Opacity
 Apply previous overlay
 Apply next overlay
 Clear overlay
+```
+
+This panel is about:
+
+```text
+Move between shots.
+Open/focus PSD tabs.
+Use onion skin while drawing.
+```
+
+This panel should be the practical drawing/work panel.
+
+---
+
+# Advanced / low-frequency controls
+
+Avoid putting low-frequency controls in the Work panel unless necessary.
+
+Place these in the Bridge panel under a compact collapsible Advanced section, or a small Settings/Advanced area:
+
+```text
+Reconnect
 Ensure template layers
 Recover broken PSD
 Choose project folder
 Choose shot folder
-Reconnect
+Canvas color / auto-apply color / apply canvas color
 ```
 
-Advanced view should be reachable from Main, but not visually dominate the default panel.
-
-Advanced view should have a Back button.
+Do not let these dominate either panel.
 
 ---
 
-## Layout constraints
+# Technical direction
 
-The plugin panel is narrow when docked in Photoshop.
+The current plugin has one `manifest.json` and one panel entrypoint.
 
-Design for a narrow panel:
+Update the UXP manifest using the correct manifest v5 pattern for multiple panel entrypoints in the same plugin package.
+
+Important:
+
+* Do not create a second `manifest.json`.
+* Do not create a second plugin id.
+* Do not duplicate backend polling aggressively.
+* Do not create two independent settings files.
+* Do not fork the backend client.
+* Do not create separate logic copies that will drift.
+
+Prefer one shared JS codebase with panel-specific DOM binding.
+
+Because the two panels will not contain all the same DOM elements, make event binding null-safe:
 
 ```text
-width around 280–340px
-vertical scrolling allowed
-no horizontal scrolling
-buttons full-width or two-column only when safe
+const node = $("someId")
+if (node) node.addEventListener(...)
 ```
 
-Do not increase the panel’s required width.
+Do this for all controls that may exist in only one panel.
 
-Do not use large headers or oversized cards.
+Do not allow one missing DOM element in one panel to break the entire plugin initialization.
 
 ---
 
-## Behavior constraints
+# Suggested file structure
+
+Use the simplest structure that works with the current UXP setup.
+
+Possible structure:
+
+```text
+photoshop_uxp_plugin/
+  manifest.json
+  bridge.html
+  work.html
+  panel.js
+  backend_client.js
+  preview_export.js
+  layer_roles.js
+  layer_sync.js
+  panel_storage_adapter.js
+  style.css
+```
+
+Alternative structure is acceptable if required by UXP manifest v5, but keep one plugin package and two panel entrypoints.
+
+Do not convert to React.
+Do not add a bundler.
+Do not add dependencies.
+
+---
+
+# Shared state and settings
+
+The two panels should share plugin settings:
+
+```text
+focus_storyboard_after_preview_export
+auto_add_at_end
+```
+
+Use the existing plugin settings storage.
+
+If both panels are open at the same time:
+
+* Settings changes in one panel should not corrupt the other.
+* It is acceptable if the other panel sees the updated setting after reload or next refresh.
+* Prefer lightweight sync where practical.
+
+`auto_add_at_end` should still affect `Next` / `Export & next` behavior.
+
+---
+
+# Polling / heartbeat rule
+
+Avoid double-heavy polling if both panels are open.
+
+Preferred behavior:
+
+```text
+Storyboard Bridge panel owns full bridge polling / heartbeat.
+Storyboard Work panel may use the same shared bridge helpers, but should avoid adding a second aggressive polling loop if possible.
+```
+
+If avoiding duplicated polling is too risky in this task, keep the existing polling behavior but do not make it worse than two panels each polling at the current interval.
+
+Do not introduce backend load-heavy loops.
+
+---
+
+# Behavior constraints
 
 Do not change:
 
 ```text
 Export preview
 Export & next
-Focus Storyboarder after export
-Open canvas
-Focus open tab
-Previous / Next
+Preview PNG export logic
+Layer visibility during export
+PSD save/open behavior
+SB bg behavior
+Focus Storyboarder after export behavior
 Auto-add behavior
+Previous / Next behavior
+Open canvas behavior
+Focus open tab behavior
 Onion skin behavior
-Layer template behavior
-PSD recovery behavior
-Backend link / heartbeat behavior
+Quick note behavior
+Recover PSD behavior
+Backend bridge API
+Storyboarder frontend
+Project metadata storage
 ```
 
-This task should preserve existing function names and event handlers where possible.
-
-If controls are moved in the DOM, make sure existing event listeners still bind correctly.
+This is a UI/panel split only.
 
 ---
 
-## Out of scope
+# Required cleanup
 
-Do not do any of the following:
+The previous single-panel `Main / Settings / Advanced` layout can be removed or simplified.
 
-* Do not change Storyboarder frontend.
-* Do not change backend APIs.
-* Do not change preview export image generation.
-* Do not change PSD save/open behavior.
-* Do not change SB background layer behavior.
-* Do not add Photoshop preheat to the plugin.
-* Do not add new dependencies.
-* Do not convert the plugin to React.
-* Do not remove any existing feature.
-* Do not implement new features.
-* Do not change project metadata storage.
-* Do not touch BoardStrip, Reference panel, or Reference Segment slider.
-
----
-
-## Validation
-
-Manual validation in UXP Developer Tool:
+After this task:
 
 ```text
-1. Plugin loads.
-2. Main view opens by default.
-3. Connection status still updates.
-4. Current shot card still updates.
-5. Export preview still works.
-6. Export & next still works.
-7. Focus Storyboarder after export still works if enabled.
-8. Previous / Next still work.
-9. Open canvas still works.
-10. Focus open tab still works.
-11. Settings view opens and Back returns to Main.
-12. Plugin settings persist after reload.
-13. Advanced view opens and Back returns to Main.
-14. Onion skin controls still work.
-15. Recover broken PSD still works.
-16. Reconnect still works.
+No fake tabs inside one panel unless they are still needed for Advanced/Settings.
+No duplicated large sections.
+No giant all-in-one vertical panel.
 ```
 
-If there is any build or lint command for the plugin, run it. Otherwise report manual UXP validation.
+The user should be able to open:
+
+```text
+Window > Plugins > Storyboard Bridge
+Window > Plugins > Storyboard Work
+```
+
+or the equivalent Photoshop UXP panel entries.
 
 ---
 
-## Output required
+# Manual validation
+
+Test in UXP Developer Tool / Photoshop.
+
+## Panel availability
+
+```text
+1. Load plugin.
+2. Confirm Photoshop shows two panel entries:
+   - Storyboard Bridge
+   - Storyboard Work
+3. Open both panels.
+4. Confirm both panels load without JS errors.
+```
+
+## Storyboard Bridge panel
+
+```text
+1. Connection status updates.
+2. Current shot card updates.
+3. Quick note still works.
+4. Export preview still works.
+5. Export & next still works.
+6. Auto-add at end still persists.
+7. Focus Storyboarder after preview export still persists and works.
+8. Advanced/low-frequency controls still work if located here.
+```
+
+## Storyboard Work panel
+
+```text
+1. Shot select loads.
+2. Previous works.
+3. Next works.
+4. Open canvas works.
+5. Focus open tab works.
+6. Onion skin overlay count works.
+7. Opacity works.
+8. Apply previous overlay works.
+9. Apply next overlay works.
+10. Clear overlay works.
+```
+
+## Two-panel interaction
+
+```text
+1. Keep both panels open.
+2. Change selected shot through Work panel.
+3. Confirm Bridge panel eventually reflects the correct current shot, or at minimum does not break.
+4. Export from Bridge panel.
+5. Navigate from Work panel.
+6. Confirm no duplicate shot creation or broken selection.
+```
+
+## Regression
+
+```text
+1. No backend errors.
+2. No PSD corruption.
+3. No project metadata rewrite from plugin in linked mode.
+4. No missing DOM id crash.
+5. Plugin settings persist after reload.
+```
+
+---
+
+# If UXP multi-panel support is unclear
+
+Do not fake a broken implementation.
+
+If the current manifest/runtime pattern cannot safely support two panels without a larger architecture change, stop and report:
+
+```text
+What manifest change is required
+Which files need to split
+What shared-state risk exists
+A safer staged plan
+```
+
+Do not force a brittle implementation that only appears to work.
+
+---
+
+# Output required
 
 When finished, report:
 
 ```text
 Changed files
-New plugin UI structure
-Which controls are in Main
-Which controls are in Settings
-Which controls are in Advanced
-Confirmation that export behavior was unchanged
-Manual validation results
+Manifest entrypoint changes
+Names of the two Photoshop panels
+Which controls are in Storyboard Bridge
+Which controls are in Storyboard Work
+How shared plugin settings are handled
+Whether polling/heartbeat was changed
+Validation results
+Known limitations
 ```

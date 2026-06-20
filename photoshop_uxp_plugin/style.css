@@ -296,6 +296,20 @@ sp-textfield {
   border-color: #7a6a3d;
 }
 
+/* Panel root sections (bridge vs work) */
+#bridge-panel,
+#work-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+}
+
+#bridge-panel[hidden],
+#work-panel[hidden] {
+  display: none !important;
+}
+
 /* Task groups */
 .panel-group {
   min-width: 0;
@@ -316,6 +330,47 @@ sp-textfield {
   letter-spacing: 0.05em;
   text-transform: uppercase;
   color: #8a8a8a;
+}
+
+/* Advanced collapsible section */
+.advanced-section {
+  border-top: 1px solid #383838;
+  padding-top: 8px;
+}
+
+.advanced-summary {
+  cursor: pointer;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: #8a8a8a;
+  padding: 4px 0;
+  user-select: none;
+  list-style: none;
+}
+
+.advanced-summary::-webkit-details-marker {
+  display: none;
+}
+
+.advanced-summary::before {
+  content: "\25B6  ";
+  font-size: 9px;
+}
+
+details[open] > .advanced-summary::before {
+  content: "\25BC  ";
+}
+
+.advanced-section > .panel-group {
+  margin-top: 10px;
+}
+
+.advanced-section > .panel-group + .panel-group {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid #383838;
 }
 
 /* Prominent save zone */

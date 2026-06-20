@@ -8,13 +8,14 @@ export interface RefSegmentSettings {
   [key: string]: unknown
 }
 
-export type ReferenceMediaType = 'image' | 'video' | 'model'
+export type ReferenceMediaType = 'image' | 'video' | 'model' | 'scene2d'
 
 export interface ReferenceLink {
   id: string
   path: string
   type: ReferenceMediaType | string
   title?: string
+  source_scene2d_id?: string
   [key: string]: unknown
 }
 

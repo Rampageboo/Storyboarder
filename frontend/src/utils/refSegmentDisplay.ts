@@ -46,14 +46,16 @@ export function segmentTypeLabel(sourceType: string): string {
   if (t === 'image') return 'IMAGE'
   if (t === 'video') return 'VIDEO'
   if (t === 'model') return 'MODEL / 3D'
+  if (t === 'scene2d') return 'SCENE 2D'
   return sourceType.toUpperCase() || 'REFERENCE'
 }
 
-export function segmentCssType(sourceType: string): 'image' | 'video' | 'model' | 'other' {
+export function segmentCssType(sourceType: string): 'image' | 'video' | 'model' | 'scene2d' | 'other' {
   const t = sourceType.toLowerCase()
   if (t === 'image') return 'image'
   if (t === 'video') return 'video'
   if (t === 'model') return 'model'
+  if (t === 'scene2d') return 'scene2d'
   return 'other'
 }
 

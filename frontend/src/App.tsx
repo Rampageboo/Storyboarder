@@ -6,6 +6,7 @@ import { CanvasBoard } from './components/CanvasBoard'
 import { ReferencePanel } from './components/ReferencePanel'
 import { ReferenceSidebar } from './components/ReferenceSidebar'
 import { ReferenceAssignmentPopover } from './components/ReferenceAssignmentPopover'
+import { Scene2DPanel } from './components/Scene2DPanel'
 import { Scene3DPanel } from './components/Scene3DPanel'
 import { NeighborContext } from './components/NeighborContext'
 import { AdvancedPanel } from './components/AdvancedPanel'
@@ -94,6 +95,7 @@ function AppInner() {
             <aside className="main-right">
               <ShotInspector />
               <ReferencePanel />
+              <Scene2DPanel />
               <Scene3DPanel />
               <AdvancedPanel />
             </aside>

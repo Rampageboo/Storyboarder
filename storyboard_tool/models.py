@@ -100,6 +100,10 @@ class Project:
         return self.root_path / "references"
 
     @property
+    def scenes2d_dir(self) -> Path:
+        return self.root_path / "scenes2d"
+
+    @property
     def exports_dir(self) -> Path:
         return self.root_path / "exports"
 

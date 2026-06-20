@@ -25,11 +25,34 @@
       },
       "preferredDockedSize": {
         "width": 320,
-        "height": 420
+        "height": 500
       },
       "preferredFloatingSize": {
         "width": 300,
-        "height": 420
+        "height": 480
+      }
+    },
+    {
+      "type": "panel",
+      "id": "storyboardWorkPanel",
+      "label": {
+        "default": "Storyboard Work"
+      },
+      "minimumSize": {
+        "width": 240,
+        "height": 220
+      },
+      "maximumSize": {
+        "width": 2000,
+        "height": 2000
+      },
+      "preferredDockedSize": {
+        "width": 280,
+        "height": 300
+      },
+      "preferredFloatingSize": {
+        "width": 260,
+        "height": 280
       }
     }
   ],

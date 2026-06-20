@@ -24,6 +24,10 @@ function fileName(path: string) {
   return path.split(/[/\\]/).pop() || path
 }
 
+function referenceTypeLabel(type: string) {
+  return type === 'scene2d' ? 'Scene 2D' : type
+}
+
 function RefPreview({ link }: { link: ReferenceLink }) {
   const linkKey = `${link.id}:${link.path}`
   const [prevLinkKey, setPrevLinkKey] = useState(linkKey)
@@ -40,7 +44,7 @@ function RefPreview({ link }: { link: ReferenceLink }) {
   }
 
   if (failed) {
-    return <div className="reflib-thumb-fallback">{link.type}</div>
+    return <div className="reflib-thumb-fallback">{referenceTypeLabel(link.type)}</div>
   }
 
   if (link.type === 'video') {
@@ -224,7 +228,7 @@ export function ReferenceSidebar() {
                         <RefPreview link={link} />
                       </div>
                       <div className="reflib-meta">
-                        <span className="reflib-type">{link.type}</span>
+                        <span className="reflib-type">{referenceTypeLabel(link.type)}</span>
                         <span className="reflib-name">{label}</span>
                       </div>
                     </button>

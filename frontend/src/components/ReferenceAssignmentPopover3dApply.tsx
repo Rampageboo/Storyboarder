@@ -70,8 +70,13 @@ function fitModeToObjectFit(mode: FitMode): 'contain' | 'cover' | 'fill' {
 
 function clampStart(start: number, mediaDuration: number, boardDuration: number, mode: string) {
   if (mode === 'image') return 0
+  if (mode === 'scene2d') return 0
   if (!mediaDuration || boardDuration >= mediaDuration) return Math.max(0, Number(start) || 0)
   return Math.min(Math.max(0, Number(start) || 0), Math.max(0, mediaDuration - Math.max(0.001, boardDuration)))
+}
+
+function referenceTypeLabel(type: string) {
+  return type === 'scene2d' ? 'Scene 2D' : type
 }
 
 function nextFrame(): Promise<void> {
@@ -100,7 +105,7 @@ function RefThumb({ link, selected }: { link: ReferenceLink; selected: boolean }
       {link.type === 'model' ? (
         <ReferenceModelPreview path={link.path} label={link.title || fileName(link.path)} />
       ) : failed ? (
-        <div className="ref-assign-ref-fallback">{link.type}</div>
+        <div className="ref-assign-ref-fallback">{referenceTypeLabel(link.type)}</div>
       ) : link.type === 'video' ? (
         <video src={url} muted preload="metadata" playsInline onError={() => setFailed(true)} />
       ) : (
@@ -169,7 +174,7 @@ function SourceTimeScrubber({
   }, [dragging])
 
   if (mode !== 'video' && mode !== 'model') {
-    return mode === 'image'
+    return mode === 'image' || mode === 'scene2d'
       ? <p className="ref-assign-source-time-note">Image references do not use source time.</p>
       : null
   }
@@ -416,6 +421,7 @@ export function ReferenceAssignmentPopover() {
       fit_mode: fitMode,
     }
     const refType = selectedRef.type
+    const bakeType = refType === 'scene2d' ? 'image' : refType
     const wasInspect = isInspectMode
     setBusy(true)
     setProgress('')
@@ -425,11 +431,11 @@ export function ReferenceAssignmentPopover() {
         const existing = refSegmentsWithoutOverlap(segments, seg, shots)
         const body: ApplyRefSegmentRequest = { anchor_shot_id: startShot, end_shot_id: endShot, segment_id: segId }
         // Render model captures once so redo can re-send them without the 3D preview.
-        const bakeRequest: ApplyRefSegmentRequest = refType === 'model' ? await buildModelRequest(body) : body
+        const bakeRequest: ApplyRefSegmentRequest = bakeType === 'model' ? await buildModelRequest(body) : body
         const runBake = async (): Promise<ProjectPayload> => {
           await updateSettings({ ref_segments: [...existing, seg], active_ref_segment_id: segId })
-          if (refType === 'image') return applyRefSegmentImage(bakeRequest)
-          if (refType === 'model') return applyRefSegmentModelCaptures(bakeRequest)
+          if (bakeType === 'image') return applyRefSegmentImage(bakeRequest)
+          if (bakeType === 'model') return applyRefSegmentModelCaptures(bakeRequest)
           return applyRefSegment(bakeRequest)
         }
         const payload = await runBake()
@@ -512,7 +518,7 @@ export function ReferenceAssignmentPopover() {
             <div className="ref-assign-refs-head"><span>References</span><button type="button" onClick={() => importRef.current?.click()} disabled={disabled}>Import</button></div>
             <input ref={importRef} type="file" accept="image/*,video/*,.glb,.gltf" hidden onChange={(e) => { importReference(e.target.files?.[0] ?? undefined); e.target.value = '' }} />
             <div className="ref-assign-ref-list">
-              {links.map((link) => <button key={link.id} type="button" className={`ref-assign-ref-item ${refId === link.id ? 'is-selected' : ''}`} onClick={() => setRefId(link.id)} title={link.path}><RefThumb link={link} selected={refId === link.id} /><span className="ref-assign-ref-name">{link.title || fileName(link.path)}</span><span className="ref-assign-ref-type">{link.type}</span></button>)}
+              {links.map((link) => <button key={link.id} type="button" className={`ref-assign-ref-item ${refId === link.id ? 'is-selected' : ''}`} onClick={() => setRefId(link.id)} title={link.path}><RefThumb link={link} selected={refId === link.id} /><span className="ref-assign-ref-name">{link.title || fileName(link.path)}</span><span className="ref-assign-ref-type">{referenceTypeLabel(link.type)}</span></button>)}
               {links.length === 0 ? <div className="ref-assign-refs-empty">Import images, video, or GLB models.</div> : null}
             </div>
           </aside>

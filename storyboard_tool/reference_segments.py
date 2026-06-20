@@ -391,7 +391,7 @@ def normalize_ref_segments(settings: dict[str, Any]) -> list[dict[str, Any]]:
             except (TypeError, ValueError):
                 video_start = 0.0
             source_type = str(item.get("source_type", "") or "").strip().lower()
-            if source_type not in {"video", "model", "image", "none"}:
+            if source_type not in {"video", "model", "image", "scene2d", "none"}:
                 source_type = "none"
             reference_id = str(item.get("reference_id", "") or "").strip()
             reference_path = pm._normalize_rel_path(str(item.get("reference_path", "") or "").strip())
@@ -477,7 +477,7 @@ def resolve_segment_reference(
         ref_path = pm._normalize_rel_path(str(project.settings.get("reference_image_path", "") or "").strip())
     else:
         ref_path = ""
-    return ref_path, source_type if source_type in {"video", "model", "image"} else "none"
+    return ref_path, source_type if source_type in {"video", "model", "image", "scene2d"} else "none"
 
 
 def sync_ref_segment_settings(project: Project) -> None:
@@ -500,8 +500,8 @@ def sync_ref_segment_settings(project: Project) -> None:
         "segment_id": active_id,
     }
     ref_path, ref_type = resolve_segment_reference(project, active)
-    if ref_path and ref_type in {"video", "model", "image"}:
-        project.settings["reference_segment_mode"] = ref_type
+    if ref_path and ref_type in {"video", "model", "image", "scene2d"}:
+        project.settings["reference_segment_mode"] = "image" if ref_type == "scene2d" else ref_type
         if ref_type == "video":
             project.settings["reference_video_path"] = ref_path
         elif ref_type == "model":
@@ -541,10 +541,10 @@ def update_ref_segment_video_start(project: Project, segment_id: str, video_star
     sync_ref_segment_settings(project)
 
 
-def normalize_reference_links(value: Any) -> list[dict[str, str]]:
+def normalize_reference_links(value: Any) -> list[dict[str, Any]]:
     if not isinstance(value, list):
         return []
-    normalized: list[dict[str, str]] = []
+    normalized: list[dict[str, Any]] = []
     seen_ids: set[str] = set()
     for item in value:
         if not isinstance(item, dict):
@@ -553,14 +553,19 @@ def normalize_reference_links(value: Any) -> list[dict[str, str]]:
         if not path or re.match(r"^https?://", path, re.IGNORECASE):
             continue
         media_type = str(item.get("type") or "").strip().lower()
-        if media_type not in {"image", "video", "model"}:
+        if media_type not in {"image", "video", "model", "scene2d"}:
             media_type = reference_media_type(path)
         title = str(item.get("title", "") or "").strip() or Path(path).name or path
         ref_id = str(item.get("id", "") or "").strip() or uuid.uuid4().hex
         while ref_id in seen_ids:
             ref_id = uuid.uuid4().hex
         seen_ids.add(ref_id)
-        normalized.append({"id": ref_id, "title": title, "type": media_type, "path": path})
+        normalized_link: dict[str, Any] = {"id": ref_id, "title": title, "type": media_type, "path": path}
+        if media_type == "scene2d":
+            source_scene2d_id = str(item.get("source_scene2d_id", "") or "").strip()
+            if source_scene2d_id:
+                normalized_link["source_scene2d_id"] = source_scene2d_id
+        normalized.append(normalized_link)
     return normalized
 
 
@@ -621,6 +626,8 @@ def ensure_reference_library(settings: dict[str, Any]) -> None:
                 }
             )
     for link in links:
+        if link["type"] == "scene2d":
+            continue
         inferred = reference_media_type(link["path"])
         if inferred != link["type"]:
             link["type"] = inferred
@@ -865,6 +872,8 @@ def _validate_segment_reference(
         "image": "Reference image not found",
     }
     rel_path, ref_type = resolve_segment_reference(project, seg)
+    if expected_type == "image" and ref_type == "scene2d":
+        ref_type = "image"
     if ref_type != expected_type or not rel_path:
         raise ValueError(bind_messages[expected_type])
     file_path = (project.root_path / rel_path).resolve()

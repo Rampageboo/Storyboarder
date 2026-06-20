@@ -51,7 +51,7 @@ DEFAULT_SETTINGS: dict = {
 def ensure_project_dirs(root: Path) -> None:
     """Create the standard project directory structure under *root*."""
     root.mkdir(parents=True, exist_ok=True)
-    for dirname in ("shots", "references", "exports", "scripts", "backups", "scene3d"):
+    for dirname in ("shots", "references", "exports", "scripts", "backups", "scene3d", "scenes2d"):
         (root / dirname).mkdir(exist_ok=True)
 
 
@@ -125,4 +125,11 @@ def project_disk_mtime(project: Project) -> float:
     # shots.csv only matters for legacy projects that have not migrated to shots.json yet.
     if shots_mtime <= 0.0:
         shots_mtime = shots_csv_mtime(project.root_path)
-    return max(manifest_mtime, settings_mtime, shots_mtime)
+    scenes2d_dir = project.root_path / "scenes2d"
+    scenes2d_index = scenes2d_dir / "scenes2d.json"
+    scenes2d_mtime = scenes2d_index.stat().st_mtime if scenes2d_index.is_file() else 0.0
+    if scenes2d_dir.is_dir():
+        for meta_path in scenes2d_dir.glob("scene_*/scene_*_meta.json"):
+            if meta_path.is_file():
+                scenes2d_mtime = max(scenes2d_mtime, meta_path.stat().st_mtime)
+    return max(manifest_mtime, settings_mtime, shots_mtime, scenes2d_mtime)

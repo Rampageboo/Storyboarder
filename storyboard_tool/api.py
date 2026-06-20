@@ -40,6 +40,8 @@ from .schemas import (
     ReorderShotsRequest,
     RestoreRefApplyRequest,
     RestoreShotRequest,
+    Scene2DCreateRequest,
+    Scene2DUpdateRequest,
     SetReferencePathsRequest,
     SettingsUpdateRequest,
     ShotUpdateRequest,
@@ -375,6 +377,38 @@ def create_app(base_dir: Path, bridge_port: int = 8000) -> FastAPI:
     @app.get("/api/project/scene3d/file")
     def get_scene3d_file() -> FileResponse:
         return _file_response_from_meta(_svc().method_get_scene3d_file())
+
+    @app.get("/api/project/scenes2d")
+    def list_scenes2d() -> dict[str, Any]:
+        return _svc().method_list_scene2d()
+
+    @app.post("/api/project/scenes2d")
+    def create_scene2d(request: Scene2DCreateRequest = Scene2DCreateRequest()) -> dict[str, Any]:
+        return _svc().method_create_scene2d(request.model_dump(exclude_unset=True))
+
+    @app.patch("/api/project/scenes2d/{scene_id}")
+    def update_scene2d(scene_id: str, request: Scene2DUpdateRequest) -> dict[str, Any]:
+        return _svc().method_update_scene2d(scene_id, request.model_dump(exclude_unset=True))
+
+    @app.delete("/api/project/scenes2d/{scene_id}")
+    def delete_scene2d(scene_id: str) -> dict[str, Any]:
+        return _svc().method_delete_scene2d(scene_id)
+
+    @app.post("/api/project/scenes2d/{scene_id}/open")
+    def open_scene2d(scene_id: str) -> dict[str, Any]:
+        return _svc().method_open_scene2d(scene_id)
+
+    @app.post("/api/project/scenes2d/{scene_id}/refresh-preview")
+    def refresh_scene2d_preview(scene_id: str) -> dict[str, Any]:
+        return _svc().method_refresh_scene2d_preview(scene_id)
+
+    @app.post("/api/project/scenes2d/{scene_id}/add-to-references")
+    def add_scene2d_to_references(scene_id: str) -> dict[str, Any]:
+        return _svc().method_add_scene2d_to_references(scene_id)
+
+    @app.get("/api/project/scenes2d/{scene_id}/preview")
+    def get_scene2d_preview(scene_id: str) -> FileResponse:
+        return _file_response_from_meta(_svc().method_get_scene2d_preview(scene_id))
 
     @app.get("/api/project/canvas-color")
     def get_canvas_color() -> dict[str, str]:

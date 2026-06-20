@@ -70,10 +70,10 @@ function init() {
   $("openAdvancedView")?.addEventListener("click", () => setPluginView("advanced"));
   $("settingsBack")?.addEventListener("click", () => setPluginView("main"));
   $("advancedBack")?.addEventListener("click", () => setPluginView("main"));
-  $("chooseProject").addEventListener("click", () => runPanelAction(chooseProjectFolder));
-  $("chooseFolder").addEventListener("click", () => runPanelAction(chooseShotFolder));
-  $("shotSelect").addEventListener("change", () => runPanelAction(switchToSelectedShot));
-  $("openShot").addEventListener("click", () => runPanelAction(switchToSelectedShot));
+  $("chooseProject")?.addEventListener("click", () => runPanelAction(chooseProjectFolder));
+  $("chooseFolder")?.addEventListener("click", () => runPanelAction(chooseShotFolder));
+  $("shotSelect")?.addEventListener("change", () => runPanelAction(switchToSelectedShot));
+  $("openShot")?.addEventListener("click", () => runPanelAction(switchToSelectedShot));
   $("focusCurrentTab")?.addEventListener("click", () => runPanelAction(focusCurrentShotTab));
   $("ensureTemplateLayers")?.addEventListener("click", () => runPanelAction(ensureTemplateLayersForActiveDocument));
   $("quickStatusButtons")?.addEventListener("click", (event) => {
@@ -85,16 +85,16 @@ function init() {
   $("addQuickNote")?.addEventListener("click", () => runPanelAction(addQuickNoteViaBackend));
   $("previousShot")?.addEventListener("click", () => runPanelAction(goToPreviousShot));
   $("nextShot")?.addEventListener("click", () => runPanelAction(goToNextShot));
-  $("overlayPrevious").addEventListener("click", () => runPanelAction(overlayPreviousShots));
+  $("overlayPrevious")?.addEventListener("click", () => runPanelAction(overlayPreviousShots));
   $("overlayNext")?.addEventListener("click", () => runPanelAction(overlayNextShots));
-  $("clearOverlay").addEventListener("click", () => runPanelAction(clearOverlayLayers));
+  $("clearOverlay")?.addEventListener("click", () => runPanelAction(clearOverlayLayers));
   $("overlayCount")?.addEventListener("change", () => clampOverlayCountInput());
   $("overlayCount")?.addEventListener("input", () => clampOverlayCountInput());
   $("overlayOpacity")?.addEventListener("change", () => clampOverlayOpacityInput());
   $("overlayOpacity")?.addEventListener("input", () => clampOverlayOpacityInput());
-  $("applyBackground").addEventListener("click", () => runPanelAction(applyCanvasBackground));
-  $("saveAndStay").addEventListener("click", () => runPanelAction(saveCurrentShot));
-  $("saveAndNext").addEventListener("click", () => runPanelAction(saveAndGoNext));
+  $("applyBackground")?.addEventListener("click", () => runPanelAction(applyCanvasBackground));
+  $("saveAndStay")?.addEventListener("click", () => runPanelAction(saveCurrentShot));
+  $("saveAndNext")?.addEventListener("click", () => runPanelAction(saveAndGoNext));
   $("autoAddShot")?.addEventListener("change", () => runPanelAction(() => updateAutoAddAtEndSetting("autoAddShot")));
   $("settingsAutoAddShot")?.addEventListener("change", () => runPanelAction(() => updateAutoAddAtEndSetting("settingsAutoAddShot")));
   $("focusStoryboardAfterExport")?.addEventListener("change", () =>
@@ -104,7 +104,7 @@ function init() {
     runPanelAction(() => updateFocusStoryboardAfterExportSetting("settingsFocusStoryboardAfterExport")),
   );
   $("recoverPsd")?.addEventListener("click", () => runPanelAction(recoverCurrentShotPsd));
-  $("relinkNow").addEventListener("click", () => runPanelAction(reconnectStoryboardBridge));
+  $("relinkNow")?.addEventListener("click", () => runPanelAction(reconnectStoryboardBridge));
   setPluginView("main");
   setLinkedUi(false);
   setLinkStatus("Connecting…", true);
@@ -126,9 +126,12 @@ function setLinkedUi(linked) {
 
 function setPluginView(view) {
   const next = view === "settings" || view === "advanced" ? view : "main";
-  $("mainView").hidden = next !== "main";
-  $("settingsView").hidden = next !== "settings";
-  $("advancedView").hidden = next !== "advanced";
+  const mainView = $("mainView");
+  const settingsView = $("settingsView");
+  const advancedView = $("advancedView");
+  if (mainView) mainView.hidden = next !== "main";
+  if (settingsView) settingsView.hidden = next !== "settings";
+  if (advancedView) advancedView.hidden = next !== "advanced";
 }
 
 async function runPanelAction(action) {
@@ -148,7 +151,8 @@ async function chooseProjectFolder() {
   }
   projectRoot = folder;
   projectData = await loadProjectJson();
-  $("projectLabel").textContent = `Project: ${folder.nativePath || folder.name}`;
+  const projectLabelEl = $("projectLabel");
+  if (projectLabelEl) projectLabelEl.textContent = `Project: ${folder.nativePath || folder.name}`;
   canvasColor = await readProjectCanvasColor(folder);
   updateColorSwatch();
   populateShotSelect();
@@ -170,7 +174,8 @@ async function chooseProjectFolder() {
 
 async function chooseShotFolder() {
   shotFolder = await fs.getFolder();
-  $("folderLabel").textContent = `Folder: ${shotFolder.nativePath || shotFolder.name}`;
+  const folderLabelEl = $("folderLabel");
+  if (folderLabelEl) folderLabelEl.textContent = `Folder: ${shotFolder.nativePath || shotFolder.name}`;
   const folderName = shotFolder.name || "";
   if (isValidShotId(folderName)) {
     setSelectedShotId(folderName);
@@ -179,7 +184,8 @@ async function chooseShotFolder() {
   if (root) {
     projectRoot = root;
     projectData = await loadProjectJson();
-    $("projectLabel").textContent = `Project: ${root.nativePath || root.name}`;
+    const rootLabelEl = $("projectLabel");
+    if (rootLabelEl) rootLabelEl.textContent = `Project: ${root.nativePath || root.name}`;
     populateShotSelect();
   }
   canvasColor = await readProjectCanvasColor(shotFolder);
@@ -847,7 +853,8 @@ function populateShotSelect() {
 }
 
 function setSelectedShotId(shotId) {
-  $("shotId").value = shotId;
+  const shotIdEl = $("shotId");
+  if (shotIdEl) shotIdEl.value = shotId;
   const select = $("shotSelect");
   if (select) {
     select.value = shotId;
@@ -857,7 +864,7 @@ function setSelectedShotId(shotId) {
 }
 
 function currentShotIndex() {
-  const shotId = String($("shotId").value || $("shotSelect").value || "").trim().toLowerCase();
+  const shotId = String($("shotId")?.value || $("shotSelect")?.value || "").trim().toLowerCase();
   return (projectData?.shots || []).findIndex((shot) => shot.shot_id === shotId);
 }
 
@@ -874,7 +881,8 @@ function updateOverlayCountLimits() {
   const maxSelectable = Math.max(1, previousAvailable, nextCount);
   input.setAttribute("data-max", String(maxSelectable));
   input.disabled = previousAvailable === 0 && nextCount === 0;
-  $("overlayPrevious").disabled = previousAvailable === 0;
+  const overlayPrev = $("overlayPrevious");
+  if (overlayPrev) overlayPrev.disabled = previousAvailable === 0;
   if ($("overlayNext")) {
     $("overlayNext").disabled = !nextAvailable;
   }
@@ -974,7 +982,7 @@ function formatShotIdLabel(shotId) {
 }
 
 function currentShotId() {
-  const value = String($("shotId").value || $("shotSelect").value || "").trim();
+  const value = String($("shotId")?.value || $("shotSelect")?.value || "").trim();
   if (!isValidShotId(value)) {
     throw new Error("Shot ID must be a legacy shot_001 id or a 32-character UUID.");
   }
@@ -2061,7 +2069,8 @@ async function switchToShot(shotId) {
 
   setSelectedShotId(shotId);
   shotFolder = folder;
-  $("folderLabel").textContent = `Folder: ${shotFolder.nativePath || shotFolder.name}`;
+  const switchFolderLabel = $("folderLabel");
+  if (switchFolderLabel) switchFolderLabel.textContent = `Folder: ${shotFolder.nativePath || shotFolder.name}`;
   canvasColor = nextColor;
   updateColorSwatch();
   await notifyBackendShotFocus(shotId);
@@ -2406,7 +2415,41 @@ async function runModal(commandName, fn) {
 }
 
 function setStatus(message) {
-  $("status").textContent = message;
+  const node = $("status");
+  if (node) node.textContent = message;
+}
+
+// ── UXP multi-panel entrypoints ───────────────────────────────────────────
+// A UXP plugin runs ONE shared document + JS context. Each panel is handed its
+// own root node through the show() lifecycle hook; we move that panel's
+// container (defined once in index.html) into it. appendChild relocates the
+// node — including any listeners init() attached — so the Bridge and Work panels
+// render different parts of the same document.
+function attachPanelContent(rootNode, containerId) {
+  const content = document.getElementById(containerId);
+  if (!content || !rootNode) {
+    return;
+  }
+  if (content.parentNode !== rootNode) {
+    rootNode.appendChild(content);
+  }
+  content.hidden = false;
+}
+
+try {
+  require("uxp").entrypoints.setup({
+    panels: {
+      storyboardBridgePanel: {
+        show(rootNode) { attachPanelContent(rootNode, "bridge-panel"); },
+      },
+      storyboardWorkPanel: {
+        show(rootNode) { attachPanelContent(rootNode, "work-panel"); },
+      },
+    },
+  });
+} catch (e) {
+  // entrypoints.setup unavailable (e.g. opened outside Photoshop) — the document
+  // still loads and wires up; the panels just are not split.
 }
 
 if (document.readyState === "loading") {

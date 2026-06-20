@@ -39,6 +39,10 @@ function fileName(path: string) {
   return path.split(/[/\\]/).pop() || path
 }
 
+function referenceTypeLabel(type: string) {
+  return type === 'scene2d' ? 'Scene 2D' : type
+}
+
 export function ReferenceWorkspace() {
   const { project, selectedShotId, setProject, flushDirtyShots, projectActionBusy, reportError } = useProject()
   const [open, setOpen] = useState(true)
@@ -151,7 +155,7 @@ export function ReferenceWorkspace() {
         await updateSettings({ ref_segments: [...existing, seg], active_ref_segment_id: segId })
         const body: ApplyRefSegmentRequest = { anchor_shot_id: startShot, end_shot_id: endShot, segment_id: segId }
         let payload: ProjectPayload
-        if (selectedRef.type === 'image') payload = await applyRefSegmentImage(body)
+        if (selectedRef.type === 'image' || selectedRef.type === 'scene2d') payload = await applyRefSegmentImage(body)
         else if (selectedRef.type === 'model') payload = await applyRefSegment3d({ ...body, camera_name: '' })
         else payload = await applyRefSegment(body)
         setProject(payload)
@@ -230,7 +234,7 @@ export function ReferenceWorkspace() {
               <ul className="refws-list">
                 {links.map((link) => (
                   <li className="refws-item" key={link.id}>
-                    <span className={`refws-type refws-type-${link.type}`}>{link.type}</span>
+                    <span className={`refws-type refws-type-${link.type}`}>{referenceTypeLabel(link.type)}</span>
                     <button
                       type="button"
                       className="refws-name"
@@ -264,7 +268,7 @@ export function ReferenceWorkspace() {
                   {links.length === 0 ? <option value="">No references</option> : null}
                   {links.map((l) => (
                     <option key={l.id} value={l.id}>
-                      {l.title || fileName(l.path)} · {l.type}
+                      {l.title || fileName(l.path)} · {referenceTypeLabel(l.type)}
                     </option>
                   ))}
                 </select>
@@ -328,7 +332,9 @@ export function ReferenceWorkspace() {
               <ul className="refws-list">
                 {segments.map((s, i) => (
                   <li className="refws-item" key={s.id || `${s.anchor_shot_id}-${s.end_shot_id}-${i}`}>
-                    <span className={`refws-type refws-type-${s.source_type}`}>{s.source_type || '—'}</span>
+                    <span className={`refws-type refws-type-${s.source_type}`}>
+                      {referenceTypeLabel(String(s.source_type || '')) || '—'}
+                    </span>
                     <span className="refws-seg-range">
                       {shotLabel(s.anchor_shot_id || '')} → {shotLabel(s.end_shot_id || '')}
                     </span>
