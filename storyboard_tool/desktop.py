@@ -161,7 +161,6 @@ def open_desktop_window(app, title: str = "Storyboard Tool") -> int:
             "Desktop mode requires pywebview. Install dependencies with: pip install -r requirements.txt"
         ) from exc
 
-    from .bridge import DesktopBridge
     from .live_bridge import publish
 
     try:
@@ -173,7 +172,6 @@ def open_desktop_window(app, title: str = "Storyboard Tool") -> int:
     app.state.bridge_port = port
     publish(app.state.base_dir, None, port=port)
 
-    bridge = DesktopBridge(app)
     _configure_windows_asyncio_noise()
     start_internal_server(app, _HOST, port)
     react_index = Path(__file__).resolve().parent / "web" / "dist" / "index.html"
@@ -192,7 +190,6 @@ def open_desktop_window(app, title: str = "Storyboard Tool") -> int:
         height=900,
         min_size=(1024, 680),
         text_select=False,
-        js_api=bridge,
     )
     start_kwargs: dict = {
         "private_mode": False,

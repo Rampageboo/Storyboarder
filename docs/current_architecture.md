@@ -64,7 +64,7 @@ Storyboarder is a **desktop-only** storyboarding application. There is no hosted
 |---|---|
 | Desktop shell | pywebview (Chromium WebView on Windows) |
 | App server | FastAPI + uvicorn, loopback-only (`127.0.0.1`) |
-| Frontend | React 18 + TypeScript, built with Vite |
+| Frontend | React 19 + TypeScript, built with Vite |
 | 3D engine | Three.js (vendor bundle) + Scene3D workspace (compiled TypeScript) |
 | Backend language | Python 3.11+ |
 | Image/media | Pillow, OpenCV-Python, psd-tools |
@@ -130,7 +130,7 @@ A background daemon thread in `api.py` wakes every 1.5 seconds and refreshes `st
 - Uses `webview.create_window()` with `http://127.0.0.1:PORT/` as the URL.
 - The WebView is Chromium-based on Windows (EdgeWebView2); it runs the same React code as a browser would.
 - System file dialogs (`/api/system/browse-*` routes) call back into pywebview's `create_file_dialog()` API from the server thread. This is the only place pywebview is called outside of window creation.
-- `desktop.py` does not expose any JavaScript bridge; all communication goes through the HTTP API.
+- `desktop.py` does not expose any JavaScript bridge; all communication goes through the HTTP API. (The legacy pywebview `js_api` bridge — `DesktopBridge` in `bridge.py` — was unused by the React frontend and has been removed.)
 
 ---
 
@@ -238,7 +238,7 @@ This is the single business-logic entry point. Every `method_*` handler correspo
 | Reference workflows | `reference_segments.py` |
 | Auto-sync (PSD/PNG) | `linked_sync.py` |
 | Export generation | `export_service.py` + `export_utils.py` |
-| Photoshop bridge | `live_bridge.py`, `bridge.py` |
+| Photoshop bridge | `live_bridge.py` |
 | Image processing | `image_utils.py` |
 | Video processing | `video_utils.py` |
 | File dialogs | `system_utils.py` |
@@ -252,7 +252,7 @@ This is the single business-logic entry point. Every `method_*` handler correspo
 
 `storyboard_tool/app_state.py` — transport-agnostic project and app-state utilities.
 
-These functions were extracted from `api.py` so they are available to both the HTTP route layer and the desktop bridge (`bridge.py`) without circular imports.
+These functions were extracted from `api.py` so the service layer can use them without reaching "up" into the route module, avoiding circular imports.
 
 **Key helpers**
 

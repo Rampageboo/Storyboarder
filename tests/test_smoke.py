@@ -16,7 +16,6 @@ with warnings.catch_warnings():
     warnings.filterwarnings("ignore", message="Using `httpx` with `starlette.testclient` is deprecated")
     from fastapi.testclient import TestClient
 
-from storyboard_tool.bridge import DesktopBridge
 from storyboard_tool import desktop, live_bridge, project_manager
 from storyboard_tool import api as api_module
 from storyboard_tool import backend_service as backend_service_module
@@ -220,30 +219,6 @@ class StoryboardSmokeTests(unittest.TestCase):
                     # the missing shot, not an unregistered endpoint.
                     self.assertEqual(response.status_code, 404)
                     self.assertIn("Shot not found", response.json()["detail"])
-
-    def test_desktop_bridge_exposes_snake_and_camel_case_methods(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            bridge = DesktopBridge(api_module.create_app(Path(tmp)))
-
-            self.assertEqual(bridge.ping(), "python-backend-ready")
-            self.assertTrue(callable(bridge.request))
-            self.assertTrue(callable(bridge.upload_multipart))
-            self.assertTrue(callable(bridge.uploadMultipart))
-            self.assertTrue(callable(bridge.open_ref_video_window))
-            self.assertTrue(callable(bridge.openRefVideoWindow))
-
-    def test_desktop_bridge_request_and_error_paths_are_stable(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            bridge = DesktopBridge(api_module.create_app(Path(tmp)))
-
-            with contextlib.redirect_stderr(io.StringIO()):
-                status = bridge.request("GET", "/api/bridge/status")
-            self.assertIsInstance(status, dict)
-            self.assertIn("live", status)
-            self.assertFalse(status["project_open"])
-
-            with self.assertRaisesRegex(RuntimeError, "No project opened"):
-                bridge.uploadMultipart("/api/project/references", "ref.png", "image/png", [137, 80, 78, 71])
 
     def test_webview_storage_path_falls_back_when_global_dir_unavailable(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

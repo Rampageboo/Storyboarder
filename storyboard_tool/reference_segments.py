@@ -44,8 +44,38 @@ def _segment_board_range_by_shot_id(shots: list[Shot], anchor_id: str, end_id: s
     return _segment_board_range(shots, id_to_index[anchor_id], id_to_index[end_id])
 
 
+MAX_REF_UNDO_SNAPSHOTS = 20
+
+
 def _undo_root(project: Project) -> Path:
     return project.root_path / "backups" / "ref_undo"
+
+
+def _prune_ref_undo_snapshots(project: Project, protect_token: str | None = None) -> None:
+    """Keep only the most recent ``MAX_REF_UNDO_SNAPSHOTS`` undo-snapshot token dirs.
+
+    Reference applies create one snapshot per apply and only delete it on undo, so
+    apply-without-undo would otherwise grow ``backups/ref_undo/`` without bound. The
+    snapshot for the current apply (``protect_token``) is never pruned. Undoing a very
+    old apply whose token was already pruned degrades gracefully (the frontend resyncs).
+    Best-effort: cleanup must never break a reference apply.
+    """
+    try:
+        root = _undo_root(project)
+        if not root.is_dir():
+            return
+        tokens = [child for child in root.iterdir() if child.is_dir()]
+        if len(tokens) <= MAX_REF_UNDO_SNAPSHOTS:
+            return
+        tokens.sort(key=lambda child: child.stat().st_mtime, reverse=True)
+        keep = {child.name for child in tokens[:MAX_REF_UNDO_SNAPSHOTS]}
+        if protect_token:
+            keep.add(protect_token)
+        for child in tokens:
+            if child.name not in keep:
+                shutil.rmtree(child, ignore_errors=True)
+    except Exception:
+        pass
 
 
 def _board_bake_filenames(shot: Shot) -> list[str]:
@@ -82,6 +112,7 @@ def snapshot_boards_for_undo(project: Project, min_index: int, max_index: int) -
         manifest.append({"shot_id": shot.shot_id, "shot": shot.to_dict(), "files": saved_files})
     backup_root.mkdir(parents=True, exist_ok=True)
     (backup_root / "manifest.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+    _prune_ref_undo_snapshots(project, protect_token=token)
     return token
 
 

@@ -341,6 +341,18 @@ def recover_shot_source_psd(project: Project, shot: Shot, *, preserve_layers: bo
     history.mkdir(parents=True, exist_ok=True)
     backup = history / f"{shot.shot_id}.broken-{int(time.time())}.psd"
     shutil.copy2(source, backup)
+    # PSD recovery is now rare (the old plugin's forced-save corruption that required it
+    # is fixed), so keep only the most recent few broken-PSD backups. Best-effort.
+    try:
+        broken = sorted(
+            history.glob(f"{shot.shot_id}.broken-*.psd"),
+            key=lambda p: p.stat().st_mtime,
+            reverse=True,
+        )
+        for stale in broken[3:]:
+            stale.unlink(missing_ok=True)
+    except Exception:
+        pass
 
     # Rebuild to a temp file first, then atomically swap it over the source so a
     # failed rebuild never destroys the (still backed-up) original.

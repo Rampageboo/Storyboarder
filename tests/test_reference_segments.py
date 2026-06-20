@@ -351,6 +351,26 @@ class TestSnapshotAndRestore(unittest.TestCase):
         self.assertEqual(result["restored"], 1)
         self.assertTrue(preview_path.is_file())
 
+    def test_snapshot_retention_is_capped(self) -> None:
+        project = _make_project(self._tmp)
+        project_manager.add_shot(project)
+        shot = project.shots[0]
+        shot_dir = project_manager.get_shot_dir(project, shot)
+        shot_dir.mkdir(parents=True, exist_ok=True)
+        (shot_dir / f"{shot.shot_id}_preview.png").write_bytes(MINI_PNG)
+
+        cap = reference_segments.MAX_REF_UNDO_SNAPSHOTS
+        tokens = [reference_segments.snapshot_boards_for_undo(project, 0, 0) for _ in range(cap + 5)]
+
+        undo_root = project.root_path / "backups" / "ref_undo"
+        kept = [child for child in undo_root.iterdir() if child.is_dir()]
+        self.assertLessEqual(len(kept), cap + 1)  # at most the cap (+1 protected current)
+        # The most recent snapshot must survive and still be restorable.
+        newest_token = tokens[-1]
+        self.assertTrue((undo_root / newest_token).is_dir())
+        result = reference_segments.restore_boards_from_undo(project, newest_token)
+        self.assertEqual(result["restored"], 1)
+
     def test_restore_with_invalid_token_raises(self) -> None:
         project = _make_project(self._tmp)
         with self.assertRaises(ValueError):
