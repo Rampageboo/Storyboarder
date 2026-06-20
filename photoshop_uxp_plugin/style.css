@@ -9,22 +9,53 @@ body {
 sp-body {
   display: flex;
   flex-direction: column;
-  gap: 12px;
-  padding: 14px 16px;
+  gap: 10px;
+  padding: 12px;
   box-sizing: border-box;
+  overflow-x: hidden;
 }
 
+.plugin-view,
 #linkedPanel,
 #unlinkedPanel,
-#colorSection {
+#colorSection,
+.panel-group {
   display: flex;
   flex-direction: column;
 }
 
+#mainView[hidden],
+#settingsView[hidden],
+#advancedView[hidden],
 #linkedPanel[hidden],
 #unlinkedPanel[hidden],
 #colorSection[hidden] {
   display: none !important;
+}
+
+.plugin-header,
+.view-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.plugin-title {
+  flex: 1;
+  min-width: 0;
+}
+
+.header-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  flex: 0 0 86px;
+}
+
+.header-actions sp-button,
+.view-header sp-button {
+  margin: 0 !important;
 }
 
 sp-heading {
@@ -36,26 +67,21 @@ sp-button {
   margin: 0;
 }
 
-#linkedPanel sp-label,
-#colorSection sp-label {
+.panel-group sp-label {
   display: block;
   margin: 0 0 8px;
 }
 
-#linkedPanel sp-button,
-#unlinkedPanel sp-button,
-#colorSection sp-button {
-  margin-bottom: 10px;
+.panel-group sp-button {
+  margin-bottom: 8px;
 }
 
-#linkedPanel sp-button:last-of-type,
-#colorSection sp-button:last-of-type {
+.panel-group sp-button:last-of-type {
   margin-bottom: 0;
 }
 
-#linkedPanel sp-checkbox,
-#colorSection sp-checkbox {
-  margin-top: 14px;
+.panel-group sp-checkbox {
+  margin-top: 8px;
 }
 
 #overlayCount,
@@ -115,7 +141,7 @@ sp-textfield {
 .link-status {
   display: block;
   margin: 0 0 4px;
-  padding: 8px 10px;
+  padding: 6px 8px;
   border-radius: 4px;
   background: #1f3d2a;
   color: #b8f0c8;
@@ -125,7 +151,7 @@ sp-textfield {
 .current-shot {
   display: block;
   margin: 0 0 4px;
-  padding: 8px 10px;
+  padding: 6px 8px;
   border-radius: 4px;
   background: #20304a;
   color: #cfe0ff;
@@ -146,7 +172,7 @@ sp-textfield {
 
 .current-shot-card {
   display: block;
-  padding: 10px;
+  padding: 8px;
   border-radius: 6px;
   border: 1px solid #46546d;
   background: #182234;
@@ -171,7 +197,7 @@ sp-textfield {
   justify-content: space-between;
   gap: 8px;
   align-items: flex-start;
-  margin: 4px 0 8px;
+  margin: 3px 0 6px;
 }
 
 .card-shot-id {
@@ -201,7 +227,7 @@ sp-textfield {
 }
 
 .card-section {
-  margin-top: 8px;
+  margin-top: 6px;
   line-height: 1.35;
   white-space: pre-wrap;
   word-break: break-word;
@@ -217,7 +243,7 @@ sp-textfield {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 6px;
-  margin-top: 10px;
+  margin-top: 8px;
 }
 
 .status-buttons button {
@@ -243,14 +269,14 @@ sp-textfield {
   display: flex;
   flex-direction: column;
   gap: 6px;
-  margin-top: 10px;
+  margin-top: 8px;
 }
 
 .quick-note-input {
   width: 100%;
   box-sizing: border-box;
   resize: vertical;
-  min-height: 44px;
+  min-height: 38px;
   border: 1px solid #4e5a6e;
   border-radius: 5px;
   background: #101722;
@@ -261,7 +287,7 @@ sp-textfield {
 
 .card-hint {
   display: block;
-  margin-top: 8px;
+  margin-top: 6px;
 }
 
 .link-status.waiting {
@@ -270,25 +296,15 @@ sp-textfield {
   border-color: #7a6a3d;
 }
 
-.advanced-section {
-  margin-top: 4px;
-  color: #b3b3b3;
-}
-
-.advanced-section sp-button {
-  margin-top: 10px;
-  margin-bottom: 0;
-}
-
 /* Task groups */
 .panel-group {
-  display: flex;
-  flex-direction: column;
+  min-width: 0;
 }
 
+.plugin-view > .panel-group + .panel-group,
 #linkedPanel .panel-group + .panel-group {
-  margin-top: 14px;
-  padding-top: 14px;
+  margin-top: 10px;
+  padding-top: 10px;
   border-top: 1px solid #383838;
 }
 
@@ -307,7 +323,7 @@ sp-textfield {
   background: #15251a;
   border: 1px solid #2f5a3d;
   border-radius: 6px;
-  padding: 12px;
+  padding: 10px;
 }
 
 .panel-group-save .group-label {

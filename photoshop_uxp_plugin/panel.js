@@ -58,6 +58,7 @@ let lastFocusToken = 0;
 let focusBaselineSet = false;
 let focusSwitchInFlight = false;
 let focusStoryboardAfterPreviewExport = false;
+let autoAddAtEnd = true;
 const boardBackgroundSigByShot = new Map();
 
 function $(id) {
@@ -65,6 +66,10 @@ function $(id) {
 }
 
 function init() {
+  $("openSettingsView")?.addEventListener("click", () => setPluginView("settings"));
+  $("openAdvancedView")?.addEventListener("click", () => setPluginView("advanced"));
+  $("settingsBack")?.addEventListener("click", () => setPluginView("main"));
+  $("advancedBack")?.addEventListener("click", () => setPluginView("main"));
   $("chooseProject").addEventListener("click", () => runPanelAction(chooseProjectFolder));
   $("chooseFolder").addEventListener("click", () => runPanelAction(chooseShotFolder));
   $("shotSelect").addEventListener("change", () => runPanelAction(switchToSelectedShot));
@@ -90,9 +95,17 @@ function init() {
   $("applyBackground").addEventListener("click", () => runPanelAction(applyCanvasBackground));
   $("saveAndStay").addEventListener("click", () => runPanelAction(saveCurrentShot));
   $("saveAndNext").addEventListener("click", () => runPanelAction(saveAndGoNext));
-  $("focusStoryboardAfterExport")?.addEventListener("change", () => runPanelAction(updateFocusStoryboardAfterExportSetting));
+  $("autoAddShot")?.addEventListener("change", () => runPanelAction(() => updateAutoAddAtEndSetting("autoAddShot")));
+  $("settingsAutoAddShot")?.addEventListener("change", () => runPanelAction(() => updateAutoAddAtEndSetting("settingsAutoAddShot")));
+  $("focusStoryboardAfterExport")?.addEventListener("change", () =>
+    runPanelAction(() => updateFocusStoryboardAfterExportSetting("focusStoryboardAfterExport")),
+  );
+  $("settingsFocusStoryboardAfterExport")?.addEventListener("change", () =>
+    runPanelAction(() => updateFocusStoryboardAfterExportSetting("settingsFocusStoryboardAfterExport")),
+  );
   $("recoverPsd")?.addEventListener("click", () => runPanelAction(recoverCurrentShotPsd));
   $("relinkNow").addEventListener("click", () => runPanelAction(reconnectStoryboardBridge));
+  setPluginView("main");
   setLinkedUi(false);
   setLinkStatus("Connecting…", true);
   startStoryboardBridgePolling();
@@ -106,11 +119,16 @@ function init() {
 
 function setLinkedUi(linked) {
   const linkedPanel = $("linkedPanel");
-  const unlinkedPanel = $("unlinkedPanel");
   const colorSection = $("colorSection");
   if (linkedPanel) linkedPanel.hidden = !linked;
-  if (unlinkedPanel) unlinkedPanel.hidden = linked;
   if (colorSection) colorSection.hidden = linked;
+}
+
+function setPluginView(view) {
+  const next = view === "settings" || view === "advanced" ? view : "main";
+  $("mainView").hidden = next !== "main";
+  $("settingsView").hidden = next !== "settings";
+  $("advancedView").hidden = next !== "advanced";
 }
 
 async function runPanelAction(action) {
@@ -304,11 +322,23 @@ async function loadPluginSettings() {
     const entry = await dataFolder.getEntry(PLUGIN_SETTINGS_FILE);
     const settings = JSON.parse(await readEntryText(entry));
     focusStoryboardAfterPreviewExport = Boolean(settings?.focus_storyboard_after_preview_export);
+    autoAddAtEnd = settings?.auto_add_at_end !== false;
   } catch {
     focusStoryboardAfterPreviewExport = false;
+    autoAddAtEnd = true;
   }
-  const checkbox = $("focusStoryboardAfterExport");
-  if (checkbox) checkbox.checked = focusStoryboardAfterPreviewExport;
+  syncPluginSettingsCheckboxes();
+}
+
+function syncPluginSettingsCheckboxes() {
+  for (const id of ["focusStoryboardAfterExport", "settingsFocusStoryboardAfterExport"]) {
+    const checkbox = $(id);
+    if (checkbox) checkbox.checked = focusStoryboardAfterPreviewExport;
+  }
+  for (const id of ["autoAddShot", "settingsAutoAddShot"]) {
+    const checkbox = $(id);
+    if (checkbox) checkbox.checked = autoAddAtEnd;
+  }
 }
 
 async function savePluginSettings() {
@@ -319,6 +349,7 @@ async function savePluginSettings() {
     JSON.stringify(
       {
         focus_storyboard_after_preview_export: focusStoryboardAfterPreviewExport,
+        auto_add_at_end: autoAddAtEnd,
       },
       null,
       2,
@@ -326,9 +357,17 @@ async function savePluginSettings() {
   );
 }
 
-async function updateFocusStoryboardAfterExportSetting() {
-  const checkbox = $("focusStoryboardAfterExport");
+async function updateFocusStoryboardAfterExportSetting(sourceId = "focusStoryboardAfterExport") {
+  const checkbox = $(sourceId);
   focusStoryboardAfterPreviewExport = Boolean(checkbox?.checked);
+  syncPluginSettingsCheckboxes();
+  await savePluginSettings();
+}
+
+async function updateAutoAddAtEndSetting(sourceId = "autoAddShot") {
+  const checkbox = $(sourceId);
+  autoAddAtEnd = checkbox?.checked !== false;
+  syncPluginSettingsCheckboxes();
   await savePluginSettings();
 }
 
@@ -1275,7 +1314,7 @@ async function resolveNextShot(shotId) {
 
 function isAutoAddShotEnabled() {
   const checkbox = $("autoAddShot");
-  return !checkbox || checkbox.checked !== false;
+  return checkbox ? checkbox.checked !== false : autoAddAtEnd;
 }
 
 function findOpenDocumentForShot(shotId) {
