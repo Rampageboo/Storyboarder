@@ -69,6 +69,7 @@ from .project_storage import (  # noqa: E402
     DEFAULT_SETTINGS,
     ensure_project_dirs as _ensure_project_dirs,
     atomic_write_json as _atomic_write_json,
+    atomic_write_text as _atomic_write_text,
     load_settings as _load_settings,
     save_settings,
     project_disk_mtime,
@@ -153,7 +154,7 @@ def open_project(project_json_path: Path) -> Project:
     needs_json_migration = False
     if json_path.is_file():
         # Canonical path — shots.csv is intentionally not consulted.
-        project.shots = load_shots_json(json_path)
+        project.shots = load_shots_json(json_path) or []
     elif csv_path.is_file():
         # COMPAT-READ: legacy CSV-only project; migrate to shots.json below.
         project.shots = load_shots_csv(csv_path)
@@ -566,7 +567,7 @@ def _ensure_shot_files(project: Project, shot: Shot) -> None:
     if not shot.annotation_path:
         annotation_path = shot_dir / f"{shot.shot_id}_annotations.json"
         if not annotation_path.exists():
-            annotation_path.write_text("[]", encoding="utf-8")
+            _atomic_write_text(annotation_path, "[]")
         shot.annotation_path = annotation_path.relative_to(project.root_path).as_posix()
     notes_path = shot_dir / f"{shot.shot_id}_notes.json"
     if not notes_path.exists():

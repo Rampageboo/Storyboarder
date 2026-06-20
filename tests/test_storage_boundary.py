@@ -22,14 +22,23 @@ Verifies the canonical vs legacy storage contract for shots metadata:
 """
 from __future__ import annotations
 
+import contextlib
 import csv
+import io
 import json
+import os
 import shutil
 import tempfile
+import time
 import unittest
+import warnings
 from pathlib import Path
 
-from storyboard_tool import project_manager
+with warnings.catch_warnings():
+    warnings.filterwarnings("ignore", message="Using `httpx` with `starlette.testclient` is deprecated")
+    from fastapi.testclient import TestClient
+
+from storyboard_tool import api as api_module, project_manager
 from storyboard_tool.image_utils import board_background_filename
 from storyboard_tool.models import Shot
 from storyboard_tool.shot_store import (
@@ -41,6 +50,15 @@ from storyboard_tool.shot_store import (
     shots_csv_path,
     shots_json_path,
 )
+
+
+def _make_client(tmp: str) -> TestClient:
+    return TestClient(api_module.create_app(Path(tmp)), raise_server_exceptions=False)
+
+
+def _quiet(fn):
+    with contextlib.redirect_stderr(io.StringIO()):
+        return fn()
 
 
 def _make_project(tmp: str) -> "project_manager.models.Project":
@@ -180,6 +198,115 @@ class TestLoadPriority(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
+# Canonical shots.json safety
+# ---------------------------------------------------------------------------
+
+class TestCanonicalJsonSafety(unittest.TestCase):
+    def setUp(self):
+        self._tmp = tempfile.mkdtemp()
+
+    def tearDown(self):
+        shutil.rmtree(self._tmp, ignore_errors=True)
+
+    def test_invalid_shots_json_raises_clear_error(self):
+        project = _make_project(self._tmp)
+        json_path = shots_json_path(project.root_path)
+        json_path.write_text("{not valid json", encoding="utf-8")
+
+        with self.assertRaisesRegex(ValueError, r"shots\.json.*canonical shot metadata.*invalid JSON"):
+            _reload(project)
+
+    def test_container_corrupt_shots_json_raises_clear_error(self):
+        project = _make_project(self._tmp)
+        json_path = shots_json_path(project.root_path)
+
+        corrupt_payloads = [
+            "null",
+            json.dumps("not a container"),
+            json.dumps({"version": 1, "shots": 42}),
+        ]
+        for payload in corrupt_payloads:
+            with self.subTest(payload=payload):
+                json_path.write_text(payload, encoding="utf-8")
+                with self.assertRaisesRegex(ValueError, r"shots\.json.*corrupt.*canonical shot metadata"):
+                    _reload(project)
+
+    def test_valid_empty_shots_json_opens_zero_shots(self):
+        project = _make_project(self._tmp)
+        shots_json_path(project.root_path).write_text(
+            json.dumps({"version": 1, "shots": []}),
+            encoding="utf-8",
+        )
+
+        reloaded = _reload(project)
+        self.assertEqual(reloaded.shots, [])
+
+    def test_top_level_array_shots_json_still_loads(self):
+        project = _make_project(self._tmp)
+        shot = Shot(shot_id="array_shot", title="Array shape")
+        shots_json_path(project.root_path).write_text(
+            json.dumps([shot.to_dict()]),
+            encoding="utf-8",
+        )
+
+        reloaded = _reload(project)
+        self.assertEqual([item.shot_id for item in reloaded.shots], ["array_shot"])
+
+    def test_malformed_entry_is_skipped_but_valid_entries_load(self):
+        project = _make_project(self._tmp)
+        valid = Shot(shot_id="valid_shot", title="Keep me")
+        shots_json_path(project.root_path).write_text(
+            json.dumps({"version": 1, "shots": [None, {"title": "missing id"}, valid.to_dict()]}),
+            encoding="utf-8",
+        )
+
+        reloaded = _reload(project)
+        self.assertEqual([item.shot_id for item in reloaded.shots], ["valid_shot"])
+
+    def test_object_without_shots_key_is_lenient_empty_list(self):
+        project = _make_project(self._tmp)
+        shots_json_path(project.root_path).write_text(json.dumps({"version": 1}), encoding="utf-8")
+
+        reloaded = _reload(project)
+        self.assertEqual(reloaded.shots, [])
+
+    def test_corrupt_shots_json_api_open_returns_project_open_failed(self):
+        project = _make_project(self._tmp)
+        shots_json_path(project.root_path).write_text("{broken", encoding="utf-8")
+        client = _make_client(self._tmp)
+
+        response = _quiet(lambda: client.post(
+            "/api/project/open",
+            json={"project_json_path": str(project.json_path)},
+        ))
+
+        self.assertEqual(response.status_code, 400)
+        body = response.json()
+        self.assertEqual(body.get("code"), "PROJECT_OPEN_FAILED")
+        self.assertIn("shots.json", body.get("detail", ""))
+
+    def test_background_refresh_keeps_in_memory_project_when_disk_json_is_corrupt(self):
+        client = _make_client(self._tmp)
+        created = _quiet(lambda: client.post("/api/project/new", json={"path": self._tmp}))
+        self.assertEqual(created.status_code, 200)
+        added = _quiet(lambda: client.post("/api/shots", json={}))
+        self.assertEqual(added.status_code, 200)
+        before = added.json()
+        shot_id = before["shot"]["shot_id"]
+        project_root = Path(before["project_path"])
+        json_path = shots_json_path(project_root)
+        json_path.write_text("{transiently broken", encoding="utf-8")
+        future = time.time() + 2.0
+        os.utime(json_path, (future, future))
+
+        response = _quiet(lambda: client.get("/api/project"))
+
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertIn(shot_id, {shot["shot_id"] for shot in body["shots"]})
+
+
+# ---------------------------------------------------------------------------
 # Legacy migration — shots.json written non-destructively on open
 # ---------------------------------------------------------------------------
 
@@ -303,6 +430,68 @@ class TestSaveShotsEntryPoint(unittest.TestCase):
         save_shots(root, [Shot(shot_id="shot_a")])
         tmp_files = list(root.glob("*.tmp"))
         self.assertEqual(tmp_files, [], "Stale .tmp file found after save_shots — not atomic")
+
+
+# ---------------------------------------------------------------------------
+# Annotation persistence
+# ---------------------------------------------------------------------------
+
+class TestAnnotationPersistence(unittest.TestCase):
+    def setUp(self):
+        self._tmp = tempfile.mkdtemp()
+        self.client = _make_client(self._tmp)
+        created = _quiet(lambda: self.client.post("/api/project/new", json={"path": self._tmp}))
+        self.assertEqual(created.status_code, 200)
+        added = _quiet(lambda: self.client.post("/api/shots", json={}))
+        self.assertEqual(added.status_code, 200)
+        body = added.json()
+        self.shot_id = body["shot"]["shot_id"]
+        self.project_root = Path(body["project_path"])
+
+    def tearDown(self):
+        shutil.rmtree(self._tmp, ignore_errors=True)
+
+    def _annotation_path(self) -> Path:
+        project = project_manager.open_project(self.project_root / "project.json")
+        shot = next(item for item in project.shots if item.shot_id == self.shot_id)
+        return self.project_root / shot.annotation_path
+
+    def test_save_annotations_writes_valid_json(self):
+        payload = [{"id": "a1", "points": [[1, 2], [3, 4]], "label": "note"}]
+
+        response = _quiet(lambda: self.client.put(
+            f"/api/shots/{self.shot_id}/annotations",
+            json={"annotations": payload},
+        ))
+
+        self.assertEqual(response.status_code, 200)
+        saved = json.loads(self._annotation_path().read_text(encoding="utf-8"))
+        self.assertEqual(saved, payload)
+
+    def test_save_annotations_preserves_requested_payload(self):
+        payload = [
+            {"type": "rect", "x": 10, "y": 20, "meta": {"color": "#ff00aa"}},
+            {"type": "legacy", "points": ["array", "entry"]},
+        ]
+
+        response = _quiet(lambda: self.client.put(
+            f"/api/shots/{self.shot_id}/annotations",
+            json={"annotations": payload},
+        ))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["annotations"], payload)
+        self.assertEqual(json.loads(self._annotation_path().read_text(encoding="utf-8")), payload)
+
+    def test_missing_annotation_file_is_recreated_as_empty_list(self):
+        path = self._annotation_path()
+        path.unlink()
+
+        response = _quiet(lambda: self.client.get(f"/api/shots/{self.shot_id}/annotations"))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["annotations"], [])
+        self.assertEqual(json.loads(path.read_text(encoding="utf-8")), [])
 
 
 # ---------------------------------------------------------------------------

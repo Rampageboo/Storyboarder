@@ -8,6 +8,7 @@ them downward, with no circular dependency.
 
 from __future__ import annotations
 
+import logging
 import time
 from pathlib import Path
 from typing import Any
@@ -17,6 +18,8 @@ from fastapi import FastAPI, HTTPException
 from . import live_bridge, project_manager, runtime_state, session_store, shot_service
 from .errors import AppErrorCode, app_error
 from .models import Project, SHOT_STATUSES, Shot
+
+logger = logging.getLogger(__name__)
 
 
 def _project_payload(project: Project, dirty: bool) -> dict[str, Any]:
@@ -84,10 +87,14 @@ def _refresh_project_from_disk(app: FastAPI) -> Project:
     project = _require_project(app)
     if app.state.dirty:
         return project
-    refreshed, disk_mtime, changed = project_manager.reload_project_if_changed(
-        project,
-        app.state.project_disk_mtime,
-    )
+    try:
+        refreshed, disk_mtime, changed = project_manager.reload_project_if_changed(
+            project,
+            app.state.project_disk_mtime,
+        )
+    except ValueError as exc:
+        logger.warning("Keeping in-memory project after background refresh failed: %s", exc)
+        return project
     if changed:
         app.state.project = refreshed
         app.state.project_disk_mtime = disk_mtime
@@ -239,12 +246,12 @@ def _annotation_path(project: Project, shot: Shot) -> Path:
     if not shot.annotation_path:
         project_manager.get_shot_dir(project, shot).mkdir(parents=True, exist_ok=True)
         path = project_manager.get_shot_dir(project, shot) / f"{shot.shot_id}_annotations.json"
-        path.write_text("[]", encoding="utf-8")
+        project_manager._atomic_write_text(path, "[]")
         shot.annotation_path = path.relative_to(project.root_path).as_posix()
         project_manager.save_project(project)
         return path
     path = project.root_path / shot.annotation_path
     if not path.exists():
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text("[]", encoding="utf-8")
+        project_manager._atomic_write_text(path, "[]")
     return path

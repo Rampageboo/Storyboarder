@@ -416,7 +416,7 @@ class StoryboardBackendService(ExportServiceMixin):
         shot = app_state._find_shot(project, shot_id)
         path = app_state._annotation_path(project, shot)
         payload = annotations if isinstance(annotations, list) else []
-        path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+        project_manager._atomic_write_text(path, json.dumps(payload, indent=2))
         return {"annotations": payload}
 
     def method_add_comment(self, shot_id: str, text: str) -> dict[str, Any]:

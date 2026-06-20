@@ -123,21 +123,34 @@ function preferredShotId(payload: ProjectPayload, wanted?: string | null): strin
   return payload.shots[0]?.shot_id ?? null
 }
 
+function hashString(value: string): number {
+  let hash = 2166136261
+  for (let i = 0; i < value.length; i += 1) {
+    hash ^= value.charCodeAt(i)
+    hash = Math.imul(hash, 16777619)
+  }
+  return hash >>> 0
+}
+
+function mixHash(hash: number, value: unknown): number {
+  return Math.imul(hash ^ hashString(String(value ?? '')), 16777619) >>> 0
+}
+
 function projectVisualEpoch(payload: ProjectPayload | null): number {
   if (!payload) return 0
   let hash = payload.dirty ? 17 : 0
   hash = (hash * 31 + payload.shots.length) >>> 0
   for (const shot of payload.shots) {
-    hash = (hash * 31 + shot.shot_id.length) >>> 0
-    hash = (hash * 31 + String(shot.preview_disk_mtime ?? '').length) >>> 0
-    hash = (hash * 31 + String(shot.thumbnail_disk_mtime ?? '').length) >>> 0
-    hash = (hash * 31 + String(shot.board_background_disk_mtime ?? '').length) >>> 0
-    hash = (hash * 31 + String(shot.image_path ?? '').length) >>> 0
-    hash = (hash * 31 + String(shot.preview_image_path ?? '').length) >>> 0
-    hash = (hash * 31 + String(shot.source_file_path ?? '').length) >>> 0
-    hash = (hash * 31 + (shot.has_board_background ? 1 : 0)) >>> 0
+    hash = mixHash(hash, shot.shot_id)
+    hash = mixHash(hash, shot.preview_disk_mtime)
+    hash = mixHash(hash, shot.thumbnail_disk_mtime)
+    hash = mixHash(hash, shot.board_background_disk_mtime)
+    hash = mixHash(hash, shot.image_path)
+    hash = mixHash(hash, shot.preview_image_path)
+    hash = mixHash(hash, shot.source_file_path)
+    hash = mixHash(hash, shot.has_board_background ? '1' : '0')
   }
-  hash = (hash * 31 + JSON.stringify(payload.settings?.ref_segments ?? []).length) >>> 0
+  hash = mixHash(hash, JSON.stringify(payload.settings?.ref_segments ?? []))
   return hash
 }
 

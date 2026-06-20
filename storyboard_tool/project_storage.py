@@ -17,6 +17,7 @@ import json
 import os
 import tempfile
 from pathlib import Path
+from typing import Any
 
 from .models import Project
 from .shot_store import shots_csv_mtime, shots_json_mtime
@@ -53,8 +54,8 @@ def ensure_project_dirs(root: Path) -> None:
         (root / dirname).mkdir(exist_ok=True)
 
 
-def atomic_write_json(path: Path, data: dict) -> None:
-    """Write *data* as JSON to *path* atomically via a sibling temp file.
+def atomic_write_text(path: Path, text: str) -> None:
+    """Write *text* to *path* atomically via a sibling temp file.
 
     A crash mid-write leaves at most a stale .tmp file — the destination
     is never left in a partially-written state.
@@ -63,7 +64,7 @@ def atomic_write_json(path: Path, data: dict) -> None:
     fd, tmp_name = tempfile.mkstemp(dir=str(path.parent), prefix=f"{path.name}.", suffix=".tmp")
     try:
         with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as file:
-            json.dump(data, file, indent=2, ensure_ascii=False)
+            file.write(text)
         os.replace(tmp_name, path)
     except BaseException:
         try:
@@ -71,6 +72,11 @@ def atomic_write_json(path: Path, data: dict) -> None:
         except OSError:
             pass
         raise
+
+
+def atomic_write_json(path: Path, data: Any) -> None:
+    """Write *data* as JSON to *path* atomically via a sibling temp file."""
+    atomic_write_text(path, json.dumps(data, indent=2, ensure_ascii=False))
 
 
 def load_settings(project: Project) -> dict:

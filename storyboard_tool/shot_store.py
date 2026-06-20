@@ -76,6 +76,10 @@ SHOT_CSV_COLUMNS = [
 _JSON_COLUMNS = {"camera_data", "tags", "comments", "reference_image_paths"}
 
 
+class ShotStoreError(ValueError):
+    """Canonical shots.json is present but unreadable as a shot list."""
+
+
 def shots_csv_path(project_root: Path) -> Path:
     return project_root / SHOTS_CSV_NAME
 
@@ -139,21 +143,40 @@ def shots_json_path(project_root: Path) -> Path:
     return project_root / SHOTS_JSON_NAME
 
 
-def load_shots_json(path: Path) -> list[Shot]:
+def load_shots_json(path: Path) -> list[Shot] | None:
     """Load shots from the canonical shots.json.
 
-    Returns an empty list if the file is missing or unreadable so callers can fall
-    back to the legacy CSV / inline-shots migration path.
+    Returns None only when the canonical file is absent, allowing callers to use
+    legacy fallback stores. If shots.json exists but the container cannot be read
+    as shot metadata, raises ShotStoreError so callers do not silently replace
+    potentially recoverable data with an empty project.
     """
     if not path.is_file():
-        return []
+        return None
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, OSError):
-        return []
-    raw = payload.get("shots") if isinstance(payload, dict) else payload
+    except json.JSONDecodeError as exc:
+        raise ShotStoreError(
+            f"shots.json is corrupt: canonical shot metadata contains invalid JSON ({exc})"
+        ) from exc
+    except OSError as exc:
+        raise ShotStoreError(
+            f"shots.json is corrupt: canonical shot metadata could not be read ({exc})"
+        ) from exc
+    if isinstance(payload, dict):
+        raw = payload.get("shots", [])
+        if "shots" in payload and not isinstance(raw, list):
+            raise ShotStoreError(
+                "shots.json is corrupt: canonical shot metadata field 'shots' must be a list."
+            )
+    elif isinstance(payload, list):
+        raw = payload
+    else:
+        raise ShotStoreError(
+            "shots.json is corrupt: canonical shot metadata must be a JSON object or list."
+        )
     if not isinstance(raw, list):
-        return []
+        raise ShotStoreError("shots.json is corrupt: canonical shot metadata must be a shot list.")
     shots: list[Shot] = []
     for item in raw:
         if not isinstance(item, dict):
