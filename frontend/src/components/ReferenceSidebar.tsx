@@ -20,6 +20,11 @@ type Segment = {
   [key: string]: unknown
 }
 
+interface ReferenceSidebarProps {
+  open: boolean
+  onOpenChange: (open: boolean) => void
+}
+
 function fileName(path: string) {
   return path.split(/[/\\]/).pop() || path
 }
@@ -54,7 +59,7 @@ function RefPreview({ link }: { link: ReferenceLink }) {
   return <img src={url} alt="" loading="lazy" onError={() => setFailed(true)} />
 }
 
-export function ReferenceSidebar() {
+export function ReferenceSidebar({ open, onOpenChange }: ReferenceSidebarProps) {
   const {
     project,
     setProject,
@@ -66,7 +71,6 @@ export function ReferenceSidebar() {
     activeAppliedSegmentId,
     dismissRefSegmentUi,
   } = useProject()
-  const [drawerOpen, setDrawerOpen] = useState(false)
   const [segmentsOpen, setSegmentsOpen] = useState(false)
   const [busy, setBusy] = useState(false)
   const [note, setNote] = useState('')
@@ -162,28 +166,13 @@ export function ReferenceSidebar() {
 
   return (
     <>
-      <button
-        type="button"
-        className={`ref-rail-btn ${drawerOpen ? 'is-active' : ''}`}
-        onClick={() => setDrawerOpen((v) => !v)}
-        title="Reference library"
-        aria-expanded={drawerOpen}
-        aria-controls="ref-drawer-panel"
-      >
-        <span className="ref-rail-icon" aria-hidden="true">
-          ◫
-        </span>
-        <span className="ref-rail-label">Refs</span>
-        {links.length > 0 ? <span className="ref-rail-count">{links.length}</span> : null}
-      </button>
-
-      {drawerOpen ? <div className="ref-drawer-backdrop" onClick={() => setDrawerOpen(false)} aria-hidden="true" /> : null}
+      {open ? <div className="ref-drawer-backdrop" onClick={() => onOpenChange(false)} aria-hidden="true" /> : null}
 
       <aside
         id="ref-drawer-panel"
-        className={`ref-sidebar ${drawerOpen ? 'is-open' : ''}`}
+        className={`ref-sidebar ${open ? 'is-open' : ''}`}
         aria-label="Project references"
-        aria-hidden={!drawerOpen}
+        aria-hidden={!open}
       >
         <div className="ref-sidebar-scroll">
           <div className="ref-sidebar-head">
@@ -192,8 +181,8 @@ export function ReferenceSidebar() {
               <button type="button" onClick={() => importRef.current?.click()} disabled={disabled}>
                 Import
               </button>
-              <button type="button" className="ref-drawer-close" onClick={() => setDrawerOpen(false)} aria-label="Close">
-                ×
+              <button type="button" className="ref-drawer-close" onClick={() => onOpenChange(false)} aria-label="Close">
+                &times;
               </button>
             </div>
           </div>
@@ -239,7 +228,7 @@ export function ReferenceSidebar() {
                       disabled={disabled}
                       aria-label={`Remove ${label}`}
                     >
-                      ×
+                      &times;
                     </button>
                   </div>
                 )
@@ -256,15 +245,15 @@ export function ReferenceSidebar() {
                 aria-expanded={segmentsOpen}
               >
                 <span>Applied segments ({segments.length})</span>
-                <span className="ref-segments-chevron">{segmentsOpen ? '▾' : '▸'}</span>
+                <span className="ref-segments-chevron">{segmentsOpen ? '\u25be' : '\u25b8'}</span>
               </button>
               {segmentsOpen ? (
                 <ul className="ref-segment-list">
                   {recentSegments.map((s, i) => (
                     <li className="ref-segment-item" key={s.id || `${s.anchor_shot_id}-${s.end_shot_id}-${i}`}>
-                      <span className="ref-segment-type">{s.source_type || '—'}</span>
+                      <span className="ref-segment-type">{s.source_type || '-'}</span>
                       <span className="ref-segment-range">
-                        {shotLabel(s.anchor_shot_id || '')} → {shotLabel(s.end_shot_id || '')}
+                        {shotLabel(s.anchor_shot_id || '')} -&gt; {shotLabel(s.end_shot_id || '')}
                       </span>
                       {s.id ? (
                         <button
@@ -274,7 +263,7 @@ export function ReferenceSidebar() {
                           disabled={disabled}
                           aria-label="Delete segment"
                         >
-                          ×
+                          &times;
                         </button>
                       ) : null}
                     </li>
@@ -315,7 +304,7 @@ export function ReferenceSidebar() {
             onClick={() => setLightbox(null)}
             aria-label="Close preview"
           >
-            ×
+            &times;
           </button>
         </div>
       ) : null}

@@ -308,7 +308,7 @@ export function Scene2DPanel() {
     <section className={`scene2d ${panelOpen ? 'is-open' : ''}`}>
       <button type="button" className="scene2d-toggle" onClick={() => setPanelOpen((value) => !value)}>
         <span>Scene 2D</span>
-        <span className="scene2d-toggle-icon">{panelOpen ? 'v' : '>'}</span>
+        <span className="scene2d-toggle-icon" aria-hidden="true">{panelOpen ? '▾' : '▸'}</span>
       </button>
 
       {panelOpen ? (
@@ -353,8 +353,8 @@ export function Scene2DPanel() {
               <button type="button" onClick={() => void createScene(false)} disabled={disabled}>
                 Add Scene
               </button>
-              <button type="button" className="scene2d-workspace-close" onClick={() => setWorkspaceOpen(false)} title="Close Scene 2D">
-                x
+              <button type="button" className="scene2d-workspace-close" onClick={() => setWorkspaceOpen(false)} title="Close Scene 2D" aria-label="Close Scene 2D">
+                ×
               </button>
             </div>
           </div>

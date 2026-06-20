@@ -7,7 +7,6 @@ function fileName(path: string) {
   return path.split(/[/\\]/).pop() || path
 }
 
-// A reference thumbnail that degrades to a clean "missing" tile instead of a broken-image icon.
 function RefThumb({ url, name }: { url: string; name: string }) {
   const [prevUrl, setPrevUrl] = useState(url)
   const [failed, setFailed] = useState(false)
@@ -34,7 +33,6 @@ export function ReferencePanel() {
     return project.shots.find((s) => s.shot_id === selectedShotId) || null
   }, [project, selectedShotId])
 
-  // Close the lightbox when switching shots.
   const [prevShotIdForLightbox, setPrevShotIdForLightbox] = useState(selectedShotId)
   if (selectedShotId !== prevShotIdForLightbox) {
     setPrevShotIdForLightbox(selectedShotId)
@@ -61,7 +59,6 @@ export function ReferencePanel() {
   const refs = shot.reference_image_paths || []
   const shotId = shot.shot_id
   const disabled = busy || projectActionBusy
-  // Cache-bust so a replaced reference reloads instead of showing the stale cached image.
   const refUrl = (path: string) => `${projectFileUrl(path)}&v=${bust}`
 
   const addReference = (file: File | undefined) => {
@@ -136,7 +133,7 @@ export function ReferencePanel() {
                   disabled={disabled}
                   aria-label={`Remove ${fileName(path)}`}
                 >
-                  ×
+                  &times;
                 </button>
               </div>
             </div>
@@ -160,7 +157,7 @@ export function ReferencePanel() {
           )}
           <div className="refs-lightbox-path">{lightbox}</div>
           <button type="button" className="refs-lightbox-close" onClick={() => setLightbox(null)} aria-label="Close preview">
-            ×
+            &times;
           </button>
         </div>
       ) : null}

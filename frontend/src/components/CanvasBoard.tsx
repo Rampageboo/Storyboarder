@@ -51,6 +51,14 @@ export function CanvasBoard() {
   const hasArtworkImage = hasPreview
   const hasVisual = (hasArtworkImage || hasBoardBg) && !loadFailed
   const canvasAspect = `${Number(project?.settings?.canvas_width || 1920)} / ${Number(project?.settings?.canvas_height || 1080)}`
+  const linkedCount = [hasSource, hasPreview, hasBoardBg].filter(Boolean).length
+  const linkedTotal = hasBoardBg ? 3 : 2
+  const linkedLabel = linkedCount === linkedTotal ? 'All linked' : `Linked ${linkedCount}/${linkedTotal}`
+  const linkedTitle = [
+    `Source: ${hasSource ? 'linked' : 'missing'}`,
+    `Preview: ${hasPreview ? 'linked' : 'missing'}`,
+    hasBoardBg ? 'Reference background: linked' : 'Reference background: none',
+  ].join('\n')
 
   const artworkSrc = useMemo(() => {
     if (!shot) return ''
@@ -264,9 +272,104 @@ export function CanvasBoard() {
   return (
     <div className="canvas">
       <div className="canvas-header">
-        <div>
+        <div className="canvas-heading">
           <div className="canvas-title">Preview</div>
           <div className="canvas-subtitle">{shotDisplayLabel(shot)}</div>
+        </div>
+        <div className="canvas-toolbar" aria-label="Preview actions">
+          <button
+            type="button"
+            className="primary"
+            onClick={() => handleOpenInPhotoshop()}
+            disabled={disabled}
+            title="Open the shot's source in Photoshop (creates a blank canvas if none exists)"
+          >
+            Open in Photoshop
+          </button>
+          <button
+            type="button"
+            onClick={() => handleSync()}
+            disabled={disabled || !hasSource}
+            title="Sync the preview from the linked source file"
+          >
+            Sync
+          </button>
+          <button
+            type="button"
+            onClick={() => handleOpenPreview()}
+            disabled={disabled || !hasPreview}
+            title="Open the preview image externally"
+          >
+            Preview
+          </button>
+          <button type="button" onClick={() => imageInputRef.current?.click()} disabled={disabled}>
+            {busy ? 'Working...' : 'Upload'}
+          </button>
+          <button
+            type="button"
+            className="icon"
+            onClick={() => {
+              setLoadFailed(false)
+              setBust((x) => x + 1)
+            }}
+            disabled={disabled || (!hasArtworkImage && !hasBoardBg)}
+            title="Reload preview from server"
+            aria-label="Refresh preview"
+          >
+            Refresh
+          </button>
+          <span
+            className={`canvas-link-pill ${linkedCount === linkedTotal ? 'ok' : 'partial'}`}
+            title={linkedTitle}
+            aria-label={linkedTitle}
+          >
+            {linkedLabel}
+          </span>
+          <details className="canvas-more">
+            <summary aria-label="More preview actions">More</summary>
+            <div className="canvas-more-menu">
+              <button type="button" onClick={() => sourceInputRef.current?.click()} disabled={disabled}>
+                Upload source PSD
+              </button>
+              <button type="button" onClick={() => handleCreateCanvas()} disabled={disabled}>
+                Create blank canvas
+              </button>
+              <button type="button" className="danger" onClick={() => handleDelete()} disabled={disabled || !shot.image_path}>
+                Delete image
+              </button>
+              <label className="canvas-autoopen" title="Open the new source in Photoshop right after creating a canvas">
+                <input
+                  type="checkbox"
+                  checked={autoOpenPs}
+                  onChange={(e) => {
+                    const next = e.target.checked
+                    setAutoOpenPs(next)
+                    try {
+                      localStorage.setItem('sb.autoOpenPsAfterCreate', next ? '1' : '0')
+                    } catch {
+                      /* localStorage unavailable - keep session-only */
+                    }
+                  }}
+                />
+                Open PS after create
+              </label>
+              {sourcePath || previewPath ? (
+                <details className="canvas-file-details">
+                  <summary>File details</summary>
+                  {sourcePath ? (
+                    <div className="canvas-status-path" title={sourcePath}>
+                      Source: {sourcePath}
+                    </div>
+                  ) : null}
+                  {previewPath ? (
+                    <div className="canvas-status-path" title={previewPath}>
+                      Preview: {previewPath}
+                    </div>
+                  ) : null}
+                </details>
+              ) : null}
+            </div>
+          </details>
         </div>
         <div className="canvas-actions">
           <button type="button" className="primary" onClick={() => imageInputRef.current?.click()} disabled={disabled}>
@@ -361,7 +464,7 @@ export function CanvasBoard() {
         </div>
       </div>
 
-      {(sourcePath || previewPath || note || (missing && (missing.source || missing.preview || missing.refs > 0))) ? (
+      {(note || (missing && (missing.source || missing.preview || missing.refs > 0))) ? (
         <div className="canvas-status-compact">
           {sourcePath ? (
             <div className="canvas-status-path" title={sourcePath}>

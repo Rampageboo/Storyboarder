@@ -3,18 +3,25 @@
   min-height: 0;
   display: flex;
   flex-direction: column;
-  background: var(--color-surface);
+  background: var(--color-bg);
   overflow: hidden;
 }
 
 .canvas-header {
   flex-shrink: 0;
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   justify-content: space-between;
   gap: 12px;
-  padding: 12px var(--panel-padding);
-  border-bottom: 1px solid var(--color-border);
+  padding: 10px var(--panel-padding);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.025), transparent),
+    color-mix(in srgb, var(--color-surface) 82%, transparent);
+  border-bottom: 1px solid color-mix(in srgb, var(--color-border) 70%, transparent);
+}
+
+.canvas-heading {
+  min-width: 0;
 }
 
 .canvas-title {
@@ -28,6 +35,19 @@
   margin-top: 2px;
 }
 
+.canvas-toolbar {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+.canvas-header > .canvas-actions,
+.canvas-actions-ps {
+  display: none;
+}
+
 .canvas-actions {
   display: flex;
   flex-wrap: wrap;
@@ -39,14 +59,114 @@
   padding: 7px 10px;
   border-radius: 8px;
   border: 1px solid var(--color-border);
-  background: var(--bg-panel);
+  background: color-mix(in srgb, var(--bg-elevated) 84%, transparent);
   font-size: 12px;
 }
 
 .canvas-actions button.primary {
   background: var(--color-accent);
   border-color: var(--color-accent);
-  color: #fff;
+  color: #120d05;
+  font-weight: 700;
+}
+
+.canvas-toolbar button,
+.canvas-more summary {
+  min-height: 28px;
+  padding: 5px 9px;
+  border-radius: 7px;
+  border: 1px solid var(--color-border);
+  background: color-mix(in srgb, var(--bg-elevated) 82%, transparent);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.canvas-toolbar button.primary {
+  background: var(--color-accent);
+  border-color: var(--color-accent);
+  color: #120d05;
+  font-weight: 600;
+}
+
+.canvas-toolbar button.icon {
+  color: var(--color-muted);
+  background: transparent;
+}
+
+.canvas-link-pill {
+  min-height: 24px;
+  display: inline-flex;
+  align-items: center;
+  padding: 3px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--color-border);
+  font-size: 10px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.canvas-link-pill.ok {
+  color: var(--color-success);
+  border-color: color-mix(in srgb, var(--color-success) 42%, transparent);
+  background: color-mix(in srgb, var(--color-success) 10%, transparent);
+}
+
+.canvas-link-pill.partial {
+  color: var(--color-muted);
+  background: color-mix(in srgb, var(--color-toolbar) 72%, transparent);
+}
+
+.canvas-more {
+  position: relative;
+}
+
+.canvas-more summary {
+  list-style: none;
+  cursor: pointer;
+}
+
+.canvas-more summary::-webkit-details-marker {
+  display: none;
+}
+
+.canvas-more-menu {
+  position: absolute;
+  z-index: 25;
+  top: calc(100% + 6px);
+  right: 0;
+  width: 280px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px;
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  background: var(--color-surface);
+  box-shadow: 0 16px 32px rgba(0, 0, 0, 0.24);
+}
+
+.canvas-more-menu button {
+  justify-content: flex-start;
+  text-align: left;
+}
+
+.canvas-more-menu button.danger {
+  color: var(--color-danger);
+  border-color: color-mix(in srgb, var(--color-danger) 35%, transparent);
+  background: color-mix(in srgb, var(--color-danger) 8%, transparent);
+}
+
+.canvas-file-details {
+  padding-top: 5px;
+  border-top: 1px solid color-mix(in srgb, var(--color-border) 65%, transparent);
+}
+
+.canvas-file-details summary {
+  padding: 2px 0 4px;
+  border: none;
+  background: transparent;
+  color: var(--color-muted);
+  font-size: 10px;
 }
 
 .canvas-actions button.subtle {
@@ -61,6 +181,10 @@
   gap: 8px;
   padding: 8px var(--panel-padding);
   border-bottom: 1px solid var(--color-border);
+}
+
+.canvas-actions.canvas-actions-ps {
+  display: none;
 }
 
 .canvas-status-chips {
@@ -86,21 +210,24 @@
 .canvas-status-compact {
   flex-shrink: 0;
   display: flex;
-  flex-direction: column;
-  gap: 2px;
-  padding: 6px var(--panel-padding);
-  border-bottom: 1px solid var(--color-border);
-  background: var(--bg-toolbar);
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 5px var(--panel-padding);
+  border-bottom: 1px solid color-mix(in srgb, var(--color-border) 55%, transparent);
+  background: color-mix(in srgb, var(--bg-toolbar) 82%, transparent);
+}
+
+.canvas-status-compact > .canvas-status-path {
+  display: none;
 }
 
 .canvas-note {
-  margin-top: 4px;
   font-size: 11px;
-  color: var(--color-text);
+  color: var(--color-muted);
 }
 
 .canvas-missing {
-  margin-top: 4px;
   font-size: 11px;
   color: var(--color-danger);
 }
@@ -139,8 +266,11 @@
 .canvas-body {
   flex: 1 1 0;
   min-height: 0;
-  padding: 16px 20px;
-  background: var(--canvas-empty-bg, var(--canvas-well));
+  padding: 28px 34px;
+  background:
+    radial-gradient(circle at center, color-mix(in srgb, var(--color-accent) 8%, transparent), transparent 44%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.018), transparent 28%),
+    var(--canvas-empty-bg, var(--canvas-well));
   overflow: auto;
 }
 
@@ -161,8 +291,13 @@
   max-width: 100%;
   max-height: 100%;
   aspect-ratio: var(--canvas-aspect, 16 / 9);
-  border-radius: 6px;
-  box-shadow: 0 4px 24px rgba(0, 0, 0, 0.14);
+  border: 1px solid color-mix(in srgb, var(--color-accent) 22%, var(--color-border));
+  border-radius: 9px;
+  background: var(--canvas-empty-bg, var(--canvas-well));
+  box-shadow:
+    0 22px 56px rgba(0, 0, 0, 0.42),
+    0 0 0 1px rgba(255, 255, 255, 0.025),
+    0 0 42px color-mix(in srgb, var(--color-accent) 8%, transparent);
   overflow: hidden;
 }
 
@@ -202,7 +337,8 @@
   border-radius: 8px;
   border: 1px solid var(--color-accent);
   background: var(--color-accent);
-  color: #fff;
+  color: #120d05;
+  font-weight: 700;
 }
 
 .canvas-empty-state {
@@ -239,6 +375,7 @@
 }
 
 .canvas-status-path {
+  display: block;
   font-size: 10px;
   color: var(--color-muted);
   white-space: nowrap;

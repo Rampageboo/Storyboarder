@@ -2,106 +2,102 @@
   flex-shrink: 0;
   height: var(--topbar-height);
   display: grid;
-  grid-template-columns: auto 1fr auto;
+  grid-template-columns: minmax(240px, 1fr) minmax(180px, auto) minmax(220px, 1fr);
   align-items: center;
-  gap: 12px;
-  padding: 0 var(--panel-padding);
-  border-bottom: 1px solid var(--color-border);
-  background: var(--color-surface);
+  gap: 14px;
+  padding: 0 16px;
+  border-bottom: 1px solid color-mix(in srgb, var(--color-border) 78%, transparent);
+  background: var(--topbar-bg);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.18);
 }
 
-.topbar-menu {
-  position: relative;
-  display: inline-flex;
-  align-items: center;
-  gap: 2px;
-}
-
-.topbar-menu-item {
-  position: relative;
-}
-
-.topbar button {
-  border-radius: 6px;
-  border: 1px solid transparent;
-  background: transparent;
-}
-
-.topbar-menu-label {
-  min-height: 28px;
-  padding: 4px 9px;
-  font-size: 12px;
-}
-
-.topbar-menu-label[aria-expanded='true'] {
-  border-color: var(--color-border);
-  background: var(--bg-panel);
-}
-
-.topbar-dropdown {
-  position: absolute;
-  z-index: 30;
-  top: calc(100% + 4px);
-  left: 0;
-  min-width: 170px;
-  padding: 5px;
-  border: 1px solid var(--color-border);
-  border-radius: 7px;
-  background: var(--color-surface);
-  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.2);
-}
-
-.topbar-dropdown button {
-  width: 100%;
-  min-height: 28px;
+.topbar-left {
+  min-width: 0;
   display: flex;
   align-items: center;
-  justify-content: flex-start;
-  padding: 5px 9px;
-  border-color: transparent;
-  background: transparent;
-  font-size: 12px;
-  text-align: left;
+  gap: 12px;
 }
 
-.topbar-center {
-  text-align: center;
+.topbar-project-mark {
+  width: 34px;
+  height: 34px;
+  flex: 0 0 34px;
+  display: grid;
+  place-items: center;
+  border: 1px solid color-mix(in srgb, var(--color-accent) 45%, var(--color-border));
+  border-radius: 9px;
+  background:
+    radial-gradient(circle at 35% 25%, color-mix(in srgb, var(--color-accent) 34%, transparent), transparent 50%),
+    var(--bg-elevated);
+  color: var(--color-accent);
+  font-size: 10px;
+  font-weight: 800;
+}
+
+.topbar-project-copy {
   min-width: 0;
 }
 
 .topbar-title {
-  font-weight: 600;
+  color: var(--color-text);
+  font-weight: 700;
   font-size: 14px;
+  letter-spacing: 0.01em;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
 .topbar-subtitle {
-  font-size: 12px;
+  margin-top: 1px;
   color: var(--color-muted);
+  font-size: 11px;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
+.topbar-center {
+  justify-self: center;
+  min-width: 0;
+}
+
+.topbar-context {
+  display: inline-flex;
+  align-items: center;
+  min-height: 30px;
+  padding: 0 16px;
+  border: 1px solid color-mix(in srgb, var(--color-border) 76%, transparent);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--bg-input) 82%, transparent);
+  color: var(--color-muted);
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
 .topbar-right {
+  min-width: 0;
   display: flex;
   align-items: center;
   justify-content: flex-end;
   gap: 8px;
-  min-width: 0;
+}
+
+.topbar button {
+  border-radius: 8px;
 }
 
 .topbar-ps-status {
-  font-size: 11px;
-  color: var(--color-muted);
-  padding: 4px 8px;
+  max-width: 250px;
+  min-height: 30px;
+  padding: 5px 10px;
+  border: 1px solid color-mix(in srgb, var(--color-border) 75%, transparent);
   border-radius: 999px;
-  border: 1px solid var(--color-border);
-  background: var(--bg-panel);
+  background: color-mix(in srgb, var(--bg-input) 80%, transparent);
+  color: var(--color-muted);
+  font-size: 11px;
   white-space: nowrap;
-  max-width: 260px;
   overflow: hidden;
   text-overflow: ellipsis;
 }
@@ -112,19 +108,25 @@ button.topbar-ps-status {
 
 button.topbar-ps-status.is-preheat-countdown {
   cursor: pointer;
-  color: #9b1c1c;
-  border-color: rgba(155, 28, 28, 0.45);
-  background: rgba(155, 28, 28, 0.1);
+  color: var(--color-danger);
+  border-color: color-mix(in srgb, var(--color-danger) 46%, transparent);
+  background: color-mix(in srgb, var(--color-danger) 11%, transparent);
 }
 
 button.topbar-ps-status.is-preheating {
-  color: #8a5a00;
-  border-color: rgba(138, 90, 0, 0.4);
-  background: rgba(232, 168, 56, 0.16);
+  color: var(--color-accent);
+  border-color: color-mix(in srgb, var(--color-accent) 42%, transparent);
+  background: color-mix(in srgb, var(--color-accent) 13%, transparent);
 }
 
 .topbar-ps-status.is-linked {
-  color: #2b8a3e;
-  border-color: rgba(43, 138, 62, 0.35);
-  background: rgba(43, 138, 62, 0.08);
+  color: var(--color-success);
+  border-color: color-mix(in srgb, var(--color-success) 42%, transparent);
+  background: color-mix(in srgb, var(--color-success) 10%, transparent);
+}
+
+@media (max-width: 1300px) {
+  .topbar {
+    grid-template-columns: minmax(210px, 1fr) auto minmax(180px, 1fr);
+  }
 }

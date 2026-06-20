@@ -4,6 +4,8 @@
 :root {
   /* Layout tokens (unchanged) */
   --topbar-height: 56px;
+  --left-rail-width: 76px;
+  --right-rail-width: 68px;
   --inspector-width: 520px;
   --reference-sidebar-width: 380px;
   --board-strip-height: 244px;
@@ -80,6 +82,14 @@ select {
   -webkit-user-select: text;
 }
 
+input:focus,
+textarea:focus,
+select:focus {
+  outline: none;
+  border-color: color-mix(in srgb, var(--color-accent) 70%, var(--border));
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-accent) 14%, transparent);
+}
+
 
 button {
   min-height: 32px;
@@ -95,6 +105,12 @@ button {
 button:hover:not(:disabled) {
   background: var(--bg-hover);
   border-color: var(--border-light);
+}
+
+button:focus-visible {
+  outline: none;
+  border-color: color-mix(in srgb, var(--color-accent) 72%, var(--border));
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-accent) 16%, transparent);
 }
 
 button:disabled,

@@ -1,7 +1,7 @@
 .scene3d {
   flex-shrink: 0;
-  border-top: 1px solid var(--color-border);
-  background: var(--bg-toolbar);
+  border-top: 1px solid color-mix(in srgb, var(--color-border) 72%, transparent);
+  background: color-mix(in srgb, var(--bg-toolbar) 84%, transparent);
 }
 
 .scene3d-toggle {
@@ -14,16 +14,21 @@
   background: transparent;
   font-weight: 600;
   font-size: 12px;
-  color: var(--color-muted);
+  color: var(--color-text);
   cursor: pointer;
 }
 
 .scene3d-toggle:hover {
-  background: var(--bg-hover);
+  background: color-mix(in srgb, var(--color-accent) 8%, transparent);
 }
 
 .scene3d-toggle-icon {
+  width: 18px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   font-size: 11px;
+  line-height: 1;
 }
 
 .scene3d-body {
@@ -78,7 +83,7 @@
   padding: 6px 8px;
   border-radius: 8px;
   border: 1px solid var(--color-border);
-  background: var(--bg-panel);
+  background: color-mix(in srgb, var(--bg-elevated) 82%, transparent);
   font-size: 11px;
   cursor: pointer;
 }
@@ -86,7 +91,8 @@
 .scene3d-actions button.primary {
   border-color: var(--color-accent);
   background: var(--color-accent);
-  color: #fff;
+  color: #120d05;
+  font-weight: 700;
 }
 
 .scene3d-help,
@@ -100,7 +106,8 @@
   color: var(--color-text);
   padding: 7px 8px;
   border-radius: 8px;
-  background: rgba(59, 91, 219, 0.08);
+  border: 1px solid color-mix(in srgb, var(--color-accent) 24%, transparent);
+  background: var(--color-accent-soft);
 }
 
 .scene3d-workspace-overlay[hidden] {
@@ -186,6 +193,9 @@
 .scene3d-workspace-close {
   width: 32px;
   min-width: 32px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   font-size: 16px !important;
   line-height: 1;
 }
@@ -341,9 +351,9 @@
 }
 
 .scene3d-editor-root .scene3d-toolbar button.active {
-  border-color: #6f8cff;
-  background: rgba(111, 140, 255, 0.2);
-  color: #fff;
+  border-color: var(--color-accent);
+  background: color-mix(in srgb, var(--color-accent) 18%, transparent);
+  color: var(--color-text);
 }
 
 .scene3d-editor-root .scene3d-viewport {

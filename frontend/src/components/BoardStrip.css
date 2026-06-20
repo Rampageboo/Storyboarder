@@ -6,9 +6,102 @@
   display: flex;
   flex-direction: column;
   overflow: hidden;
-  background: var(--color-surface);
-  border-top: 1px solid var(--color-border);
-  box-shadow: 0 -2px 8px rgba(0, 0, 0, 0.04);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.024), transparent 22%),
+    color-mix(in srgb, var(--color-surface) 94%, var(--color-bg));
+  border-top: 1px solid color-mix(in srgb, var(--color-border) 65%, transparent);
+  box-shadow: 0 -16px 34px rgba(0, 0, 0, 0.22);
+}
+
+.board-strip-progress {
+  flex: 0 0 4px;
+  width: 100%;
+  min-height: 4px;
+  height: 4px;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: color-mix(in srgb, var(--color-border) 45%, transparent);
+  cursor: pointer;
+  appearance: none;
+  overflow: hidden;
+}
+
+.board-strip-progress:hover .board-strip-progress-fill,
+.board-strip-progress[aria-pressed='true'] .board-strip-progress-fill {
+  filter: brightness(1.18);
+}
+
+.board-strip-progress-fill {
+  height: 100%;
+  width: 0%;
+  background: var(--color-accent);
+  transition: width 0.16s ease;
+}
+
+.board-strip-transport {
+  flex: 0 0 32px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 4px 12px 3px;
+  background: color-mix(in srgb, var(--color-surface) 78%, transparent);
+}
+
+.board-strip-transport.board-strip-transport-inline {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: none;
+  padding: 0;
+  background: transparent;
+}
+
+.board-strip-toolbar.is-transport > .board-strip-transport-inline {
+  display: flex;
+}
+
+.board-strip-toolbar.is-transport > .board-strip-segment,
+.board-strip-toolbar.is-transport > .board-strip-hint {
+  display: none;
+}
+
+.board-strip-transport button {
+  min-width: 32px;
+  min-height: 24px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  border-color: color-mix(in srgb, var(--color-border) 70%, transparent);
+  background: color-mix(in srgb, var(--bg-elevated) 78%, transparent);
+  font-size: 11px;
+  line-height: 1;
+}
+
+.board-strip-transport .board-strip-icon-btn {
+  width: 32px;
+  padding: 0;
+  font-size: 12px;
+}
+
+.board-strip-transport .board-strip-play {
+  min-width: 44px;
+  color: #120d05;
+  border-color: var(--color-accent);
+  background: var(--color-accent);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.board-strip-transport .board-strip-play[aria-pressed='true'] {
+  background: color-mix(in srgb, var(--color-accent) 72%, #000);
+}
+
+.board-strip-position {
+  min-width: 100px;
+  margin-left: 4px;
+  color: var(--color-muted);
+  font-size: 10px;
+  white-space: nowrap;
 }
 
 .board-strip-toolbar {
@@ -17,9 +110,10 @@
   align-items: center;
   justify-content: space-between;
   gap: 10px;
-  padding: 8px 12px;
-  border-bottom: 1px solid var(--color-border);
-  background: var(--bg-toolbar);
+  padding: 5px 12px;
+  border-top: 1px solid color-mix(in srgb, var(--color-border) 50%, transparent);
+  border-bottom: 1px solid color-mix(in srgb, var(--color-border) 55%, transparent);
+  background: color-mix(in srgb, var(--bg-toolbar) 82%, transparent);
 }
 
 .board-strip-title {
@@ -33,17 +127,19 @@
 }
 
 .board-strip-actions {
-  display: flex;
+  display: none;
   gap: 6px;
   flex-shrink: 0;
 }
 
 .board-strip-actions button {
-  padding: 5px 10px;
+  min-height: 24px;
+  padding: 3px 8px;
   border-radius: 6px;
-  border: 1px solid var(--color-border);
-  background: var(--bg-panel);
-  font-size: 11px;
+  border: 1px solid color-mix(in srgb, var(--color-border) 78%, transparent);
+  background: transparent;
+  color: var(--color-muted);
+  font-size: 10px;
 }
 
 /* Horizontal scroll viewport — only cards move, not the strip chrome */
@@ -54,7 +150,7 @@
   width: 100%;
   overflow-x: auto;
   overflow-y: hidden;
-  padding: 6px 12px 10px;
+  padding: 8px 12px 10px;
   overscroll-behavior-x: contain;
   scrollbar-gutter: stable;
   transform: rotateX(180deg);
@@ -272,20 +368,6 @@
   transform: scale(1);
 }
 
-.board-strip-progress {
-  flex: 0 0 5px;
-  height: 5px;
-  background: color-mix(in srgb, var(--color-border) 55%, transparent);
-  border-top: 1px solid var(--color-border);
-}
-
-.board-strip-progress-fill {
-  height: 100%;
-  width: 0%;
-  background: var(--color-accent);
-  transition: width 0.16s ease;
-}
-
 /* Reference-segment dot rail, aligned 1:1 under the cards. */
 .board-strip-dotrail {
   display: flex;
@@ -314,10 +396,10 @@
   right: -5px;
   height: 3px;
   transform: translateY(-50%);
-  background: #3b5bdb;
+  background: var(--color-accent);
   border-radius: 2px;
   z-index: 2;
-  box-shadow: 0 0 0 1px rgba(59, 91, 219, 0.25);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--color-accent) 32%, transparent);
 }
 
 .board-strip-dotcell.range-start::before {
@@ -352,26 +434,26 @@
 }
 
 .board-strip-dot:hover {
-  border-color: #3b5bdb;
+  border-color: var(--color-accent);
 }
 
 .board-strip-dot.in-range {
-  border-color: #3b5bdb;
+  border-color: var(--color-accent);
 }
 
 .board-strip-dot.anchor-only {
-  border-color: #3b5bdb;
-  background: rgba(59, 91, 219, 0.15);
+  border-color: var(--color-accent);
+  background: color-mix(in srgb, var(--color-accent) 16%, transparent);
 }
 
 .board-strip-dot.endpoint {
-  background: #3b5bdb;
-  border-color: #3b5bdb;
+  background: var(--color-accent);
+  border-color: var(--color-accent);
 }
 
 /* Distinguish the start endpoint with an extra ring. */
 .board-strip-dot.start {
-  box-shadow: 0 0 0 2px rgba(59, 91, 219, 0.28);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--color-accent) 32%, transparent);
 }
 
 .board-strip-segment {
@@ -426,9 +508,11 @@
   flex-direction: column;
   margin: 0;
   padding: 0;
-  border: 2px solid var(--color-border);
-  border-radius: 6px;
-  background: var(--bg-panel);
+  border: 1px solid color-mix(in srgb, var(--color-border) 86%, transparent);
+  border-radius: 8px;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.025), transparent 24%),
+    color-mix(in srgb, var(--bg-panel) 88%, transparent);
   text-align: left;
   cursor: pointer;
   overflow: hidden;
@@ -439,8 +523,11 @@
 
 .board-strip-card.is-selected {
   border-color: var(--color-accent);
-  background: var(--color-accent-soft);
-  box-shadow: 0 0 0 1px rgba(59, 91, 219, 0.4);
+  background: color-mix(in srgb, var(--color-accent-soft) 72%, var(--bg-panel));
+  box-shadow:
+    inset 0 0 0 1px color-mix(in srgb, var(--color-accent) 55%, transparent),
+    0 0 0 1px color-mix(in srgb, var(--color-accent) 24%, transparent),
+    0 10px 24px rgba(0, 0, 0, 0.28);
 }
 
 .board-strip-thumb {
@@ -451,7 +538,7 @@
   min-height: var(--board-strip-thumb-height);
   max-height: var(--board-strip-thumb-height);
   background: var(--thumb-empty-bg, var(--canvas-well));
-  border-bottom: 1px solid rgba(0, 0, 0, 0.08);
+  border-bottom: 1px solid rgba(0, 0, 0, 0.32);
   overflow: hidden;
 }
 
@@ -486,8 +573,8 @@
   display: flex;
   flex-direction: column;
   justify-content: center;
-  gap: 2px;
-  padding: 6px 8px;
+  gap: 1px;
+  padding: 5px 7px;
 }
 
 .board-strip-label {
@@ -522,6 +609,7 @@
   align-items: center;
   font-size: 10px;
   color: var(--color-muted);
+  opacity: 0.72;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;

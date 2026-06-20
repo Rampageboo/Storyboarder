@@ -4,42 +4,42 @@
 [data-theme="studio"] {
   color-scheme: dark;
   --font-ui: "Segoe UI", "PingFang SC", "Microsoft YaHei", Arial, sans-serif;
-  --radius-sm: 4px;
-  --radius-md: 6px;
-  --bg-app: #1a1d21;
-  --bg-panel: #24282e;
-  --bg-canvas: #2c3036;
-  --bg-toolbar: #1f2328;
-  --bg-input: #1a1d21;
-  --bg-hover: #2e3339;
-  --bg-elevated: #2a2f36;
-  --border: #3a4048;
-  --border-light: #4a515a;
-  --text: #e8eaed;
-  --text-muted: #9aa0a8;
-  --accent: #3d8bfd;
-  --accent-2: #6fcf97;
-  --accent-soft: rgba(61, 139, 253, 0.12);
+  --radius-sm: 6px;
+  --radius-md: 8px;
+  --bg-app: #07090d;
+  --bg-panel: #10151d;
+  --bg-canvas: #111720;
+  --bg-toolbar: #0b0f15;
+  --bg-input: #0b1118;
+  --bg-hover: #18202b;
+  --bg-elevated: #141b24;
+  --border: #26303d;
+  --border-light: #3a4656;
+  --text: #f4efe4;
+  --text-muted: #9f9a8f;
+  --accent: #d6a84f;
+  --accent-2: #f1d488;
+  --accent-soft: rgba(214, 168, 79, 0.16);
   --accent-ps: #31a8ff;
   --accent-bl: #a5d66a;
   --danger: #ff6b6b;
-  --success: #6fcf97;
-  --thumb-active: #3d8bfd;
-  --shadow: rgba(0, 0, 0, 0.42);
-  --modal-backdrop: rgba(0, 0, 0, 0.55);
-  --topbar-bg: linear-gradient(180deg, #232830 0%, #1f2328 100%);
-  --canvas-well: #1e2126;
+  --success: #52d273;
+  --thumb-active: #d6a84f;
+  --shadow: rgba(0, 0, 0, 0.62);
+  --modal-backdrop: rgba(0, 0, 0, 0.68);
+  --topbar-bg: linear-gradient(180deg, #121821 0%, #0a0e14 100%);
+  --canvas-well: #0b0f15;
   --ps-bg: #1a3a5c;
   --ps-bg-hover: #1e4a75;
   --ps-border: #31a8ff;
   --bl-bg: #2a3a1a;
   --bl-bg-hover: #354820;
   --bl-border: #8bc34a;
-  --startup-bg: radial-gradient(circle at 50% 42%, rgba(61, 139, 253, 0.16), transparent 34%),
-    linear-gradient(180deg, #1a1d21 0%, #0f1114 100%);
-  --startup-panel: rgba(36, 40, 46, 0.96);
-  --startup-brand: linear-gradient(135deg, #2563eb, #0f766e);
-  --startup-brand-border: rgba(61, 139, 253, 0.55);
+  --startup-bg: radial-gradient(circle at 50% 42%, rgba(214, 168, 79, 0.14), transparent 34%),
+    linear-gradient(180deg, #07090d 0%, #030405 100%);
+  --startup-panel: rgba(16, 21, 29, 0.96);
+  --startup-brand: linear-gradient(135deg, #d6a84f, #5d4518);
+  --startup-brand-border: rgba(214, 168, 79, 0.48);
 }
 
 [data-theme="cinema"] {

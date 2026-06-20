@@ -508,7 +508,7 @@ export function Scene3DPanel() {
     <section className={`scene3d ${panelOpen ? 'is-open' : ''}`}>
       <button type="button" className="scene3d-toggle" onClick={() => setPanelOpen((value) => !value)}>
         <span>Scene 3D</span>
-        <span className="scene3d-toggle-icon">{panelOpen ? 'v' : '>'}</span>
+        <span className="scene3d-toggle-icon" aria-hidden="true">{panelOpen ? '▾' : '▸'}</span>
       </button>
 
       {panelOpen ? (
@@ -602,8 +602,8 @@ export function Scene3DPanel() {
               <button type="button" onClick={() => void saveScene()} disabled={!editorReady || disabled}>
                 Save scene
               </button>
-              <button type="button" className="scene3d-workspace-close" onClick={closeWorkspace} title="Close Scene 3D">
-                x
+              <button type="button" className="scene3d-workspace-close" onClick={closeWorkspace} title="Close Scene 3D" aria-label="Close Scene 3D">
+                ×
               </button>
             </div>
           </div>

@@ -34,9 +34,7 @@ export function ShotInspector() {
     }
   }
 
-  if (!project) {
-    return null
-  }
+  if (!project) return null
 
   if (!shot) {
     return (
@@ -66,12 +64,12 @@ export function ShotInspector() {
           <div className="inspector-title">Shot Inspector</div>
           <div className="inspector-subtitle">
             {dirty ? 'Unsaved changes' : 'All changes saved'}
-            {saving ? ' · Saving…' : ''}
+            {saving ? ' | Saving...' : ''}
           </div>
         </div>
         <div className="inspector-actions">
           <button type="button" onClick={() => void saveShot(shotId)} disabled={!dirty || saving}>
-            {saving ? 'Saving…' : 'Save shot'}
+            {saving ? 'Saving...' : 'Save shot'}
           </button>
         </div>
       </div>

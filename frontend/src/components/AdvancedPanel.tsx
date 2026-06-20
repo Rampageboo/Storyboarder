@@ -146,7 +146,7 @@ export function AdvancedPanel() {
     <section className={`advanced ${open ? 'is-open' : ''}`}>
       <button type="button" className="advanced-toggle" onClick={() => setOpen((v) => !v)}>
         <span>Advanced</span>
-        <span className="advanced-toggle-icon">{open ? '▾' : '▸'}</span>
+        <span className="advanced-toggle-icon" aria-hidden="true">{open ? '▾' : '▸'}</span>
       </button>
 
       {open ? (

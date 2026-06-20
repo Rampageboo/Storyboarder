@@ -1458,10 +1458,10 @@ function updateCurrentShotIndicator() {
     if (shot.preview_out_of_date) warnings.push("preview stale");
     else if (shot.preview_exists === false) warnings.push("preview missing");
     if (status || duration) {
-      text += ` Â· ${status || "No status"}${duration ? ` Â· ${duration}s` : ""}`;
+      text += ` · ${status || "No status"}${duration ? ` · ${duration}s` : ""}`;
     }
     if (warnings.length) {
-      text += ` Â· ${warnings.join(", ")}`;
+      text += ` · ${warnings.join(", ")}`;
     }
   }
   node.textContent = text;

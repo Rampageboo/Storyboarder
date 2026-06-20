@@ -68,6 +68,8 @@ export function BoardStrip() {
   const [missingShots, setMissingShots] = useState<Set<string>>(new Set())
   const [dragShotId, setDragShotId] = useState<string | null>(null)
   const [dropTarget, setDropTarget] = useState<{ id: string; after: boolean } | null>(null)
+  const [playing, setPlaying] = useState(false)
+  const [showTransport, setShowTransport] = useState(false)
   const viewportRef = useRef<HTMLDivElement | null>(null)
   const markerClickTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
@@ -81,6 +83,22 @@ export function BoardStrip() {
         ? `${shots.length} boards`
         : 'No boards'
   const disabled = busy || projectActionBusy || initialLoading
+  const canStepBack = selectedIndex > 0
+  const canStepForward = selectedIndex >= 0 && selectedIndex < shots.length - 1
+  const showTransportControls = showTransport || playing
+
+  useEffect(() => {
+    if (!playing || disabled || selectedIndex < 0 || shots.length === 0) return
+    if (selectedIndex >= shots.length - 1) return
+    const durationMs = Math.max(500, Number(shots[selectedIndex]?.duration_seconds ?? 3) * 1000)
+    const timer = window.setTimeout(() => {
+      const nextIndex = selectedIndex + 1
+      const next = shots[nextIndex]
+      if (next) setSelectedShotId(next.shot_id)
+      if (nextIndex >= shots.length - 1) setPlaying(false)
+    }, durationMs)
+    return () => window.clearTimeout(timer)
+  }, [playing, disabled, selectedIndex, shots, setSelectedShotId])
 
   // Reference-segment range (normalized by board order for display + the connecting line).
   const anchorIdx = segmentRange.anchorShotId ? shots.findIndex((s) => s.shot_id === segmentRange.anchorShotId) : -1
@@ -293,6 +311,43 @@ export function BoardStrip() {
     }
   }, [redo])
 
+  const selectShotAt = useCallback(
+    (index: number) => {
+      const next = shots[index]
+      if (!next) return
+      setSelectedShotId(next.shot_id)
+    },
+    [shots, setSelectedShotId],
+  )
+
+  const handleTransportFirst = useCallback(() => {
+    setPlaying(false)
+    selectShotAt(0)
+  }, [selectShotAt])
+
+  const handleTransportPrevious = useCallback(() => {
+    setPlaying(false)
+    selectShotAt(selectedIndex - 1)
+  }, [selectShotAt, selectedIndex])
+
+  const handleTransportNext = useCallback(() => {
+    setPlaying(false)
+    selectShotAt(selectedIndex + 1)
+  }, [selectShotAt, selectedIndex])
+
+  const handleTransportLast = useCallback(() => {
+    setPlaying(false)
+    selectShotAt(shots.length - 1)
+  }, [selectShotAt, shots.length])
+
+  const handleTransportPlay = useCallback(() => {
+    if (!shots.length || selectedIndex < 0) return
+    if (selectedIndex >= shots.length - 1 && !playing) {
+      selectShotAt(0)
+    }
+    setPlaying((value) => !value)
+  }, [playing, selectShotAt, selectedIndex, shots.length])
+
   const handleDragStart = useCallback((e: DragEvent<HTMLButtonElement>, shotId: string) => {
     if (disabled) {
       e.preventDefault()
@@ -349,10 +404,53 @@ export function BoardStrip() {
 
   return (
     <section className="board-strip" aria-label="Storyboard strip">
-      <div className="board-strip-toolbar">
+      <button
+        type="button"
+        className="board-strip-progress"
+        aria-label={`${progressLabel}. Show playback controls`}
+        aria-pressed={showTransportControls}
+        title={`${progressLabel}. Click to show playback controls.`}
+        onClick={() => setShowTransport((value) => !value)}
+      >
+        <div className="board-strip-progress-fill" style={{ width: `${progressPercent}%` }} />
+      </button>
+      <div className={`board-strip-toolbar ${showTransportControls ? 'is-transport' : ''}`}>
         <span className="board-strip-title">
           Boards <span className="board-strip-count">({shots.length})</span>
         </span>
+        <div className="board-strip-transport board-strip-transport-inline" aria-label="Board playback controls">
+          <button type="button" className="board-strip-icon-btn" onClick={handleTransportFirst} disabled={disabled || selectedIndex <= 0} title="Jump to first board" aria-label="Jump to first board">
+            ⏮
+          </button>
+          <button type="button" className="board-strip-icon-btn" onClick={handleTransportPrevious} disabled={disabled || !canStepBack} title="Previous board" aria-label="Previous board">
+            ◀
+          </button>
+          <button
+            type="button"
+            className="board-strip-play"
+            onClick={handleTransportPlay}
+            disabled={disabled || shots.length === 0 || selectedIndex < 0}
+            title={playing ? 'Pause playback' : 'Play boards'}
+            aria-pressed={playing}
+            aria-label={playing ? 'Pause playback' : 'Play boards'}
+          >
+            {playing ? '⏸' : '▶'}
+          </button>
+          <button type="button" className="board-strip-icon-btn" onClick={handleTransportNext} disabled={disabled || !canStepForward} title="Next board" aria-label="Next board">
+            ▶
+          </button>
+          <button
+            type="button"
+            className="board-strip-icon-btn"
+            onClick={handleTransportLast}
+            disabled={disabled || selectedIndex < 0 || selectedIndex >= shots.length - 1}
+            title="Jump to last board"
+            aria-label="Jump to last board"
+          >
+            ⏭
+          </button>
+          <span className="board-strip-position">{progressLabel}</span>
+        </div>
         {rangeLabel || segmentDeleting ? (
           <span className="board-strip-segment">
             {segmentDeleting ? 'Deleting segment…' : rangeLabel}
@@ -606,9 +704,6 @@ export function BoardStrip() {
             </div>
           </div>
         )}
-      </div>
-      <div className="board-strip-progress" aria-label={progressLabel} title={progressLabel}>
-        <div className="board-strip-progress-fill" style={{ width: `${progressPercent}%` }} />
       </div>
     </section>
   )
