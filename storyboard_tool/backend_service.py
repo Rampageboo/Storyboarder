@@ -494,10 +494,11 @@ class StoryboardBackendService(ExportServiceMixin):
             project.settings["active_ref_segment_id"] = str(data.get("active_ref_segment_id") or "").strip()
             project_manager.sync_ref_segment_settings(project)
         if "ref_segment_video" in data:
-            segment = data.get("ref_segment_video")
-            project.settings["ref_segment_video"] = segment if isinstance(segment, dict) else {}
+            raw_segment = data.get("ref_segment_video")
+            segment = raw_segment if isinstance(raw_segment, dict) else {}
+            project.settings["ref_segment_video"] = segment
             seg_id = str(segment.get("segment_id", "") or project.settings.get("active_ref_segment_id", "") or "").strip()
-            if seg_id and isinstance(segment, dict) and "start" in segment:
+            if seg_id and "start" in segment:
                 project_manager.update_ref_segment_video_start(
                     project,
                     seg_id,

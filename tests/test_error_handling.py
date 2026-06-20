@@ -122,6 +122,30 @@ class TestNoRawTracebackInResponse(unittest.TestCase):
         self.assertNotIn("unexpected blender crash", body.get("detail", ""))
 
 
+class TestSettingsUpdateEdgeCases(unittest.TestCase):
+    def setUp(self) -> None:
+        self._tmp = tempfile.mkdtemp()
+        self._app = api_module.create_app(Path(self._tmp))
+        self._client = TestClient(self._app, raise_server_exceptions=False)
+
+    def tearDown(self) -> None:
+        shutil.rmtree(self._tmp, ignore_errors=True)
+
+    def test_ref_segment_video_null_clears_without_500(self) -> None:
+        created = _quiet(lambda: self._client.post("/api/project/new", json={"path": self._tmp}))
+        self.assertEqual(created.status_code, 200)
+
+        response = _quiet(
+            lambda: self._client.patch(
+                "/api/project/settings",
+                json={"ref_segment_video": None},
+            )
+        )
+
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.json()["settings"].get("ref_segment_video"), {})
+
+
 class TestBackendExceptionLogging(unittest.TestCase):
     def setUp(self) -> None:
         self._tmp = tempfile.mkdtemp()
