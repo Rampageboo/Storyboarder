@@ -110,6 +110,120 @@ function RefThumb({ link, selected }: { link: ReferenceLink; selected: boolean }
   )
 }
 
+// Drag-to-position timeline scrubber for source start time.
+// Shows the board-duration window on a track sized to the full media duration.
+// Dragging moves the window (updates segmentStart); nothing is rebaked until the user clicks Reapply.
+type SourceTimeScrubberProps = {
+  segmentStart: number
+  mediaDuration: number   // 0 = unknown → use fallback
+  boardDuration: number   // storyboard segment duration = window width on track
+  playheadTime: number    // video playhead position (0 for model)
+  mode: string            // 'video' | 'model' | 'image' | 'none'
+  disabled: boolean
+  onStartChange: (t: number) => void
+  onVideoSeek?: (t: number) => void
+}
+
+function SourceTimeScrubber({
+  segmentStart, mediaDuration, boardDuration, playheadTime,
+  mode, disabled, onStartChange, onVideoSeek,
+}: SourceTimeScrubberProps) {
+  const vizRef = useRef<HTMLDivElement>(null)
+  const [dragging, setDragging] = useState(false)
+
+  const totalDuration =
+    mediaDuration > 0 ? mediaDuration :
+    mode === 'video' ? 60 :
+    mode === 'model' ? 10 : 0
+  const maxStart = Math.max(0, totalDuration - boardDuration)
+
+  // Keep mutable values accessible inside the stable effect closure via refs.
+  const totalRef = useRef(totalDuration)
+  totalRef.current = totalDuration
+  const maxStartRef = useRef(maxStart)
+  maxStartRef.current = maxStart
+  const onStartChangeRef = useRef(onStartChange)
+  onStartChangeRef.current = onStartChange
+  const onVideoSeekRef = useRef(onVideoSeek)
+  onVideoSeekRef.current = onVideoSeek
+
+  useEffect(() => {
+    if (!dragging) return
+    const onMove = (e: MouseEvent) => {
+      const viz = vizRef.current
+      if (!viz) return
+      const rect = viz.getBoundingClientRect()
+      const trackW = Math.max(1, rect.width - 24) // 12 px padding each side
+      const x = Math.max(0, Math.min(e.clientX - rect.left - 12, trackW))
+      const t = Math.max(0, Math.min((x / trackW) * totalRef.current, maxStartRef.current))
+      onStartChangeRef.current(t)
+      onVideoSeekRef.current?.(t)
+    }
+    const onUp = () => setDragging(false)
+    window.addEventListener('mousemove', onMove)
+    window.addEventListener('mouseup', onUp)
+    return () => {
+      window.removeEventListener('mousemove', onMove)
+      window.removeEventListener('mouseup', onUp)
+    }
+  }, [dragging])
+
+  if (mode !== 'video' && mode !== 'model') {
+    return mode === 'image'
+      ? <p className="ref-assign-source-time-note">Image references do not use source time.</p>
+      : null
+  }
+
+  const safeTotal = totalDuration || 1
+  const barLeft = Math.max(0, Math.min(1, segmentStart / safeTotal))
+  const barWidth = Math.max(0.02, Math.min(1 - barLeft, boardDuration / safeTotal))
+  const phLeft = Math.max(0, Math.min(1, playheadTime / safeTotal))
+
+  const handleMouseDown = (e: React.MouseEvent<HTMLDivElement>) => {
+    if (disabled) return
+    e.preventDefault()
+    const viz = vizRef.current
+    if (!viz) return
+    const rect = viz.getBoundingClientRect()
+    const trackW = Math.max(1, rect.width - 24)
+    const x = Math.max(0, Math.min(e.clientX - rect.left - 12, trackW))
+    const t = Math.max(0, Math.min((x / trackW) * totalDuration, maxStart))
+    onStartChange(t)
+    onVideoSeek?.(t)
+    setDragging(true)
+  }
+
+  return (
+    <div className="ref-assign-source-time">
+      <div className="ref-assign-source-time-label">
+        <span>{mode === 'model' ? 'Animation start' : 'Source start'}</span>
+        <span className="ref-assign-source-time-value">{segmentStart.toFixed(1)} s</span>
+      </div>
+      <div
+        ref={vizRef}
+        className={`ref-assign-seg-viz${dragging ? ' is-dragging' : ''}`}
+        onMouseDown={handleMouseDown}
+        role="slider"
+        aria-valuemin={0}
+        aria-valuemax={totalDuration}
+        aria-valuenow={segmentStart}
+        aria-label={mode === 'model' ? 'Animation start time' : 'Source start time'}
+      >
+        <div className="ref-assign-seg-rail" />
+        <div className="ref-assign-seg-layer">
+          <div
+            className="ref-assign-seg-bar is-draggable"
+            style={{ left: `${barLeft * 100}%`, width: `${barWidth * 100}%` }}
+          />
+          {mode === 'video' ? (
+            <div className="ref-assign-seg-playhead" style={{ left: `${phLeft * 100}%` }} />
+          ) : null}
+        </div>
+      </div>
+    </div>
+  )
+}
+
 export function ReferenceAssignmentPopover() {
   const {
     project,
@@ -229,14 +343,6 @@ export function ReferenceAssignmentPopover() {
   const previewLabel = selectedRef ? selectedRef.title || fileName(selectedRef.path) : 'No reference selected'
   const boardLabel = lo === hi ? `#${lo + 1}` : `#${lo + 1}–#${hi + 1}`
   const objectFit = fitModeToObjectFit(fitMode)
-
-  // Practical max for the source-time slider.
-  // For video: use loaded duration when available, fall back to 60 s.
-  // For model: use loaded duration when available, fall back to 10 s (typical animation).
-  const sliderMax =
-    refMode === 'video' ? (mediaDuration > 0 ? mediaDuration : 60) :
-    refMode === 'model' ? (mediaDuration > 0 ? mediaDuration : 10) :
-    0
 
   const close = () => {
     if (isInspectMode) closeRefSegmentInspect()
@@ -419,34 +525,16 @@ export function ReferenceAssignmentPopover() {
             <div className="ref-assign-fit-mode" role="group" aria-label="Reference fit"><span className="ref-assign-fit-label">Fit</span>{FIT_MODES.map((mode) => <button key={mode} type="button" className={`ref-assign-fit-btn ${fitMode === mode ? 'is-active' : ''}`} onClick={() => setFitMode(mode)} disabled={disabled}>{mode === 'fit' ? 'Fit' : mode === 'fill' ? 'Fill' : 'Stretch'}</button>)}</div>
             <section className="ref-assign-segment-box">
               <div className="ref-assign-segment-toolbar"><span className="ref-assign-section-label">Board segment</span><div className="ref-assign-board-picks"><select value={startShot} onChange={(e) => setStart(e.target.value || null)} disabled={disabled}>{shots.map((s) => <option key={s.shot_id} value={s.shot_id}>{shotLabel(s.shot_id)}</option>)}</select><span>→</span><select value={endShot} onChange={(e) => setEnd(e.target.value || null)} disabled={disabled}>{shots.map((s) => <option key={s.shot_id} value={s.shot_id}>{shotLabel(s.shot_id)}</option>)}</select></div><button type="button" className="ref-assign-reset-start" onClick={() => setSegmentStart(0)} disabled={disabled || refMode === 'image' || segmentStart <= 0}>Reset start</button><button type="button" className="ref-assign-apply" onClick={apply} disabled={disabled || !links.length || shots.length === 0}>{isInspectMode ? 'Reapply to boards' : 'Apply to boards'}</button>{isInspectMode ? <button type="button" className="ref-assign-delete" onClick={deleteSegment} disabled={disabled}>Delete segment</button> : null}</div>
-              {(refMode === 'video' || refMode === 'model') ? (
-                <div className="ref-assign-source-time">
-                  <label className="ref-assign-source-time-label">
-                    <span>{refMode === 'model' ? 'Animation start' : 'Source start'}</span>
-                    <span className="ref-assign-source-time-value">{segmentStart.toFixed(1)} s</span>
-                  </label>
-                  <input
-                    type="range"
-                    className="ref-assign-source-time-slider"
-                    min={0}
-                    max={sliderMax}
-                    step={0.1}
-                    value={segmentStart}
-                    onChange={(e) => {
-                      const val = Number(e.target.value)
-                      setSegmentStart(val)
-                      // Seek the video preview so the user can see that frame; no reapply.
-                      if (videoRef.current && refMode === 'video') {
-                        videoRef.current.currentTime = val
-                      }
-                    }}
-                    disabled={disabled}
-                    aria-label={refMode === 'model' ? 'Animation start time in seconds' : 'Source start time in seconds'}
-                  />
-                </div>
-              ) : refMode === 'image' ? (
-                <p className="ref-assign-source-time-note">Image references do not use source time.</p>
-              ) : null}
+              <SourceTimeScrubber
+                segmentStart={segmentStart}
+                mediaDuration={mediaDuration}
+                boardDuration={durationSec}
+                playheadTime={playheadTime}
+                mode={refMode}
+                disabled={disabled}
+                onStartChange={(t) => setSegmentStart(t)}
+                onVideoSeek={(t) => { if (videoRef.current) videoRef.current.currentTime = t }}
+              />
               <div className="ref-assign-segment-summary"><span>{refMode === 'model' ? `3D segment: ${formatClock(durationSec)} · anim ${formatClock(segmentStart)} · boards ${boardLabel}` : `Reference segment: ${durationSec.toFixed(1)}s · boards ${boardLabel}`}</span><span>{refMode === 'video' ? `Playhead: ${formatClock(playheadTime)}` : `Fit: ${fitMode}`}</span></div>
             </section>
             <div className="ref-assign-footer"><button type="button" onClick={close} disabled={disabled}>{isInspectMode ? 'Close' : 'Cancel / clear range'}</button>{isInspectMode ? <button type="button" className="primary" onClick={apply} disabled={disabled || !links.length}>Reapply</button> : null}{refApplyUndoToken ? <button type="button" onClick={undo} disabled={disabled}>Undo last apply</button> : null}</div>
