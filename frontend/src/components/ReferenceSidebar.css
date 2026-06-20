@@ -1,7 +1,7 @@
 .ref-drawer-backdrop {
   position: fixed;
   top: var(--topbar-height, 56px);
-  right: 0;
+  right: var(--right-rail-width, 60px);
   bottom: 0;
   left: var(--left-rail-width, 76px);
   z-index: 34;
@@ -11,7 +11,7 @@
 
 .ref-sidebar {
   position: fixed;
-  left: var(--left-rail-width, 76px);
+  right: var(--right-rail-width, 60px);
   top: var(--topbar-height, 48px);
   bottom: 0;
   z-index: 35;
@@ -24,9 +24,9 @@
   background:
     linear-gradient(180deg, rgba(255, 255, 255, 0.03), transparent 20%),
     color-mix(in srgb, var(--color-surface) 94%, #000);
-  border-right: 1px solid color-mix(in srgb, var(--color-border) 82%, transparent);
-  box-shadow: 16px 0 42px rgba(0, 0, 0, 0.38);
-  transform: translateX(calc(-100% - var(--left-rail-width, 76px)));
+  border-left: 1px solid color-mix(in srgb, var(--color-border) 82%, transparent);
+  box-shadow: -16px 0 42px rgba(0, 0, 0, 0.38);
+  transform: translateX(calc(100% + var(--right-rail-width, 60px)));
   transition: transform 0.2s ease;
   pointer-events: none;
 }
@@ -54,35 +54,59 @@
   align-items: center;
   justify-content: space-between;
   gap: 8px;
+  padding-bottom: 2px;
 }
 
 .ref-sidebar-head-actions {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 5px;
 }
 
 .ref-sidebar-title {
-  font-size: 13px;
+  font-size: 12px;
   font-weight: 700;
-  color: var(--color-text);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--color-muted);
 }
 
-.ref-sidebar-head button,
-.ref-sidebar-head-actions button {
-  padding: 5px 8px;
-  border-radius: 8px;
-  border: 1px solid color-mix(in srgb, var(--color-border) 78%, transparent);
-  background: color-mix(in srgb, var(--bg-elevated) 82%, transparent);
+/* Import button */
+.ref-sidebar-head-actions button:not(.ref-drawer-close) {
+  padding: 5px 12px;
+  border-radius: 7px;
+  border: 1px solid color-mix(in srgb, var(--color-accent) 55%, transparent);
+  background: color-mix(in srgb, var(--color-accent) 14%, transparent);
+  color: var(--color-accent);
   font-size: 11px;
+  font-weight: 600;
 }
 
+.ref-sidebar-head-actions button:not(.ref-drawer-close):hover:not(:disabled) {
+  background: color-mix(in srgb, var(--color-accent) 24%, transparent);
+  border-color: color-mix(in srgb, var(--color-accent) 72%, transparent);
+}
+
+/* Close × button */
 .ref-drawer-close {
-  width: 28px;
-  height: 28px;
+  width: 26px;
+  height: 26px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   padding: 0 !important;
+  border-radius: 50%;
+  border: 1px solid color-mix(in srgb, var(--color-accent) 40%, transparent);
+  background: color-mix(in srgb, var(--color-accent) 10%, transparent);
+  color: var(--color-accent);
+  font-size: 17px;
   line-height: 1;
-  font-size: 16px;
+  cursor: pointer;
+}
+
+.ref-drawer-close:hover {
+  background: color-mix(in srgb, var(--color-accent) 22%, transparent);
+  border-color: color-mix(in srgb, var(--color-accent) 65%, transparent);
 }
 
 .ref-sidebar-hint {
@@ -101,21 +125,25 @@
 .reflib-grid {
   display: grid;
   grid-template-columns: repeat(3, 1fr);
-  gap: 10px;
+  gap: 8px;
 }
 
 .reflib-card {
   position: relative;
-  border: 1px solid color-mix(in srgb, var(--color-border) 86%, transparent);
+  border: 1px solid color-mix(in srgb, var(--color-border) 72%, transparent);
   border-radius: 8px;
-  background: color-mix(in srgb, var(--bg-panel) 88%, transparent);
+  background: color-mix(in srgb, var(--bg-panel) 80%, transparent);
   overflow: hidden;
+  transition: border-color 0.12s;
+}
+
+.reflib-card:hover {
+  border-color: color-mix(in srgb, var(--color-accent) 40%, var(--color-border));
 }
 
 .reflib-card-main {
   display: flex;
   flex-direction: column;
-  gap: 4px;
   width: 100%;
   padding: 0;
   margin: 0;
@@ -129,7 +157,7 @@
 .reflib-thumb {
   width: 100%;
   aspect-ratio: 16 / 10;
-  background: #1a1c22;
+  background: #15171d;
   overflow: hidden;
   display: flex;
   align-items: center;
@@ -139,19 +167,17 @@
 .reflib-thumb img {
   width: 100%;
   height: 100%;
-  /* contain preserves aspect ratio and avoids cropping — important for line-art/storyboard images */
   object-fit: contain;
   display: block;
   pointer-events: none;
-  /* subtle checker-like bg: slightly offset squares help white/transparent images stand out */
-  background-color: #1e2028;
+  background-color: #1a1c22;
   background-image:
-    linear-gradient(45deg, #252830 25%, transparent 25%),
-    linear-gradient(-45deg, #252830 25%, transparent 25%),
-    linear-gradient(45deg, transparent 75%, #252830 75%),
-    linear-gradient(-45deg, transparent 75%, #252830 75%);
-  background-size: 12px 12px;
-  background-position: 0 0, 0 6px, 6px -6px, -6px 0;
+    linear-gradient(45deg, #222530 25%, transparent 25%),
+    linear-gradient(-45deg, #222530 25%, transparent 25%),
+    linear-gradient(45deg, transparent 75%, #222530 75%),
+    linear-gradient(-45deg, transparent 75%, #222530 75%);
+  background-size: 10px 10px;
+  background-position: 0 0, 0 5px, 5px -5px, -5px 0;
 }
 
 .reflib-thumb video {
@@ -177,19 +203,18 @@
   letter-spacing: 0.04em;
 }
 
-
 .reflib-meta {
-  padding: 4px 6px 6px;
+  padding: 5px 6px 6px;
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: 1px;
   min-width: 0;
 }
 
 .reflib-type {
   font-size: 9px;
   text-transform: uppercase;
-  letter-spacing: 0.04em;
+  letter-spacing: 0.05em;
   color: var(--color-muted);
 }
 
@@ -199,22 +224,39 @@
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  color: var(--color-text);
 }
 
 .reflib-remove {
   position: absolute;
-  top: 4px;
-  right: 4px;
-  width: 20px;
-  height: 20px;
+  top: 5px;
+  right: 5px;
+  width: 18px;
+  height: 18px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border-radius: 50%;
+  border: none;
+  background: rgba(0, 0, 0, 0.55);
+  color: rgba(255, 255, 255, 0.7);
+  font-size: 14px;
   line-height: 1;
-  border-radius: 4px;
-  border: 1px solid var(--color-border);
-  background: color-mix(in srgb, var(--bg-toolbar) 86%, transparent);
-  color: var(--color-danger);
-  font-size: 13px;
   cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.12s, background 0.12s, color 0.12s;
   z-index: 1;
+  backdrop-filter: blur(2px);
+}
+
+.reflib-card:hover .reflib-remove {
+  opacity: 1;
+}
+
+.reflib-remove:hover {
+  background: var(--color-danger);
+  color: #fff;
 }
 
 .ref-segments-disclosure {

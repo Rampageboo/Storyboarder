@@ -4,7 +4,7 @@
 :root {
   /* Layout tokens (unchanged) */
   --topbar-height: 56px;
-  --left-rail-width: 76px;
+  --left-rail-width: 108px;
   --right-rail-width: 68px;
   --inspector-width: 520px;
   --reference-sidebar-width: 380px;

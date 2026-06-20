@@ -5,8 +5,8 @@ import { BoardStrip } from './components/BoardStrip'
 import { CanvasBoard } from './components/CanvasBoard'
 import { ReferenceSidebar } from './components/ReferenceSidebar'
 import { ReferenceAssignmentPopover } from './components/ReferenceAssignmentPopover'
-import { Scene2DPanel } from './components/Scene2DPanel'
-import { Scene3DPanel } from './components/Scene3DPanel'
+import { Scene2DPanel, type Scene2DPanelHandle } from './components/Scene2DPanel'
+import { Scene3DPanel, type Scene3DPanelHandle } from './components/Scene3DPanel'
 import { NeighborContext } from './components/NeighborContext'
 import { AdvancedPanel } from './components/AdvancedPanel'
 import { SettingsModal } from './components/SettingsModal'
@@ -16,8 +16,6 @@ import { LiveBridgeProvider } from './state/LiveBridgeContext'
 import { useGlobalShortcuts } from './hooks/useGlobalShortcuts'
 import type { ProjectPathRequest } from './types'
 import './App.css'
-
-type RightPanel = 'scene2d' | 'scene3d' | null
 
 function WelcomePanel() {
   const { newProject, openProjectFromDialog, projectActionBusy } = useProject()
@@ -57,55 +55,67 @@ function WelcomePanel() {
 }
 
 function LeftRail({
+  showNav,
   refsOpen,
   onToggleRefs,
+  onOpen2D,
+  onOpen3D,
   onOpenSettings,
 }: {
+  showNav: boolean
   refsOpen: boolean
   onToggleRefs: () => void
+  onOpen2D: () => void
+  onOpen3D: () => void
   onOpenSettings: () => void
 }) {
   return (
     <nav className="left-rail" aria-label="Workspace navigation">
-      <div className="left-rail-brand" aria-label="Storyboarder">
-        <span>SB</span>
+      <div className="left-rail-logo">
+        <img src="/react/icon.png" width="46" height="46" alt="" style={{ borderRadius: 11, display: 'block' }} />
       </div>
-      <div className="left-rail-group">
-        <button type="button" className="left-rail-item is-active" title="Board" aria-current="page">
-          <span className="left-rail-icon">&#9638;</span>
-          <span>Board</span>
-        </button>
-        <button
-          type="button"
-          className={`left-rail-item ${refsOpen ? 'is-active' : ''}`}
-          onClick={onToggleRefs}
-          title="References"
-          aria-expanded={refsOpen}
-          aria-controls="ref-drawer-panel"
-        >
-          <span className="left-rail-icon">&#9671;</span>
-          <span>Refs</span>
-        </button>
-      </div>
-      <div className="left-rail-group left-rail-bottom">
-        <button type="button" className="left-rail-item" onClick={onOpenSettings} title="Settings">
-          <span className="left-rail-icon">&#9881;</span>
-          <span>Settings</span>
-        </button>
-      </div>
+      {showNav ? (
+        <>
+          <div className="left-rail-group">
+            <button type="button" className="left-rail-item is-active" title="Board" aria-current="page">
+              <span className="left-rail-icon">&#9638;</span>
+              <span>Board</span>
+            </button>
+            <button type="button" className="left-rail-item" onClick={onOpen2D} title="Scene 2D">
+              <span className="left-rail-icon">&#9636;</span>
+              <span>2D</span>
+            </button>
+            <button type="button" className="left-rail-item" onClick={onOpen3D} title="Scene 3D">
+              <span className="left-rail-icon">&#11042;</span>
+              <span>3D</span>
+            </button>
+            <button
+              type="button"
+              className={`left-rail-item ${refsOpen ? 'is-active' : ''}`}
+              onClick={onToggleRefs}
+              title="References"
+              aria-expanded={refsOpen}
+              aria-controls="ref-drawer-panel"
+            >
+              <span className="left-rail-icon">&#9671;</span>
+              <span>Refs</span>
+            </button>
+          </div>
+          <div className="left-rail-group left-rail-bottom">
+            <button type="button" className="left-rail-item" onClick={onOpenSettings} title="Settings">
+              <span className="left-rail-icon">&#9881;</span>
+              <span>Settings</span>
+            </button>
+          </div>
+        </>
+      ) : null}
     </nav>
   )
 }
 
 function RightRail({
-  activePanel,
-  onToggleScene2D,
-  onToggleScene3D,
   onOpenSettings,
 }: {
-  activePanel: RightPanel
-  onToggleScene2D: () => void
-  onToggleScene3D: () => void
   onOpenSettings: () => void
 }) {
   const { project, newProject, openProjectFromDialog, saveProject, dirtyShotIds, projectActionBusy, initialLoading } =
@@ -170,29 +180,6 @@ function RightRail({
 
   return (
     <nav className="right-rail" aria-label="Workspace tools">
-      <div className="right-rail-group">
-        <button
-          type="button"
-          className={`right-rail-item ${activePanel === 'scene2d' ? 'is-active' : ''}`}
-          onClick={onToggleScene2D}
-          title="Scene 2D"
-          aria-pressed={activePanel === 'scene2d'}
-        >
-          <span className="right-rail-icon">&#9636;</span>
-          <span>2D</span>
-        </button>
-        <button
-          type="button"
-          className={`right-rail-item ${activePanel === 'scene3d' ? 'is-active' : ''}`}
-          onClick={onToggleScene3D}
-          title="Scene 3D"
-          aria-pressed={activePanel === 'scene3d'}
-        >
-          <span className="right-rail-icon">&#11042;</span>
-          <span>3D</span>
-        </button>
-      </div>
-
       <div className="right-rail-group right-rail-bottom">
         <button type="button" className="right-rail-item" disabled title="Upload is not wired yet">
           <span className="right-rail-icon">&#8679;</span>
@@ -257,29 +244,12 @@ function RightRail({
   )
 }
 
-function SidePanelDrawer({ activePanel, onClose }: { activePanel: RightPanel; onClose: () => void }) {
-  if (!activePanel) return null
-
-  return (
-    <aside className="side-panel-drawer is-open" aria-label={activePanel === 'scene2d' ? 'Scene 2D panel' : 'Scene 3D panel'}>
-      <div className="side-panel-drawer-head">
-        <span>{activePanel === 'scene2d' ? 'Scene 2D' : 'Scene 3D'}</span>
-        <button type="button" onClick={onClose} aria-label="Close panel">
-          &times;
-        </button>
-      </div>
-      <div className="side-panel-drawer-body">
-        {activePanel === 'scene2d' ? <Scene2DPanel /> : <Scene3DPanel />}
-      </div>
-    </aside>
-  )
-}
-
 function AppInner() {
   const { project, initialLoading, lastError, clearError, reloadProject } = useProject()
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [refsOpen, setRefsOpen] = useState(false)
-  const [rightPanel, setRightPanel] = useState<RightPanel>(null)
+  const scene2dRef = useRef<Scene2DPanelHandle>(null)
+  const scene3dRef = useRef<Scene3DPanelHandle>(null)
   useGlobalShortcuts()
 
   const themeVars: CSSProperties = {
@@ -293,49 +263,48 @@ function AppInner() {
 
   return (
     <div className="app-root" style={themeVars}>
-      <Topbar />
-      {lastError ? (
-        <div className="app-banner" role="alert">
-          <span>{lastError}</span>
-          <button type="button" onClick={clearError} aria-label="Dismiss error">
-            &times;
-          </button>
-        </div>
-      ) : null}
-      <div className="workspace-shell">
-        {project ? (
-          <LeftRail
-            refsOpen={refsOpen}
-            onToggleRefs={() => setRefsOpen((value) => !value)}
-            onOpenSettings={() => setSettingsOpen(true)}
-          />
+      <LeftRail
+        showNav={!!project}
+        refsOpen={refsOpen}
+        onToggleRefs={() => setRefsOpen((v) => !v)}
+        onOpen2D={() => scene2dRef.current?.openWorkspace()}
+        onOpen3D={() => scene3dRef.current?.openWorkspace()}
+        onOpenSettings={() => setSettingsOpen(true)}
+      />
+      <div className="app-main">
+        <Topbar />
+        {lastError ? (
+          <div className="app-banner" role="alert">
+            <span>{lastError}</span>
+            <button type="button" onClick={clearError} aria-label="Dismiss error">
+              &times;
+            </button>
+          </div>
         ) : null}
-        <div className="workspace">
-          {initialLoading ? (
-            <div className="loading-panel">Loading project...</div>
-          ) : !project ? (
-            <WelcomePanel />
-          ) : (
-            <>
-              <ReferenceSidebar open={refsOpen} onOpenChange={setRefsOpen} />
-              <main className="main-center">
-                <CanvasBoard />
-                <NeighborContext />
-                <BoardStrip />
-              </main>
-              <aside className="main-right">
-                <ShotInspector />
-                <AdvancedPanel />
-              </aside>
-              <RightRail
-                activePanel={rightPanel}
-                onToggleScene2D={() => setRightPanel((value) => (value === 'scene2d' ? null : 'scene2d'))}
-                onToggleScene3D={() => setRightPanel((value) => (value === 'scene3d' ? null : 'scene3d'))}
-                onOpenSettings={() => setSettingsOpen(true)}
-              />
-              <SidePanelDrawer activePanel={rightPanel} onClose={() => setRightPanel(null)} />
-            </>
-          )}
+        <div className="workspace-shell">
+          <div className="workspace">
+            {initialLoading ? (
+              <div className="loading-panel">Loading project...</div>
+            ) : !project ? (
+              <WelcomePanel />
+            ) : (
+              <>
+                <ReferenceSidebar open={refsOpen} onOpenChange={setRefsOpen} />
+                <main className="main-center">
+                  <CanvasBoard />
+                  <NeighborContext />
+                  <BoardStrip />
+                </main>
+                <aside className="main-right">
+                  <ShotInspector />
+                  <AdvancedPanel />
+                </aside>
+                <RightRail onOpenSettings={() => setSettingsOpen(true)} />
+                <Scene2DPanel ref={scene2dRef} />
+                <Scene3DPanel ref={scene3dRef} />
+              </>
+            )}
+          </div>
         </div>
       </div>
       <ReferenceAssignmentPopover />

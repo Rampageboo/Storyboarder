@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react'
 import {
   addScene2DPerspectiveToReferences,
   createScene2D,
@@ -31,9 +31,12 @@ function replaceScene(scenes: Scene2D[], next: Scene2D): Scene2D[] {
   return scenes.map((scene) => (scene.id === next.id ? next : scene))
 }
 
-export function Scene2DPanel() {
+export interface Scene2DPanelHandle {
+  openWorkspace: () => void
+}
+
+export const Scene2DPanel = forwardRef<Scene2DPanelHandle>(function Scene2DPanel(_, ref) {
   const { project, setProject, flushDirtyShots, projectActionBusy, reportError } = useProject()
-  const [panelOpen, setPanelOpen] = useState(true)
   const [workspaceOpen, setWorkspaceOpen] = useState(false)
   const [scenes, setScenes] = useState<Scene2D[]>([])
   const [scene3ds, setScene3ds] = useState<Scene3DRecord[]>([])
@@ -65,6 +68,8 @@ export function Scene2DPanel() {
   const disabled = busy || projectActionBusy
   const previewKey = selectedScene && selectedPerspective ? `${selectedScene.id}:${selectedPerspective.id}` : ''
   const previewMissing = !selectedScene || !selectedPerspective || previewFailedFor === previewKey
+
+  useImperativeHandle(ref, () => ({ openWorkspace: () => setWorkspaceOpen(true) }))
 
   const loadScenes = useCallback(async () => {
     if (!project) {
@@ -107,25 +112,21 @@ export function Scene2DPanel() {
     setPreviewFailedFor('')
   }, [selectedPerspective?.id, selectedPerspective?.title, selectedPerspective?.linked_scene3d_id])
 
-  const createScene = useCallback(
-    async (openWorkspace = false) => {
-      setBusy(true)
-      try {
-        await flushDirtyShots()
-        const payload = await createScene2D()
-        setScenes(payload.scenes)
-        setSelectedSceneId(payload.scene.id)
-        setSelectedPerspectiveId(payload.scene.primary_perspective_id)
-        if (openWorkspace) setWorkspaceOpen(true)
-        setNote(`Created ${payload.scene.id}.`)
-      } catch (error) {
-        reportError(error)
-      } finally {
-        setBusy(false)
-      }
-    },
-    [flushDirtyShots, reportError],
-  )
+  const createScene = useCallback(async () => {
+    setBusy(true)
+    try {
+      await flushDirtyShots()
+      const payload = await createScene2D()
+      setScenes(payload.scenes)
+      setSelectedSceneId(payload.scene.id)
+      setSelectedPerspectiveId(payload.scene.primary_perspective_id)
+      setNote(`Created ${payload.scene.id}.`)
+    } catch (error) {
+      reportError(error)
+    } finally {
+      setBusy(false)
+    }
+  }, [flushDirtyShots, reportError])
 
   const saveSceneDetails = useCallback(async () => {
     if (!selectedScene) return
@@ -305,41 +306,7 @@ export function Scene2DPanel() {
   if (!project) return null
 
   return (
-    <section className={`scene2d ${panelOpen ? 'is-open' : ''}`}>
-      <button type="button" className="scene2d-toggle" onClick={() => setPanelOpen((value) => !value)}>
-        <span>Scene 2D</span>
-        <span className="scene2d-toggle-icon" aria-hidden="true">{panelOpen ? '▾' : '▸'}</span>
-      </button>
-
-      {panelOpen ? (
-        <div className="scene2d-body">
-          <div className="scene2d-status">
-            <span className={`scene2d-chip ${scenes.length ? 'ok' : 'off'}`}>{scenes.length} scene board{scenes.length === 1 ? '' : 's'}</span>
-            <span className="scene2d-path" title={sceneLabel(selectedScene)}>
-              {selectedScene ? `Selected: ${sceneLabel(selectedScene)}` : 'No Scene 2D boards yet.'}
-            </span>
-          </div>
-          {!selectedScene ? (
-            <div className="scene2d-help">Scene 2D is a project-level board for layouts, maps, blocking, or environment sketches.</div>
-          ) : null}
-          <div className="scene2d-actions">
-            <button type="button" className="primary" onClick={() => setWorkspaceOpen(true)} disabled={disabled}>
-              Open workspace
-            </button>
-            <button type="button" onClick={() => void createScene(true)} disabled={disabled}>
-              Create Scene 2D
-            </button>
-            {selectedPerspective ? (
-              <button type="button" onClick={() => void openPerspective()} disabled={disabled}>
-                Open in Photoshop
-              </button>
-            ) : null}
-          </div>
-          <div className="scene2d-help">Use workspace for preview, metadata, Photoshop open, refresh, and references.</div>
-          {note ? <div className="scene2d-note">{note}</div> : null}
-        </div>
-      ) : null}
-
+    <>
       <div className="scene2d-workspace-overlay" hidden={!workspaceOpen} role="dialog" aria-modal="true" aria-label="Scene 2D workspace">
         <div className="scene2d-workspace-card">
           <div className="scene2d-workspace-header">
@@ -350,7 +317,8 @@ export function Scene2DPanel() {
               </div>
             </div>
             <div className="scene2d-workspace-actions">
-              <button type="button" onClick={() => void createScene(false)} disabled={disabled}>
+              {note ? <span className="scene2d-note">{note}</span> : null}
+              <button type="button" onClick={() => void createScene()} disabled={disabled}>
                 Add Scene
               </button>
               <button type="button" className="scene2d-workspace-close" onClick={() => setWorkspaceOpen(false)} title="Close Scene 2D" aria-label="Close Scene 2D">
@@ -513,6 +481,6 @@ export function Scene2DPanel() {
           </div>
         </div>
       </div>
-    </section>
+    </>
   )
-}
+})

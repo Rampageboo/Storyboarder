@@ -118,18 +118,13 @@ export function Topbar() {
 
   return (
     <header className="topbar">
-      <div className="topbar-left">
-        <div className="topbar-project-mark" aria-hidden="true">
-          <span>SB</span>
-        </div>
+      <div className="topbar-left" />
+
+      <div className="topbar-center">
         <div className="topbar-project-copy">
           <div className="topbar-title">{projectLabel}</div>
           <div className="topbar-subtitle">{subtitle}</div>
         </div>
-      </div>
-
-      <div className="topbar-center">
-        <span className="topbar-context">Board workspace</span>
       </div>
 
       <div className="topbar-right">

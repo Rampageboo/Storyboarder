@@ -1,12 +1,21 @@
 .app-root {
   height: 100%;
   display: flex;
-  flex-direction: column;
+  flex-direction: row;
   overflow: hidden;
   max-width: 100vw;
   background:
     radial-gradient(circle at 45% 0%, color-mix(in srgb, var(--color-accent) 9%, transparent), transparent 34%),
     var(--color-bg);
+}
+
+.app-main {
+  flex: 1 1 0;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
 }
 
 .app-banner {
@@ -44,16 +53,28 @@
   flex: 0 0 var(--left-rail-width);
   width: var(--left-rail-width);
   min-width: var(--left-rail-width);
+  height: 100%;
   display: flex;
   flex-direction: column;
   align-items: center;
   gap: 18px;
-  padding: 14px 8px 12px;
+  padding: 0 8px 12px;
   border-right: 1px solid color-mix(in srgb, var(--color-border) 76%, transparent);
   background:
     linear-gradient(180deg, rgba(255, 255, 255, 0.025), transparent 18%),
     color-mix(in srgb, var(--bg-toolbar) 88%, #000);
   box-shadow: inset -1px 0 0 rgba(255, 255, 255, 0.025);
+}
+
+.left-rail-logo {
+  flex-shrink: 0;
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 22px 8px 16px;
+  border-bottom: 1px solid color-mix(in srgb, var(--color-border) 52%, transparent);
+  margin-bottom: 4px;
 }
 
 .left-rail-brand {
@@ -67,9 +88,6 @@
     radial-gradient(circle at 35% 25%, color-mix(in srgb, var(--color-accent) 34%, transparent), transparent 48%),
     var(--bg-elevated);
   color: var(--color-accent);
-  font-size: 11px;
-  font-weight: 800;
-  letter-spacing: 0.02em;
   box-shadow: 0 10px 28px rgba(0, 0, 0, 0.32);
 }
 
@@ -83,22 +101,23 @@
 
 .left-rail-bottom {
   margin-top: auto;
+  margin-bottom: 16px;
 }
 
 .left-rail-item {
   width: 100%;
-  min-height: 58px;
+  min-height: 68px;
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 4px;
-  padding: 7px 4px;
+  gap: 5px;
+  padding: 8px 4px;
   border: 1px solid transparent;
-  border-radius: 9px;
+  border-radius: 10px;
   background: transparent;
   color: var(--color-muted);
-  font-size: 10px;
+  font-size: 11px;
   line-height: 1.1;
 }
 
@@ -113,8 +132,9 @@
   box-shadow: inset 2px 0 0 var(--color-accent);
 }
 
+
 .left-rail-icon {
-  font-size: 17px;
+  font-size: 26px;
   line-height: 1;
   color: var(--color-accent);
 }

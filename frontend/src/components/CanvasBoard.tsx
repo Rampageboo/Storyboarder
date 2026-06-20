@@ -371,26 +371,6 @@ export function CanvasBoard() {
             </div>
           </details>
         </div>
-        <div className="canvas-actions">
-          <button type="button" className="primary" onClick={() => imageInputRef.current?.click()} disabled={disabled}>
-            {busy ? 'Working…' : 'Upload image'}
-          </button>
-          <button type="button" onClick={() => handleDelete()} disabled={disabled || !shot.image_path}>
-            Delete image
-          </button>
-          <button
-            type="button"
-            className="subtle"
-            onClick={() => {
-              setLoadFailed(false)
-              setBust((x) => x + 1)
-            }}
-            disabled={disabled || (!hasArtworkImage && !hasBoardBg)}
-            title="Reload preview from server"
-          >
-            Refresh
-          </button>
-        </div>
         <input
           ref={imageInputRef}
           type="file"
@@ -411,57 +391,6 @@ export function CanvasBoard() {
             e.target.value = ''
           }}
         />
-      </div>
-
-      <div className="canvas-actions canvas-actions-ps">
-        <button
-          type="button"
-          className="primary"
-          onClick={() => handleOpenInPhotoshop()}
-          disabled={disabled}
-          title="Open the shot's source in Photoshop (creates a blank canvas if none exists)"
-        >
-          Open in Photoshop
-        </button>
-        <button
-          type="button"
-          onClick={() => handleSync()}
-          disabled={disabled || !hasSource}
-          title="Sync the preview from the linked source file"
-        >
-          Sync from Photoshop
-        </button>
-        <button
-          type="button"
-          onClick={() => handleOpenPreview()}
-          disabled={disabled || !hasPreview}
-          title="Open the preview image externally"
-        >
-          Open preview
-        </button>
-        <label className="canvas-autoopen" title="Open the new source in Photoshop right after creating a canvas">
-          <input
-            type="checkbox"
-            checked={autoOpenPs}
-            onChange={(e) => {
-              const next = e.target.checked
-              setAutoOpenPs(next)
-              try {
-                localStorage.setItem('sb.autoOpenPsAfterCreate', next ? '1' : '0')
-              } catch {
-                /* localStorage unavailable — keep session-only */
-              }
-            }}
-          />
-          Open PS after create
-        </label>
-        <div className="canvas-status-chips">
-          <span className={`canvas-chip ${hasSource ? 'ok' : 'missing'}`}>Source: {hasSource ? 'linked' : 'missing'}</span>
-          <span className={`canvas-chip ${hasPreview ? 'ok' : 'missing'}`}>Preview: {hasPreview ? 'linked' : 'missing'}</span>
-          {hasBoardBg ? (
-            <span className="canvas-chip ok">Ref background: linked</span>
-          ) : null}
-        </div>
       </div>
 
       {(note || (missing && (missing.source || missing.preview || missing.refs > 0))) ? (

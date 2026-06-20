@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react'
 import {
   createScene3D,
   getProject,
@@ -84,9 +84,12 @@ async function dataUrlToFile(dataUrl: string, name: string): Promise<File> {
   return new File([blob], name, { type: blob.type || 'image/png' })
 }
 
-export function Scene3DPanel() {
+export interface Scene3DPanelHandle {
+  openWorkspace: () => void
+}
+
+export const Scene3DPanel = forwardRef<Scene3DPanelHandle>(function Scene3DPanel(_, ref) {
   const { project, selectedShotId, setProject, flushDirtyShots, projectActionBusy, reportError } = useProject()
-  const [panelOpen, setPanelOpen] = useState(true)
   const [workspaceOpen, setWorkspaceOpen] = useState(false)
   const [busy, setBusy] = useState(false)
   const [note, setNote] = useState('')
@@ -122,7 +125,6 @@ export function Scene3DPanel() {
   )
   const scenePath = typeof scene.file_path === 'string' ? scene.file_path : ''
   const sceneName = activeScene3d?.title || (typeof scene.file_name === 'string' && scene.file_name) || (scenePath ? fileName(scenePath) : '')
-  const hasScene = !!scenePath || Array.isArray(scene.objects)
   const hasLinkedGlb = !!scenePath
   const disabled = busy || projectActionBusy
   const currentSceneKey = useMemo(() => sceneKey(project), [project])
@@ -231,7 +233,6 @@ export function Scene3DPanel() {
       setActiveScene3dId(payload.active_scene3d_id)
       setProject(await getProject())
       setWorkspaceOpen(true)
-      setPanelOpen(true)
       setNote(`Created ${payload.scene.title || payload.scene.id}.`)
       return payload.scene.id
     } catch (error) {
@@ -315,7 +316,6 @@ export function Scene3DPanel() {
           requestAnimationFrame(() => editor._resize?.())
         }
         setWorkspaceOpen(true)
-        setPanelOpen(true)
         setNote(`Imported GLB: ${file.name}`)
       } catch (error) {
         reportError(error)
@@ -452,9 +452,10 @@ export function Scene3DPanel() {
 
   const openWorkspace = useCallback(() => {
     setWorkspaceOpen(true)
-    setPanelOpen(true)
     void loadEditorScene().catch(reportError)
   }, [loadEditorScene, reportError])
+
+  useImperativeHandle(ref, () => ({ openWorkspace }), [openWorkspace])
 
   const closeWorkspace = useCallback(() => {
     // Capture whatever view (incl. free-orbit) the user left the workspace at.
@@ -505,48 +506,7 @@ export function Scene3DPanel() {
   if (!project) return null
 
   return (
-    <section className={`scene3d ${panelOpen ? 'is-open' : ''}`}>
-      <button type="button" className="scene3d-toggle" onClick={() => setPanelOpen((value) => !value)}>
-        <span>Scene 3D</span>
-        <span className="scene3d-toggle-icon" aria-hidden="true">{panelOpen ? '▾' : '▸'}</span>
-      </button>
-
-      {panelOpen ? (
-        <div className="scene3d-body">
-          <div className="scene3d-status">
-            {hasScene ? (
-              <>
-                <span className={`scene3d-chip ${hasLinkedGlb ? 'ok' : 'off'}`}>{hasLinkedGlb ? 'Linked GLB' : 'Built-in'}</span>
-                <span className="scene3d-path" title={scenePath || 'Built-in scene'}>
-                  {sceneName || activeScene3d?.id || 'Built-in scene'}
-                </span>
-              </>
-            ) : (
-              <span className="scene3d-chip off">No 3D scene linked</span>
-            )}
-            <span className="scene3d-path" title={`${scene3ds.length} Scene 3D record${scene3ds.length === 1 ? '' : 's'}`}>
-              {scene3ds.length} scene{scene3ds.length === 1 ? '' : 's'}
-            </span>
-          </div>
-          <div className="scene3d-actions">
-            <button type="button" className="primary" onClick={() => openWorkspace()} disabled={disabled}>
-              Open workspace
-            </button>
-            <button type="button" onClick={() => void create3dScene()} disabled={disabled}>
-              Add 3D Scene
-            </button>
-            <button type="button" onClick={() => inputRef.current?.click()} disabled={disabled}>
-              Import GLB
-            </button>
-            <button type="button" onClick={() => void openBlender()} disabled={disabled} title="Open the project's Blender scene">
-              Open Blender
-            </button>
-          </div>
-          <div className="scene3d-help">Open workspace for viewport, camera switching, reload, and capture-to-board.</div>
-          {note ? <div className="scene3d-note">{note}</div> : null}
-        </div>
-      ) : null}
-
+    <>
       <input
         ref={inputRef}
         type="file"
@@ -567,6 +527,7 @@ export function Scene3DPanel() {
               </div>
             </div>
             <div className="scene3d-workspace-actions">
+              {note ? <span className="scene3d-note">{note}</span> : null}
               <select
                 className="scene3d-workspace-select"
                 value={activeScene3dId}
@@ -610,6 +571,6 @@ export function Scene3DPanel() {
           <div className="scene3d-editor-root" ref={editorRootRef} />
         </div>
       </div>
-    </section>
+    </>
   )
-}
+})

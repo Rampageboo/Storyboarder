@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import logging
 import sys
 import tempfile
@@ -153,6 +154,25 @@ def webview_storage_path() -> Path:
     return Path(tempfile.gettempdir())
 
 
+def _window_state_path() -> Path:
+    return global_bridge_dir() / "window_state.json"
+
+
+def _load_window_state() -> dict | None:
+    try:
+        return json.loads(_window_state_path().read_text(encoding="utf-8"))
+    except Exception:
+        return None
+
+
+def _save_window_state(window, maximized: bool = False) -> None:
+    try:
+        state = {"width": window.width, "height": window.height, "maximized": maximized}
+        _window_state_path().write_text(json.dumps(state), encoding="utf-8")
+    except Exception:
+        pass
+
+
 def open_desktop_window(app, title: str = "Storyboard Tool") -> int:
     try:
         import webview
@@ -183,14 +203,43 @@ def open_desktop_window(app, title: str = "Storyboard Tool") -> int:
         return 1
     internal_app_url = f"http://{_HOST}:{port}/"
     _configure_windows_taskbar_identity()
-    app.state.main_window = webview.create_window(
+
+    saved_state = _load_window_state()
+    # Default to maximized; restore previous size only when user had explicitly unmaximized.
+    restore_maximized = saved_state is None or saved_state.get("maximized", True)
+    win_width = saved_state["width"] if saved_state and not restore_maximized else 1440
+    win_height = saved_state["height"] if saved_state and not restore_maximized else 900
+
+    window = webview.create_window(
         title,
         internal_app_url,
-        width=1440,
-        height=900,
+        width=win_width,
+        height=win_height,
         min_size=(1024, 680),
         text_select=False,
     )
+    app.state.main_window = window
+
+    # Track whether the window is currently maximized so we can save it on close.
+    _maximized = [restore_maximized]
+
+    def _on_shown():
+        if restore_maximized:
+            try:
+                window.maximize()
+            except Exception:
+                pass
+
+    def _on_resized(width, height):
+        # Any user-driven resize means the window is no longer maximized.
+        _maximized[0] = False
+
+    window.events.shown += _on_shown
+    try:
+        window.events.resized += _on_resized
+    except Exception:
+        pass  # older pywebview versions may not have resized event
+
     start_kwargs: dict = {
         "private_mode": False,
         "storage_path": str(webview_storage_path()),
@@ -198,6 +247,10 @@ def open_desktop_window(app, title: str = "Storyboard Tool") -> int:
     if ICON_PATH.is_file():
         start_kwargs["icon"] = str(ICON_PATH.resolve())
     webview.start(**start_kwargs)
+
+    # webview.start() blocks until the window closes — save state now.
+    _save_window_state(window, maximized=_maximized[0])
+
     try:
         project_manager.shutdown_reference_cleanup(
             app.state.project,
