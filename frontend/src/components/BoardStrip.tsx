@@ -170,6 +170,24 @@ export function BoardStrip() {
     }
   }, [selectedShotId, shots.length])
 
+  // Restore wheel/trackpad scrolling broken by the rotateX(180deg) scrollbar trick.
+  // The CSS transform confuses the browser's built-in wheel-to-scroll mapping, so we
+  // attach a non-passive native listener and drive scrollLeft directly.
+  useEffect(() => {
+    const viewport = viewportRef.current
+    if (!viewport) return
+    const onWheel = (e: WheelEvent) => {
+      if (viewport.scrollWidth <= viewport.clientWidth) return
+      // Prefer horizontal trackpad delta; fall back to vertical mouse-wheel delta.
+      const delta = Math.abs(e.deltaX) > Math.abs(e.deltaY) ? e.deltaX : e.deltaY
+      if (delta === 0) return
+      e.preventDefault()
+      viewport.scrollLeft += delta
+    }
+    viewport.addEventListener('wheel', onWheel, { passive: false })
+    return () => viewport.removeEventListener('wheel', onWheel)
+  }, [])
+
   // Project-wide missing-file map for the per-card warning dot. Refetched whenever committed
   // project data changes (visualEpoch). Stale-guarded and silent — no error banner for this.
   useEffect(() => {

@@ -36,7 +36,7 @@ function RefPreview({ link }: { link: ReferenceLink }) {
   }
 
   if (link.type === 'model') {
-    return <ReferenceModelPreview path={link.path} label={link.title || fileName(link.path)} compact />
+    return <ReferenceModelPreview path={link.path} label={link.title || fileName(link.path)} />
   }
 
   if (failed) {

@@ -26,9 +26,15 @@ type ReferenceModelPreviewProps = {
 }
 
 function ReferenceModelPreviewCompact({ label }: { label: string }) {
+  // Strip directory and extension for a compact display name.
+  const shortName = (label.split(/[/\\]/).pop() ?? label).replace(/\.[^.]+$/, '') || label
   return (
     <div className="ref-model-preview is-compact" title={label}>
-      <div className="ref-model-preview-fallback" aria-hidden="true">3D</div>
+      <div className="ref-model-preview-compact-body">
+        <span className="ref-model-preview-cube-icon" aria-hidden="true">⬡</span>
+        <span className="ref-model-preview-filename">{shortName}</span>
+        <span className="ref-model-preview-type-tag">3D / GLB</span>
+      </div>
       <div className="ref-model-preview-badge">3D</div>
     </div>
   )

@@ -98,7 +98,7 @@ function RefThumb({ link, selected }: { link: ReferenceLink; selected: boolean }
   return (
     <div className={`ref-assign-ref-thumb ${selected ? 'is-selected' : ''}`}>
       {link.type === 'model' ? (
-        <ReferenceModelPreview path={link.path} label={link.title || fileName(link.path)} compact />
+        <ReferenceModelPreview path={link.path} label={link.title || fileName(link.path)} />
       ) : failed ? (
         <div className="ref-assign-ref-fallback">{link.type}</div>
       ) : link.type === 'video' ? (
