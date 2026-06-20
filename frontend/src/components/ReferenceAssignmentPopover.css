@@ -13,8 +13,8 @@
   top: 50%;
   transform: translate(-50%, -50%);
   z-index: 45;
-  width: min(920px, calc(100vw - 28px));
-  max-height: min(88vh, 760px);
+  width: min(1160px, calc(100vw - 28px));
+  max-height: min(92vh, 900px);
   display: flex;
   flex-direction: column;
   border-radius: 10px;
@@ -77,7 +77,7 @@
 
 .ref-assign-layout {
   display: grid;
-  grid-template-columns: 200px minmax(0, 1fr);
+  grid-template-columns: 260px minmax(0, 1fr);
   min-height: 0;
   flex: 1 1 auto;
   overflow: hidden;

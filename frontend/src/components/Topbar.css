@@ -10,16 +10,58 @@
   background: var(--color-surface);
 }
 
-.topbar-group {
+.topbar-menu {
+  position: relative;
   display: inline-flex;
-  gap: 8px;
+  align-items: center;
+  gap: 2px;
+}
+
+.topbar-menu-item {
+  position: relative;
 }
 
 .topbar button {
-  padding: 7px 12px;
-  border-radius: 8px;
-  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  border: 1px solid transparent;
+  background: transparent;
+}
+
+.topbar-menu-label {
+  min-height: 28px;
+  padding: 4px 9px;
+  font-size: 12px;
+}
+
+.topbar-menu-label[aria-expanded='true'] {
+  border-color: var(--color-border);
   background: var(--bg-panel);
+}
+
+.topbar-dropdown {
+  position: absolute;
+  z-index: 30;
+  top: calc(100% + 4px);
+  left: 0;
+  min-width: 170px;
+  padding: 5px;
+  border: 1px solid var(--color-border);
+  border-radius: 7px;
+  background: var(--color-surface);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.2);
+}
+
+.topbar-dropdown button {
+  width: 100%;
+  min-height: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  padding: 5px 9px;
+  border-color: transparent;
+  background: transparent;
+  font-size: 12px;
+  text-align: left;
 }
 
 .topbar-center {
@@ -49,12 +91,6 @@
   justify-content: flex-end;
   gap: 8px;
   min-width: 0;
-}
-
-.topbar-settings {
-  flex: 0 0 auto;
-  padding: 6px 10px;
-  font-size: 11px;
 }
 
 .topbar-ps-status {

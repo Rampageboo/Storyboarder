@@ -1,128 +1,213 @@
-# CODEX_TASK.md — Storyboarder UI: board strip and settings cleanup
+# CODEX_TASK.md — Storyboarder UI: compact topbar menu cleanup
 
-Repo: `Rampageboo/Storyboarder`. Work from the latest default branch.
+Repo: `Rampageboo/Storyboarder`.
+
+Work from the latest branch containing:
+
+```text
+b928bb25c3921480a6a794b8a4fad038c7e73ea8
+```
 
 ## Goal
 
-Clean up the main Storyboarder UI without changing backend behavior.
+Clean up the top app bar so it feels more like a compact desktop application menu bar.
 
-This task focuses only on:
+The current top-left buttons are visually bulky:
 
-1. Board strip usability.
-2. Restoring a Settings entry point.
-3. Adding two settings:
+```text
+New
+Open Folder
+Save
+```
 
-   * Canvas background color.
-   * Whether to preheat Photoshop when the app opens.
+Replace them with a narrower menu-style UI similar in spirit to desktop apps such as Photoshop:
 
-Do not refactor the whole frontend. Do not redesign the reference panel in this task.
+```text
+File    Edit    View
+```
+
+This task is UI organization only.
+
+Do not change project behavior, backend APIs, BoardStrip, Reference previews, Reference Segment slider, Photoshop plugin, or PSD logic.
+
+---
+
+## Current context
+
+Recent tasks already completed:
+
+1. BoardStrip progress bar.
+2. Hover `+` insert between boards.
+3. BoardStrip wheel scrolling restored.
+4. Settings modal restored.
+5. Reference preview cards improved.
+6. GLB/model preview improved.
+7. Reference Segment source-time slider restored.
+
+Do not undo or refactor any of those.
 
 ---
 
 ## Required changes
 
-### 1. Board strip progress bar
+### 1. Replace large top-left buttons with compact menu bar
 
-Add a compact progress bar directly under the board strip.
-
-Purpose:
-
-* Show current storyboard position.
-* Make the board strip feel more like a timeline.
-* Should update when the selected shot changes.
-
-Recommended behavior:
-
-* Progress can be based on selected shot index / total shots.
-* Keep it visual-only for now unless there is already drag/click timeline logic.
-* Do not introduce a complex timeline model.
-
-### 2. Move board strip horizontal scrollbar above the strip
-
-The current horizontal scrollbar appears below the board strip and competes with the new progress bar.
-
-Change layout so:
+In `Topbar`, replace the prominent button group:
 
 ```text
-horizontal scrollbar / scroll area control
-board thumbnails
-progress bar
+New
+Open Folder
+Save
 ```
 
-Preserve existing scroll behavior.
-
-### 3. Add hover insert button between boards
-
-Add an insert affordance between board cards.
-
-Behavior:
-
-* When hovering the gap between two boards, show a compact `+` button.
-* Clicking `+` inserts a new board at that position.
-* Do not place the `+` directly in the center of a board thumbnail, because that conflicts with selecting the board.
-* Preserve existing add-at-end behavior.
-* Preserve current shot selection behavior.
-
-Required checks:
-
-* Insert before first board works if the UI has a left gap.
-* Insert between boards works.
-* Insert after last board still works through the existing add-at-end flow.
-
-### 4. Restore Settings entry point
-
-If the Settings button/entry is currently missing, add it back.
-
-Preferred location:
-
-* Top-right gear icon in the app header, or
-* A compact Settings button in the existing top control area.
-
-Do not create a full menu bar in this task.
-
-### 5. Settings panel contents
-
-Add or restore a Settings panel/modal with these fields:
-
-#### Canvas background color
-
-* User can choose/set canvas background color.
-* Use the existing backend/settings mechanism if it already exists.
-* Do not introduce a new settings schema if an existing `canvas_background_color` setting exists.
-* Changing the value should update the app in the same way the existing canvas color flow expects.
-
-#### Preheat Photoshop on app open
-
-Add a boolean setting:
+with a compact menu bar:
 
 ```text
-Preheat Photoshop when Storyboarder opens
+File
+Edit
+View
 ```
 
-Behavior:
+Recommended structure:
 
-* Store it in app/project settings using the existing settings mechanism.
-* Do not implement heavy Photoshop launch logic unless an existing preheat/open-Photoshop helper already exists.
-* If preheat behavior already exists, wire the setting to it.
-* If no preheat behavior exists, add only the setting and leave a clearly named TODO/comment for the backend hook.
+```text
+File
+  New Project
+  Open Project Folder
+  Save Project
+
+Edit
+  optional: no-op / omitted if there are no real actions available here
+
+View
+  Settings
+```
+
+Important:
+
+* Do not add fake menu items that do nothing.
+* If `Edit` or `View` would be empty, either omit that menu or keep only menus that contain real actions.
+* It is acceptable to start with only `File` and `Settings` if that is cleaner.
+* Prefer practical UI over imitating Photoshop exactly.
+
+### 2. Preserve existing behavior
+
+The menu items must call the same existing handlers as before:
+
+```text
+New Project      -> existing newProject flow
+Open Folder      -> existing openProjectFromDialog flow
+Save Project     -> existing saveProject flow
+Settings         -> existing SettingsModal open flow
+```
+
+Do not change:
+
+* project creation defaults
+* project open behavior
+* save behavior
+* dirty-state handling
+* Settings modal behavior
+* disabled states
+
+### 3. Keep the topbar narrow
+
+The topbar should take less horizontal space than before.
+
+Target visual structure:
+
+```text
+[File] [View]        Project Name / status        PS status
+```
+
+or:
+
+```text
+[File]        Project Name / status        [Settings] PS status
+```
+
+Rules:
+
+* Do not make the topbar taller.
+* Do not add large icons.
+* Do not add a sidebar.
+* Do not redesign the whole layout.
+* Keep project title and Photoshop bridge status visible.
+
+### 4. Dropdown behavior
+
+Implement simple dropdown menus without new dependencies.
+
+Expected behavior:
+
+* Click menu label to open dropdown.
+* Click a menu item to run action and close dropdown.
+* Click outside to close dropdown.
+* Press Escape to close dropdown if practical.
+* Disable menu items when the old buttons would have been disabled.
+* Keyboard accessibility should not get worse.
+
+Do not implement native OS menus.
+
+Do not add Electron/Tauri/native menu code.
+
+### 5. Settings access
+
+Settings must remain easy to access.
+
+Acceptable options:
+
+Option A:
+
+```text
+View > Settings
+```
+
+Option B:
+
+```text
+right-side compact Settings button
+```
+
+Option C:
+
+```text
+File > Settings
+```
+
+Use whichever requires the smallest clean change.
+
+Do not remove Settings.
+
+### 6. Dirty/save state
+
+Preserve the existing dirty indicator behavior:
+
+* Project name still shows `*` or equivalent when unsaved.
+* Save item is disabled when there is nothing to save.
+* Save item shows busy/disabled state during project action.
+
+Do not change autosave/draft handling.
 
 ---
 
 ## Out of scope
 
-Do not do any of the following in this task:
+Do not do any of the following:
 
-* Do not change the reference panel.
-* Do not resize reference thumbnails.
-* Do not add GLB preview rendering.
-* Do not restore reference segment sliders.
-* Do not redesign the top-left buttons into a File/Edit/View menu.
-* Do not change Photoshop plugin behavior.
-* Do not change backend APIs unless required for the two settings.
-* Do not touch PSD/Photoshop document manipulation.
-* Do not refactor `ProjectContext.tsx` broadly.
-* Do not split large files just because they are large.
+* Do not change BoardStrip.
+* Do not change reference previews.
+* Do not change Reference Segment slider.
+* Do not change GLB rendering behavior.
+* Do not change Settings modal content.
+* Do not implement plugin focus behavior.
+* Do not implement Photoshop preheat behavior.
+* Do not change backend APIs.
+* Do not change project storage.
+* Do not change PSD/Photoshop document handling.
 * Do not add new dependencies.
+* Do not broadly refactor `ProjectContext.tsx`.
+* Do not introduce a full design system.
 
 ---
 
@@ -135,27 +220,33 @@ cd frontend
 npm run build
 ```
 
-If backend settings code changes, also run:
-
-```powershell
-.venv\Scripts\python.exe -m pytest tests/ -q
-```
-
 Manual validation:
 
-* Board strip still scrolls.
-* Selected shot still updates correctly.
-* Progress bar updates when selecting different shots.
-* Hovering between boards shows `+`.
-* Clicking `+` inserts at the intended position.
-* Existing add-at-end behavior still works.
-* Settings opens.
-* Canvas background color setting is visible and works.
-* Preheat Photoshop setting is visible and persists.
+```text
+1. Topbar opens normally.
+2. File menu opens and closes.
+3. New Project still works.
+4. Open Folder still works.
+5. Save still works.
+6. Save is disabled when there are no unsaved changes.
+7. Settings still opens.
+8. Clicking outside closes dropdown.
+9. Escape closes dropdown if implemented.
+10. Project title/status still visible.
+11. Photoshop bridge status still visible.
+12. BoardStrip, Reference panel, and Reference Segment slider still work.
+```
 
-Output:
+---
 
-* Changed files.
-* Summary of board strip layout changes.
-* Summary of Settings panel changes.
-* Validation results.
+## Output required
+
+When finished, report:
+
+```text
+Changed files
+Topbar structure after the change
+Which menu items were added
+Confirmation that old New/Open/Save handlers were preserved
+Validation results
+```

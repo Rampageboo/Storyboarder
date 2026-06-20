@@ -4,8 +4,8 @@
 :root {
   /* Layout tokens (unchanged) */
   --topbar-height: 56px;
-  --inspector-width: 360px;
-  --reference-sidebar-width: 252px;
+  --inspector-width: 520px;
+  --reference-sidebar-width: 380px;
   --board-strip-height: 244px;
   --board-strip-card-width: 148px;
   --board-strip-card-height: 132px;
