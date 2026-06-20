@@ -7,7 +7,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI, File, HTTPException, Request, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
@@ -41,7 +41,11 @@ from .schemas import (
     RestoreRefApplyRequest,
     RestoreShotRequest,
     Scene2DCreateRequest,
+    Scene2DPerspectiveCreateRequest,
+    Scene2DPerspectiveUpdateRequest,
     Scene2DUpdateRequest,
+    Scene3DCreateRequest,
+    Scene3DUpdateRequest,
     SetReferencePathsRequest,
     SettingsUpdateRequest,
     ShotUpdateRequest,
@@ -378,6 +382,35 @@ def create_app(base_dir: Path, bridge_port: int = 8000) -> FastAPI:
     def get_scene3d_file() -> FileResponse:
         return _file_response_from_meta(_svc().method_get_scene3d_file())
 
+    @app.get("/api/project/scenes3d")
+    def list_scenes3d() -> dict[str, Any]:
+        return _svc().method_list_scene3d()
+
+    @app.post("/api/project/scenes3d")
+    def create_scene3d(request: Scene3DCreateRequest = Scene3DCreateRequest()) -> dict[str, Any]:
+        return _svc().method_create_scene3d(request.model_dump(exclude_unset=True))
+
+    @app.patch("/api/project/scenes3d/{scene3d_id}")
+    def update_scene3d(scene3d_id: str, request: Scene3DUpdateRequest) -> dict[str, Any]:
+        return _svc().method_update_scene3d(scene3d_id, request.model_dump(exclude_unset=True))
+
+    @app.delete("/api/project/scenes3d/{scene3d_id}")
+    def delete_scene3d(scene3d_id: str) -> dict[str, Any]:
+        return _svc().method_delete_scene3d(scene3d_id)
+
+    @app.post("/api/project/scenes3d/{scene3d_id}/set-active")
+    def set_active_scene3d(scene3d_id: str) -> dict[str, Any]:
+        return _svc().method_set_active_scene3d(scene3d_id)
+
+    @app.post("/api/project/scenes3d/{scene3d_id}/import")
+    async def import_scene3d_to_scene(scene3d_id: str, file: UploadFile = File(...)) -> dict[str, Any]:
+        filename, data = await _read_upload(file, "scene.glb")
+        return _svc().method_import_scene3d_to_scene(scene3d_id, filename, data)
+
+    @app.get("/api/project/scenes3d/{scene3d_id}/file")
+    def get_scene3d_scene_file(scene3d_id: str) -> FileResponse:
+        return _file_response_from_meta(_svc().method_get_scene3d_file(scene3d_id))
+
     @app.get("/api/project/scenes2d")
     def list_scenes2d() -> dict[str, Any]:
         return _svc().method_list_scene2d()
@@ -409,6 +442,52 @@ def create_app(base_dir: Path, bridge_port: int = 8000) -> FastAPI:
     @app.get("/api/project/scenes2d/{scene_id}/preview")
     def get_scene2d_preview(scene_id: str) -> FileResponse:
         return _file_response_from_meta(_svc().method_get_scene2d_preview(scene_id))
+
+    @app.get("/api/project/scenes2d/{scene_id}/perspectives")
+    def list_scene2d_perspectives(scene_id: str) -> dict[str, Any]:
+        return _svc().method_list_scene2d_perspectives(scene_id)
+
+    @app.post("/api/project/scenes2d/{scene_id}/perspectives")
+    def create_scene2d_perspective(scene_id: str, request: Scene2DPerspectiveCreateRequest = Scene2DPerspectiveCreateRequest()) -> dict[str, Any]:
+        return _svc().method_create_scene2d_perspective(scene_id, request.model_dump(exclude_unset=True))
+
+    @app.post("/api/project/scenes2d/{scene_id}/perspectives/import")
+    async def import_scene2d_perspective(
+        scene_id: str,
+        file: UploadFile = File(...),
+        title: str = Form(""),
+        linked_scene3d_id: str = Form(""),
+    ) -> dict[str, Any]:
+        filename, data = await _read_upload(file, "perspective")
+        return _svc().method_import_scene2d_perspective(scene_id, filename, data, title, linked_scene3d_id)
+
+    @app.patch("/api/project/scenes2d/{scene_id}/perspectives/{perspective_id}")
+    def update_scene2d_perspective(scene_id: str, perspective_id: str, request: Scene2DPerspectiveUpdateRequest) -> dict[str, Any]:
+        return _svc().method_update_scene2d_perspective(scene_id, perspective_id, request.model_dump(exclude_unset=True))
+
+    @app.delete("/api/project/scenes2d/{scene_id}/perspectives/{perspective_id}")
+    def delete_scene2d_perspective(scene_id: str, perspective_id: str) -> dict[str, Any]:
+        return _svc().method_delete_scene2d_perspective(scene_id, perspective_id)
+
+    @app.post("/api/project/scenes2d/{scene_id}/perspectives/{perspective_id}/open")
+    def open_scene2d_perspective(scene_id: str, perspective_id: str) -> dict[str, Any]:
+        return _svc().method_open_scene2d_perspective(scene_id, perspective_id)
+
+    @app.post("/api/project/scenes2d/{scene_id}/perspectives/{perspective_id}/refresh-preview")
+    def refresh_scene2d_perspective_preview(scene_id: str, perspective_id: str) -> dict[str, Any]:
+        return _svc().method_refresh_scene2d_perspective_preview(scene_id, perspective_id)
+
+    @app.post("/api/project/scenes2d/{scene_id}/perspectives/{perspective_id}/set-primary")
+    def set_primary_scene2d_perspective(scene_id: str, perspective_id: str) -> dict[str, Any]:
+        return _svc().method_set_primary_scene2d_perspective(scene_id, perspective_id)
+
+    @app.post("/api/project/scenes2d/{scene_id}/perspectives/{perspective_id}/add-to-references")
+    def add_scene2d_perspective_to_references(scene_id: str, perspective_id: str) -> dict[str, Any]:
+        return _svc().method_add_scene2d_perspective_to_references(scene_id, perspective_id)
+
+    @app.get("/api/project/scenes2d/{scene_id}/perspectives/{perspective_id}/preview")
+    def get_scene2d_perspective_preview(scene_id: str, perspective_id: str) -> FileResponse:
+        return _file_response_from_meta(_svc().method_get_scene2d_perspective_preview(scene_id, perspective_id))
 
     @app.get("/api/project/canvas-color")
     def get_canvas_color() -> dict[str, str]:

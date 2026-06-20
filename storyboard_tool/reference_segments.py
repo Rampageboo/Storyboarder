@@ -565,6 +565,9 @@ def normalize_reference_links(value: Any) -> list[dict[str, Any]]:
             source_scene2d_id = str(item.get("source_scene2d_id", "") or "").strip()
             if source_scene2d_id:
                 normalized_link["source_scene2d_id"] = source_scene2d_id
+            source_scene2d_perspective_id = str(item.get("source_scene2d_perspective_id", "") or "").strip()
+            if source_scene2d_perspective_id:
+                normalized_link["source_scene2d_perspective_id"] = source_scene2d_perspective_id
         normalized.append(normalized_link)
     return normalized
 

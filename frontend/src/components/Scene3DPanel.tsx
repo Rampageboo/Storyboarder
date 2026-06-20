@@ -1,7 +1,18 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { importScene3d, openBlenderScene, updateSettings, updateShot, uploadShotImage } from '../api'
+import {
+  createScene3D,
+  getProject,
+  importScene3DToScene,
+  listScene3D,
+  openBlenderScene,
+  setActiveScene3D,
+  updateScene3D,
+  updateSettings,
+  updateShot,
+  uploadShotImage,
+} from '../api'
 import { useProject } from '../state/useProject'
-import type { ProjectPayload, Shot } from '../types'
+import type { ProjectPayload, Scene3DRecord, Shot } from '../types'
 import { shotDisplayLabel } from '../utils/shotDisplay'
 import { shotToUpdate } from '../utils/shotUpdate'
 import {
@@ -80,6 +91,8 @@ export function Scene3DPanel() {
   const [busy, setBusy] = useState(false)
   const [note, setNote] = useState('')
   const [editorReady, setEditorReady] = useState(false)
+  const [scene3ds, setScene3ds] = useState<Scene3DRecord[]>([])
+  const [activeScene3dId, setActiveScene3dId] = useState('')
   const inputRef = useRef<HTMLInputElement | null>(null)
   const editorRootRef = useRef<HTMLDivElement | null>(null)
   const editorRef = useRef<Scene3DEditorInstance | null>(null)
@@ -88,6 +101,7 @@ export function Scene3DPanel() {
   const refViewTimerRef = useRef<number | null>(null)
   const projectRef = useRef<ProjectPayload | null>(null)
   const selectedShotIdRef = useRef<string | null>(null)
+  const activeScene3dIdRef = useRef('')
 
   useEffect(() => {
     projectRef.current = project
@@ -97,13 +111,40 @@ export function Scene3DPanel() {
     selectedShotIdRef.current = selectedShotId
   }, [selectedShotId])
 
+  useEffect(() => {
+    activeScene3dIdRef.current = activeScene3dId
+  }, [activeScene3dId])
+
   const scene = useMemo(() => sceneSettings(project), [project])
+  const activeScene3d = useMemo(
+    () => scene3ds.find((item) => item.id === activeScene3dId) ?? scene3ds[0] ?? null,
+    [activeScene3dId, scene3ds],
+  )
   const scenePath = typeof scene.file_path === 'string' ? scene.file_path : ''
-  const sceneName = (typeof scene.file_name === 'string' && scene.file_name) || (scenePath ? fileName(scenePath) : '')
+  const sceneName = activeScene3d?.title || (typeof scene.file_name === 'string' && scene.file_name) || (scenePath ? fileName(scenePath) : '')
   const hasScene = !!scenePath || Array.isArray(scene.objects)
   const hasLinkedGlb = !!scenePath
   const disabled = busy || projectActionBusy
   const currentSceneKey = useMemo(() => sceneKey(project), [project])
+
+  const loadScene3DList = useCallback(async () => {
+    if (!project) {
+      setScene3ds([])
+      setActiveScene3dId('')
+      return
+    }
+    try {
+      const payload = await listScene3D()
+      setScene3ds(payload.scenes)
+      setActiveScene3dId(payload.active_scene3d_id)
+    } catch (error) {
+      reportError(error)
+    }
+  }, [project, reportError])
+
+  useEffect(() => {
+    void loadScene3DList()
+  }, [loadScene3DList, project?.project_json_path])
 
   const currentShot = useCallback((): Shot | null => {
     const shotId = selectedShotIdRef.current
@@ -138,11 +179,21 @@ export function Scene3DPanel() {
       const prev = sceneSettings(projectRef.current)
       const merged: Scene3DSettings = { ...nextScene }
       if (merged.reference_view == null && prev.reference_view != null) merged.reference_view = prev.reference_view
-      const payload = await updateSettings({ scene3d: merged })
+      const activeId = activeScene3dIdRef.current
+      if (activeId) {
+        await updateScene3D(activeId, {
+          display_settings: merged,
+          reference_view: typeof merged.reference_view === 'object' && merged.reference_view ? (merged.reference_view as Record<string, unknown>) : null,
+        })
+      } else {
+        await updateSettings({ scene3d: merged })
+      }
+      const payload = await getProject()
       setProject(payload)
+      void loadScene3DList()
       setNote('3D scene settings saved.')
     },
-    [flushDirtyShots, setProject],
+    [flushDirtyShots, loadScene3DList, setProject],
   )
 
   // Persist the current workspace view to settings.scene3d.reference_view so the GLB reference
@@ -155,14 +206,67 @@ export function Scene3DPanel() {
       void (async () => {
         try {
           await flushDirtyShots()
-          const merged: Scene3DSettings = { ...sceneSettings(projectRef.current), reference_view: view }
-          setProject(await updateSettings({ scene3d: merged }))
+          const activeId = activeScene3dIdRef.current
+          if (activeId) {
+            await updateScene3D(activeId, { reference_view: view as Record<string, unknown> })
+            setProject(await getProject())
+            void loadScene3DList()
+          } else {
+            const merged: Scene3DSettings = { ...sceneSettings(projectRef.current), reference_view: view }
+            setProject(await updateSettings({ scene3d: merged }))
+          }
         } catch (error) {
           reportError(error)
         }
       })()
     }, 400)
+  }, [flushDirtyShots, loadScene3DList, reportError, setProject])
+
+  const create3dScene = useCallback(async () => {
+    setBusy(true)
+    try {
+      await flushDirtyShots()
+      const payload = await createScene3D()
+      setScene3ds(payload.scenes)
+      setActiveScene3dId(payload.active_scene3d_id)
+      setProject(await getProject())
+      setWorkspaceOpen(true)
+      setPanelOpen(true)
+      setNote(`Created ${payload.scene.title || payload.scene.id}.`)
+      return payload.scene.id
+    } catch (error) {
+      reportError(error)
+      return ''
+    } finally {
+      setBusy(false)
+    }
   }, [flushDirtyShots, reportError, setProject])
+
+  const activate3dScene = useCallback(
+    async (sceneId: string) => {
+      if (!sceneId || sceneId === activeScene3dIdRef.current) return
+      setBusy(true)
+      try {
+        await flushDirtyShots()
+        const payload = await setActiveScene3D(sceneId)
+        setScene3ds(payload.scenes)
+        setActiveScene3dId(payload.active_scene3d_id)
+        const nextProject = await getProject()
+        setProject(nextProject)
+        setNote(`Active Scene 3D: ${payload.scene.title || payload.scene.id}`)
+        if (editorRef.current) {
+          await editorRef.current.loadSceneData(sceneSettings(nextProject))
+          loadedSceneKeyRef.current = sceneKey(nextProject)
+          requestAnimationFrame(() => editorRef.current?._resize?.())
+        }
+      } catch (error) {
+        reportError(error)
+      } finally {
+        setBusy(false)
+      }
+    },
+    [flushDirtyShots, reportError, setProject],
+  )
 
   const schedulePersistSceneSettings = useCallback(
     (nextScene: Scene3DSettings) => {
@@ -193,7 +297,15 @@ export function Scene3DPanel() {
       setBusy(true)
       try {
         await flushDirtyShots()
-        const payload = await importScene3d(file)
+        let targetId = activeScene3dIdRef.current
+        if (!targetId) {
+          const created = await createScene3D({ title: file.name.replace(/\.[^.]+$/, '') })
+          targetId = created.scene.id
+        }
+        const scenePayload = await importScene3DToScene(targetId, file)
+        setScene3ds(scenePayload.scenes)
+        setActiveScene3dId(scenePayload.active_scene3d_id)
+        const payload = await getProject()
         setProject(payload)
         const editor = editorRef.current
         if (editor) {
@@ -396,7 +508,7 @@ export function Scene3DPanel() {
     <section className={`scene3d ${panelOpen ? 'is-open' : ''}`}>
       <button type="button" className="scene3d-toggle" onClick={() => setPanelOpen((value) => !value)}>
         <span>Scene 3D</span>
-        <span className="scene3d-toggle-icon">{panelOpen ? '▾' : '▸'}</span>
+        <span className="scene3d-toggle-icon">{panelOpen ? 'v' : '>'}</span>
       </button>
 
       {panelOpen ? (
@@ -406,16 +518,22 @@ export function Scene3DPanel() {
               <>
                 <span className={`scene3d-chip ${hasLinkedGlb ? 'ok' : 'off'}`}>{hasLinkedGlb ? 'Linked GLB' : 'Built-in'}</span>
                 <span className="scene3d-path" title={scenePath || 'Built-in scene'}>
-                  {sceneName || 'Built-in scene'}
+                  {sceneName || activeScene3d?.id || 'Built-in scene'}
                 </span>
               </>
             ) : (
               <span className="scene3d-chip off">No 3D scene linked</span>
             )}
+            <span className="scene3d-path" title={`${scene3ds.length} Scene 3D record${scene3ds.length === 1 ? '' : 's'}`}>
+              {scene3ds.length} scene{scene3ds.length === 1 ? '' : 's'}
+            </span>
           </div>
           <div className="scene3d-actions">
             <button type="button" className="primary" onClick={() => openWorkspace()} disabled={disabled}>
               Open workspace
+            </button>
+            <button type="button" onClick={() => void create3dScene()} disabled={disabled}>
+              Add 3D Scene
             </button>
             <button type="button" onClick={() => inputRef.current?.click()} disabled={disabled}>
               Import GLB
@@ -444,9 +562,31 @@ export function Scene3DPanel() {
           <div className="scene3d-workspace-header">
             <div>
               <div className="scene3d-workspace-title">Scene 3D Workspace</div>
-              <div className="scene3d-workspace-subtitle">{sceneName || 'Built-in scene'} · selected board drives preview/capture</div>
+              <div className="scene3d-workspace-subtitle">
+                {sceneName || activeScene3d?.id || 'Built-in scene'} - selected board drives preview/capture
+              </div>
             </div>
             <div className="scene3d-workspace-actions">
+              <select
+                className="scene3d-workspace-select"
+                value={activeScene3dId}
+                onChange={(event) => void activate3dScene(event.target.value)}
+                disabled={disabled || scene3ds.length === 0}
+                aria-label="Active Scene 3D"
+              >
+                {scene3ds.length ? (
+                  scene3ds.map((item) => (
+                    <option key={item.id} value={item.id}>
+                      {item.title || item.id}
+                    </option>
+                  ))
+                ) : (
+                  <option value="">No Scene 3D records</option>
+                )}
+              </select>
+              <button type="button" onClick={() => void create3dScene()} disabled={disabled}>
+                Add 3D Scene
+              </button>
               <button type="button" onClick={() => inputRef.current?.click()} disabled={disabled}>
                 Import GLB
               </button>
@@ -463,7 +603,7 @@ export function Scene3DPanel() {
                 Save scene
               </button>
               <button type="button" className="scene3d-workspace-close" onClick={closeWorkspace} title="Close Scene 3D">
-                ×
+                x
               </button>
             </div>
           </div>

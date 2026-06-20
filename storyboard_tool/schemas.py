@@ -185,7 +185,33 @@ class Scene2DCreateRequest(BaseModel):
 class Scene2DUpdateRequest(BaseModel):
     title: str | None = None
     description: str | None = None
+    linked_scene3d_id: str | None = None
     can_be_reference: bool | None = None
+
+
+class Scene2DPerspectiveCreateRequest(BaseModel):
+    title: str | None = None
+    type: str = "psd"
+    linked_scene3d_id: str | None = None
+    linked_scene3d_view: dict[str, Any] | None = None
+
+
+class Scene2DPerspectiveUpdateRequest(BaseModel):
+    title: str | None = None
+    linked_scene3d_id: str | None = None
+    linked_scene3d_view: dict[str, Any] | None = None
+
+
+class Scene3DCreateRequest(BaseModel):
+    title: str | None = None
+    description: str | None = None
+
+
+class Scene3DUpdateRequest(BaseModel):
+    title: str | None = None
+    description: str | None = None
+    reference_view: dict[str, Any] | None = None
+    display_settings: dict[str, Any] | None = None
 
 
 class CanvasColorRequest(BaseModel):

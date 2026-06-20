@@ -51,7 +51,7 @@ DEFAULT_SETTINGS: dict = {
 def ensure_project_dirs(root: Path) -> None:
     """Create the standard project directory structure under *root*."""
     root.mkdir(parents=True, exist_ok=True)
-    for dirname in ("shots", "references", "exports", "scripts", "backups", "scene3d", "scenes2d"):
+    for dirname in ("shots", "references", "exports", "scripts", "backups", "scene3d", "scenes2d", "scenes3d"):
         (root / dirname).mkdir(exist_ok=True)
 
 
@@ -132,4 +132,11 @@ def project_disk_mtime(project: Project) -> float:
         for meta_path in scenes2d_dir.glob("scene_*/scene_*_meta.json"):
             if meta_path.is_file():
                 scenes2d_mtime = max(scenes2d_mtime, meta_path.stat().st_mtime)
-    return max(manifest_mtime, settings_mtime, shots_mtime, scenes2d_mtime)
+    scenes3d_dir = project.root_path / "scenes3d"
+    scenes3d_index = scenes3d_dir / "scenes3d.json"
+    scenes3d_mtime = scenes3d_index.stat().st_mtime if scenes3d_index.is_file() else 0.0
+    if scenes3d_dir.is_dir():
+        for meta_path in scenes3d_dir.glob("scene3d_*/scene3d_*_meta.json"):
+            if meta_path.is_file():
+                scenes3d_mtime = max(scenes3d_mtime, meta_path.stat().st_mtime)
+    return max(manifest_mtime, settings_mtime, shots_mtime, scenes2d_mtime, scenes3d_mtime)

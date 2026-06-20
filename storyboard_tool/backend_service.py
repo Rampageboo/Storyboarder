@@ -15,6 +15,7 @@ from . import (
     reference_segments,
     runtime_state,
     scene2d,
+    scene3d,
     session_store,
     shot_service,
 )
@@ -675,7 +676,7 @@ class StoryboardBackendService(ExportServiceMixin):
     def method_open_blender_scene(self) -> dict[str, Any]:
         project = app_state._require_project(self.app)
         try:
-            opened = project_manager.open_blender_scene(project)
+            opened = scene3d.open_blender_scene(project)
         except (FileNotFoundError, ValueError) as exc:
             logger.exception("Failed to open Blender scene")
             raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -685,6 +686,69 @@ class StoryboardBackendService(ExportServiceMixin):
             "relative_path": opened.relative_to(project.root_path).as_posix() if opened.exists() else "",
             **app_state._project_payload(project, self.app.state.dirty),
         }
+
+    def method_list_scene3d(self) -> dict[str, Any]:
+        project = app_state._require_project(self.app)
+        return scene3d.list_scenes(project)
+
+    def method_create_scene3d(self, data: dict[str, Any]) -> dict[str, Any]:
+        project = app_state._require_project(self.app)
+        try:
+            return scene3d.create_scene(
+                project,
+                title=str(data.get("title") or ""),
+                description=str(data.get("description") or ""),
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    def method_update_scene3d(self, scene3d_id: str, data: dict[str, Any]) -> dict[str, Any]:
+        project = app_state._require_project(self.app)
+        try:
+            return scene3d.update_scene(project, scene3d_id, data)
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    def method_delete_scene3d(self, scene3d_id: str) -> dict[str, Any]:
+        project = app_state._require_project(self.app)
+        try:
+            return scene3d.delete_scene(project, scene3d_id)
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    def method_set_active_scene3d(self, scene3d_id: str) -> dict[str, Any]:
+        project = app_state._require_project(self.app)
+        try:
+            return scene3d.set_active(project, scene3d_id)
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    def method_import_scene3d_to_scene(self, scene3d_id: str, filename: str, data: list[int] | bytes | bytearray) -> dict[str, Any]:
+        project = app_state._require_project(self.app)
+        try:
+            payload = scene3d.import_scene_file(project, scene3d_id, str(filename or "scene.glb"), _normalize_upload_bytes(data))
+        except (FileNotFoundError, ValueError) as exc:
+            logger.exception("Failed to import Scene3D file: %s", filename)
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return payload
+
+    def method_get_scene3d_file(self, scene3d_id: str | None = None) -> dict[str, str]:
+        project = app_state._require_project(self.app)
+        try:
+            path = scene3d.file_path(project, scene3d_id)
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        if path is None:
+            raise app_error(AppErrorCode.MEDIA_NOT_FOUND, "No Scene 3D file linked.", status=404)
+        return {"path": str(path), "media_type": "model/gltf-binary", "filename": path.name}
 
     def method_list_scene2d(self) -> dict[str, Any]:
         project = app_state._require_project(self.app)
@@ -763,6 +827,132 @@ class StoryboardBackendService(ExportServiceMixin):
         project = app_state._require_project(self.app)
         try:
             return scene2d.preview_meta(project, scene_id)
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    def method_list_scene2d_perspectives(self, scene_id: str) -> dict[str, Any]:
+        project = app_state._require_project(self.app)
+        try:
+            scene, perspectives = scene2d.list_perspectives(project, scene_id)
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {"scene": scene, "perspectives": perspectives}
+
+    def method_create_scene2d_perspective(self, scene_id: str, data: dict[str, Any]) -> dict[str, Any]:
+        project = app_state._require_project(self.app)
+        try:
+            scene, perspective, scenes = scene2d.create_perspective(
+                project,
+                scene_id,
+                title=str(data.get("title") or ""),
+                perspective_type=str(data.get("type") or "psd"),
+                linked_scene3d_id=str(data.get("linked_scene3d_id") or ""),
+                linked_scene3d_view=data.get("linked_scene3d_view") if isinstance(data.get("linked_scene3d_view"), dict) else None,
+            )
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {"scene": scene, "perspective": perspective, "scenes": scenes}
+
+    def method_import_scene2d_perspective(
+        self,
+        scene_id: str,
+        filename: str,
+        data: list[int] | bytes | bytearray,
+        title: str = "",
+        linked_scene3d_id: str = "",
+    ) -> dict[str, Any]:
+        project = app_state._require_project(self.app)
+        try:
+            scene, perspective, scenes = scene2d.import_perspective(
+                project,
+                scene_id,
+                str(filename or "perspective"),
+                _normalize_upload_bytes(data),
+                title=str(title or ""),
+                linked_scene3d_id=str(linked_scene3d_id or ""),
+            )
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {"scene": scene, "perspective": perspective, "scenes": scenes}
+
+    def method_update_scene2d_perspective(self, scene_id: str, perspective_id: str, data: dict[str, Any]) -> dict[str, Any]:
+        project = app_state._require_project(self.app)
+        try:
+            scene, perspective, scenes = scene2d.update_perspective(project, scene_id, perspective_id, data)
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {"scene": scene, "perspective": perspective, "scenes": scenes}
+
+    def method_delete_scene2d_perspective(self, scene_id: str, perspective_id: str) -> dict[str, Any]:
+        project = app_state._require_project(self.app)
+        try:
+            scene, scenes = scene2d.delete_perspective(project, scene_id, perspective_id)
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {"scene": scene, "scenes": scenes}
+
+    def method_open_scene2d_perspective(self, scene_id: str, perspective_id: str) -> dict[str, Any]:
+        project = app_state._require_project(self.app)
+        try:
+            scene, opened, relative_path = scene2d.open_perspective(project, scene_id, perspective_id)
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {"path": opened, "relative_path": relative_path, "scene": scene}
+
+    def method_refresh_scene2d_perspective_preview(self, scene_id: str, perspective_id: str) -> dict[str, Any]:
+        project = app_state._require_project(self.app)
+        try:
+            scene, perspective, _scenes = scene2d.refresh_perspective_preview(project, scene_id, perspective_id)
+            preview_exists = bool((project.root_path / perspective["preview_image_path"]).is_file())
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {
+            "scene": scene,
+            "perspective": perspective,
+            "preview_exists": preview_exists,
+            "message": "Scene 2D preview refreshed." if preview_exists else "No Scene 2D preview exists yet.",
+        }
+
+    def method_set_primary_scene2d_perspective(self, scene_id: str, perspective_id: str) -> dict[str, Any]:
+        project = app_state._require_project(self.app)
+        try:
+            scene, scenes = scene2d.set_primary_perspective(project, scene_id, perspective_id)
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {"scene": scene, "scenes": scenes}
+
+    def method_add_scene2d_perspective_to_references(self, scene_id: str, perspective_id: str) -> dict[str, Any]:
+        project = app_state._require_project(self.app)
+        try:
+            reference, scene = scene2d.add_perspective_to_references(project, scene_id, perspective_id)
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {"reference": reference, "scene": scene, "project": app_state._project_payload(project, self.app.state.dirty)}
+
+    def method_get_scene2d_perspective_preview(self, scene_id: str, perspective_id: str) -> dict[str, str]:
+        project = app_state._require_project(self.app)
+        try:
+            return scene2d.perspective_preview_meta(project, scene_id, perspective_id)
         except FileNotFoundError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         except ValueError as exc:
@@ -883,18 +1073,13 @@ class StoryboardBackendService(ExportServiceMixin):
     def method_import_scene3d(self, filename: str, data: list[int] | bytes | bytearray) -> dict[str, Any]:
         project = app_state._require_project(self.app)
         try:
-            with project_transaction.mutate_project(project):
-                scene_settings = project_manager.import_scene3d_stream(
-                    project,
-                    _upload_stream(data),
-                    str(filename or "scene.glb"),
-                )
+            scene_payload = scene3d.import_active_scene_file(project, str(filename or "scene.glb"), _normalize_upload_bytes(data))
         except (FileNotFoundError, ValueError) as exc:
             logger.exception("Failed to import Scene3D file: %s", filename)
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         app_state._touch_live_bridge(self.app)
         payload = app_state._project_payload(project, self.app.state.dirty)
-        return {"scene3d": scene_settings, **payload}
+        return {"scene3d": project.settings.get("scene3d") or {}, "scenes3d": scene_payload, **payload}
 
     def method_import_shot_image(
         self,

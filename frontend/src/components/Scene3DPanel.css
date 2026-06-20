@@ -168,6 +168,17 @@
   color: #f3f4f6;
 }
 
+.scene3d-workspace-select {
+  min-width: 150px;
+  max-width: 220px;
+  padding: 6px 8px;
+  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  background: #15171b;
+  color: #f3f4f6;
+  font-size: 11px;
+}
+
 .scene3d-workspace-actions button:hover:not(:disabled) {
   background: rgba(255, 255, 255, 0.14);
 }

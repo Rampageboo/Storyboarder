@@ -33,57 +33,59 @@
   gap: 8px;
 }
 
-.scene2d-empty,
-.scene2d-note,
-.scene2d-preview-placeholder {
-  font-size: 11px;
-  line-height: 1.35;
-  color: var(--color-muted);
-}
-
-.scene2d-list {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  max-height: 128px;
-  overflow: auto;
-}
-
-.scene2d-list button {
+.scene2d-status {
   min-width: 0;
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  padding: 7px 8px;
-  border-radius: 8px;
+  gap: 6px;
+}
+
+.scene2d-chip {
+  flex-shrink: 0;
+  font-size: 10px;
+  padding: 2px 8px;
+  border-radius: 999px;
   border: 1px solid var(--color-border);
-  background: var(--bg-panel);
-  color: var(--color-text);
-  cursor: pointer;
 }
 
-.scene2d-list button.is-selected {
-  border-color: var(--color-accent);
-  background: rgba(59, 91, 219, 0.08);
+.scene2d-chip.ok {
+  background: rgba(40, 167, 69, 0.12);
+  border-color: rgba(40, 167, 69, 0.4);
 }
 
-.scene2d-list span {
+.scene2d-chip.off {
+  color: var(--color-muted);
+  background: rgba(0, 0, 0, 0.04);
+}
+
+.scene2d-path {
   min-width: 0;
+  color: var(--color-muted);
+  white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  white-space: nowrap;
   font-size: 11px;
 }
 
-.scene2d-list small {
-  flex-shrink: 0;
-  font-size: 10px;
+.scene2d-help,
+.scene2d-empty,
+.scene2d-note,
+.scene2d-preview-placeholder {
   color: var(--color-muted);
+  font-size: 11px;
+  line-height: 1.35;
 }
 
-.scene2d-create,
-.scene2d-actions button {
+.scene2d-actions,
+.scene2d-workspace-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.scene2d-actions button,
+.scene2d-workspace-actions button,
+.scene2d-workspace-fields button {
   padding: 6px 8px;
   border-radius: 8px;
   border: 1px solid var(--color-border);
@@ -92,30 +94,216 @@
   cursor: pointer;
 }
 
-.scene2d-create.primary,
-.scene2d-actions button.primary {
+.scene2d-actions button.primary,
+.scene2d-workspace-actions button.primary,
+.scene2d-workspace-fields button.primary {
   border-color: var(--color-accent);
   background: var(--color-accent);
   color: #fff;
 }
 
-.scene2d-actions button.danger {
+.scene2d-actions button.danger,
+.scene2d-workspace-fields button.danger {
   color: #b42318;
   border-color: rgba(180, 35, 24, 0.35);
 }
 
-.scene2d-details {
+.scene2d-note {
+  color: var(--color-text);
+  padding: 7px 8px;
+  border-radius: 8px;
+  background: rgba(59, 91, 219, 0.08);
+}
+
+.scene2d-workspace-overlay[hidden] {
+  display: none !important;
+}
+
+.scene2d-workspace-overlay {
+  position: fixed;
+  inset: 42px 18px 18px;
+  z-index: 895;
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  background: rgba(20, 22, 26, 0.72);
+  backdrop-filter: blur(2px);
+  padding: 16px;
+}
+
+.scene2d-workspace-card {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
   display: flex;
   flex-direction: column;
+  overflow: hidden;
+  border-radius: 14px;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  background: var(--color-surface);
+  box-shadow: 0 18px 60px rgba(0, 0, 0, 0.38);
+}
+
+.scene2d-workspace-header {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--color-border);
+  background: var(--bg-toolbar);
+}
+
+.scene2d-workspace-title {
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.scene2d-workspace-subtitle {
+  margin-top: 2px;
+  font-size: 11px;
+  color: var(--color-muted);
+}
+
+.scene2d-workspace-close {
+  width: 32px;
+  min-width: 32px;
+  font-size: 16px !important;
+  line-height: 1;
+}
+
+.scene2d-workspace-layout {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: minmax(180px, 240px) minmax(320px, 1fr) minmax(260px, 340px);
+  overflow: hidden;
+}
+
+.scene2d-workspace-list,
+.scene2d-workspace-main,
+.scene2d-workspace-detail {
+  min-width: 0;
+  min-height: 0;
+  overflow: auto;
+  padding: 12px;
+}
+
+.scene2d-workspace-list {
+  border-right: 1px solid var(--color-border);
+  background: var(--bg-toolbar);
+}
+
+.scene2d-workspace-detail {
+  border-left: 1px solid var(--color-border);
+  background: var(--bg-panel);
+}
+
+.scene2d-workspace-section-title {
+  margin-bottom: 8px;
+  color: var(--color-muted);
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.scene2d-workspace-section-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-top: 14px;
+}
+
+.scene2d-workspace-list button,
+.scene2d-perspective-grid button {
+  width: 100%;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 3px;
+  padding: 8px;
+  margin-bottom: 6px;
+  border-radius: 8px;
+  border: 1px solid var(--color-border);
+  background: var(--bg-panel);
+  color: var(--color-text);
+  cursor: pointer;
+}
+
+.scene2d-workspace-list button.is-selected,
+.scene2d-perspective-grid button.is-selected {
+  border-color: var(--color-accent);
+  background: rgba(59, 91, 219, 0.1);
+}
+
+.scene2d-workspace-list button span,
+.scene2d-perspective-grid button span {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+}
+
+.scene2d-workspace-list button small,
+.scene2d-perspective-grid button small {
+  color: var(--color-muted);
+  font-size: 10px;
+}
+
+.scene2d-workspace-fields {
+  display: grid;
+  grid-template-columns: minmax(160px, 1fr) minmax(160px, 1fr) auto auto;
+  gap: 8px;
+  align-items: end;
+}
+
+.scene2d-field-wide {
+  grid-column: span 2;
+}
+
+.scene2d-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  color: var(--color-muted);
+  font-size: 11px;
+}
+
+.scene2d-field input,
+.scene2d-field select,
+.scene2d-field textarea {
+  width: 100%;
+  min-width: 0;
+  padding: 7px 8px;
+  border-radius: 8px;
+  border: 1px solid var(--color-border);
+  background: var(--bg-panel);
+  color: var(--color-text);
+  font: inherit;
+}
+
+.scene2d-field textarea {
+  resize: vertical;
+}
+
+.scene2d-perspective-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
   gap: 8px;
 }
 
-.scene2d-preview {
-  min-height: 112px;
+.scene2d-workspace-preview {
+  min-height: 220px;
   display: flex;
   align-items: center;
   justify-content: center;
   overflow: hidden;
+  margin-bottom: 10px;
   border-radius: 8px;
   border: 1px solid var(--color-border);
   background:
@@ -127,48 +315,14 @@
   background-size: 16px 16px;
 }
 
-.scene2d-preview img {
+.scene2d-workspace-preview img {
   width: 100%;
-  max-height: 180px;
+  max-height: 320px;
   object-fit: contain;
   display: block;
 }
 
 .scene2d-preview-placeholder {
-  padding: 10px;
+  padding: 12px;
   text-align: center;
-}
-
-.scene2d-field {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  font-size: 11px;
-  color: var(--color-muted);
-}
-
-.scene2d-field input,
-.scene2d-field textarea {
-  width: 100%;
-  min-width: 0;
-  padding: 7px 8px;
-  border-radius: 8px;
-  border: 1px solid var(--color-border);
-  background: var(--bg-panel);
-  color: var(--color-text);
-  font: inherit;
-  resize: vertical;
-}
-
-.scene2d-actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-}
-
-.scene2d-note {
-  color: var(--color-text);
-  padding: 7px 8px;
-  border-radius: 8px;
-  background: rgba(59, 91, 219, 0.08);
 }

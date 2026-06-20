@@ -36,7 +36,7 @@ class TestCreateProject:
     def test_creates_expected_subdirectories(self):
         project = _make_project(self._tmp)
         root = project.root_path
-        for dirname in ("shots", "references", "exports", "backups", "scene3d"):
+        for dirname in ("shots", "references", "exports", "backups", "scene3d", "scenes2d", "scenes3d"):
             assert (root / dirname).is_dir(), f"expected {dirname}/ directory"
 
     def test_creates_project_json(self):

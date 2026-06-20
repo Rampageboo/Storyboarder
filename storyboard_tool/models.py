@@ -104,6 +104,10 @@ class Project:
         return self.root_path / "scenes2d"
 
     @property
+    def scenes3d_dir(self) -> Path:
+        return self.root_path / "scenes3d"
+
+    @property
     def exports_dir(self) -> Path:
         return self.root_path / "exports"
 

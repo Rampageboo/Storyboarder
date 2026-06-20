@@ -50,9 +50,12 @@ class Scene2DTests(unittest.TestCase):
         scene = self._create_scene("Living room layout")
 
         self.assertEqual(scene["id"], "scene_001")
+        self.assertEqual(scene["primary_perspective_id"], "persp_001")
         self.assertEqual(scene["source_file_path"], "scenes2d/scene_001/scene_001.psd")
         self.assertEqual(scene["preview_image_path"], "scenes2d/scene_001/scene_001_preview.png")
         self.assertTrue(scene["can_be_reference"])
+        self.assertEqual(scene["perspectives"][0]["id"], "persp_001")
+        self.assertEqual(scene["perspectives"][0]["source_file_path"], scene["source_file_path"])
 
         scene_dir = self.project_root / "scenes2d" / "scene_001"
         self.assertTrue((self.project_root / "scenes2d" / "scenes2d.json").is_file())
@@ -164,6 +167,139 @@ class Scene2DTests(unittest.TestCase):
             )
         )
         self.assertEqual(project["shots"], [])
+
+    def test_flat_scene2d_record_normalizes_to_default_perspective(self) -> None:
+        scenes_root = self.project_root / "scenes2d"
+        scene_root = scenes_root / "scene_001"
+        scene_root.mkdir(parents=True)
+        (scene_root / "scene_001.psd").write_bytes(b"legacy psd")
+        legacy = {
+            "scenes": [
+                {
+                    "id": "scene_001",
+                    "title": "Legacy flat scene",
+                    "description": "",
+                    "source_file_path": "scenes2d/scene_001/scene_001.psd",
+                    "preview_image_path": "scenes2d/scene_001/scene_001_preview.png",
+                    "created_at": "2025-01-01T00:00:00Z",
+                    "updated_at": "2025-01-01T00:00:00Z",
+                    "can_be_reference": True,
+                }
+            ]
+        }
+        (scenes_root / "scenes2d.json").write_text(json.dumps(legacy), encoding="utf-8")
+
+        response = _quiet(lambda: self.client.get("/api/project/scenes2d"))
+
+        self.assertEqual(response.status_code, 200, response.text)
+        scene = response.json()["scenes"][0]
+        self.assertEqual(scene["primary_perspective_id"], "persp_001")
+        self.assertEqual(len(scene["perspectives"]), 1)
+        self.assertEqual(scene["perspectives"][0]["source_file_path"], "scenes2d/scene_001/scene_001.psd")
+        self.assertEqual(scene["source_file_path"], scene["perspectives"][0]["source_file_path"])
+
+    def test_blank_perspective_open_refresh_primary_and_delete_behaviors(self) -> None:
+        scene = self._create_scene("Perspective scene")
+
+        created = _quiet(
+            lambda: self.client.post(
+                f"/api/project/scenes2d/{scene['id']}/perspectives",
+                json={"title": "North view"},
+            )
+        )
+        self.assertEqual(created.status_code, 200, created.text)
+        perspective = created.json()["perspective"]
+        self.assertEqual(perspective["id"], "persp_002")
+        self.assertTrue((self.project_root / perspective["source_file_path"]).is_file())
+        self.assertIn("perspectives/persp_002", perspective["source_file_path"])
+
+        refresh = _quiet(
+            lambda: self.client.post(
+                f"/api/project/scenes2d/{scene['id']}/perspectives/{perspective['id']}/refresh-preview"
+            )
+        )
+        self.assertEqual(refresh.status_code, 200, refresh.text)
+        self.assertFalse(refresh.json()["preview_exists"])
+
+        source = self.project_root / perspective["source_file_path"]
+        source.unlink()
+        before = _quiet(lambda: self.client.get("/api/project")).json()["shots"]
+        with mock.patch("storyboard_tool.scene2d.project_manager.open_project_file", return_value=source) as opened:
+            opened_response = _quiet(
+                lambda: self.client.post(
+                    f"/api/project/scenes2d/{scene['id']}/perspectives/{perspective['id']}/open"
+                )
+            )
+        self.assertEqual(opened_response.status_code, 200, opened_response.text)
+        opened.assert_called_once()
+        self.assertEqual(opened.call_args.args[1], perspective["source_file_path"])
+        self.assertEqual(_quiet(lambda: self.client.get("/api/project")).json()["shots"], before)
+
+        primary = _quiet(
+            lambda: self.client.post(
+                f"/api/project/scenes2d/{scene['id']}/perspectives/{perspective['id']}/set-primary"
+            )
+        )
+        self.assertEqual(primary.status_code, 200, primary.text)
+        self.assertEqual(primary.json()["scene"]["source_file_path"], perspective["source_file_path"])
+
+        deleted = _quiet(
+            lambda: self.client.delete(
+                f"/api/project/scenes2d/{scene['id']}/perspectives/{perspective['id']}"
+            )
+        )
+        self.assertEqual(deleted.status_code, 200, deleted.text)
+        self.assertEqual(deleted.json()["scene"]["primary_perspective_id"], "persp_001")
+
+    def test_import_image_and_psd_perspectives_and_reference_source_ids(self) -> None:
+        scene = self._create_scene("Import scene")
+        image = _quiet(
+            lambda: self.client.post(
+                f"/api/project/scenes2d/{scene['id']}/perspectives/import",
+                files={"file": ("south.png", MINI_PNG, "image/png")},
+                data={"title": "South view"},
+            )
+        )
+        self.assertEqual(image.status_code, 200, image.text)
+        image_perspective = image.json()["perspective"]
+        self.assertEqual(image_perspective["type"], "image")
+        self.assertEqual(image_perspective["source_file_path"], image_perspective["preview_image_path"])
+        self.assertTrue((self.project_root / image_perspective["preview_image_path"]).is_file())
+
+        added = _quiet(
+            lambda: self.client.post(
+                f"/api/project/scenes2d/{scene['id']}/perspectives/{image_perspective['id']}/add-to-references"
+            )
+        )
+        self.assertEqual(added.status_code, 200, added.text)
+        reference = added.json()["reference"]
+        self.assertEqual(reference["type"], "scene2d")
+        self.assertEqual(reference["source_scene2d_id"], scene["id"])
+        self.assertEqual(reference["source_scene2d_perspective_id"], image_perspective["id"])
+
+        psd = _quiet(
+            lambda: self.client.post(
+                f"/api/project/scenes2d/{scene['id']}/perspectives/import",
+                files={"file": ("paint.psd", b"psd data", "application/octet-stream")},
+                data={"title": "Paint view"},
+            )
+        )
+        self.assertEqual(psd.status_code, 200, psd.text)
+        psd_perspective = psd.json()["perspective"]
+        self.assertEqual(psd_perspective["type"], "psd")
+        preview = _quiet(
+            lambda: self.client.get(
+                f"/api/project/scenes2d/{scene['id']}/perspectives/{psd_perspective['id']}/preview"
+            )
+        )
+        self.assertEqual(preview.status_code, 404)
+        refresh = _quiet(
+            lambda: self.client.post(
+                f"/api/project/scenes2d/{scene['id']}/perspectives/{psd_perspective['id']}/refresh-preview"
+            )
+        )
+        self.assertEqual(refresh.status_code, 200, refresh.text)
+        self.assertFalse(refresh.json()["preview_exists"])
 
 
 if __name__ == "__main__":

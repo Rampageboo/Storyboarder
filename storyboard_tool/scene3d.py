@@ -1,0 +1,356 @@
+"""Project-level Scene 3D collection storage."""
+from __future__ import annotations
+
+import json
+import os
+import re
+import shutil
+import tempfile
+import uuid
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any
+
+from . import project_manager
+from .models import Project
+
+SCENE3D_ROOT = "scenes3d"
+SCENE3D_INDEX = "scenes3d.json"
+SCENE3D_EXTENSIONS = {".glb", ".gltf"}
+SCENE3D_ID_RE = re.compile(r"^scene3d_(\d{3,})$")
+
+
+def _now_iso() -> str:
+    return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+
+def _root_dir(project: Project) -> Path:
+    return project.root_path / SCENE3D_ROOT
+
+
+def _index_path(project: Project) -> Path:
+    return _root_dir(project) / SCENE3D_INDEX
+
+
+def _scene_dir(project: Project, scene_id: str) -> Path:
+    _validate_scene_id(scene_id)
+    return _root_dir(project) / scene_id
+
+
+def _meta_path(project: Project, scene_id: str) -> Path:
+    return _scene_dir(project, scene_id) / f"{scene_id}_meta.json"
+
+
+def _validate_scene_id(scene_id: str) -> str:
+    scene_id = str(scene_id or "").strip()
+    if not SCENE3D_ID_RE.match(scene_id):
+        raise ValueError("Invalid Scene 3D id.")
+    return scene_id
+
+
+def _slug(value: str) -> str:
+    text = re.sub(r"[^a-zA-Z0-9]+", "_", str(value or "").strip().lower()).strip("_")
+    return text[:80]
+
+
+def _safe_rel_path(project: Project, relative_path: str) -> Path:
+    rel = project_manager._normalize_rel_path(str(relative_path or "").strip())
+    if not rel:
+        raise ValueError("Scene 3D path is empty.")
+    resolved = (project.root_path / rel).resolve()
+    root = project.root_path.resolve()
+    if resolved != root and root not in resolved.parents:
+        raise ValueError("Scene 3D path escapes the project.")
+    return resolved
+
+
+def _write_binary_atomic(path: Path, data: bytes) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp_name = tempfile.mkstemp(dir=str(path.parent), prefix=f"{path.name}.", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "wb") as file:
+            file.write(data)
+        os.replace(tmp_name, path)
+    except BaseException:
+        try:
+            os.unlink(tmp_name)
+        except OSError:
+            pass
+        raise
+
+
+def _default_display_settings(raw: dict[str, Any] | None = None) -> dict[str, Any]:
+    settings = {
+        "follow_camera": True,
+        "program_lighting": "auto",
+        "object_color_preview": True,
+        "wireframe_mode": "off",
+    }
+    if isinstance(raw, dict):
+        settings.update(raw)
+    return settings
+
+
+def _normalize_scene(raw: dict[str, Any]) -> dict[str, Any]:
+    scene_id = _validate_scene_id(raw.get("id", ""))
+    created_at = str(raw.get("created_at") or "").strip() or _now_iso()
+    updated_at = str(raw.get("updated_at") or created_at).strip() or created_at
+    file_path = project_manager._normalize_rel_path(str(raw.get("file_path") or "").strip())
+    file_name = str(raw.get("file_name") or "").strip() or (Path(file_path).name if file_path else "")
+    reference_view = raw.get("reference_view")
+    return {
+        "id": scene_id,
+        "title": str(raw.get("title") or "").strip() or file_name or scene_id,
+        "description": str(raw.get("description") or ""),
+        "source_type": str(raw.get("source_type") or raw.get("source") or ("glb" if file_path else "")).strip(),
+        "file_path": file_path,
+        "file_name": file_name,
+        "blend_file_path": project_manager._normalize_rel_path(str(raw.get("blend_file_path") or "").strip()),
+        "reference_view": reference_view if isinstance(reference_view, dict) else {},
+        "display_settings": _default_display_settings(raw.get("display_settings") if isinstance(raw.get("display_settings"), dict) else raw),
+        "created_at": created_at,
+        "updated_at": updated_at,
+    }
+
+
+def _legacy_scene(project: Project) -> dict[str, Any] | None:
+    legacy = project.settings.get("scene3d")
+    if not isinstance(legacy, dict) or not legacy:
+        return None
+    timestamp = _now_iso()
+    file_name = str(legacy.get("file_name") or "").strip()
+    file_path = project_manager._normalize_rel_path(str(legacy.get("file_path") or "").strip())
+    return _normalize_scene(
+        {
+            "id": "scene3d_001",
+            "title": file_name or Path(file_path).stem or "Scene 3D 1",
+            "description": legacy.get("description") or "",
+            "source_type": legacy.get("source_type") or legacy.get("source") or ("glb" if file_path else ""),
+            "file_path": file_path,
+            "file_name": file_name,
+            "blend_file_path": legacy.get("blend_file_path") or "",
+            "reference_view": legacy.get("reference_view") or {},
+            "display_settings": legacy,
+            "created_at": timestamp,
+            "updated_at": timestamp,
+        }
+    )
+
+
+def _read_index(project: Project) -> tuple[str, list[dict[str, Any]]] | None:
+    index = _index_path(project)
+    if not index.is_file():
+        return None
+    try:
+        data = json.loads(index.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    raw_scenes = data.get("scenes") if isinstance(data, dict) else []
+    if not isinstance(raw_scenes, list):
+        raw_scenes = []
+    scenes: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for item in raw_scenes:
+        if not isinstance(item, dict):
+            continue
+        try:
+            scene = _normalize_scene(item)
+        except ValueError:
+            continue
+        if scene["id"] in seen:
+            continue
+        seen.add(scene["id"])
+        scenes.append(scene)
+    active_id = str(data.get("active_scene3d_id") or "").strip() if isinstance(data, dict) else ""
+    if active_id not in {scene["id"] for scene in scenes}:
+        active_id = scenes[0]["id"] if scenes else ""
+    return active_id, sorted(scenes, key=lambda scene: scene["id"])
+
+
+def _mirror_active_to_settings(project: Project, scene: dict[str, Any] | None) -> None:
+    if scene is None:
+        project.settings["scene3d"] = {}
+        project.settings["active_scene3d_id"] = ""
+    else:
+        mirrored = dict(scene.get("display_settings") or {})
+        mirrored.update(
+            {
+                "id": scene["id"],
+                "source": scene.get("source_type") or "",
+                "source_type": scene.get("source_type") or "",
+                "file_path": scene.get("file_path") or "",
+                "file_name": scene.get("file_name") or "",
+                "blend_file_path": scene.get("blend_file_path") or "",
+                "reference_view": scene.get("reference_view") or {},
+            }
+        )
+        project.settings["scene3d"] = mirrored
+        project.settings["active_scene3d_id"] = scene["id"]
+    project_manager.save_settings(project)
+
+
+def _save(project: Project, active_scene3d_id: str, scenes: list[dict[str, Any]]) -> None:
+    root = _root_dir(project)
+    root.mkdir(parents=True, exist_ok=True)
+    normalized = sorted([_normalize_scene(scene) for scene in scenes], key=lambda scene: scene["id"])
+    ids = {scene["id"] for scene in normalized}
+    if active_scene3d_id not in ids:
+        active_scene3d_id = normalized[0]["id"] if normalized else ""
+    project_manager._atomic_write_json(_index_path(project), {"active_scene3d_id": active_scene3d_id, "scenes": normalized})
+    for scene in normalized:
+        scene_dir = _scene_dir(project, scene["id"])
+        scene_dir.mkdir(parents=True, exist_ok=True)
+        project_manager._atomic_write_json(_meta_path(project, scene["id"]), scene)
+    active = next((scene for scene in normalized if scene["id"] == active_scene3d_id), None)
+    _mirror_active_to_settings(project, active)
+
+
+def list_scenes(project: Project) -> dict[str, Any]:
+    loaded = _read_index(project)
+    if loaded is None:
+        legacy = _legacy_scene(project)
+        if legacy:
+            _save(project, legacy["id"], [legacy])
+            loaded = _read_index(project)
+        else:
+            loaded = ("", [])
+    active_scene3d_id, scenes = loaded
+    return {"active_scene3d_id": active_scene3d_id, "scenes": scenes}
+
+
+def _find_scene(project: Project, scene_id: str) -> tuple[str, dict[str, Any], list[dict[str, Any]]]:
+    scene_id = _validate_scene_id(scene_id)
+    payload = list_scenes(project)
+    scenes = payload["scenes"]
+    for scene in scenes:
+        if scene["id"] == scene_id:
+            return payload["active_scene3d_id"], scene, scenes
+    raise FileNotFoundError("Scene 3D not found.")
+
+
+def _next_scene_id(scenes: list[dict[str, Any]]) -> str:
+    used = {scene["id"] for scene in scenes}
+    max_seen = 0
+    for scene_id in used:
+        match = SCENE3D_ID_RE.match(scene_id)
+        if match:
+            max_seen = max(max_seen, int(match.group(1)))
+    candidate = max_seen + 1
+    while True:
+        scene_id = f"scene3d_{candidate:03d}"
+        if scene_id not in used:
+            return scene_id
+        candidate += 1
+
+
+def create_scene(project: Project, title: str = "", description: str = "") -> dict[str, Any]:
+    payload = list_scenes(project)
+    scenes = payload["scenes"]
+    scene_id = _next_scene_id(scenes)
+    timestamp = _now_iso()
+    scene = _normalize_scene(
+        {
+            "id": scene_id,
+            "title": title.strip() or f"Scene 3D {len(scenes) + 1}",
+            "description": description,
+            "created_at": timestamp,
+            "updated_at": timestamp,
+        }
+    )
+    scenes.append(scene)
+    active_id = payload["active_scene3d_id"] or scene_id
+    _save(project, active_id, scenes)
+    return {"scene": scene, **list_scenes(project)}
+
+
+def update_scene(project: Project, scene_id: str, changes: dict[str, Any]) -> dict[str, Any]:
+    active_id, scene, scenes = _find_scene(project, scene_id)
+    if "title" in changes and changes["title"] is not None:
+        scene["title"] = str(changes["title"] or "").strip() or scene["id"]
+    if "description" in changes and changes["description"] is not None:
+        scene["description"] = str(changes["description"] or "")
+    if "reference_view" in changes:
+        view = changes.get("reference_view")
+        scene["reference_view"] = view if isinstance(view, dict) else {}
+    if "display_settings" in changes and isinstance(changes.get("display_settings"), dict):
+        scene["display_settings"] = _default_display_settings(changes["display_settings"])
+    scene["updated_at"] = _now_iso()
+    _save(project, active_id, scenes)
+    return {"scene": scene, **list_scenes(project)}
+
+
+def delete_scene(project: Project, scene_id: str) -> dict[str, Any]:
+    active_id, scene, scenes = _find_scene(project, scene_id)
+    scenes = [item for item in scenes if item["id"] != scene["id"]]
+    if active_id == scene["id"]:
+        active_id = scenes[0]["id"] if scenes else ""
+    scene_dir = _scene_dir(project, scene["id"])
+    if scene_dir.is_dir():
+        shutil.rmtree(scene_dir)
+    _save(project, active_id, scenes)
+    return list_scenes(project)
+
+
+def set_active(project: Project, scene_id: str) -> dict[str, Any]:
+    _active_id, scene, scenes = _find_scene(project, scene_id)
+    _save(project, scene["id"], scenes)
+    return {"scene": scene, **list_scenes(project)}
+
+
+def active_scene(project: Project) -> dict[str, Any] | None:
+    payload = list_scenes(project)
+    active_id = payload["active_scene3d_id"]
+    return next((scene for scene in payload["scenes"] if scene["id"] == active_id), None)
+
+
+def ensure_active_scene(project: Project) -> dict[str, Any]:
+    scene = active_scene(project)
+    if scene:
+        return scene
+    return create_scene(project)["scene"]
+
+
+def import_scene_file(project: Project, scene_id: str, filename: str, data: bytes) -> dict[str, Any]:
+    _active_id, scene, scenes = _find_scene(project, scene_id)
+    suffix = Path(filename or "").suffix.lower()
+    if suffix not in SCENE3D_EXTENSIONS:
+        raise ValueError("Only .glb and .gltf Scene 3D files are supported.")
+    stem = _slug(Path(filename or "").stem) or scene["id"]
+    destination_rel = f"{SCENE3D_ROOT}/{scene['id']}/{stem}{suffix}"
+    _write_binary_atomic(_safe_rel_path(project, destination_rel), bytes(data))
+    scene.update(
+        {
+            "source_type": "glb" if suffix == ".glb" else "gltf",
+            "file_path": destination_rel,
+            "file_name": Path(filename or "").name or f"{stem}{suffix}",
+            "updated_at": _now_iso(),
+        }
+    )
+    _save(project, scene["id"], scenes)
+    return {"scene": scene, **list_scenes(project)}
+
+
+def import_active_scene_file(project: Project, filename: str, data: bytes) -> dict[str, Any]:
+    scene = ensure_active_scene(project)
+    return import_scene_file(project, scene["id"], filename, data)
+
+
+def file_path(project: Project, scene_id: str | None = None) -> Path | None:
+    scene = active_scene(project) if scene_id is None else _find_scene(project, scene_id)[1]
+    if not scene or not scene.get("file_path"):
+        return None
+    path = _safe_rel_path(project, scene["file_path"])
+    if not path.is_file():
+        raise FileNotFoundError(f"Scene 3D file not found: {scene['file_path']}")
+    return path
+
+
+def open_blender_scene(project: Project) -> Path:
+    scene = ensure_active_scene(project)
+    blend_path = project_manager.ensure_project_blend_file(project)
+    if blend_path.exists():
+        payload = update_scene(project, scene["id"], {"display_settings": scene.get("display_settings") or {}})
+        updated = payload["scene"]
+        updated["blend_file_path"] = blend_path.relative_to(project.root_path).as_posix()
+        _save(project, payload["active_scene3d_id"], payload["scenes"])
+    return project_manager.open_blender_scene(project)

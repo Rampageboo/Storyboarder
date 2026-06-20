@@ -16,6 +16,7 @@ export interface ReferenceLink {
   type: ReferenceMediaType | string
   title?: string
   source_scene2d_id?: string
+  source_scene2d_perspective_id?: string
   [key: string]: unknown
 }
 

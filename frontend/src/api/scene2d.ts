@@ -1,5 +1,14 @@
 import { requestJson } from './client'
-import type { ProjectPayload, ReferenceLink, Scene2D, Scene2DCreateRequest, Scene2DUpdateRequest } from '../types'
+import type {
+  ProjectPayload,
+  ReferenceLink,
+  Scene2D,
+  Scene2DCreateRequest,
+  Scene2DPerspective,
+  Scene2DPerspectiveCreateRequest,
+  Scene2DPerspectiveUpdateRequest,
+  Scene2DUpdateRequest,
+} from '../types'
 
 export interface Scene2DListResponse {
   scenes: Scene2D[]
@@ -7,6 +16,16 @@ export interface Scene2DListResponse {
 
 export interface Scene2DSceneResponse extends Scene2DListResponse {
   scene: Scene2D
+}
+
+export interface Scene2DPerspectiveListResponse {
+  scene: Scene2D
+  perspectives: Scene2DPerspective[]
+}
+
+export interface Scene2DPerspectiveResponse extends Scene2DListResponse {
+  scene: Scene2D
+  perspective: Scene2DPerspective
 }
 
 export interface Scene2DOpenResponse {
@@ -71,4 +90,86 @@ export function addScene2DToReferences(sceneId: string): Promise<Scene2DReferenc
 
 export function scene2DPreviewUrl(scene: Scene2D): string {
   return `/api/project/scenes2d/${encodeURIComponent(scene.id)}/preview?t=${encodeURIComponent(scene.updated_at || '')}`
+}
+
+export function listScene2DPerspectives(sceneId: string): Promise<Scene2DPerspectiveListResponse> {
+  return requestJson<Scene2DPerspectiveListResponse>(`/api/project/scenes2d/${encodeURIComponent(sceneId)}/perspectives`)
+}
+
+export function createScene2DPerspective(
+  sceneId: string,
+  body: Scene2DPerspectiveCreateRequest = {},
+): Promise<Scene2DPerspectiveResponse> {
+  return requestJson<Scene2DPerspectiveResponse>(`/api/project/scenes2d/${encodeURIComponent(sceneId)}/perspectives`, {
+    method: 'POST',
+    body,
+  })
+}
+
+export function importScene2DPerspective(
+  sceneId: string,
+  file: File,
+  opts: { title?: string; linked_scene3d_id?: string } = {},
+): Promise<Scene2DPerspectiveResponse> {
+  const form = new FormData()
+  form.append('file', file)
+  if (opts.title) form.append('title', opts.title)
+  if (opts.linked_scene3d_id) form.append('linked_scene3d_id', opts.linked_scene3d_id)
+  return requestJson<Scene2DPerspectiveResponse>(`/api/project/scenes2d/${encodeURIComponent(sceneId)}/perspectives/import`, {
+    method: 'POST',
+    body: form,
+  })
+}
+
+export function updateScene2DPerspective(
+  sceneId: string,
+  perspectiveId: string,
+  body: Scene2DPerspectiveUpdateRequest,
+): Promise<Scene2DPerspectiveResponse> {
+  return requestJson<Scene2DPerspectiveResponse>(
+    `/api/project/scenes2d/${encodeURIComponent(sceneId)}/perspectives/${encodeURIComponent(perspectiveId)}`,
+    { method: 'PATCH', body },
+  )
+}
+
+export function deleteScene2DPerspective(sceneId: string, perspectiveId: string): Promise<Scene2DSceneResponse> {
+  return requestJson<Scene2DSceneResponse>(
+    `/api/project/scenes2d/${encodeURIComponent(sceneId)}/perspectives/${encodeURIComponent(perspectiveId)}`,
+    { method: 'DELETE' },
+  )
+}
+
+export function openScene2DPerspective(sceneId: string, perspectiveId: string): Promise<Scene2DOpenResponse> {
+  return requestJson<Scene2DOpenResponse>(
+    `/api/project/scenes2d/${encodeURIComponent(sceneId)}/perspectives/${encodeURIComponent(perspectiveId)}/open`,
+    { method: 'POST' },
+  )
+}
+
+export function refreshScene2DPerspectivePreview(
+  sceneId: string,
+  perspectiveId: string,
+): Promise<Scene2DRefreshResponse & { perspective: Scene2DPerspective }> {
+  return requestJson<Scene2DRefreshResponse & { perspective: Scene2DPerspective }>(
+    `/api/project/scenes2d/${encodeURIComponent(sceneId)}/perspectives/${encodeURIComponent(perspectiveId)}/refresh-preview`,
+    { method: 'POST' },
+  )
+}
+
+export function setPrimaryScene2DPerspective(sceneId: string, perspectiveId: string): Promise<Scene2DSceneResponse> {
+  return requestJson<Scene2DSceneResponse>(
+    `/api/project/scenes2d/${encodeURIComponent(sceneId)}/perspectives/${encodeURIComponent(perspectiveId)}/set-primary`,
+    { method: 'POST' },
+  )
+}
+
+export function addScene2DPerspectiveToReferences(sceneId: string, perspectiveId: string): Promise<Scene2DReferenceResponse> {
+  return requestJson<Scene2DReferenceResponse>(
+    `/api/project/scenes2d/${encodeURIComponent(sceneId)}/perspectives/${encodeURIComponent(perspectiveId)}/add-to-references`,
+    { method: 'POST' },
+  )
+}
+
+export function scene2DPerspectivePreviewUrl(scene: Scene2D, perspective: Scene2DPerspective): string {
+  return `/api/project/scenes2d/${encodeURIComponent(scene.id)}/perspectives/${encodeURIComponent(perspective.id)}/preview?t=${encodeURIComponent(perspective.updated_at || '')}`
 }
