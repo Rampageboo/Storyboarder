@@ -100,6 +100,28 @@ class TestImportScene3dStream:
         # scene_settings.update(), but keys NOT in SCENE3D update payload survive if not touched.
         assert "file_path" in scene3d
 
+    def test_failed_import_does_not_destroy_existing_scene_file(self, monkeypatch):
+        project = _make_project(self._tmp)
+        scene_dir = project.root_path / "scene3d"
+        scene_dir.mkdir(parents=True, exist_ok=True)
+        destination = scene_dir / "scene.glb"
+        destination.write_bytes(b"existing model bytes")
+        project.settings["scene3d"] = {"file_path": "scene3d/scene.glb", "source": "blender"}
+        before_settings = dict(project.settings["scene3d"])
+
+        def fail_after_partial_write(source, target):
+            target.write(b"partial replacement")
+            raise OSError("simulated write failure")
+
+        monkeypatch.setattr("storyboard_tool.external_tools.shutil.copyfileobj", fail_after_partial_write)
+
+        with pytest.raises(OSError, match="simulated write failure"):
+            import_scene3d_stream(project, io.BytesIO(b"new model bytes"), "scene.glb")
+
+        assert destination.read_bytes() == b"existing model bytes"
+        assert project.settings["scene3d"] == before_settings
+        assert list(scene_dir.glob("scene.glb.*.tmp")) == []
+
 
 # ---------------------------------------------------------------------------
 # get_scene3d_file_path

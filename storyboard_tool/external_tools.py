@@ -4,6 +4,7 @@ import os
 import shutil
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 from typing import BinaryIO
 
@@ -76,8 +77,17 @@ def import_scene3d_stream(project: Project, source_stream: BinaryIO, filename: s
     scene_dir = project.root_path / "scene3d"
     scene_dir.mkdir(exist_ok=True)
     destination = scene_dir / f"scene{suffix}"
-    with destination.open("wb") as file:
-        shutil.copyfileobj(source_stream, file)
+    fd, tmp_name = tempfile.mkstemp(dir=str(scene_dir), prefix=f"{destination.name}.", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "wb") as file:
+            shutil.copyfileobj(source_stream, file)
+        os.replace(tmp_name, destination)
+    except BaseException:
+        try:
+            os.unlink(tmp_name)
+        except OSError:
+            pass
+        raise
     relative_path = destination.relative_to(project.root_path).as_posix()
     scene_settings = dict(project.settings.get("scene3d") or {})
     scene_settings.update(
