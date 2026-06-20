@@ -13,6 +13,7 @@ from typing import Any
 
 from . import project_manager
 from .models import Project
+from . import scene2d
 
 SCENE3D_ROOT = "scenes3d"
 SCENE3D_INDEX = "scenes3d.json"
@@ -208,6 +209,8 @@ def _save(project: Project, active_scene3d_id: str, scenes: list[dict[str, Any]]
 def list_scenes(project: Project) -> dict[str, Any]:
     loaded = _read_index(project)
     if loaded is None:
+        # First read of legacy settings.scene3d migrates it into scenes3d
+        # and mirrors the active Scene 3D back for backward compatibility.
         legacy = _legacy_scene(project)
         if legacy:
             _save(project, legacy["id"], [legacy])
@@ -284,6 +287,7 @@ def delete_scene(project: Project, scene_id: str) -> dict[str, Any]:
     scenes = [item for item in scenes if item["id"] != scene["id"]]
     if active_id == scene["id"]:
         active_id = scenes[0]["id"] if scenes else ""
+    scene2d.clear_scene3d_links(project, scene["id"])
     scene_dir = _scene_dir(project, scene["id"])
     if scene_dir.is_dir():
         shutil.rmtree(scene_dir)

@@ -131,6 +131,7 @@ export function Scene2DPanel() {
     if (!selectedScene) return
     setBusy(true)
     try {
+      await flushDirtyShots()
       const payload = await updateScene2D(selectedScene.id, {
         title: sceneTitle,
         description: sceneDescription,
@@ -144,12 +145,13 @@ export function Scene2DPanel() {
     } finally {
       setBusy(false)
     }
-  }, [reportError, scene3dLink, sceneDescription, sceneTitle, selectedScene])
+  }, [flushDirtyShots, reportError, scene3dLink, sceneDescription, sceneTitle, selectedScene])
 
   const addPerspective = useCallback(async () => {
     if (!selectedScene) return
     setBusy(true)
     try {
+      await flushDirtyShots()
       const payload = await createScene2DPerspective(selectedScene.id, {
         title: '',
         type: 'psd',
@@ -163,13 +165,14 @@ export function Scene2DPanel() {
     } finally {
       setBusy(false)
     }
-  }, [reportError, scene3dLink, selectedScene])
+  }, [flushDirtyShots, reportError, scene3dLink, selectedScene])
 
   const importPerspective = useCallback(
     async (file: File | undefined) => {
       if (!selectedScene || !file) return
       setBusy(true)
       try {
+        await flushDirtyShots()
         const payload = await importScene2DPerspective(selectedScene.id, file, {
           linked_scene3d_id: scene3dLink,
         })
@@ -183,13 +186,14 @@ export function Scene2DPanel() {
         if (importRef.current) importRef.current.value = ''
       }
     },
-    [reportError, scene3dLink, selectedScene],
+    [flushDirtyShots, reportError, scene3dLink, selectedScene],
   )
 
   const savePerspectiveDetails = useCallback(async () => {
     if (!selectedScene || !selectedPerspective) return
     setBusy(true)
     try {
+      await flushDirtyShots()
       const payload = await updateScene2DPerspective(selectedScene.id, selectedPerspective.id, {
         title: perspectiveTitle,
         linked_scene3d_id: perspective3dLink,
@@ -202,7 +206,7 @@ export function Scene2DPanel() {
     } finally {
       setBusy(false)
     }
-  }, [perspective3dLink, perspectiveTitle, reportError, selectedPerspective, selectedScene])
+  }, [flushDirtyShots, perspective3dLink, perspectiveTitle, reportError, selectedPerspective, selectedScene])
 
   const openPerspective = useCallback(async () => {
     if (!selectedScene || !selectedPerspective) return
@@ -222,6 +226,7 @@ export function Scene2DPanel() {
     if (!selectedScene || !selectedPerspective) return
     setBusy(true)
     try {
+      await flushDirtyShots()
       const payload = await refreshScene2DPerspectivePreview(selectedScene.id, selectedPerspective.id)
       setScenes((current) => replaceScene(current, payload.scene))
       setPreviewFailedFor(payload.preview_exists ? '' : `${selectedScene.id}:${selectedPerspective.id}`)
@@ -231,12 +236,13 @@ export function Scene2DPanel() {
     } finally {
       setBusy(false)
     }
-  }, [reportError, selectedPerspective, selectedScene])
+  }, [flushDirtyShots, reportError, selectedPerspective, selectedScene])
 
   const setPrimary = useCallback(async () => {
     if (!selectedScene || !selectedPerspective) return
     setBusy(true)
     try {
+      await flushDirtyShots()
       const payload = await setPrimaryScene2DPerspective(selectedScene.id, selectedPerspective.id)
       setScenes(payload.scenes)
       setNote('Primary perspective updated.')
@@ -245,7 +251,7 @@ export function Scene2DPanel() {
     } finally {
       setBusy(false)
     }
-  }, [reportError, selectedPerspective, selectedScene])
+  }, [flushDirtyShots, reportError, selectedPerspective, selectedScene])
 
   const addToReferences = useCallback(async () => {
     if (!selectedScene || !selectedPerspective) return
@@ -267,6 +273,7 @@ export function Scene2DPanel() {
     if (!window.confirm(`Delete perspective "${perspectiveLabel(selectedPerspective)}"?`)) return
     setBusy(true)
     try {
+      await flushDirtyShots()
       const payload = await deleteScene2DPerspective(selectedScene.id, selectedPerspective.id)
       setScenes(payload.scenes)
       setSelectedPerspectiveId(payload.scene.primary_perspective_id)
@@ -276,7 +283,7 @@ export function Scene2DPanel() {
     } finally {
       setBusy(false)
     }
-  }, [reportError, selectedPerspective, selectedScene])
+  }, [flushDirtyShots, reportError, selectedPerspective, selectedScene])
 
   const removeScene = useCallback(async () => {
     if (!selectedScene) return

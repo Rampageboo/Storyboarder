@@ -402,6 +402,29 @@ def delete_scene(project: Project, scene_id: str) -> list[dict[str, Any]]:
     return scenes
 
 
+def clear_scene3d_links(project: Project, scene3d_id: str) -> int:
+    scene3d_id = str(scene3d_id or "").strip()
+    if not scene3d_id:
+        return 0
+    scenes = list_scenes(project)
+    cleared = 0
+    for scene in scenes:
+        if str(scene.get("linked_scene3d_id") or "") == scene3d_id:
+            scene["linked_scene3d_id"] = ""
+            scene["updated_at"] = _now_iso()
+            cleared += 1
+        for perspective in scene.get("perspectives") or []:
+            if str(perspective.get("linked_scene3d_id") or "") == scene3d_id:
+                timestamp = _now_iso()
+                perspective["linked_scene3d_id"] = ""
+                perspective["updated_at"] = timestamp
+                scene["updated_at"] = timestamp
+                cleared += 1
+    if cleared:
+        _save_scenes(project, scenes)
+    return cleared
+
+
 def list_perspectives(project: Project, scene_id: str) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     scene, _scenes = _find_scene(project, scene_id)
     return scene, list(scene.get("perspectives") or [])
@@ -552,13 +575,13 @@ def set_primary_perspective(project: Project, scene_id: str, perspective_id: str
     return _with_legacy_aliases(scene), scenes
 
 
-def _ensure_perspective_source(project: Project, perspective: dict[str, Any]) -> None:
+def _ensure_perspective_source(project: Project, perspective: dict[str, Any]) -> bool:
     source = _safe_rel_path(project, perspective["source_file_path"])
     if source.is_file():
-        return
+        return False
     if perspective["type"] == "psd":
         _create_psd(project, perspective["source_file_path"])
-        return
+        return True
     raise FileNotFoundError(f"Scene 2D perspective file not found: {perspective['source_file_path']}")
 
 
@@ -573,12 +596,13 @@ def open_scene(project: Project, scene_id: str) -> tuple[dict[str, Any], str, st
 def open_perspective(project: Project, scene_id: str, perspective_id: str) -> tuple[dict[str, Any], str, str]:
     scene, scenes = _find_scene(project, scene_id)
     perspective = _find_perspective(scene, perspective_id)
-    _ensure_perspective_source(project, perspective)
-    timestamp = _now_iso()
-    perspective["updated_at"] = timestamp
-    scene["updated_at"] = timestamp
-    scenes = _replace_scene(scenes, _with_legacy_aliases(scene))
-    _save_scenes(project, scenes)
+    recreated = _ensure_perspective_source(project, perspective)
+    if recreated:
+        timestamp = _now_iso()
+        perspective["updated_at"] = timestamp
+        scene["updated_at"] = timestamp
+        scenes = _replace_scene(scenes, _with_legacy_aliases(scene))
+        _save_scenes(project, scenes)
     opened = project_manager.open_project_file(
         project,
         perspective["source_file_path"],

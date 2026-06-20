@@ -100,6 +100,43 @@ class Scene2DTests(unittest.TestCase):
         after = _quiet(lambda: self.client.get("/api/project")).json()["shots"]
         self.assertEqual(after, before)
 
+    def test_open_existing_perspective_does_not_touch_updated_at_but_recreate_does(self) -> None:
+        scene = self._create_scene("Open timestamps")
+        perspective = scene["perspectives"][0]
+        source = self.project_root / perspective["source_file_path"]
+        before_shots = _quiet(lambda: self.client.get("/api/project")).json()["shots"]
+
+        with mock.patch("storyboard_tool.scene2d.project_manager.open_project_file", return_value=source):
+            opened = _quiet(
+                lambda: self.client.post(
+                    f"/api/project/scenes2d/{scene['id']}/perspectives/{perspective['id']}/open"
+                )
+            )
+        self.assertEqual(opened.status_code, 200, opened.text)
+
+        listed = _quiet(lambda: self.client.get("/api/project/scenes2d")).json()["scenes"][0]
+        self.assertEqual(listed["updated_at"], scene["updated_at"])
+        self.assertEqual(listed["perspectives"][0]["updated_at"], perspective["updated_at"])
+
+        source.unlink()
+        recreated_time = "2099-01-01T00:00:00Z"
+        with (
+            mock.patch("storyboard_tool.scene2d._now_iso", return_value=recreated_time),
+            mock.patch("storyboard_tool.scene2d.project_manager.open_project_file", return_value=source),
+        ):
+            reopened = _quiet(
+                lambda: self.client.post(
+                    f"/api/project/scenes2d/{scene['id']}/perspectives/{perspective['id']}/open"
+                )
+            )
+        self.assertEqual(reopened.status_code, 200, reopened.text)
+        self.assertTrue(source.is_file())
+
+        relisted = _quiet(lambda: self.client.get("/api/project/scenes2d")).json()["scenes"][0]
+        self.assertEqual(relisted["updated_at"], recreated_time)
+        self.assertEqual(relisted["perspectives"][0]["updated_at"], recreated_time)
+        self.assertEqual(_quiet(lambda: self.client.get("/api/project")).json()["shots"], before_shots)
+
     def test_refresh_missing_preview_returns_clean_payload(self) -> None:
         scene = self._create_scene("Preview")
         response = _quiet(lambda: self.client.post(f"/api/project/scenes2d/{scene['id']}/refresh-preview"))

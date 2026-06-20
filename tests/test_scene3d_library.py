@@ -112,6 +112,42 @@ class Scene3DLibraryTests(unittest.TestCase):
         listed = _quiet(lambda: self.client.get("/api/project/scenes2d"))
         self.assertEqual(listed.json()["scenes"][0]["linked_scene3d_id"], scene3d["id"])
 
+    def test_delete_scene3d_clears_scene2d_group_and_perspective_links(self) -> None:
+        existing = _quiet(lambda: self.client.get("/api/project/scenes3d"))
+        self.assertEqual(existing.status_code, 200, existing.text)
+        scene3d_b = _quiet(lambda: self.client.post("/api/project/scenes3d", json={"title": "Delete target"})).json()["scene"]
+        scene2d = _quiet(lambda: self.client.post("/api/project/scenes2d", json={"title": "Linked 2D"})).json()["scene"]
+        before_shots = _quiet(lambda: self.client.get("/api/project")).json()["shots"]
+
+        patched = _quiet(
+            lambda: self.client.patch(
+                f"/api/project/scenes2d/{scene2d['id']}",
+                json={"linked_scene3d_id": scene3d_b["id"]},
+            )
+        )
+        self.assertEqual(patched.status_code, 200, patched.text)
+
+        perspective = _quiet(
+            lambda: self.client.post(
+                f"/api/project/scenes2d/{scene2d['id']}/perspectives",
+                json={"title": "Linked perspective", "linked_scene3d_id": scene3d_b["id"]},
+            )
+        ).json()["perspective"]
+        self.assertEqual(perspective["linked_scene3d_id"], scene3d_b["id"])
+
+        deleted = _quiet(lambda: self.client.delete(f"/api/project/scenes3d/{scene3d_b['id']}"))
+        self.assertEqual(deleted.status_code, 200, deleted.text)
+
+        scenes2d = _quiet(lambda: self.client.get("/api/project/scenes2d")).json()["scenes"]
+        self.assertEqual(len(scenes2d), 1)
+        scene = scenes2d[0]
+        self.assertEqual(scene["id"], scene2d["id"])
+        self.assertEqual(scene["linked_scene3d_id"], "")
+        self.assertEqual(len(scene["perspectives"]), 2)
+        cleared_perspective = next(item for item in scene["perspectives"] if item["id"] == perspective["id"])
+        self.assertEqual(cleared_perspective["linked_scene3d_id"], "")
+        self.assertEqual(_quiet(lambda: self.client.get("/api/project")).json()["shots"], before_shots)
+
 
 if __name__ == "__main__":
     unittest.main()
