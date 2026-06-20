@@ -20,6 +20,26 @@ export function updateAppSession(body: AppSession): Promise<AppSession> {
   return requestJson<AppSession>('/api/app/session', { method: 'PUT', body })
 }
 
+export interface AppFocusResult {
+  ok: boolean
+  focused: boolean
+}
+
+export interface PreheatPhotoshopResult {
+  ok: boolean
+  attempted: boolean
+  launched: boolean
+  message: string
+}
+
+export function focusApp(): Promise<AppFocusResult> {
+  return requestJson<AppFocusResult>('/api/app/focus', { method: 'POST' })
+}
+
+export function preheatPhotoshop(): Promise<PreheatPhotoshopResult> {
+  return requestJson<PreheatPhotoshopResult>('/api/app/preheat-photoshop', { method: 'POST' })
+}
+
 /** Opens the native folder picker. Used for project roots and new-project locations. */
 export function browseFolder(): Promise<BrowseResult> {
   return requestJson<BrowseResult>('/api/system/browse-folder', { method: 'POST' })

@@ -10,6 +10,7 @@ from fastapi import FastAPI, HTTPException
 
 from . import app_state, project_manager, project_transaction, reference_segments, runtime_state, session_store, shot_service
 from .errors import AppErrorCode, app_error
+from .external_tools import preheat_photoshop
 from .export_utils import missing_files
 from .image_utils import normalize_hex_color
 from .linked_sync import sync_project
@@ -79,6 +80,28 @@ class StoryboardBackendService(ExportServiceMixin):
             advanced_panel_open=data.get("advanced_panel_open"),
             ui_theme=data.get("ui_theme"),
         )
+
+    def method_app_focus(self) -> dict[str, Any]:
+        """Best-effort desktop focus. Browser/dev mode is a clean no-op."""
+        window = getattr(self.app.state, "main_window", None)
+        if window is None:
+            return {"ok": True, "focused": False}
+        focused = False
+        for method_name in ("restore", "show", "focus"):
+            method = getattr(window, method_name, None)
+            if not callable(method):
+                continue
+            try:
+                method()
+                focused = True
+            except Exception:
+                logger.debug("pywebview window %s failed during focus request", method_name, exc_info=True)
+        return {"ok": True, "focused": focused}
+
+    def method_preheat_photoshop(self) -> dict[str, Any]:
+        project = self.app.state.project
+        photoshop_path = str(project.settings.get("photoshop_path", "") or "") if project else ""
+        return preheat_photoshop(photoshop_path)
 
     def method_new_project(
         self,

@@ -106,6 +106,23 @@
   text-overflow: ellipsis;
 }
 
+button.topbar-ps-status {
+  cursor: default;
+}
+
+button.topbar-ps-status.is-preheat-countdown {
+  cursor: pointer;
+  color: #9b1c1c;
+  border-color: rgba(155, 28, 28, 0.45);
+  background: rgba(155, 28, 28, 0.1);
+}
+
+button.topbar-ps-status.is-preheating {
+  color: #8a5a00;
+  border-color: rgba(138, 90, 0, 0.4);
+  background: rgba(232, 168, 56, 0.16);
+}
+
 .topbar-ps-status.is-linked {
   color: #2b8a3e;
   border-color: rgba(43, 138, 62, 0.35);

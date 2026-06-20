@@ -183,7 +183,7 @@ def open_desktop_window(app, title: str = "Storyboard Tool") -> int:
         return 1
     internal_app_url = f"http://{_HOST}:{port}/"
     _configure_windows_taskbar_identity()
-    webview.create_window(
+    app.state.main_window = webview.create_window(
         title,
         internal_app_url,
         width=1440,

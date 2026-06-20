@@ -46,6 +46,9 @@ async function exportDrawingPreview() {
 async function saveCurrentShot() {
   const shotId = await exportDrawingPreview();
   await updateProjectAfterSave(shotId);
+  if (typeof focusStoryboardAfterPreviewExportIfEnabled === "function") {
+    focusStoryboardAfterPreviewExportIfEnabled();
+  }
   setStatus(
     `Preview exported for ${shotId}. Press Ctrl+S in Photoshop to save the PSD.`,
   );

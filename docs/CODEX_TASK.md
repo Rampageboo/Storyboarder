@@ -1,252 +1,379 @@
-# CODEX_TASK.md — Storyboarder UI: compact topbar menu cleanup
+# CODEX_TASK.md — Storyboarder: delayed Photoshop preheat + focus after export
 
 Repo: `Rampageboo/Storyboarder`.
 
 Work from the latest branch containing:
 
 ```text
-b928bb25c3921480a6a794b8a4fad038c7e73ea8
+32fb29977dd1da2dcc6c9a1ac282197a2d6e58c3
 ```
 
 ## Goal
 
-Clean up the top app bar so it feels more like a compact desktop application menu bar.
+Implement two Photoshop workflow improvements:
 
-The current top-left buttons are visually bulky:
+1. After preview export from the Photoshop plugin, optionally focus the Storyboarder app.
+2. In Storyboarder, implement delayed, cancellable Photoshop preheat after the app/project is fully loaded.
 
-```text
-New
-Open Folder
-Save
-```
-
-Replace them with a narrower menu-style UI similar in spirit to desktop apps such as Photoshop:
-
-```text
-File    Edit    View
-```
-
-This task is UI organization only.
-
-Do not change project behavior, backend APIs, BoardStrip, Reference previews, Reference Segment slider, Photoshop plugin, or PSD logic.
+This task is workflow behavior only. Do not redesign the Photoshop plugin panel.
 
 ---
 
-## Current context
+# Part A — Plugin export can optionally focus Storyboarder
 
-Recent tasks already completed:
+## Required behavior
 
-1. BoardStrip progress bar.
-2. Hover `+` insert between boards.
-3. BoardStrip wheel scrolling restored.
-4. Settings modal restored.
-5. Reference preview cards improved.
-6. GLB/model preview improved.
-7. Reference Segment source-time slider restored.
-
-Do not undo or refactor any of those.
-
----
-
-## Required changes
-
-### 1. Replace large top-left buttons with compact menu bar
-
-In `Topbar`, replace the prominent button group:
+Add a plugin-local option:
 
 ```text
-New
-Open Folder
-Save
+Focus Storyboarder after preview export
 ```
 
-with a compact menu bar:
+Behavior:
+
+* Default: off.
+* Stored in plugin-local settings.
+* Visible in the Photoshop plugin settings area if one exists.
+* If there is no settings area, add a compact checkbox near the Preview export section.
+* Do not redesign the whole plugin panel.
+
+When enabled:
+
+* After successful `Export preview`, request Storyboarder to focus its main window.
+* After successful `Export & next`, request Storyboarder to focus its main window.
+* This must be best-effort:
+
+  * If Storyboarder is unreachable, preview export still counts as successful.
+  * If focus is unsupported, backend returns a clean no-op success.
+  * Do not block export.
+
+When disabled:
+
+* Export behavior remains unchanged.
+
+## Backend focus endpoint
+
+Add or reuse a small backend endpoint, for example:
 
 ```text
-File
-Edit
-View
+POST /api/app/focus
 ```
-
-Recommended structure:
-
-```text
-File
-  New Project
-  Open Project Folder
-  Save Project
-
-Edit
-  optional: no-op / omitted if there are no real actions available here
-
-View
-  Settings
-```
-
-Important:
-
-* Do not add fake menu items that do nothing.
-* If `Edit` or `View` would be empty, either omit that menu or keep only menus that contain real actions.
-* It is acceptable to start with only `File` and `Settings` if that is cleaner.
-* Prefer practical UI over imitating Photoshop exactly.
-
-### 2. Preserve existing behavior
-
-The menu items must call the same existing handlers as before:
-
-```text
-New Project      -> existing newProject flow
-Open Folder      -> existing openProjectFromDialog flow
-Save Project     -> existing saveProject flow
-Settings         -> existing SettingsModal open flow
-```
-
-Do not change:
-
-* project creation defaults
-* project open behavior
-* save behavior
-* dirty-state handling
-* Settings modal behavior
-* disabled states
-
-### 3. Keep the topbar narrow
-
-The topbar should take less horizontal space than before.
-
-Target visual structure:
-
-```text
-[File] [View]        Project Name / status        PS status
-```
-
-or:
-
-```text
-[File]        Project Name / status        [Settings] PS status
-```
-
-Rules:
-
-* Do not make the topbar taller.
-* Do not add large icons.
-* Do not add a sidebar.
-* Do not redesign the whole layout.
-* Keep project title and Photoshop bridge status visible.
-
-### 4. Dropdown behavior
-
-Implement simple dropdown menus without new dependencies.
 
 Expected behavior:
 
-* Click menu label to open dropdown.
-* Click a menu item to run action and close dropdown.
-* Click outside to close dropdown.
-* Press Escape to close dropdown if practical.
-* Disable menu items when the old buttons would have been disabled.
-* Keyboard accessibility should not get worse.
+* In pywebview desktop mode, try to focus/restore the main Storyboarder window.
+* In browser/dev mode, return success with `focused: false`.
+* Do not require a project to be open.
+* Do not mutate project data.
+* Never throw 500 if the window handle is unavailable.
 
-Do not implement native OS menus.
+Suggested response:
 
-Do not add Electron/Tauri/native menu code.
-
-### 5. Settings access
-
-Settings must remain easy to access.
-
-Acceptable options:
-
-Option A:
-
-```text
-View > Settings
+```json
+{
+  "ok": true,
+  "focused": true
+}
 ```
 
-Option B:
-
-```text
-right-side compact Settings button
-```
-
-Option C:
-
-```text
-File > Settings
-```
-
-Use whichever requires the smallest clean change.
-
-Do not remove Settings.
-
-### 6. Dirty/save state
-
-Preserve the existing dirty indicator behavior:
-
-* Project name still shows `*` or equivalent when unsaved.
-* Save item is disabled when there is nothing to save.
-* Save item shows busy/disabled state during project action.
-
-Do not change autosave/draft handling.
+Exact response shape can follow existing API conventions.
 
 ---
 
-## Out of scope
+# Part B — Delayed, cancellable Photoshop preheat in Storyboarder
 
-Do not do any of the following:
+## Current context
 
-* Do not change BoardStrip.
-* Do not change reference previews.
-* Do not change Reference Segment slider.
-* Do not change GLB rendering behavior.
-* Do not change Settings modal content.
-* Do not implement plugin focus behavior.
-* Do not implement Photoshop preheat behavior.
-* Do not change backend APIs.
-* Do not change project storage.
-* Do not change PSD/Photoshop document handling.
-* Do not add new dependencies.
-* Do not broadly refactor `ProjectContext.tsx`.
-* Do not introduce a full design system.
+Storyboarder already has this project setting:
+
+```text
+preheat_photoshop_on_open
+```
+
+It is controlled from the Storyboarder Settings modal.
+
+This setting should remain in Storyboarder, not the Photoshop plugin.
+
+## Required behavior
+
+When Storyboarder starts and a project is fully loaded:
+
+* If `project.settings.preheat_photoshop_on_open === true`, schedule Photoshop preheat.
+* Do not launch Photoshop immediately during app startup.
+* Wait until Storyboarder UI/project state is loaded.
+* Then show a visible countdown in the top-right Photoshop status pill.
+
+Example states:
+
+```text
+Photoshop Disconnected
+Preheat Photoshop in 5s — click to cancel
+Preheating Photoshop…
+Photoshop Connected · ...
+```
+
+## Countdown behavior
+
+Add a short countdown before launching Photoshop.
+
+Recommended default:
+
+```text
+5 seconds
+```
+
+Behavior:
+
+* The top-right Photoshop status pill should visibly change during countdown.
+* Use a warning/red/attention style for countdown state.
+* Clicking the countdown status cancels the pending preheat.
+* Cancel only affects the current app session.
+* Do not change the saved `preheat_photoshop_on_open` setting when the user cancels once.
+* If the user wants to disable preheat permanently, they should do that in Storyboarder Settings.
+
+## Only once per app session
+
+Preheat should run at most once per app session.
+
+Rules:
+
+* One automatic preheat attempt per app session.
+* Opening/reloading the same project should not repeatedly trigger Photoshop.
+* If user cancels the countdown, do not schedule it again during the same app session.
+* If user manually uses Open Canvas / plugin link / other Photoshop workflow later, do not automatically schedule preheat again.
+
+Use an in-memory session flag on the frontend or backend, whichever fits the current architecture better.
+
+## What “preheat Photoshop” means
+
+Use the lightest existing safe mechanism.
+
+Preferred order:
+
+1. If there is already a helper for launching Photoshop without opening a shot PSD, reuse it.
+2. Else, if `photoshop_path` is configured and valid, launch the Photoshop executable.
+3. Else, if existing Photoshop path detection exists, use it.
+4. Else return a clean no-op result.
+
+Important:
+
+* Do not create a shot canvas.
+* Do not open a shot PSD.
+* Do not modify any PSD.
+* Do not modify project data.
+* Do not mark project dirty.
+* Do not block UI loading.
+
+## Backend preheat endpoint
+
+Add or reuse a small endpoint, for example:
+
+```text
+POST /api/app/preheat-photoshop
+```
+
+Expected behavior:
+
+* Best-effort.
+* Non-blocking or returns quickly.
+* Uses current project settings if needed.
+* Handles missing Photoshop path without 500.
+* Does not require Photoshop plugin to be connected.
+* Does not create/modify project files.
+
+Suggested response:
+
+```json
+{
+  "ok": true,
+  "attempted": true,
+  "launched": true,
+  "message": ""
+}
+```
+
+Missing Photoshop path should return something like:
+
+```json
+{
+  "ok": true,
+  "attempted": false,
+  "launched": false,
+  "message": "Photoshop path is not configured."
+}
+```
+
+Do not treat missing path as fatal.
 
 ---
 
-## Validation
+# Part C — Top-right Photoshop status pill states
 
-Run:
+The top-right status pill already shows Photoshop connection status.
+
+Extend it to represent preheat states.
+
+Required visual states:
+
+```text
+Disconnected: grey
+Preheat countdown: red / warning / attention color
+Preheating: warning / loading state
+Connected: existing green connected style
+```
+
+Interaction:
+
+* During countdown, clicking the pill cancels the pending preheat.
+* In normal disconnected/connected state, clicking the pill should not break existing behavior.
+* Tooltip should explain what clicking does during countdown.
+
+Example display:
+
+```text
+Preheat Photoshop in 5s — click to cancel
+```
+
+or shorter:
+
+```text
+Preheat PS in 5s
+```
+
+Keep it compact.
+
+Do not make the topbar taller.
+
+---
+
+# Frontend trigger location
+
+Implement the preheat trigger from Storyboarder frontend after project load is complete.
+
+Suggested logic:
+
+```text
+if project is loaded
+and initialLoading is false
+and project.settings.preheat_photoshop_on_open is true
+and this app session has not attempted/cancelled preheat:
+    start countdown
+```
+
+When countdown reaches zero:
+
+```text
+call POST /api/app/preheat-photoshop
+mark preheat attempted for this session
+```
+
+If user cancels:
+
+```text
+cancel countdown
+mark preheat cancelled for this session
+```
+
+Do not trigger preheat from the Photoshop plugin.
+
+---
+
+# Validation
+
+Run frontend build:
 
 ```powershell
 cd frontend
 npm run build
 ```
 
-Manual validation:
+If backend routes/helpers are changed, run:
+
+```powershell
+.venv\Scripts\python.exe -m pytest tests/ -q
+```
+
+## Manual validation — focus after export
 
 ```text
-1. Topbar opens normally.
-2. File menu opens and closes.
-3. New Project still works.
-4. Open Folder still works.
-5. Save still works.
-6. Save is disabled when there are no unsaved changes.
-7. Settings still opens.
-8. Clicking outside closes dropdown.
-9. Escape closes dropdown if implemented.
-10. Project title/status still visible.
-11. Photoshop bridge status still visible.
-12. BoardStrip, Reference panel, and Reference Segment slider still work.
+1. Open Storyboarder desktop app.
+2. Open a project.
+3. Open Photoshop and load the UXP plugin.
+4. Link plugin to Storyboarder.
+5. Enable "Focus Storyboarder after preview export" in the plugin.
+6. Click Export preview.
+7. Confirm preview export succeeds.
+8. Confirm Storyboarder window is focused after export.
+9. Repeat with Export & next.
+10. Disable the setting.
+11. Confirm export still succeeds and Storyboarder is not forcibly focused.
+```
+
+## Manual validation — delayed preheat
+
+```text
+1. In Storyboarder Settings, enable "Preheat Photoshop when Storyboarder opens".
+2. Save settings.
+3. Close Storyboarder and Photoshop.
+4. Reopen Storyboarder and open/restore the project.
+5. Confirm Storyboarder UI loads first.
+6. Confirm the top-right Photoshop status pill shows a countdown.
+7. Click the countdown pill.
+8. Confirm preheat is cancelled and Photoshop does not launch.
+9. Restart Storyboarder.
+10. Let the countdown finish.
+11. Confirm Photoshop launches/preheats.
+12. Confirm no shot PSD is created or modified.
+13. Confirm preheat does not run again in the same app session.
+```
+
+## Regression checks
+
+```text
+1. Existing Photoshop connected/disconnected status still works.
+2. Existing Export preview still updates Storyboarder.
+3. Existing Export & next still advances normally.
+4. Open canvas still works.
+5. Focus open tab still works.
+6. Settings modal still opens.
+7. BoardStrip scroll/insert still works.
+8. Reference segment slider still works.
+9. No backend 500 when Photoshop path is missing.
 ```
 
 ---
 
-## Output required
+# Out of scope
+
+Do not do any of the following:
+
+* Do not redesign the Photoshop plugin panel.
+* Do not reorganize the long plugin layout.
+* Do not remove existing plugin buttons.
+* Do not change preview export image/layer behavior.
+* Do not change PSD saving.
+* Do not open/create shot PSDs during preheat.
+* Do not force-kill or restart Photoshop.
+* Do not make preheat mandatory.
+* Do not block Storyboarder startup while launching Photoshop.
+* Do not change BoardStrip.
+* Do not change Reference panel.
+* Do not change Reference Segment slider.
+* Do not change topbar menu structure except the PS status pill state.
+* Do not add new dependencies.
+
+---
+
+# Output required
 
 When finished, report:
 
 ```text
 Changed files
-Topbar structure after the change
-Which menu items were added
-Confirmation that old New/Open/Save handlers were preserved
+Where the plugin focus setting is stored
+Which export paths trigger focus
+Which backend focus/preheat route or helper was added/reused
+How the preheat countdown/cancel logic works
+How missing Photoshop path is handled
 Validation results
 ```

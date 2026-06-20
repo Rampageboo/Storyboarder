@@ -9,6 +9,7 @@ const SHARED_BRIDGE_PATH = "C:/Users/Public/StoryboardTool/storyboard_live_bridg
 const SHARED_HEARTBEAT_PATH = "C:/Users/Public/StoryboardTool/storyboard_plugin_heartbeat.json";
 const SB_POLL_MS = 1500;
 const BRIDGE_CACHE_FILE = "storyboard_bridge_cache.json";
+const PLUGIN_SETTINGS_FILE = "storyboard_plugin_settings.json";
 const BRIDGE_STALE_MS = 8000;
 const QUICK_STATUS_OPTIONS = ["Draft", "In Progress", "Review", "Approved"];
 const SHOT_CSV_COLUMNS = [
@@ -56,6 +57,7 @@ let lastActiveDocKey = "";
 let lastFocusToken = 0;
 let focusBaselineSet = false;
 let focusSwitchInFlight = false;
+let focusStoryboardAfterPreviewExport = false;
 const boardBackgroundSigByShot = new Map();
 
 function $(id) {
@@ -88,6 +90,7 @@ function init() {
   $("applyBackground").addEventListener("click", () => runPanelAction(applyCanvasBackground));
   $("saveAndStay").addEventListener("click", () => runPanelAction(saveCurrentShot));
   $("saveAndNext").addEventListener("click", () => runPanelAction(saveAndGoNext));
+  $("focusStoryboardAfterExport")?.addEventListener("change", () => runPanelAction(updateFocusStoryboardAfterExportSetting));
   $("recoverPsd")?.addEventListener("click", () => runPanelAction(recoverCurrentShotPsd));
   $("relinkNow").addEventListener("click", () => runPanelAction(reconnectStoryboardBridge));
   setLinkedUi(false);
@@ -98,6 +101,7 @@ function init() {
   scheduleBackgroundSyncForActiveDocument();
   updateCurrentShotIndicator();
   renderCurrentShotCard();
+  loadPluginSettings().catch(() => {});
 }
 
 function setLinkedUi(linked) {
@@ -292,6 +296,55 @@ async function loadBridgeCache() {
   } catch {
     return null;
   }
+}
+
+async function loadPluginSettings() {
+  try {
+    const dataFolder = await fs.getDataFolder();
+    const entry = await dataFolder.getEntry(PLUGIN_SETTINGS_FILE);
+    const settings = JSON.parse(await readEntryText(entry));
+    focusStoryboardAfterPreviewExport = Boolean(settings?.focus_storyboard_after_preview_export);
+  } catch {
+    focusStoryboardAfterPreviewExport = false;
+  }
+  const checkbox = $("focusStoryboardAfterExport");
+  if (checkbox) checkbox.checked = focusStoryboardAfterPreviewExport;
+}
+
+async function savePluginSettings() {
+  const dataFolder = await fs.getDataFolder();
+  const file = await dataFolder.createFile(PLUGIN_SETTINGS_FILE, { overwrite: true });
+  await writeEntryText(
+    file,
+    JSON.stringify(
+      {
+        focus_storyboard_after_preview_export: focusStoryboardAfterPreviewExport,
+      },
+      null,
+      2,
+    ),
+  );
+}
+
+async function updateFocusStoryboardAfterExportSetting() {
+  const checkbox = $("focusStoryboardAfterExport");
+  focusStoryboardAfterPreviewExport = Boolean(checkbox?.checked);
+  await savePluginSettings();
+}
+
+async function maybeFocusStoryboardAfterPreviewExport() {
+  if (!focusStoryboardAfterPreviewExport) return;
+  try {
+    if (typeof requestStoryboardAppFocus === "function") {
+      await requestStoryboardAppFocus();
+    }
+  } catch {
+    // Focusing Storyboarder is best-effort; export success must not depend on it.
+  }
+}
+
+async function focusStoryboardAfterPreviewExportIfEnabled() {
+  maybeFocusStoryboardAfterPreviewExport().catch(() => {});
 }
 
 async function cacheBridgeEndpoints(live, sourceUrl) {
@@ -1846,6 +1899,7 @@ async function saveAndGoNext() {
   await updateProjectAfterSave(shotId, currentFolder);
 
   if (!nextShot) {
+    focusStoryboardAfterPreviewExportIfEnabled();
     setStatus(
       `Preview exported for ${shotId}. No more shots in the project. Press Ctrl+S to save the PSD.`,
     );
@@ -1865,6 +1919,7 @@ async function saveAndGoNext() {
   setStatus(
     `Exported drawing for ${shotId}. Now on ${nextShot.shot_id}. ${shotId}'s tab stays open — switch to it and Ctrl+S to save its PSD.`,
   );
+  focusStoryboardAfterPreviewExportIfEnabled();
 }
 
 async function switchToSelectedShot() {

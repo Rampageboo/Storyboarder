@@ -107,6 +107,7 @@ def create_app(base_dir: Path, bridge_port: int = 8000) -> FastAPI:
     app.state.project = None
     app.state.project_disk_mtime = 0.0
     app.state.dirty = False
+    app.state.main_window = None
     runtime_state.init_bridge_state(app, bridge_port)
 
     def _svc() -> StoryboardBackendService:
@@ -203,6 +204,14 @@ def create_app(base_dir: Path, bridge_port: int = 8000) -> FastAPI:
     @app.put("/api/app/session")
     def put_app_session(request: AppSessionUpdateRequest) -> dict[str, Any]:
         return _svc().method_update_session(request.model_dump(exclude_unset=True))
+
+    @app.post("/api/app/focus")
+    def focus_app() -> dict[str, Any]:
+        return _svc().method_app_focus()
+
+    @app.post("/api/app/preheat-photoshop")
+    def preheat_photoshop() -> dict[str, Any]:
+        return _svc().method_preheat_photoshop()
 
     @app.get("/api/bridge/live")
     def get_live_bridge() -> dict[str, Any]:

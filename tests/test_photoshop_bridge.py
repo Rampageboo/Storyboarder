@@ -13,6 +13,7 @@ with warnings.catch_warnings():
     from fastapi.testclient import TestClient
 
 from storyboard_tool import api as api_module
+from storyboard_tool import backend_service as backend_service_module
 from storyboard_tool import live_bridge
 from storyboard_tool.schemas import BridgeStatusResponse, PluginContextResponse
 
@@ -132,6 +133,51 @@ class PhotoshopBridgeContractTests(unittest.TestCase):
         body = response.json()
         self.assertEqual(body.get("code"), "PROJECT_NOT_OPEN")
         self.assertIn("detail", body)
+
+    def test_app_focus_no_window_is_clean_noop(self) -> None:
+        response = self.client.post("/api/app/focus")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), {"ok": True, "focused": False})
+
+    def test_app_focus_uses_desktop_window_when_available(self) -> None:
+        calls: list[str] = []
+
+        class Window:
+            def restore(self) -> None:
+                calls.append("restore")
+
+            def show(self) -> None:
+                calls.append("show")
+
+            def focus(self) -> None:
+                calls.append("focus")
+
+        self.app.state.main_window = Window()
+        response = self.client.post("/api/app/focus")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), {"ok": True, "focused": True})
+        self.assertEqual(calls, ["restore", "show", "focus"])
+
+    def test_preheat_photoshop_missing_path_is_clean_noop(self) -> None:
+        with mock.patch.object(backend_service_module, "preheat_photoshop") as preheat:
+            preheat.return_value = {
+                "ok": True,
+                "attempted": False,
+                "launched": False,
+                "message": "Photoshop path is not configured.",
+            }
+            response = self.client.post("/api/app/preheat-photoshop")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            response.json(),
+            {
+                "ok": True,
+                "attempted": False,
+                "launched": False,
+                "message": "Photoshop path is not configured.",
+            },
+        )
+        preheat.assert_called_once_with("")
 
 
 if __name__ == "__main__":

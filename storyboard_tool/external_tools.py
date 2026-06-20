@@ -70,6 +70,39 @@ def open_blender_scene(project: Project) -> Path:
     return blend_path
 
 
+def preheat_photoshop(photoshop_path: str = "") -> dict[str, object]:
+    """Best-effort Photoshop warmup without opening or modifying project files."""
+    from .system_utils import detect_photoshop_paths, validate_photoshop_path
+
+    configured_path = str(photoshop_path or "").strip()
+    if not configured_path:
+        candidates = detect_photoshop_paths()
+        configured_path = candidates[0] if candidates else ""
+    if not configured_path:
+        return {
+            "ok": True,
+            "attempted": False,
+            "launched": False,
+            "message": "Photoshop path is not configured.",
+        }
+    try:
+        executable = validate_photoshop_path(configured_path)
+        subprocess.Popen([executable])
+    except (OSError, ValueError) as exc:
+        return {
+            "ok": True,
+            "attempted": True,
+            "launched": False,
+            "message": str(exc),
+        }
+    return {
+        "ok": True,
+        "attempted": True,
+        "launched": True,
+        "message": "",
+    }
+
+
 def import_scene3d_stream(project: Project, source_stream: BinaryIO, filename: str) -> dict:
     suffix = Path(filename).suffix.lower()
     if suffix not in SCENE3D_EXTENSIONS:

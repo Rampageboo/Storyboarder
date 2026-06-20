@@ -151,6 +151,10 @@ async function notifyBackendShotFocus(shotId) {
   }
 }
 
+async function requestStoryboardAppFocus() {
+  await requestStoryboardApi("/api/app/focus", { method: "POST" });
+}
+
 // Ask Storyboard Tool to rebuild a Photoshop-unopenable PSD. preserveLayers keeps
 // the original layer data (blend modes, opacity, masks) via a psd_tools round-trip;
 // false forces a flattened rebuild. Returns the recovery result (or null).

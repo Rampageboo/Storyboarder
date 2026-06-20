@@ -1,8 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { preheatPhotoshop } from '../api'
 import { useProject } from '../state/useProject'
 import { useBridgeStatus, bridgeStatusLabel } from '../state/liveBridgeUtils'
 import type { ProjectPathRequest } from '../types'
 import './Topbar.css'
+
+const PREHEAT_COUNTDOWN_SECONDS = 5
+let preheatSessionState: 'ready' | 'countdown' | 'cancelled' | 'attempted' = 'ready'
 
 function shortShotId(shotId: string) {
   return shotId.length > 12 ? `${shotId.slice(0, 8)}...` : shotId
@@ -45,6 +49,8 @@ export function Topbar({ onOpenSettings }: TopbarProps) {
   const bridgeStatus = useBridgeStatus()
   const menuRef = useRef<HTMLDivElement | null>(null)
   const [openMenu, setOpenMenu] = useState<'file' | 'view' | null>(null)
+  const [preheatState, setPreheatState] = useState<'idle' | 'countdown' | 'preheating'>('idle')
+  const [preheatSeconds, setPreheatSeconds] = useState(PREHEAT_COUNTDOWN_SECONDS)
 
   const handleNew = useCallback(async () => {
     const body: ProjectPathRequest = {
@@ -95,6 +101,55 @@ export function Topbar({ onOpenSettings }: TopbarProps) {
     }
   }, [openMenu, closeMenu])
 
+  const cancelPreheatCountdown = useCallback(() => {
+    if (preheatSessionState !== 'countdown') return
+    preheatSessionState = 'cancelled'
+    setPreheatState('idle')
+  }, [])
+
+  const projectPreheatEnabled = Boolean(project?.settings?.preheat_photoshop_on_open)
+  const projectSessionKey = project?.project_json_path ?? project?.project_path ?? ''
+
+  useEffect(() => {
+    if (initialLoading) return
+    if (!projectPreheatEnabled) return
+    if (!projectSessionKey) return
+    if (preheatSessionState !== 'ready') return
+
+    preheatSessionState = 'countdown'
+    setPreheatSeconds(PREHEAT_COUNTDOWN_SECONDS)
+    setPreheatState('countdown')
+
+    let remaining = PREHEAT_COUNTDOWN_SECONDS
+    const timer = window.setInterval(() => {
+      remaining -= 1
+      if (remaining > 0) {
+        setPreheatSeconds(remaining)
+        return
+      }
+
+      window.clearInterval(timer)
+      if (preheatSessionState !== 'countdown') return
+      preheatSessionState = 'attempted'
+      setPreheatState('preheating')
+      void preheatPhotoshop()
+        .catch(() => {
+          // Best-effort warmup; missing/unsupported Photoshop must not affect the app.
+        })
+        .finally(() => {
+          setPreheatState('idle')
+        })
+    }, 1000)
+
+    return () => {
+      window.clearInterval(timer)
+      if (preheatSessionState === 'countdown') {
+        preheatSessionState = 'ready'
+        setPreheatState('idle')
+      }
+    }
+  }, [initialLoading, projectPreheatEnabled, projectSessionKey])
+
   const hasUnsaved = !!project && (project.dirty || dirtyShotIds.length > 0)
   const projectLabel = project ? `${project.name}${hasUnsaved ? ' *' : ''}` : 'No project open'
   const psLabel = bridgeStatusLabel(bridgeStatus, !!project)
@@ -107,6 +162,18 @@ export function Topbar({ onOpenSettings }: TopbarProps) {
     psLastExport ? 'exported' : '',
   ].filter(Boolean)
   const psVisibleLabel = psDetails.length ? `${psLabel} · ${psDetails.join(' · ')}` : psLabel
+  const preheatCountdownActive = preheatState === 'countdown'
+  const preheatBusy = preheatState === 'preheating'
+  const psDisplayLabel = preheatCountdownActive
+    ? `Preheat PS in ${preheatSeconds}s`
+    : preheatBusy
+      ? 'Preheating Photoshop…'
+      : psVisibleLabel
+  const psStatusTitle = preheatCountdownActive
+    ? 'Click to cancel Photoshop preheat for this app session.'
+    : preheatBusy
+      ? 'Launching Photoshop in the background.'
+      : photoshopStatusTitle(psLabel, psSelectedShot, psOpenShots, psLastExport)
   const newDisabled = projectActionBusy || initialLoading
   const openDisabled = projectActionBusy || initialLoading
   const saveDisabled = !project || !hasUnsaved || projectActionBusy
@@ -206,12 +273,15 @@ export function Topbar({ onOpenSettings }: TopbarProps) {
       </div>
 
       <div className="topbar-right">
-        <span
-          className={`topbar-ps-status ${bridgeStatus?.plugin_linked ? 'is-linked' : ''}`}
-          title={photoshopStatusTitle(psLabel, psSelectedShot, psOpenShots, psLastExport)}
+        <button
+          type="button"
+          className={`topbar-ps-status ${bridgeStatus?.plugin_linked && !preheatCountdownActive && !preheatBusy ? 'is-linked' : ''} ${preheatCountdownActive ? 'is-preheat-countdown' : ''} ${preheatBusy ? 'is-preheating' : ''}`}
+          title={psStatusTitle}
+          onClick={preheatCountdownActive ? cancelPreheatCountdown : undefined}
+          aria-label={preheatCountdownActive ? 'Cancel Photoshop preheat' : psDisplayLabel}
         >
-          {psVisibleLabel}
-        </span>
+          {psDisplayLabel}
+        </button>
       </div>
     </header>
   )
