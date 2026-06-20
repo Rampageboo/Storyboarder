@@ -93,8 +93,8 @@ function init() {
   $("overlayOpacity")?.addEventListener("change", () => clampOverlayOpacityInput());
   $("overlayOpacity")?.addEventListener("input", () => clampOverlayOpacityInput());
   $("applyBackground")?.addEventListener("click", () => runPanelAction(applyCanvasBackground));
-  $("saveAndStay")?.addEventListener("click", () => runPanelAction(saveCurrentShot));
-  $("saveAndNext")?.addEventListener("click", () => runPanelAction(saveAndGoNext));
+  $("saveAndStay")?.addEventListener("click", () => { if (!_isSaving) runPanelAction(saveCurrentShotGuarded); });
+  $("saveAndNext")?.addEventListener("click", () => { if (!_isSaving) runPanelAction(saveAndGoNextGuarded); });
   $("autoAddShot")?.addEventListener("change", () => runPanelAction(() => updateAutoAddAtEndSetting("autoAddShot")));
   $("settingsAutoAddShot")?.addEventListener("change", () => runPanelAction(() => updateAutoAddAtEndSetting("settingsAutoAddShot")));
   $("focusStoryboardAfterExport")?.addEventListener("change", () =>

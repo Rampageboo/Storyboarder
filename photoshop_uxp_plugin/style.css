@@ -172,7 +172,7 @@ sp-textfield {
 
 .current-shot-card {
   display: block;
-  padding: 8px;
+  padding: 10px 12px;
   border-radius: 6px;
   border: 1px solid #46546d;
   background: #182234;
@@ -303,6 +303,8 @@ sp-textfield {
   flex-direction: column;
   gap: 10px;
   min-width: 0;
+  padding: 8px 10px 12px;
+  box-sizing: border-box;
 }
 
 #bridge-panel[hidden],

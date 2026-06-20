@@ -43,6 +43,39 @@ async function exportDrawingPreview() {
   return shotId;
 }
 
+function setSaveButtonsBusy(busy) {
+  const stayBtn = document.getElementById("saveAndStay");
+  const nextBtn = document.getElementById("saveAndNext");
+  if (stayBtn) stayBtn.disabled = busy;
+  if (nextBtn) nextBtn.disabled = busy;
+}
+
+let _isSaving = false;
+
+async function saveCurrentShotGuarded() {
+  if (_isSaving) return;
+  _isSaving = true;
+  setSaveButtonsBusy(true);
+  try {
+    await saveCurrentShot();
+  } finally {
+    _isSaving = false;
+    setSaveButtonsBusy(false);
+  }
+}
+
+async function saveAndGoNextGuarded() {
+  if (_isSaving) return;
+  _isSaving = true;
+  setSaveButtonsBusy(true);
+  try {
+    await saveAndGoNext();
+  } finally {
+    _isSaving = false;
+    setSaveButtonsBusy(false);
+  }
+}
+
 async function saveCurrentShot() {
   const shotId = await exportDrawingPreview();
   await updateProjectAfterSave(shotId);

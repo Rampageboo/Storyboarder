@@ -4,7 +4,7 @@ import { useProject } from '../state/useProject'
 import { bridgeStatusLabel, useBridgeStatus } from '../state/liveBridgeUtils'
 import './Topbar.css'
 
-const PREHEAT_COUNTDOWN_SECONDS = 5
+const PREHEAT_COUNTDOWN_SECONDS = 10
 let preheatSessionState: 'ready' | 'countdown' | 'cancelled' | 'attempted' = 'ready'
 
 function shortShotId(shotId: string) {
@@ -40,12 +40,18 @@ export function Topbar() {
 
   const projectPreheatEnabled = Boolean(project?.settings?.preheat_photoshop_on_open)
   const projectSessionKey = project?.project_json_path ?? project?.project_path ?? ''
+  const psAlreadyLinked = Boolean(bridgeStatus?.plugin_linked)
 
   useEffect(() => {
     if (initialLoading) return
     if (!projectPreheatEnabled) return
     if (!projectSessionKey) return
     if (preheatSessionState !== 'ready') return
+    if (psAlreadyLinked) {
+      // PS is already running and connected — no need to preheat.
+      preheatSessionState = 'attempted'
+      return
+    }
 
     preheatSessionState = 'countdown'
     const kickoff = window.setTimeout(() => {
@@ -82,7 +88,7 @@ export function Topbar() {
         window.setTimeout(() => setPreheatState('idle'), 0)
       }
     }
-  }, [initialLoading, projectPreheatEnabled, projectSessionKey])
+  }, [initialLoading, projectPreheatEnabled, projectSessionKey, psAlreadyLinked])
 
   const hasUnsaved = !!project && (project.dirty || dirtyShotIds.length > 0)
   const projectLabel = project ? `${project.name}${hasUnsaved ? ' *' : ''}` : 'Storyboarder'
