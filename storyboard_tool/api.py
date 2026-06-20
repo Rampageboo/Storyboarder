@@ -12,7 +12,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
-from . import app_state, project_manager, runtime_state
+from . import app_state, logging_config, project_manager, runtime_state
 from .backend_service import StoryboardBackendService
 from .errors import AppErrorCode
 from .logging_config import setup_logging
@@ -136,7 +136,7 @@ def create_app(base_dir: Path, bridge_port: int = 8000) -> FastAPI:
         return JSONResponse(
             status_code=500,
             content={
-                "detail": "Internal error. See logs/desktop.log.",
+                "detail": f"Internal error. See {logging_config.LOG_FILE}.",
                 "code": AppErrorCode.INTERNAL_ERROR,
             },
         )

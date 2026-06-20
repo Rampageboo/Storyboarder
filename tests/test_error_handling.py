@@ -118,7 +118,7 @@ class TestNoRawTracebackInResponse(unittest.TestCase):
         self.assertEqual(response.status_code, 500)
         body = response.json()
         self.assertEqual(body.get("code"), "INTERNAL_ERROR")
-        self.assertEqual(body.get("detail"), "Internal error. See logs/desktop.log.")
+        self.assertEqual(body.get("detail"), f"Internal error. See {logging_config.LOG_FILE}.")
         self.assertNotIn("unexpected blender crash", body.get("detail", ""))
 
 

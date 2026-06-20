@@ -12,7 +12,6 @@ export class ApiError extends Error {
 
 export interface RequestOptions extends Omit<RequestInit, 'body'> {
   body?: BodyInit | object | null
-  silent?: boolean
 }
 
 function buildBody(
@@ -41,8 +40,7 @@ async function readErrorMessage(response: Response): Promise<{ message: string; 
 }
 
 export async function requestJson<T>(url: string, options: RequestOptions = {}): Promise<T> {
-  const { silent, body, headers: customHeaders, ...fetchOptions } = options
-  void silent
+  const { body, headers: customHeaders, ...fetchOptions } = options
   const headers = new Headers(customHeaders)
   const response = await fetch(url, {
     ...fetchOptions,
