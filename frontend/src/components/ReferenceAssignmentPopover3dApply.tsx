@@ -230,6 +230,14 @@ export function ReferenceAssignmentPopover() {
   const boardLabel = lo === hi ? `#${lo + 1}` : `#${lo + 1}–#${hi + 1}`
   const objectFit = fitModeToObjectFit(fitMode)
 
+  // Practical max for the source-time slider.
+  // For video: use loaded duration when available, fall back to 60 s.
+  // For model: use loaded duration when available, fall back to 10 s (typical animation).
+  const sliderMax =
+    refMode === 'video' ? (mediaDuration > 0 ? mediaDuration : 60) :
+    refMode === 'model' ? (mediaDuration > 0 ? mediaDuration : 10) :
+    0
+
   const close = () => {
     if (isInspectMode) closeRefSegmentInspect()
     else dismissRefSegmentUi()
@@ -411,6 +419,34 @@ export function ReferenceAssignmentPopover() {
             <div className="ref-assign-fit-mode" role="group" aria-label="Reference fit"><span className="ref-assign-fit-label">Fit</span>{FIT_MODES.map((mode) => <button key={mode} type="button" className={`ref-assign-fit-btn ${fitMode === mode ? 'is-active' : ''}`} onClick={() => setFitMode(mode)} disabled={disabled}>{mode === 'fit' ? 'Fit' : mode === 'fill' ? 'Fill' : 'Stretch'}</button>)}</div>
             <section className="ref-assign-segment-box">
               <div className="ref-assign-segment-toolbar"><span className="ref-assign-section-label">Board segment</span><div className="ref-assign-board-picks"><select value={startShot} onChange={(e) => setStart(e.target.value || null)} disabled={disabled}>{shots.map((s) => <option key={s.shot_id} value={s.shot_id}>{shotLabel(s.shot_id)}</option>)}</select><span>→</span><select value={endShot} onChange={(e) => setEnd(e.target.value || null)} disabled={disabled}>{shots.map((s) => <option key={s.shot_id} value={s.shot_id}>{shotLabel(s.shot_id)}</option>)}</select></div><button type="button" className="ref-assign-reset-start" onClick={() => setSegmentStart(0)} disabled={disabled || refMode === 'image' || segmentStart <= 0}>Reset start</button><button type="button" className="ref-assign-apply" onClick={apply} disabled={disabled || !links.length || shots.length === 0}>{isInspectMode ? 'Reapply to boards' : 'Apply to boards'}</button>{isInspectMode ? <button type="button" className="ref-assign-delete" onClick={deleteSegment} disabled={disabled}>Delete segment</button> : null}</div>
+              {(refMode === 'video' || refMode === 'model') ? (
+                <div className="ref-assign-source-time">
+                  <label className="ref-assign-source-time-label">
+                    <span>{refMode === 'model' ? 'Animation start' : 'Source start'}</span>
+                    <span className="ref-assign-source-time-value">{segmentStart.toFixed(1)} s</span>
+                  </label>
+                  <input
+                    type="range"
+                    className="ref-assign-source-time-slider"
+                    min={0}
+                    max={sliderMax}
+                    step={0.1}
+                    value={segmentStart}
+                    onChange={(e) => {
+                      const val = Number(e.target.value)
+                      setSegmentStart(val)
+                      // Seek the video preview so the user can see that frame; no reapply.
+                      if (videoRef.current && refMode === 'video') {
+                        videoRef.current.currentTime = val
+                      }
+                    }}
+                    disabled={disabled}
+                    aria-label={refMode === 'model' ? 'Animation start time in seconds' : 'Source start time in seconds'}
+                  />
+                </div>
+              ) : refMode === 'image' ? (
+                <p className="ref-assign-source-time-note">Image references do not use source time.</p>
+              ) : null}
               <div className="ref-assign-segment-summary"><span>{refMode === 'model' ? `3D segment: ${formatClock(durationSec)} · anim ${formatClock(segmentStart)} · boards ${boardLabel}` : `Reference segment: ${durationSec.toFixed(1)}s · boards ${boardLabel}`}</span><span>{refMode === 'video' ? `Playhead: ${formatClock(playheadTime)}` : `Fit: ${fitMode}`}</span></div>
             </section>
             <div className="ref-assign-footer"><button type="button" onClick={close} disabled={disabled}>{isInspectMode ? 'Close' : 'Cancel / clear range'}</button>{isInspectMode ? <button type="button" className="primary" onClick={apply} disabled={disabled || !links.length}>Reapply</button> : null}{refApplyUndoToken ? <button type="button" onClick={undo} disabled={disabled}>Undo last apply</button> : null}</div>

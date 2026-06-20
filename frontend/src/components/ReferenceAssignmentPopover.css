@@ -580,6 +580,57 @@
   cursor: not-allowed;
 }
 
+/* Source-time slider — shown for video and model segments inside ref-assign-segment-box */
+.ref-assign-source-time {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.ref-assign-source-time-label {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--color-muted);
+}
+
+.ref-assign-source-time-value {
+  font-size: 11px;
+  font-weight: 600;
+  font-family: var(--font-mono, monospace);
+  color: var(--ref-seg-accent);
+  text-transform: none;
+  letter-spacing: normal;
+  min-width: 3.5em;
+  text-align: right;
+}
+
+.ref-assign-source-time-slider {
+  width: 100%;
+  height: 4px;
+  accent-color: var(--ref-seg-accent);
+  cursor: pointer;
+  padding: 0;
+  margin: 0;
+}
+
+.ref-assign-source-time-slider:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.ref-assign-source-time-note {
+  margin: 0;
+  font-size: 10px;
+  color: var(--color-muted);
+  font-style: italic;
+}
+
 .ref-assign-segment-summary {
   display: flex;
   flex-direction: column;
