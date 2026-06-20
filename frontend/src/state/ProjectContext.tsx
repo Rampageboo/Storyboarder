@@ -30,7 +30,8 @@ import {
   updateShot,
 } from '../api'
 import { browseFolder, getAppSession, isNoProjectOpenError, updateAppSession, type AppSession } from '../api'
-import type { ProjectPathRequest, ProjectPayload, SettingsUpdate, Shot, ShotUpdate } from '../types'
+import type { ProjectPathRequest, ProjectPayload, SettingsUpdate, ShotUpdate } from '../types'
+import { shotToUpdate } from '../utils/shotUpdate'
 import { ProjectContext } from './useProject'
 
 export interface ProjectContextValue {
@@ -93,25 +94,6 @@ export interface ProjectContextValue {
 function projectJsonInFolder(folderPath: string): string {
   const trimmed = folderPath.replace(/[\\/]+$/, '')
   return `${trimmed}/project.json`
-}
-
-function shotToUpdate(shot: Shot): ShotUpdate {
-  return {
-    title: shot.title,
-    scene: shot.scene,
-    sequence: shot.sequence,
-    description: shot.description,
-    action_note: shot.action_note,
-    camera_note: shot.camera_note,
-    character_note: shot.character_note,
-    dialogue: shot.dialogue,
-    lighting_note: shot.lighting_note,
-    transition_note: shot.transition_note,
-    duration_seconds: shot.duration_seconds,
-    camera_data: shot.camera_data,
-    tags: shot.tags,
-    status: shot.status,
-  }
 }
 
 function draftIsDirty(draft: ShotUpdate | undefined): boolean {

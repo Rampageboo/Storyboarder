@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { importScene3d, openBlenderScene, updateSettings, updateShot, uploadShotImage } from '../api'
 import { useProject } from '../state/useProject'
-import type { ProjectPayload, Shot, ShotUpdate } from '../types'
+import type { ProjectPayload, Shot } from '../types'
 import { shotDisplayLabel } from '../utils/shotDisplay'
+import { shotToUpdate } from '../utils/shotUpdate'
 import {
   loadScene3DEditorClass,
   type Scene3DEditorInstance,
@@ -51,25 +52,6 @@ function numericTriple(value: unknown): [number, number, number] | null {
 function formatTriple(value: unknown): string {
   const parsed = numericTriple(value)
   return parsed ? parsed.map((item) => Number(item).toFixed(2)).join(', ') : ''
-}
-
-function shotToUpdate(shot: Shot): ShotUpdate {
-  return {
-    title: shot.title,
-    scene: shot.scene,
-    sequence: shot.sequence,
-    description: shot.description,
-    action_note: shot.action_note,
-    camera_note: shot.camera_note,
-    character_note: shot.character_note,
-    dialogue: shot.dialogue,
-    lighting_note: shot.lighting_note,
-    transition_note: shot.transition_note,
-    duration_seconds: shot.duration_seconds,
-    camera_data: shot.camera_data,
-    tags: shot.tags,
-    status: shot.status,
-  }
 }
 
 function getShotCamera(shot: Shot | null): Record<string, unknown> | null {
