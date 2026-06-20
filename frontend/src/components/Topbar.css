@@ -45,8 +45,16 @@
 
 .topbar-right {
   display: flex;
+  align-items: center;
   justify-content: flex-end;
+  gap: 8px;
   min-width: 0;
+}
+
+.topbar-settings {
+  flex: 0 0 auto;
+  padding: 6px 10px;
+  font-size: 11px;
 }
 
 .topbar-ps-status {

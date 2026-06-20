@@ -164,6 +164,7 @@ class SettingsUpdateRequest(BaseModel):
     canvas_width: int | None = None
     canvas_height: int | None = None
     apply_canvas_size_to_blank_shots: bool | None = None
+    preheat_photoshop_on_open: bool | None = None
     scene3d: dict[str, Any] | None = None
     reference_video_path: str | None = None
     reference_model_path: str | None = None

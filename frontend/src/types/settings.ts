@@ -25,6 +25,7 @@ export interface ProjectSettings {
   canvas_width?: number
   canvas_height?: number
   apply_canvas_size_to_blank_shots?: boolean
+  preheat_photoshop_on_open?: boolean
   scene3d?: Record<string, unknown>
   reference_video_path?: string
   reference_model_path?: string
@@ -47,6 +48,7 @@ export interface SettingsUpdate {
   canvas_width?: number | null
   canvas_height?: number | null
   apply_canvas_size_to_blank_shots?: boolean | null
+  preheat_photoshop_on_open?: boolean | null
   scene3d?: Record<string, unknown> | null
   reference_video_path?: string | null
   reference_model_path?: string | null

@@ -46,6 +46,7 @@ export interface ProjectContextValue {
   openProjectFromDialog: () => Promise<void>
   saveProject: () => Promise<void>
   addShotAfterSelection: () => Promise<void>
+  insertShotAtIndex: (index: number) => Promise<void>
   deleteSelectedShot: () => Promise<void>
   moveSelectedShot: (direction: 'up' | 'down') => Promise<void>
   reorderBoards: (orderedIds: string[], selectId?: string | null) => Promise<void>
@@ -485,6 +486,48 @@ export function ProjectProvider({ children }: PropsWithChildren) {
     })
   }, [replaceProject, selectedShotId, pushHistory])
 
+  const insertShotAtIndex = useCallback(async (index: number) => {
+    const current = projectRef.current
+    if (!current) return
+    const previousShots = current.shots
+    const targetIndex = Math.max(0, Math.min(index, previousShots.length))
+    const afterId = targetIndex > 0 ? previousShots[targetIndex - 1]?.shot_id : undefined
+    const addBody = afterId ? { after_shot_id: afterId } : {}
+    const placeCreated = async (payload: ProjectPayload, createdId: string): Promise<ProjectPayload> => {
+      if (targetIndex !== 0 || previousShots.length === 0) return payload
+      const previousOrder = previousShots.map((shot) => shot.shot_id)
+      return reorderShots({ shot_ids: [createdId, ...previousOrder] })
+    }
+    const createdIdFrom = (payload: ProjectPayload): string | null => {
+      if (targetIndex === 0) return payload.shots[0]?.shot_id ?? null
+      return payload.shots[targetIndex]?.shot_id ?? null
+    }
+
+    let payload = await addShot(addBody)
+    let createdId =
+      targetIndex === 0
+        ? payload.shots[payload.shots.length - 1]?.shot_id ?? null
+        : payload.shots[targetIndex]?.shot_id ?? null
+    if (!createdId) return
+    payload = await placeCreated(payload, createdId)
+    createdId = createdIdFrom(payload) ?? createdId
+    replaceProject(payload, createdId)
+    pushHistory({
+      label: 'Insert board',
+      undo: async () => ({ payload: await deleteShot(createdId as string), select: afterId ?? null }),
+      redo: async () => {
+        let p = await addShot(addBody)
+        const nextCreatedId =
+          targetIndex === 0 ? p.shots[p.shots.length - 1]?.shot_id ?? null : p.shots[targetIndex]?.shot_id ?? null
+        if (nextCreatedId) {
+          p = await placeCreated(p, nextCreatedId)
+          createdId = createdIdFrom(p) ?? nextCreatedId
+        }
+        return { payload: p, select: createdId }
+      },
+    })
+  }, [replaceProject, pushHistory])
+
   const deleteSelectedShot = useCallback(async () => {
     const current = projectRef.current
     if (!current || !selectedShotId) return
@@ -650,6 +693,7 @@ export function ProjectProvider({ children }: PropsWithChildren) {
       openProjectFromDialog,
       saveProject: saveProjectAction,
       addShotAfterSelection,
+      insertShotAtIndex,
       deleteSelectedShot,
       moveSelectedShot,
       reorderBoards,
@@ -692,7 +736,7 @@ export function ProjectProvider({ children }: PropsWithChildren) {
       clearError,
       reportError,
     }),
-    [project, selectedShotId, replaceProject, refreshProjectFromBridge, reloadProject, newProjectAction, openProjectFromDialog, saveProjectAction, addShotAfterSelection, deleteSelectedShot, moveSelectedShot, reorderBoards, deleteActiveRefSegment, deleteRefSegmentUndoable, recordRefApply, undo, redo, undoStack, redoStack, syncSelectedShot, openSelectedShotSource, initialLoading, projectActionBusy, getDraft, editShotField, isShotDirty, dirtyShotIds, savingShots, saveShot, flushDirtyShots, visualEpoch, segmentRange, setSegmentAnchor, setSegmentEnd, pickSegmentShot, clearSegmentRange, activeAppliedSegmentId, setActiveAppliedSegmentId, clearActiveAppliedSegment, refSegmentInspectOpen, openRefSegmentInspect, closeRefSegmentInspect, dismissRefSegmentUi, refApplyUndoToken, lastError, clearError, reportError],
+    [project, selectedShotId, replaceProject, refreshProjectFromBridge, reloadProject, newProjectAction, openProjectFromDialog, saveProjectAction, addShotAfterSelection, insertShotAtIndex, deleteSelectedShot, moveSelectedShot, reorderBoards, deleteActiveRefSegment, deleteRefSegmentUndoable, recordRefApply, undo, redo, undoStack, redoStack, syncSelectedShot, openSelectedShotSource, initialLoading, projectActionBusy, getDraft, editShotField, isShotDirty, dirtyShotIds, savingShots, saveShot, flushDirtyShots, visualEpoch, segmentRange, setSegmentAnchor, setSegmentEnd, pickSegmentShot, clearSegmentRange, activeAppliedSegmentId, setActiveAppliedSegmentId, clearActiveAppliedSegment, refSegmentInspectOpen, openRefSegmentInspect, closeRefSegmentInspect, dismissRefSegmentUi, refApplyUndoToken, lastError, clearError, reportError],
   )
 
   return <ProjectContext.Provider value={value}>{children}</ProjectContext.Provider>

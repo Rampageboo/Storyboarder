@@ -28,7 +28,11 @@ function photoshopStatusTitle(
   return parts.join('\n')
 }
 
-export function Topbar() {
+interface TopbarProps {
+  onOpenSettings: () => void
+}
+
+export function Topbar({ onOpenSettings }: TopbarProps) {
   const {
     project,
     newProject,
@@ -119,6 +123,16 @@ export function Topbar() {
         <div className="topbar-subtitle">{subtitle}</div>
       </div>
       <div className="topbar-right">
+        <button
+          type="button"
+          className="topbar-settings"
+          onClick={onOpenSettings}
+          disabled={!project || projectActionBusy || initialLoading}
+          title="Settings"
+          aria-label="Settings"
+        >
+          Settings
+        </button>
         <span
           className={`topbar-ps-status ${bridgeStatus?.plugin_linked ? 'is-linked' : ''}`}
           title={photoshopStatusTitle(psLabel, psSelectedShot, psOpenShots, psLastExport)}

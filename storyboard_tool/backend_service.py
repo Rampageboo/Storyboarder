@@ -516,6 +516,10 @@ class StoryboardBackendService(ExportServiceMixin):
             color = normalize_hex_color(str(data["canvas_background_color"]))
             project.settings["canvas_background_color"] = color
             project_manager.write_canvas_color_files(project, color)
+        if "preheat_photoshop_on_open" in data:
+            # TODO(preheat-photoshop): wire this stored startup preference to a lightweight
+            # Photoshop warmup hook if one is added; do not launch Photoshop from settings writes.
+            project.settings["preheat_photoshop_on_open"] = bool(data.get("preheat_photoshop_on_open"))
         if "scene3d" in data:
             project.settings["scene3d"] = data["scene3d"]
         project_manager.save_settings(project)

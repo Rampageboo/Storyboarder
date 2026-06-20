@@ -342,6 +342,7 @@ class StoryboardSmokeTests(unittest.TestCase):
             payload = created.json()
             self.assertEqual(payload["settings"]["canvas_width"], 1600)
             self.assertEqual(payload["settings"]["canvas_height"], 900)
+            self.assertFalse(payload["settings"]["preheat_photoshop_on_open"])
 
             with contextlib.redirect_stderr(io.StringIO()):
                 updated = client.patch(
@@ -350,12 +351,14 @@ class StoryboardSmokeTests(unittest.TestCase):
                         "canvas_width": 1080,
                         "canvas_height": 1080,
                         "apply_canvas_size_to_blank_shots": False,
+                        "preheat_photoshop_on_open": True,
                     },
                 )
             self.assertEqual(updated.status_code, 200)
             settings = updated.json()["settings"]
             self.assertEqual(settings["canvas_width"], 1080)
             self.assertEqual(settings["canvas_height"], 1080)
+            self.assertTrue(settings["preheat_photoshop_on_open"])
 
 
     def test_open_blender_scene_returns_project_payload(self) -> None:
@@ -422,17 +425,20 @@ class StoryboardSmokeTests(unittest.TestCase):
                     "/api/project/settings",
                     json={
                         "canvas_background_color": "#112233",
+                        "preheat_photoshop_on_open": True,
                         "scene3d": scene3d,
                     },
                 )
             self.assertEqual(rest.status_code, 200, rest.text)
             settings = rest.json()["settings"]
             self.assertEqual(settings["canvas_background_color"], "#112233")
+            self.assertTrue(settings["preheat_photoshop_on_open"])
             self.assertEqual(settings["scene3d"], scene3d)
 
             settings_json = Path(tmp) / "Storyboard_Project" / "settings.json"
             saved = json.loads(settings_json.read_text(encoding="utf-8"))
             self.assertEqual(saved["canvas_background_color"], "#112233")
+            self.assertTrue(saved["preheat_photoshop_on_open"])
             self.assertEqual(saved["scene3d"], scene3d)
 
     def test_project_lifecycle_new_save_open(self) -> None:

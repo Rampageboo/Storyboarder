@@ -38,6 +38,7 @@ export function BoardStrip() {
     setSelectedShotId,
     flushDirtyShots,
     addShotAfterSelection,
+    insertShotAtIndex,
     deleteSelectedShot,
     moveSelectedShot,
     reorderBoards,
@@ -72,6 +73,13 @@ export function BoardStrip() {
 
   const shots = useMemo(() => project?.shots ?? [], [project?.shots])
   const selectedIndex = useMemo(() => shots.findIndex((s) => s.shot_id === selectedShotId), [shots, selectedShotId])
+  const progressPercent = shots.length > 0 && selectedIndex >= 0 ? ((selectedIndex + 1) / shots.length) * 100 : 0
+  const progressLabel =
+    shots.length > 0 && selectedIndex >= 0
+      ? `Board ${selectedIndex + 1} of ${shots.length}`
+      : shots.length > 0
+        ? `${shots.length} boards`
+        : 'No boards'
   const disabled = busy || projectActionBusy || initialLoading
 
   // Reference-segment range (normalized by board order for display + the connecting line).
@@ -195,6 +203,19 @@ export function BoardStrip() {
       setBusy(false)
     }
   }, [project, flushDirtyShots, addShotAfterSelection])
+
+  const handleInsertAt = useCallback(async (index: number) => {
+    if (!project) return
+    setBusy(true)
+    try {
+      await flushDirtyShots()
+      await insertShotAtIndex(index)
+    } catch (error) {
+      reportError(error)
+    } finally {
+      setBusy(false)
+    }
+  }, [project, flushDirtyShots, insertShotAtIndex, reportError])
 
   const handleDelete = useCallback(async () => {
     if (!project || !selectedShotId) return
@@ -406,10 +427,21 @@ export function BoardStrip() {
               const hasSource = !!shot.source_file_path
               const isMissing = missingShots.has(shot.shot_id)
               return (
+                <div className="board-strip-item" role="listitem" key={shot.shot_id}>
+                <div className={`board-strip-insert-zone ${index === 0 ? 'is-first' : ''}`}>
+                  <button
+                    type="button"
+                    className="board-strip-insert"
+                    onClick={() => void handleInsertAt(index)}
+                    disabled={disabled}
+                    title={`Insert board before #${index + 1}`}
+                    aria-label={`Insert board before ${index + 1}`}
+                  >
+                    +
+                  </button>
+                </div>
                 <button
-                  key={shot.shot_id}
                   type="button"
-                  role="listitem"
                   data-shot-id={shot.shot_id}
                   draggable={!disabled}
                   className={[
@@ -468,6 +500,7 @@ export function BoardStrip() {
                     </div>
                   </div>
                 </button>
+                </div>
               )
             })}
             </div>
@@ -555,6 +588,9 @@ export function BoardStrip() {
             </div>
           </div>
         )}
+      </div>
+      <div className="board-strip-progress" aria-label={progressLabel} title={progressLabel}>
+        <div className="board-strip-progress-fill" style={{ width: `${progressPercent}%` }} />
       </div>
     </section>
   )

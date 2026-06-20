@@ -1,4 +1,4 @@
-import { useCallback, useEffect, type CSSProperties } from 'react'
+import { useCallback, useEffect, useState, type CSSProperties } from 'react'
 import { Topbar } from './components/Topbar'
 import { ShotInspector } from './components/ShotInspector'
 import { BoardStrip } from './components/BoardStrip'
@@ -9,6 +9,7 @@ import { ReferenceAssignmentPopover } from './components/ReferenceAssignmentPopo
 import { Scene3DPanel } from './components/Scene3DPanel'
 import { NeighborContext } from './components/NeighborContext'
 import { AdvancedPanel } from './components/AdvancedPanel'
+import { SettingsModal } from './components/SettingsModal'
 import { ProjectProvider } from './state/ProjectContext'
 import { useProject } from './state/useProject'
 import { LiveBridgeProvider } from './state/LiveBridgeContext'
@@ -54,6 +55,7 @@ function WelcomePanel() {
 
 function AppInner() {
   const { project, initialLoading, lastError, clearError, reloadProject } = useProject()
+  const [settingsOpen, setSettingsOpen] = useState(false)
   useGlobalShortcuts()
 
   const themeVars: CSSProperties = {
@@ -67,7 +69,7 @@ function AppInner() {
 
   return (
     <div className="app-root" style={themeVars}>
-      <Topbar />
+      <Topbar onOpenSettings={() => setSettingsOpen(true)} />
       {lastError ? (
         <div className="app-banner" role="alert">
           <span>{lastError}</span>
@@ -99,6 +101,7 @@ function AppInner() {
         )}
       </div>
       <ReferenceAssignmentPopover />
+      <SettingsModal open={settingsOpen} onClose={() => setSettingsOpen(false)} />
     </div>
   )
 }

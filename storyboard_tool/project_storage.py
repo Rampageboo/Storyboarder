@@ -34,6 +34,7 @@ DEFAULT_SETTINGS: dict = {
     "canvas_background_color": "#E8E8E8",
     "canvas_width": 1920,
     "canvas_height": 1080,
+    "preheat_photoshop_on_open": False,
     "reference_video_path": "",
     "reference_model_path": "",
     "reference_image_path": "",
