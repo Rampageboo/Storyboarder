@@ -1271,7 +1271,7 @@ def apply_model_captures_to_boards(
             raw_path.unlink(missing_ok=True)
         shot.ref_video_path = model_rel
         shot.ref_video_time = round(anim_time, 3)
-        shot.ref_segment_time = round(segment_offset, 3)
+        shot.ref_segment_time = round(segment_time, 3)
         camera_data = dict(shot.camera_data or {})
         camera_data["scene3d_time"] = round(anim_time, 3)
         if camera_name:

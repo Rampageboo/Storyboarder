@@ -14,12 +14,14 @@ Covers:
 from __future__ import annotations
 
 import io
+import base64
 import shutil
 import tempfile
 import unittest
 from pathlib import Path
 
 from storyboard_tool import project_manager, reference_segments
+from storyboard_tool.image_utils import board_background_filename
 from storyboard_tool.models import Project, Shot
 
 
@@ -462,6 +464,82 @@ class TestApplyImageSegment(unittest.TestCase):
             reference_segments.apply_ref_segment_image_to_boards(
                 project, 0, 0, segment_id="seg_img"
             )
+
+
+# ---------------------------------------------------------------------------
+# apply_model_captures_to_boards writes model captures and remains undoable
+# ---------------------------------------------------------------------------
+
+class TestApplyModelCaptures(unittest.TestCase):
+    def setUp(self) -> None:
+        self._tmp = tempfile.mkdtemp()
+
+    def tearDown(self) -> None:
+        shutil.rmtree(self._tmp, ignore_errors=True)
+
+    def test_apply_model_captures_stamps_segment_time_and_undo_restores(self) -> None:
+        project = _make_project(self._tmp)
+        for _ in range(2):
+            project_manager.add_shot(project)
+        project.shots[0].duration_seconds = 1.5
+        project.shots[1].duration_seconds = 2.0
+
+        model_path = project.root_path / "references" / "model.glb"
+        model_path.parent.mkdir(parents=True, exist_ok=True)
+        model_path.write_bytes(b"glb placeholder")
+        model_rel = model_path.relative_to(project.root_path).as_posix()
+
+        project.settings["reference_model_path"] = model_rel
+        project.settings["ref_segments"] = [
+            {
+                "id": "seg_model",
+                "anchor_shot_id": project.shots[0].shot_id,
+                "end_shot_id": project.shots[1].shot_id,
+                "source_type": "model",
+                "reference_path": model_rel,
+                "fit_mode": "fit",
+            }
+        ]
+        project.settings["active_ref_segment_id"] = "seg_model"
+
+        captures = [
+            {
+                "shot_id": project.shots[0].shot_id,
+                "data_url": "data:image/png;base64," + base64.b64encode(_make_png()).decode("ascii"),
+                "animation_time": 0.0,
+            },
+            {
+                "shot_id": project.shots[1].shot_id,
+                "data_url": "data:image/png;base64," + base64.b64encode(_make_png()).decode("ascii"),
+                "animation_time": 1.5,
+            },
+        ]
+
+        result = reference_segments.apply_model_captures_to_boards(
+            project,
+            project.shots[0].shot_id,
+            project.shots[1].shot_id,
+            "seg_model",
+            "Camera_A",
+            captures,
+        )
+
+        self.assertTrue(result.get("undo_token"))
+        for index, expected_segment_time in enumerate((0.0, 1.5)):
+            shot = project.shots[index]
+            shot_dir = project_manager.get_shot_dir(project, shot)
+            self.assertTrue((shot_dir / board_background_filename(shot.shot_id)).is_file())
+            self.assertEqual((shot.camera_data or {}).get("ref_source_type"), "model")
+            self.assertEqual(shot.ref_segment_time, expected_segment_time)
+            self.assertEqual(shot.ref_video_time, captures[index]["animation_time"])
+            self.assertEqual((shot.camera_data or {}).get("scene3d_camera"), "Camera_A")
+
+        restore = reference_segments.restore_boards_from_undo(project, str(result["undo_token"]))
+        self.assertEqual(restore["restored"], 2)
+        for shot in project.shots[:2]:
+            shot_dir = project_manager.get_shot_dir(project, shot)
+            self.assertFalse((shot_dir / board_background_filename(shot.shot_id)).exists())
+            self.assertNotEqual((shot.camera_data or {}).get("ref_source_type"), "model")
 
 
 # ---------------------------------------------------------------------------
