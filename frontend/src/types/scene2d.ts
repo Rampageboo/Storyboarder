@@ -49,3 +49,11 @@ export interface Scene2DPerspectiveUpdateRequest {
   linked_scene3d_id?: string
   linked_scene3d_view?: Record<string, unknown> | null
 }
+
+export interface Scene2DPerspectiveMoveRequest {
+  target_scene_id: string
+}
+
+export interface Scene2DPerspectiveReorderRequest {
+  perspective_ids: string[]
+}

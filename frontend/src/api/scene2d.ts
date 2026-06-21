@@ -6,6 +6,8 @@ import type {
   Scene2DCreateRequest,
   Scene2DPerspective,
   Scene2DPerspectiveCreateRequest,
+  Scene2DPerspectiveMoveRequest,
+  Scene2DPerspectiveReorderRequest,
   Scene2DPerspectiveUpdateRequest,
   Scene2DUpdateRequest,
 } from '../types'
@@ -24,6 +26,13 @@ export interface Scene2DPerspectiveListResponse {
 }
 
 export interface Scene2DPerspectiveResponse extends Scene2DListResponse {
+  scene: Scene2D
+  perspective: Scene2DPerspective
+}
+
+export interface Scene2DPerspectiveMoveResponse extends Scene2DListResponse {
+  source_scene: Scene2D
+  target_scene: Scene2D
   scene: Scene2D
   perspective: Scene2DPerspective
 }
@@ -121,6 +130,16 @@ export function importScene2DPerspective(
   })
 }
 
+export function reorderScene2DPerspectives(
+  sceneId: string,
+  body: Scene2DPerspectiveReorderRequest,
+): Promise<Scene2DSceneResponse> {
+  return requestJson<Scene2DSceneResponse>(`/api/project/scenes2d/${encodeURIComponent(sceneId)}/perspectives/reorder`, {
+    method: 'POST',
+    body,
+  })
+}
+
 export function updateScene2DPerspective(
   sceneId: string,
   perspectiveId: string,
@@ -160,6 +179,17 @@ export function setPrimaryScene2DPerspective(sceneId: string, perspectiveId: str
   return requestJson<Scene2DSceneResponse>(
     `/api/project/scenes2d/${encodeURIComponent(sceneId)}/perspectives/${encodeURIComponent(perspectiveId)}/set-primary`,
     { method: 'POST' },
+  )
+}
+
+export function moveScene2DPerspective(
+  sceneId: string,
+  perspectiveId: string,
+  body: Scene2DPerspectiveMoveRequest,
+): Promise<Scene2DPerspectiveMoveResponse> {
+  return requestJson<Scene2DPerspectiveMoveResponse>(
+    `/api/project/scenes2d/${encodeURIComponent(sceneId)}/perspectives/${encodeURIComponent(perspectiveId)}/move-to-scene`,
+    { method: 'POST', body },
   )
 }
 

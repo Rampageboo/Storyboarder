@@ -1184,7 +1184,7 @@ var dt = class {
 		}, 350));
 	}
 	applyDisplaySettings(e = {}) {
-		!e || typeof e != "object" || (this.setFollowCamera(e.follow_camera !== !1, { persist: !1 }), this.setProgramLightingMode(String(e.program_lighting || "auto"), {
+		!e || typeof e != "object" || (Object.prototype.hasOwnProperty.call(e, "follow_camera") && this.setFollowCamera(e.follow_camera !== !1, { persist: !1 }), this.setProgramLightingMode(String(e.program_lighting || "auto"), {
 			persist: !1,
 			notify: !1
 		}), this.setObjectColorPreview(e.object_color_preview !== !1, {

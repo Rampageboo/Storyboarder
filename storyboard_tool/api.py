@@ -42,6 +42,8 @@ from .schemas import (
     RestoreShotRequest,
     Scene2DCreateRequest,
     Scene2DPerspectiveCreateRequest,
+    Scene2DPerspectiveMoveRequest,
+    Scene2DPerspectiveReorderRequest,
     Scene2DPerspectiveUpdateRequest,
     Scene2DUpdateRequest,
     Scene3DCreateRequest,
@@ -479,6 +481,10 @@ def create_app(base_dir: Path, bridge_port: int = 8000) -> FastAPI:
     def create_scene2d_perspective(scene_id: str, request: Scene2DPerspectiveCreateRequest = Scene2DPerspectiveCreateRequest()) -> dict[str, Any]:
         return _svc().method_create_scene2d_perspective(scene_id, request.model_dump(exclude_unset=True))
 
+    @app.post("/api/project/scenes2d/{scene_id}/perspectives/reorder")
+    def reorder_scene2d_perspectives(scene_id: str, request: Scene2DPerspectiveReorderRequest) -> dict[str, Any]:
+        return _svc().method_reorder_scene2d_perspectives(scene_id, request.perspective_ids)
+
     @app.post("/api/project/scenes2d/{scene_id}/perspectives/import")
     async def import_scene2d_perspective(
         scene_id: str,
@@ -508,6 +514,14 @@ def create_app(base_dir: Path, bridge_port: int = 8000) -> FastAPI:
     @app.post("/api/project/scenes2d/{scene_id}/perspectives/{perspective_id}/set-primary")
     def set_primary_scene2d_perspective(scene_id: str, perspective_id: str) -> dict[str, Any]:
         return _svc().method_set_primary_scene2d_perspective(scene_id, perspective_id)
+
+    @app.post("/api/project/scenes2d/{scene_id}/perspectives/{perspective_id}/move-to-scene")
+    def move_scene2d_perspective(scene_id: str, perspective_id: str, request: Scene2DPerspectiveMoveRequest) -> dict[str, Any]:
+        return _svc().method_move_scene2d_perspective(
+            scene_id,
+            perspective_id,
+            request.target_scene_id,
+        )
 
     @app.post("/api/project/scenes2d/{scene_id}/perspectives/{perspective_id}/add-to-references")
     def add_scene2d_perspective_to_references(scene_id: str, perspective_id: str) -> dict[str, Any]:

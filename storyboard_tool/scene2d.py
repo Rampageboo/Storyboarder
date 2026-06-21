@@ -1062,6 +1062,28 @@ def import_perspective(
     return _with_legacy_aliases(scene), perspective, scenes
 
 
+def reorder_perspectives(
+    project: Project,
+    scene_id: str,
+    perspective_ids: list[str],
+) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    scene, scenes = _find_scene(project, scene_id)
+    ids = [_validate_perspective_id(item) for item in perspective_ids]
+    current = scene.get("perspectives") or []
+    current_ids = [item["id"] for item in current]
+    if len(ids) != len(current_ids) or set(ids) != set(current_ids):
+        raise ValueError("Perspective reorder must include every perspective in this Scene 2D group exactly once.")
+    if len(ids) != len(set(ids)):
+        raise ValueError("Perspective reorder contains duplicate ids.")
+
+    by_id = {item["id"]: item for item in current}
+    scene["perspectives"] = [by_id[item] for item in ids]
+    scene["updated_at"] = _now_iso()
+    scenes = _replace_scene(scenes, _with_legacy_aliases(scene))
+    _save_scenes(project, scenes)
+    return _with_legacy_aliases(scene), scenes
+
+
 def update_perspective(
     project: Project,
     scene_id: str,
@@ -1117,6 +1139,75 @@ def delete_perspective(project: Project, scene_id: str, perspective_id: str) -> 
     scenes = _replace_scene(scenes, _with_legacy_aliases(scene))
     _save_scenes(project, scenes)
     return _with_legacy_aliases(scene), scenes
+
+
+def move_perspective(
+    project: Project,
+    scene_id: str,
+    perspective_id: str,
+    target_scene_id: str,
+) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any], list[dict[str, Any]]]:
+    source_scene_id = _validate_scene_id(scene_id)
+    target_scene_id = _validate_scene_id(target_scene_id)
+    if source_scene_id == target_scene_id:
+        raise ValueError("Perspective is already in that Scene 2D group.")
+
+    scenes = list_scenes(project)
+    source_scene = next((scene for scene in scenes if scene["id"] == source_scene_id), None)
+    target_scene = next((scene for scene in scenes if scene["id"] == target_scene_id), None)
+    if source_scene is None or target_scene is None:
+        raise FileNotFoundError("Scene 2D not found.")
+
+    perspective = _find_perspective(source_scene, perspective_id)
+    source_dir = _safe_rel_path(project, perspective["source_file_path"]).parent
+    target_dir = _root_dir(project) / target_scene["id"] / "perspectives" / perspective["id"]
+    if not source_dir.is_dir():
+        raise FileNotFoundError("Scene 2D perspective folder not found.")
+    if target_dir.exists():
+        raise ValueError("Target Scene 2D already has files for this perspective.")
+
+    target_dir.parent.mkdir(parents=True, exist_ok=True)
+    shutil.move(str(source_dir), str(target_dir))
+
+    source_scene["perspectives"] = [
+        item for item in source_scene.get("perspectives", []) if item["id"] != perspective["id"]
+    ]
+    target_scene.setdefault("perspectives", []).append(perspective)
+
+    suffix = Path(str(perspective.get("source_file_path") or "")).suffix.lower()
+    if perspective.get("type") == "image":
+        perspective["source_file_path"] = _image_source_rel(target_scene["id"], perspective["id"], suffix)
+        perspective["preview_image_path"] = perspective["source_file_path"]
+    else:
+        perspective["source_file_path"] = _source_rel(target_scene["id"], perspective["id"])
+        perspective["preview_image_path"] = _preview_rel(target_scene["id"], perspective["id"])
+
+    timestamp = _now_iso()
+    perspective["updated_at"] = timestamp
+    source_scene["updated_at"] = timestamp
+    target_scene["updated_at"] = timestamp
+    if source_scene.get("primary_perspective_id") == perspective["id"]:
+        source_scene["primary_perspective_id"] = source_scene["perspectives"][0]["id"] if source_scene["perspectives"] else ""
+    if not target_scene.get("primary_perspective_id"):
+        target_scene["primary_perspective_id"] = perspective["id"]
+
+    links = project_manager.normalize_reference_links(project.settings.get("reference_links"))
+    changed_links = False
+    for link in links:
+        if (
+            str(link.get("source_scene2d_id") or "") == source_scene["id"]
+            and str(link.get("source_scene2d_perspective_id") or "") == perspective["id"]
+        ):
+            link["source_scene2d_id"] = target_scene["id"]
+            changed_links = True
+    if changed_links:
+        project.settings["reference_links"] = links
+        project_manager.save_settings(project)
+
+    scenes = _replace_scene(scenes, _with_legacy_aliases(source_scene))
+    scenes = _replace_scene(scenes, _with_legacy_aliases(target_scene))
+    _save_scenes(project, scenes)
+    return _with_legacy_aliases(source_scene), _with_legacy_aliases(target_scene), perspective, scenes
 
 
 def set_primary_perspective(project: Project, scene_id: str, perspective_id: str) -> tuple[dict[str, Any], list[dict[str, Any]]]:

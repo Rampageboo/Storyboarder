@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
 import {
   createShotCanvas,
   openShotPreview,
@@ -34,8 +34,12 @@ export function CanvasBoard() {
       return false
     }
   })
+  const [previewZoom, setPreviewZoom] = useState(100)
+  const [fitPreview, setFitPreview] = useState(true)
   const imageInputRef = useRef<HTMLInputElement | null>(null)
   const sourceInputRef = useRef<HTMLInputElement | null>(null)
+  const canvasBodyRef = useRef<HTMLDivElement | null>(null)
+  const canWheelZoomRef = useRef(false)
 
   const shot = useMemo(() => {
     if (!project || !selectedShotId) return null
@@ -91,6 +95,33 @@ export function CanvasBoard() {
     const cur = project?.shots.find((s) => s.shot_id === selectedShotId)
     setRelinkPath(cur?.preview_image_path || cur?.image_path || '')
   }
+
+  // Reset zoom on shot change so each shot opens at Fit
+  // (runs after the prevShotId guard above has already updated prevShotId)
+  useEffect(() => {
+    setPreviewZoom(100)
+    setFitPreview(true)
+  }, [selectedShotId])
+
+  // Keep the zoom guard in sync with whether the canvas has something to zoom
+  useEffect(() => {
+    canWheelZoomRef.current = hasVisual
+  }, [hasVisual])
+
+  // Wheel-to-zoom on the canvas body
+  useEffect(() => {
+    const body = canvasBodyRef.current
+    if (!body) return
+    const onWheel = (e: WheelEvent) => {
+      if (!canWheelZoomRef.current) return
+      e.preventDefault()
+      const step = e.deltaY > 0 ? -5 : 5
+      setFitPreview(false)
+      setPreviewZoom((prev) => Math.min(200, Math.max(25, prev + step)))
+    }
+    body.addEventListener('wheel', onWheel, { passive: false })
+    return () => body.removeEventListener('wheel', onWheel)
+  }, [])
 
   // Derive missing-file status from the shared context scan (no per-shot API call).
   useEffect(() => {
@@ -435,9 +466,15 @@ export function CanvasBoard() {
         </div>
       ) : null}
 
-      <div className="canvas-body">
+      <div
+        ref={canvasBodyRef}
+        className={`canvas-body${fitPreview ? '' : ' is-zoomed'}`}
+      >
         {hasVisual ? (
-          <div className="canvas-media">
+          <div
+            className={`canvas-media${fitPreview ? '' : ' is-zoomed'}`}
+            style={fitPreview ? {} : ({ '--canvas-zoom': `${previewZoom}%` } as CSSProperties)}
+          >
             <div className="canvas-composite" style={{ aspectRatio: canvasAspect }} aria-label={shotDisplayLabel(shot)}>
               {backgroundSrc ? (
                 <img
@@ -499,6 +536,21 @@ export function CanvasBoard() {
                 </button>
               ) : null}
             </div>
+          </div>
+        )}
+
+        {/* Zoom HUD — appears when not in fit mode */}
+        {hasVisual && !fitPreview && (
+          <div className="canvas-zoom-hud">
+            <span className="canvas-zoom-hud-pct">{previewZoom}%</span>
+            <button
+              type="button"
+              className="canvas-zoom-hud-fit"
+              onClick={() => { setFitPreview(true); setPreviewZoom(100) }}
+              aria-label="Reset to fit"
+            >
+              Fit
+            </button>
           </div>
         )}
       </div>

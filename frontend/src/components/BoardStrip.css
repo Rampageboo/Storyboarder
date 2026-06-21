@@ -689,3 +689,59 @@
 .board-strip-card.drop-after {
   box-shadow: inset -3px 0 0 0 #4a9eff;
 }
+
+.board-strip-add-item {
+  flex: 0 0 var(--board-strip-card-width);
+  width: var(--board-strip-card-width);
+}
+
+.board-strip-add-card {
+  width: var(--board-strip-card-width);
+  height: var(--board-strip-card-height);
+  display: inline-flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 10px;
+  border-radius: 8px;
+  border: 1px dashed color-mix(in srgb, var(--color-accent) 48%, var(--color-border));
+  background: transparent;
+  color: var(--color-muted);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.board-strip-add-card:hover:not(:disabled) {
+  border-color: color-mix(in srgb, var(--color-accent) 72%, var(--color-border));
+  background: color-mix(in srgb, var(--color-accent) 8%, transparent);
+  color: var(--color-accent);
+}
+
+.board-strip-add-mark {
+  width: 30px;
+  height: 30px;
+  position: relative;
+  display: grid;
+  place-items: center;
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--color-accent) 58%, transparent);
+  color: var(--color-accent);
+}
+
+.board-strip-add-mark::before,
+.board-strip-add-mark::after {
+  content: '';
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 10px;
+  height: 1px;
+  border-radius: 999px;
+  background: currentColor;
+  transform: translate(-50%, -50%);
+}
+
+.board-strip-add-mark::after {
+  transform: translate(-50%, -50%) rotate(90deg);
+}

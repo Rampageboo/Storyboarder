@@ -1038,6 +1038,16 @@ class StoryboardBackendService(ExportServiceMixin):
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return {"scene": scene, "perspective": perspective, "scenes": scenes}
 
+    def method_reorder_scene2d_perspectives(self, scene_id: str, perspective_ids: list[str]) -> dict[str, Any]:
+        project = app_state._require_project(self.app)
+        try:
+            scene, scenes = scene2d.reorder_perspectives(project, scene_id, perspective_ids)
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {"scene": scene, "scenes": scenes}
+
     def method_import_scene2d_perspective(
         self,
         scene_id: str,
@@ -1186,6 +1196,27 @@ class StoryboardBackendService(ExportServiceMixin):
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return {"scene": scene, "scenes": scenes}
+
+    def method_move_scene2d_perspective(self, scene_id: str, perspective_id: str, target_scene_id: str) -> dict[str, Any]:
+        project = app_state._require_project(self.app)
+        try:
+            source_scene, target_scene, perspective, scenes = scene2d.move_perspective(
+                project,
+                scene_id,
+                perspective_id,
+                target_scene_id,
+            )
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {
+            "source_scene": source_scene,
+            "target_scene": target_scene,
+            "scene": target_scene,
+            "perspective": perspective,
+            "scenes": scenes,
+        }
 
     def method_add_scene2d_perspective_to_references(self, scene_id: str, perspective_id: str) -> dict[str, Any]:
         project = app_state._require_project(self.app)

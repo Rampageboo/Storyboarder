@@ -444,7 +444,6 @@ export function Scene3DPanel({ active }: { active: boolean }) {
       editor.applyDisplaySettings?.(nextScene)
     }
     editor.setBlendFilePath?.(nextScene.blend_file_path)
-    editor.setFollowCamera?.(true, { persist: false })
     const shotTime = getShotScene3dTime()
     if (shotTime != null && Number.isFinite(shotTime)) editor.setAnimationTime?.(shotTime)
     editor.refreshBoardPreview?.()

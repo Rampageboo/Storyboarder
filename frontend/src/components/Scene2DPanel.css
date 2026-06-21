@@ -1,359 +1,20 @@
-.scene2d {
-  flex-shrink: 0;
-  border-top: 1px solid color-mix(in srgb, var(--color-border) 72%, transparent);
-  background: color-mix(in srgb, var(--bg-toolbar) 84%, transparent);
-}
-
-.scene2d-toggle {
-  width: 100%;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 12px var(--panel-padding, 12px);
-  border: none;
-  background: transparent;
-  font-weight: 600;
-  font-size: 12px;
-  color: var(--color-text);
-  cursor: pointer;
-}
-
-.scene2d-toggle:hover {
-  background: color-mix(in srgb, var(--color-accent) 8%, transparent);
-}
-
-.scene2d-toggle-icon {
-  width: 18px;
+/* ── Shared badge / thumb helpers ───────────────────────────────────── */
+.scene2d-perspective-badge {
   display: inline-flex;
   align-items: center;
-  justify-content: center;
-  font-size: 11px;
-  line-height: 1;
-}
-
-.scene2d-body {
-  padding: 0 var(--panel-padding, 12px) 14px;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
-.scene2d-status {
-  min-width: 0;
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
-
-.scene2d-chip {
-  flex-shrink: 0;
-  font-size: 10px;
-  padding: 2px 8px;
+  min-height: 18px;
+  padding: 2px 6px;
   border-radius: 999px;
-  border: 1px solid var(--color-border);
-}
-
-.scene2d-chip.ok {
-  background: rgba(40, 167, 69, 0.12);
-  border-color: rgba(40, 167, 69, 0.4);
-}
-
-.scene2d-chip.off {
+  border: 1px solid color-mix(in srgb, var(--color-border) 82%, transparent);
   color: var(--color-muted);
-  background: rgba(0, 0, 0, 0.04);
-}
-
-.scene2d-path {
-  min-width: 0;
-  color: var(--color-muted);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  font-size: 11px;
-}
-
-.scene2d-help,
-.scene2d-empty,
-.scene2d-note,
-.scene2d-preview-placeholder {
-  color: var(--color-muted);
-  font-size: 11px;
-  line-height: 1.35;
-}
-
-.scene2d-actions,
-.scene2d-workspace-actions,
-.scene2d-workspace-field-actions,
-.scene2d-preview-placeholder-actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-}
-
-.scene2d-actions button,
-.scene2d-workspace-actions button,
-.scene2d-workspace-field-actions button,
-.scene2d-preview-placeholder-actions button,
-.scene2d-zoom-toolbar button {
-  padding: 6px 9px;
-  border-radius: 8px;
-  border: 1px solid var(--color-border);
-  background: color-mix(in srgb, var(--bg-elevated) 82%, transparent);
-  color: var(--color-text);
-  font-size: 11px;
-  cursor: pointer;
-}
-
-.scene2d-actions button:hover:not(:disabled),
-.scene2d-workspace-actions button:hover:not(:disabled),
-.scene2d-workspace-field-actions button:hover:not(:disabled),
-.scene2d-preview-placeholder-actions button:hover:not(:disabled),
-.scene2d-zoom-toolbar button:hover:not(:disabled) {
-  border-color: color-mix(in srgb, var(--color-accent) 45%, var(--color-border));
-  background: color-mix(in srgb, var(--color-accent) 12%, var(--bg-elevated));
-}
-
-.scene2d-actions button.primary,
-.scene2d-workspace-actions button.primary,
-.scene2d-workspace-field-actions button.primary {
-  border-color: var(--color-accent);
-  background: var(--color-accent);
-  color: #120d05;
-  font-weight: 700;
-}
-
-.scene2d-actions button.danger,
-.scene2d-workspace-field-actions button.danger {
-  color: var(--color-danger);
-  border-color: color-mix(in srgb, var(--color-danger) 42%, transparent);
-}
-
-.scene2d-workspace-field-actions button.subtle {
-  background: transparent;
-}
-
-.scene2d-note {
-  max-width: min(420px, 38vw);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  color: var(--color-text);
-  padding: 7px 8px;
-  border-radius: 8px;
-  border: 1px solid color-mix(in srgb, var(--color-accent) 24%, transparent);
-  background: var(--color-accent-soft);
-}
-
-.scene2d-workspace-page {
-  width: 100%;
-  height: 100%;
-  min-width: 0;
-  min-height: 0;
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;
-  background:
-    radial-gradient(circle at 50% 0%, color-mix(in srgb, var(--color-accent) 9%, transparent), transparent 34%),
-    var(--color-surface);
-}
-
-.scene2d-workspace-header {
-  flex: 0 0 auto;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  padding: 10px 12px;
-  border-bottom: 1px solid color-mix(in srgb, var(--color-border) 80%, transparent);
-  background: color-mix(in srgb, var(--bg-toolbar) 92%, #000);
-}
-
-.scene2d-workspace-title {
-  font-size: 13px;
-  font-weight: 700;
-}
-
-.scene2d-workspace-subtitle {
-  margin-top: 2px;
-  font-size: 11px;
-  color: var(--color-muted);
-}
-
-.scene2d-workspace-layout {
-  flex: 1 1 auto;
-  min-width: 0;
-  min-height: 0;
-  display: grid;
-  grid-template-columns: minmax(200px, 240px) minmax(0, 1fr);
-  overflow: hidden;
-}
-
-.scene2d-workspace-list,
-.scene2d-workspace-main {
-  min-width: 0;
-  min-height: 0;
-}
-
-.scene2d-workspace-list {
-  overflow: auto;
-  padding: 12px;
-  border-right: 1px solid color-mix(in srgb, var(--color-border) 80%, transparent);
-  background: color-mix(in srgb, var(--bg-toolbar) 90%, #000);
-}
-
-.scene2d-workspace-main {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-  overflow: hidden;
-  padding: 12px;
-}
-
-.scene2d-workspace-section-title {
-  margin-bottom: 8px;
-  color: var(--color-muted);
-  font-size: 11px;
-  font-weight: 700;
+  font-size: 9px;
   text-transform: uppercase;
-  letter-spacing: 0.04em;
 }
 
-.scene2d-workspace-section-row {
-  flex: 0 0 auto;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-}
-
-.scene2d-workspace-section-row .scene2d-workspace-section-title {
-  margin-bottom: 0;
-}
-
-.scene2d-workspace-list button {
-  width: 100%;
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: 3px;
-  padding: 9px;
-  margin-bottom: 7px;
-  border-radius: 9px;
-  border: 1px solid color-mix(in srgb, var(--color-border) 78%, transparent);
-  background: color-mix(in srgb, var(--bg-panel) 84%, transparent);
-  color: var(--color-text);
-  cursor: pointer;
-}
-
-.scene2d-workspace-list button.is-selected {
-  border-color: var(--color-accent);
-  background:
-    linear-gradient(90deg, color-mix(in srgb, var(--color-accent) 16%, transparent), transparent),
-    var(--color-accent-soft);
-}
-
-.scene2d-workspace-list button span {
-  max-width: 100%;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-size: 12px;
-  font-weight: 700;
-}
-
-.scene2d-workspace-list button small {
-  color: var(--color-muted);
-  font-size: 10px;
-}
-
-.scene2d-workspace-fields {
-  flex: 0 0 auto;
-  display: grid;
-  grid-template-columns: minmax(180px, 1fr) minmax(180px, 320px) auto;
-  gap: 8px;
-  align-items: end;
-  padding: 10px;
-  border: 1px solid color-mix(in srgb, var(--color-border) 72%, transparent);
-  border-radius: 10px;
-  background: color-mix(in srgb, var(--bg-panel) 74%, transparent);
-}
-
-.scene2d-field-wide {
-  grid-column: 1 / -1;
-}
-
-.scene2d-field {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  color: var(--color-muted);
-  font-size: 11px;
-}
-
-.scene2d-field input,
-.scene2d-field select,
-.scene2d-field textarea {
-  width: 100%;
-  min-width: 0;
-  padding: 7px 8px;
-  border-radius: 8px;
-  border: 1px solid var(--color-border);
-  background: color-mix(in srgb, var(--bg-elevated) 76%, transparent);
-  color: var(--color-text);
-  font: inherit;
-}
-
-.scene2d-field textarea {
-  resize: vertical;
-}
-
-.scene2d-perspective-grid {
-  flex: 0 0 auto;
-  display: grid;
-  grid-auto-flow: column;
-  grid-auto-columns: minmax(150px, 176px);
-  gap: 9px;
-  overflow-x: auto;
-  overflow-y: hidden;
-  padding: 2px 2px 8px;
-  scrollbar-width: thin;
-}
-
-.scene2d-perspective-grid button {
-  min-width: 0;
-  min-height: 132px;
-  display: flex;
-  flex-direction: column;
-  align-items: stretch;
-  gap: 7px;
-  padding: 7px;
-  border-radius: 10px;
-  border: 1px solid color-mix(in srgb, var(--color-border) 76%, transparent);
-  background: color-mix(in srgb, var(--bg-panel) 82%, transparent);
-  color: var(--color-text);
-  cursor: pointer;
-}
-
-.scene2d-perspective-grid button.is-selected {
-  border-color: var(--color-accent);
-  box-shadow: 0 0 0 1px color-mix(in srgb, var(--color-accent) 60%, transparent);
-}
-
-.scene2d-perspective-grid button > span {
-  max-width: 100%;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-size: 12px;
-  font-weight: 700;
-  text-align: left;
-}
-
-.scene2d-perspective-grid button small {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 4px;
+.scene2d-perspective-badge.primary {
+  border-color: color-mix(in srgb, var(--color-accent) 55%, transparent);
+  color: var(--color-accent);
+  background: color-mix(in srgb, var(--color-accent) 12%, transparent);
 }
 
 .scene2d-perspective-thumb {
@@ -387,71 +48,748 @@
   letter-spacing: 0.08em;
 }
 
-.scene2d-perspective-badge {
-  display: inline-flex;
-  align-items: center;
-  min-height: 18px;
-  padding: 2px 6px;
-  border-radius: 999px;
-  border: 1px solid color-mix(in srgb, var(--color-border) 82%, transparent);
-  color: var(--color-muted);
-  font-size: 9px;
-  text-transform: uppercase;
-}
-
-.scene2d-perspective-badge.primary {
-  border-color: color-mix(in srgb, var(--color-accent) 55%, transparent);
-  color: var(--color-accent);
-  background: color-mix(in srgb, var(--color-accent) 12%, transparent);
-}
-
-.scene2d-perspective-add-card {
-  align-items: center !important;
-  justify-content: center;
-  border-style: dashed !important;
-  color: var(--color-muted) !important;
-}
-
 .scene2d-perspective-add-mark {
   width: 32px;
   height: 32px;
+  position: relative;
   display: grid;
   place-items: center;
   border-radius: 999px;
   border: 1px solid color-mix(in srgb, var(--color-accent) 55%, transparent);
   color: var(--color-accent);
-  font-size: 20px !important;
+  font-size: 0;
   line-height: 1;
 }
 
-.scene2d-preview-area {
-  flex: 1 1 auto;
-  min-height: 280px;
+.scene2d-perspective-add-mark::before,
+.scene2d-perspective-add-mark::after,
+.scene2d-scene-add-tile-icon::before,
+.scene2d-scene-add-tile-icon::after {
+  content: '';
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 10px;
+  height: 1px;
+  border-radius: 999px;
+  background: currentColor;
+  transform: translate(-50%, -50%);
+}
+
+.scene2d-perspective-add-mark::after,
+.scene2d-scene-add-tile-icon::after {
+  transform: translate(-50%, -50%) rotate(90deg);
+}
+
+/* ── Page root ──────────────────────────────────────────────────────── */
+.scene2d-workspace-page {
+  width: 100%;
+  height: 100%;
   min-width: 0;
+  min-height: 0;
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  overflow: hidden;
+  background:
+    radial-gradient(circle at 50% 0%, color-mix(in srgb, var(--color-accent) 9%, transparent), transparent 34%),
+    var(--color-surface);
+}
+
+/* ── Two-column root grid: scene list | right column ───────────────── */
+.scene2d-workspace {
+  display: grid;
+  grid-template-columns: minmax(200px, 240px) minmax(0, 1fr);
+  flex: 1 1 auto;
+  min-height: 0;
   overflow: hidden;
 }
 
-.scene2d-preview-stage {
+/* ── Left: Scene list ───────────────────────────────────────────────── */
+.scene2d-scene-list {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: 12px;
+  border-right: 1px solid color-mix(in srgb, var(--color-border) 80%, transparent);
+  background: color-mix(in srgb, var(--bg-toolbar) 90%, #000);
+  scrollbar-width: thin;
+}
+
+.scene2d-scene-list-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+
+.scene2d-workspace-section-title {
+  color: var(--color-muted);
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+/* Add Scene tile — at the bottom of the list, like "Add Perspective" */
+.scene2d-scene-add-tile {
+  width: 100%;
+  margin-top: 4px;
+  padding: 9px 10px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  border-radius: 9px;
+  border: 1px dashed color-mix(in srgb, var(--color-accent) 45%, var(--color-border));
+  background: transparent;
+  color: var(--color-muted);
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+  text-align: left;
+}
+
+.scene2d-scene-add-tile:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--color-accent) 7%, transparent);
+  color: var(--color-accent);
+}
+
+.scene2d-scene-add-tile:disabled {
+  opacity: 0.38;
+  cursor: default;
+}
+
+.scene2d-scene-add-tile-icon {
+  width: 22px;
+  height: 22px;
+  position: relative;
+  flex-shrink: 0;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  border: 1px solid color-mix(in srgb, var(--color-accent) 55%, transparent);
+  color: var(--color-accent);
+  font-size: 0;
+  line-height: 1;
+}
+
+.scene2d-scene-list button {
+  width: 100%;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 3px;
+  padding: 9px;
+  margin-bottom: 7px;
+  border-radius: 9px;
+  border: 1px solid color-mix(in srgb, var(--color-border) 78%, transparent);
+  background: color-mix(in srgb, var(--bg-panel) 84%, transparent);
+  color: var(--color-text);
+  cursor: pointer;
+}
+
+.scene2d-scene-list button:hover:not(.is-selected) {
+  border-color: color-mix(in srgb, var(--color-accent) 35%, var(--color-border));
+  background: color-mix(in srgb, var(--color-accent) 7%, var(--bg-panel));
+}
+
+.scene2d-scene-list button.is-selected {
+  border-color: var(--color-accent);
+  background:
+    linear-gradient(90deg, color-mix(in srgb, var(--color-accent) 16%, transparent), transparent),
+    var(--color-accent-soft);
+}
+
+.scene2d-scene-list button span {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.scene2d-scene-list button small {
+  color: var(--color-muted);
+  font-size: 10px;
+}
+
+.scene2d-scene-list .scene2d-scene-add-tile {
+  flex-direction: row;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  margin-top: 4px;
+  margin-bottom: 0;
+  text-align: center;
+}
+
+.scene2d-empty {
+  color: var(--color-muted);
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+/* ── Right column: perspective strip stacked above canvas ───────────── */
+.scene2d-main-col {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+/* ── Perspective horizontal strip (top of right column) ─────────────── */
+.scene2d-perspective-strip {
+  flex: 0 0 auto;
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: minmax(150px, 176px);
+  gap: 9px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding: 10px 12px 10px;
+  border-bottom: 1px solid color-mix(in srgb, var(--color-border) 72%, transparent);
+  background: color-mix(in srgb, var(--bg-toolbar) 88%, #000);
+  scrollbar-width: thin;
+}
+
+.scene2d-perspective-strip button {
+  min-width: 0;
+  min-height: 130px;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 7px;
+  padding: 7px;
+  border-radius: 10px;
+  border: 1px solid color-mix(in srgb, var(--color-border) 76%, transparent);
+  background: color-mix(in srgb, var(--bg-panel) 82%, transparent);
+  color: var(--color-text);
+  cursor: pointer;
+}
+
+.scene2d-perspective-strip button:hover:not(.is-selected):not(:disabled) {
+  border-color: color-mix(in srgb, var(--color-accent) 40%, var(--color-border));
+  background: color-mix(in srgb, var(--color-accent) 8%, var(--bg-panel));
+}
+
+.scene2d-perspective-strip button.is-selected {
+  border-color: var(--color-accent);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--color-accent) 60%, transparent);
+}
+
+.scene2d-perspective-strip button[draggable='true'] {
+  user-select: none;
+}
+
+.scene2d-perspective-strip button.is-dragging {
+  opacity: 0.48;
+}
+
+.scene2d-perspective-strip button.drop-before {
+  box-shadow:
+    -4px 0 0 var(--color-accent),
+    0 0 0 1px color-mix(in srgb, var(--color-accent) 40%, transparent);
+}
+
+.scene2d-perspective-strip button.drop-after {
+  box-shadow:
+    4px 0 0 var(--color-accent),
+    0 0 0 1px color-mix(in srgb, var(--color-accent) 40%, transparent);
+}
+
+.scene2d-perspective-strip button > span {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+  font-weight: 700;
+  text-align: left;
+}
+
+.scene2d-perspective-strip button small {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.scene2d-perspective-add-card {
+  align-items: center !important;
+  justify-content: center;
+  gap: 8px !important;
+  border-style: dashed !important;
+  color: var(--color-muted) !important;
+}
+
+.scene2d-perspective-import-card {
+  align-items: center !important;
+  justify-content: center;
+  border-style: dashed !important;
+  color: var(--color-muted) !important;
+  font-size: 11px !important;
+}
+
+.scene2d-perspective-import-card:disabled,
+.scene2d-perspective-add-card:disabled {
+  opacity: 0.38;
+  cursor: default;
+}
+
+/* ── Canvas area ────────────────────────────────────────────────────── */
+.scene2d-canvas-area {
+  position: relative;
   flex: 1 1 auto;
   min-height: 0;
   min-width: 0;
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background:
+    radial-gradient(circle at 50% 42%, color-mix(in srgb, var(--color-accent) 6%, transparent), transparent 40%),
+    linear-gradient(45deg, rgba(255, 255, 255, 0.02) 25%, transparent 25%),
+    linear-gradient(-45deg, rgba(255, 255, 255, 0.02) 25%, transparent 25%),
+    #101217;
+  background-position: center, 0 0, 0 10px;
+  background-size: auto, 20px 20px, 20px 20px;
+}
+
+/* ── Canvas title overlay (top-left, non-blocking) ──────────────────── */
+.scene2d-canvas-title {
+  position: absolute;
+  top: 16px;
+  left: 16px;
+  z-index: 5;
+  pointer-events: none;
+  padding: 6px 10px;
+  border-radius: 8px;
+  background: rgba(10, 12, 16, 0.58);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  max-width: 260px;
+}
+
+.scene2d-canvas-title-scene {
+  font-size: 10px;
+  color: var(--color-muted);
+  font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.scene2d-canvas-title-perspective {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--color-text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.scene2d-canvas-title-index {
+  font-weight: 400;
+  color: var(--color-muted);
+}
+
+/* ── Action feedback toast (top-center) ─────────────────────────────── */
+.scene2d-toast {
+  position: absolute;
+  top: 16px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 20;
+  pointer-events: none;
+  padding: 6px 14px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--bg-elevated) 94%, transparent);
+  border: 1px solid color-mix(in srgb, var(--color-accent) 30%, var(--color-border));
+  color: var(--color-text);
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
+  animation: scene2d-toast-in 0.15s ease;
+}
+
+@keyframes scene2d-toast-in {
+  from { opacity: 0; transform: translateX(-50%) translateY(-6px); }
+  to   { opacity: 1; transform: translateX(-50%) translateY(0); }
+}
+
+/* ── Floating Inspector island (top-right) ──────────────────────────── */
+/* 25% larger than original 300px = 375px; 24px inset from edges */
+.scene2d-inspector {
+  position: absolute;
+  top: 24px;
+  right: 24px;
+  z-index: 10;
+  width: min(375px, calc(100% - 48px));
+  max-height: calc(100% - 80px);
+  display: flex;
+  flex-direction: column;
+  border-radius: 14px;
+  background: color-mix(in srgb, var(--bg-panel) 96%, transparent);
+  border: 1px solid color-mix(in srgb, var(--color-border) 80%, transparent);
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.36), 0 2px 10px rgba(0, 0, 0, 0.2);
+}
+
+/* Collapsed pill state */
+.scene2d-inspector.is-collapsed {
+  width: auto;
+  max-height: none;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--bg-panel) 90%, transparent);
+}
+
+.scene2d-inspector-pill {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 14px;
+  border: none;
+  background: transparent;
+  color: var(--color-text);
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+  border-radius: 999px;
+  white-space: nowrap;
+  max-width: min(340px, calc(100vw - 48px));
+}
+
+.scene2d-inspector-pill:hover {
+  background: color-mix(in srgb, var(--bg-elevated) 60%, transparent);
+}
+
+.scene2d-inspector-pill-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 600;
+}
+
+.scene2d-inspector-pill-icon {
+  flex: 0 0 auto;
+  font-size: 14px;
+  color: var(--color-muted);
+}
+
+/* Inspector header */
+.scene2d-inspector-header {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 14px 10px;
+  border-bottom: 1px solid color-mix(in srgb, var(--color-border) 55%, transparent);
+}
+
+.scene2d-inspector-heading {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--color-muted);
+}
+
+.scene2d-inspector-close {
+  width: 24px;
+  height: 24px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--color-muted);
+  cursor: pointer;
+  font-size: 15px;
+  line-height: 1;
+}
+
+.scene2d-inspector-close:hover {
+  background: color-mix(in srgb, var(--color-border) 60%, transparent);
+  color: var(--color-text);
+}
+
+/* Inspector scrollable body */
+.scene2d-inspector-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  scrollbar-width: thin;
+  padding: 4px 0 10px;
+}
+
+/* Inspector sections */
+.scene2d-insp-section {
+  padding: 16px 18px 14px;
+}
+
+.scene2d-insp-section + .scene2d-insp-section {
+  border-top: 1px solid color-mix(in srgb, var(--color-border) 50%, transparent);
+}
+
+.scene2d-insp-section-label {
+  font-size: 9px;
+  font-weight: 800;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--color-muted);
+  margin-bottom: 14px;
+}
+
+.scene2d-insp-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: 12px;
+  color: var(--color-muted);
+  font-size: 11px;
+}
+
+.scene2d-insp-field input,
+.scene2d-insp-field select {
+  width: 100%;
+  min-width: 0;
+  padding: 7px 9px;
+  border-radius: 7px;
+  border: 1px solid var(--color-border);
+  background: color-mix(in srgb, var(--bg-elevated) 80%, transparent);
+  color: var(--color-text);
+  font: inherit;
+  font-size: 12px;
+  min-height: 32px;
+}
+
+.scene2d-insp-field input:focus,
+.scene2d-insp-field select:focus {
+  outline: none;
+  border-color: color-mix(in srgb, var(--color-accent) 80%, transparent);
+}
+
+/* Expandable description */
+.scene2d-insp-desc-group {
+  margin-bottom: 9px;
+}
+
+.scene2d-insp-desc-summary {
+  cursor: pointer;
+  font-size: 11px;
+  color: var(--color-muted);
+  user-select: none;
+  list-style: none;
+  padding: 3px 0;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.scene2d-insp-desc-summary::-webkit-details-marker { display: none; }
+
+.scene2d-insp-desc-summary::before {
+  content: '▶';
+  font-size: 8px;
+  transition: transform 0.12s;
+}
+
+details[open] > .scene2d-insp-desc-summary::before {
+  transform: rotate(90deg);
+}
+
+.scene2d-insp-desc-area {
+  width: 100%;
+  margin-top: 6px;
+  padding: 6px 8px;
+  border-radius: 7px;
+  border: 1px solid var(--color-border);
+  background: color-mix(in srgb, var(--bg-elevated) 80%, transparent);
+  color: var(--color-text);
+  font: inherit;
+  font-size: 12px;
+  resize: vertical;
+}
+
+.scene2d-insp-desc-area:focus {
+  outline: none;
+  border-color: color-mix(in srgb, var(--color-accent) 80%, transparent);
+}
+
+/* Badge row under title */
+.scene2d-insp-meta-row {
+  display: flex;
+  gap: 5px;
+  margin-bottom: 9px;
+}
+
+/* Save button — dim normally, gold-accented when dirty */
+.scene2d-insp-row {
+  margin-bottom: 10px;
+}
+
+.scene2d-insp-save {
+  width: 100%;
+  padding: 6px 10px;
+  border-radius: 7px;
+  border: 1px solid var(--color-border);
+  background: color-mix(in srgb, var(--bg-elevated) 80%, transparent);
+  color: var(--color-muted);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  min-height: 30px;
+}
+
+.scene2d-insp-save.is-dirty {
+  border-color: var(--color-accent);
+  background: color-mix(in srgb, var(--color-accent) 14%, var(--bg-elevated));
+  color: var(--color-accent);
+  font-weight: 700;
+}
+
+.scene2d-insp-save:hover:not(:disabled) {
+  border-color: color-mix(in srgb, var(--color-accent) 60%, var(--color-border));
+  background: color-mix(in srgb, var(--color-accent) 10%, var(--bg-elevated));
+  color: var(--color-text);
+}
+
+.scene2d-insp-save:disabled { opacity: 0.38; cursor: default; }
+
+/* Open in Photoshop — primary weight */
+.scene2d-insp-primary-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 6px;
+}
+
+.scene2d-insp-open-ps {
+  width: 100%;
+  padding: 7px 10px;
+  border-radius: 7px;
+  border: 1px solid var(--color-accent);
+  background: var(--color-accent);
+  color: #120d05;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+  min-height: 32px;
+}
+
+.scene2d-insp-open-ps:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--color-accent) 85%, #fff);
+}
+
+.scene2d-insp-open-ps:disabled { opacity: 0.38; cursor: default; }
+
+/* Secondary actions (Refresh, Set primary, Add to References) */
+.scene2d-insp-secondary-actions {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 6px;
+}
+
+.scene2d-insp-secondary-btn {
+  flex: 1;
+  padding: 5px 7px;
+  border-radius: 7px;
+  border: 1px solid var(--color-border);
+  background: color-mix(in srgb, var(--bg-elevated) 70%, transparent);
+  color: var(--color-muted);
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+  min-height: 28px;
+  text-align: center;
+}
+
+.scene2d-insp-secondary-btn:hover:not(:disabled) {
+  border-color: color-mix(in srgb, var(--color-accent) 40%, var(--color-border));
+  background: color-mix(in srgb, var(--color-accent) 8%, var(--bg-elevated));
+  color: var(--color-text);
+}
+
+.scene2d-insp-secondary-btn.is-state-active {
+  border-color: color-mix(in srgb, var(--color-accent) 55%, transparent);
+  color: var(--color-accent);
+  background: color-mix(in srgb, var(--color-accent) 10%, transparent);
+}
+
+.scene2d-insp-secondary-btn:disabled { opacity: 0.38; cursor: default; }
+
+/* Danger actions */
+.scene2d-insp-danger-row {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid color-mix(in srgb, var(--color-danger) 18%, transparent);
+}
+
+.scene2d-insp-danger-btn {
+  width: 100%;
+  padding: 5px 8px;
+  border-radius: 7px;
+  border: 1px solid color-mix(in srgb, var(--color-danger) 35%, transparent);
+  background: transparent;
+  color: var(--color-danger);
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+  min-height: 28px;
+}
+
+.scene2d-insp-danger-btn:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--color-danger) 10%, transparent);
+}
+
+.scene2d-insp-danger-btn:disabled { opacity: 0.38; cursor: default; }
+
+/* Plugin status badge */
+.scene2d-plugin-status {
+  display: inline-flex;
+  align-items: center;
+  padding: 3px 8px;
+  margin-bottom: 9px;
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--color-border) 60%, transparent);
+  color: var(--color-muted);
+  font-size: 10px;
+  font-weight: 600;
+}
+
+.scene2d-plugin-status.linked {
+  color: #7be07b;
+  border-color: color-mix(in srgb, #7be07b 40%, transparent);
+  background: color-mix(in srgb, #7be07b 8%, transparent);
+}
+
+.scene2d-plugin-status.open {
+  color: #7abcff;
+  border-color: color-mix(in srgb, #7abcff 40%, transparent);
+  background: color-mix(in srgb, #7abcff 8%, transparent);
+}
+
+.scene2d-insp-empty {
+  font-size: 11px;
+  color: var(--color-muted);
+}
+
+.scene2d-insp-empty-pad { padding: 14px; }
+
+/* ── Preview viewport ───────────────────────────────────────────────── */
+.scene2d-preview-viewport {
+  width: 100%;
+  height: 100%;
   display: flex;
   align-items: center;
   justify-content: center;
   overflow: auto;
-  border-radius: 12px;
-  border: 1px solid color-mix(in srgb, var(--color-border) 74%, transparent);
-  background:
-    radial-gradient(circle at 50% 42%, color-mix(in srgb, var(--color-accent) 8%, transparent), transparent 40%),
-    linear-gradient(45deg, rgba(255, 255, 255, 0.025) 25%, transparent 25%),
-    linear-gradient(-45deg, rgba(255, 255, 255, 0.025) 25%, transparent 25%),
-    #101217;
-  background-position: center, 0 0, 0 8px;
-  background-size: auto, 16px 16px, 16px 16px;
-  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.025);
 }
 
 .scene2d-preview-canvas {
@@ -496,6 +834,9 @@
   gap: 10px;
   padding: 22px;
   text-align: center;
+  color: var(--color-muted);
+  font-size: 11px;
+  line-height: 1.45;
 }
 
 .scene2d-preview-placeholder strong {
@@ -503,88 +844,174 @@
   font-size: 14px;
 }
 
-.scene2d-zoom-toolbar {
-  flex: 0 0 auto;
+.scene2d-preview-placeholder-actions {
   display: flex;
-  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
   justify-content: center;
-  gap: 8px;
-  padding: 8px;
-  border-radius: 10px;
-  border: 1px solid color-mix(in srgb, var(--color-border) 68%, transparent);
-  background: color-mix(in srgb, var(--bg-toolbar) 80%, transparent);
-  color: var(--color-muted);
-  font-size: 10px;
 }
 
-.scene2d-zoom-toolbar button.is-active {
+.scene2d-preview-placeholder-actions button {
+  padding: 6px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--color-border);
+  background: color-mix(in srgb, var(--bg-elevated) 82%, transparent);
+  color: var(--color-text);
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.scene2d-preview-placeholder-actions button:hover:not(:disabled) {
+  border-color: color-mix(in srgb, var(--color-accent) 45%, var(--color-border));
+  background: color-mix(in srgb, var(--color-accent) 12%, var(--bg-elevated));
+}
+
+/* ── Empty states ───────────────────────────────────────────────────── */
+.scene2d-canvas-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  padding: 36px 24px;
+  text-align: center;
+}
+
+.scene2d-canvas-empty strong {
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--color-text);
+}
+
+.scene2d-canvas-empty span {
+  font-size: 12px;
+  color: var(--color-muted);
+  max-width: 300px;
+  line-height: 1.45;
+}
+
+.scene2d-canvas-empty-btn {
+  padding: 8px 18px;
+  border-radius: 8px;
+  border: 1px solid var(--color-accent);
+  background: var(--color-accent);
+  color: #120d05;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.scene2d-canvas-empty-btn:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--color-accent) 85%, #fff);
+}
+
+.scene2d-canvas-empty-btn:disabled { opacity: 0.38; cursor: default; }
+
+.scene2d-canvas-empty-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  justify-content: center;
+}
+
+.scene2d-canvas-empty-actions button {
+  padding: 7px 14px;
+  border-radius: 8px;
+  border: 1px solid var(--color-border);
+  background: color-mix(in srgb, var(--bg-elevated) 80%, transparent);
+  color: var(--color-text);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.scene2d-canvas-empty-actions button:hover:not(:disabled) {
+  border-color: color-mix(in srgb, var(--color-accent) 50%, var(--color-border));
+  background: color-mix(in srgb, var(--color-accent) 10%, var(--bg-elevated));
+}
+
+.scene2d-canvas-empty-actions button:disabled { opacity: 0.38; cursor: default; }
+
+/* ── Floating zoom island (bottom-center) ───────────────────────────── */
+.scene2d-zoom-island {
+  position: absolute;
+  bottom: 18px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--bg-panel) 94%, transparent);
+  border: 1px solid color-mix(in srgb, var(--color-border) 75%, transparent);
+  box-shadow: 0 4px 18px rgba(0, 0, 0, 0.28);
+  white-space: nowrap;
+}
+
+.scene2d-zoom-island button {
+  padding: 3px 8px;
+  border-radius: 6px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--color-muted);
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+  min-height: 26px;
+  min-width: 32px;
+}
+
+.scene2d-zoom-island button:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--bg-elevated) 70%, transparent);
+  border-color: color-mix(in srgb, var(--color-border) 60%, transparent);
+  color: var(--color-text);
+}
+
+.scene2d-zoom-island button.is-active {
   border-color: var(--color-accent);
   background: var(--color-accent-soft);
   color: var(--color-accent);
 }
 
-.scene2d-zoom-toolbar input[type='range'] {
-  width: min(260px, 28vw);
+.scene2d-zoom-island button:disabled { opacity: 0.38; cursor: default; }
+
+.scene2d-zoom-slider {
+  width: clamp(80px, 18vw, 220px);
   accent-color: var(--color-accent);
+  cursor: pointer;
 }
 
-.scene2d-zoom-toolbar output {
+.scene2d-zoom-output {
   min-width: 42px;
   color: var(--color-text);
   font-size: 11px;
   text-align: right;
+  cursor: pointer;
+  user-select: none;
 }
 
-.scene2d-perspective-editor {
-  flex: 0 0 auto;
-  display: grid;
-  grid-template-columns: minmax(180px, 1fr) minmax(180px, 280px);
-  gap: 8px;
-  align-items: end;
-  padding: 10px;
-  border: 1px solid color-mix(in srgb, var(--color-border) 70%, transparent);
-  border-radius: 10px;
-  background: color-mix(in srgb, var(--bg-panel) 74%, transparent);
-}
-
-.scene2d-perspective-editor .scene2d-actions {
-  grid-column: 1 / -1;
-}
-
-.scene2d-plugin-status {
-  grid-column: 1 / -1;
-  font-size: 11px;
-  font-weight: 600;
-  padding: 4px 8px;
-  border-radius: 4px;
-  border: 1px solid color-mix(in srgb, var(--color-border) 60%, transparent);
-  color: var(--color-text-muted, #aaa);
-}
-
-.scene2d-plugin-status.linked {
-  color: #7be07b;
-  border-color: color-mix(in srgb, #7be07b 40%, transparent);
-  background: color-mix(in srgb, #7be07b 8%, transparent);
-}
-
-.scene2d-plugin-status.open {
-  color: #7abcff;
-  border-color: color-mix(in srgb, #7abcff 40%, transparent);
-  background: color-mix(in srgb, #7abcff 8%, transparent);
-}
-
+/* ── Responsive ─────────────────────────────────────────────────────── */
 @media (max-width: 1180px) {
-  .scene2d-workspace-layout {
+  .scene2d-workspace {
     grid-template-columns: minmax(170px, 210px) minmax(0, 1fr);
   }
 
-  .scene2d-workspace-fields,
-  .scene2d-perspective-editor {
-    grid-template-columns: 1fr;
+  .scene2d-inspector {
+    width: min(340px, calc(100% - 48px));
+  }
+}
+
+@media (max-width: 900px) {
+  .scene2d-workspace {
+    grid-template-columns: minmax(150px, 180px) minmax(0, 1fr);
   }
 
-  .scene2d-field-wide,
-  .scene2d-perspective-editor .scene2d-actions {
-    grid-column: auto;
+  .scene2d-inspector {
+    width: min(300px, calc(100% - 48px));
   }
+
+  .scene2d-zoom-slider { display: none; }
 }

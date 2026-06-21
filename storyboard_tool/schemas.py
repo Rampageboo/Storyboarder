@@ -206,6 +206,14 @@ class Scene2DPerspectiveUpdateRequest(BaseModel):
     linked_scene3d_view: dict[str, Any] | None = None
 
 
+class Scene2DPerspectiveMoveRequest(BaseModel):
+    target_scene_id: str
+
+
+class Scene2DPerspectiveReorderRequest(BaseModel):
+    perspective_ids: list[str]
+
+
 class Scene3DCreateRequest(BaseModel):
     title: str | None = None
     description: str | None = None

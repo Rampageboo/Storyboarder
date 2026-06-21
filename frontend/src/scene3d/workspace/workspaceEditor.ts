@@ -614,7 +614,9 @@ export class Scene3DEditor {
 
   applyDisplaySettings(meta: Record<string, unknown> = {}): void {
     if (!meta || typeof meta !== 'object') return
-    this.setFollowCamera(meta.follow_camera !== false, { persist: false })
+    if (Object.prototype.hasOwnProperty.call(meta, 'follow_camera')) {
+      this.setFollowCamera(meta.follow_camera !== false, { persist: false })
+    }
     this.setProgramLightingMode(String(meta.program_lighting || 'auto'), { persist: false, notify: false })
     this.setObjectColorPreview(meta.object_color_preview !== false, { persist: false, notify: false })
     this.setWireframeMode(String(meta.wireframe_mode || 'off'), { persist: false, notify: false })

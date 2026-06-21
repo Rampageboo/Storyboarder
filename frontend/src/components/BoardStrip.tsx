@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type DragEvent } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type DragEvent } from 'react'
 import { useProject } from '../state/useProject'
 import { shotDisplayLabel } from '../utils/shotDisplay'
 import {
@@ -19,9 +19,9 @@ function scrollCardIntoViewport(viewport: HTMLElement, card: HTMLElement) {
   const viewRight = viewLeft + viewport.clientWidth
 
   if (cardLeft < viewLeft + pad) {
-    viewport.scrollTo({ left: Math.max(0, cardLeft - pad), behavior: 'smooth' })
+    viewport.scrollTo({ left: Math.max(0, cardLeft - pad), behavior: 'auto' })
   } else if (cardRight > viewRight - pad) {
-    viewport.scrollTo({ left: cardRight - viewport.clientWidth + pad, behavior: 'smooth' })
+    viewport.scrollTo({ left: cardRight - viewport.clientWidth + pad, behavior: 'auto' })
   }
 }
 
@@ -90,6 +90,8 @@ export function BoardStrip() {
   const canStepBack = selectedIndex > 0
   const canStepForward = selectedIndex >= 0 && selectedIndex < shots.length - 1
   const showTransportControls = showTransport || playing
+  const lastScrollLeftRef = useRef(0)
+  const preserveScrollOnSelectRef = useRef(false)
 
   useEffect(() => {
     if (!playing || disabled || selectedIndex < 0 || shots.length === 0) return
@@ -184,8 +186,13 @@ export function BoardStrip() {
     }
   }, [activeAppliedSegmentId, project, flushDirtyShots, deleteRefSegmentUndoable, dismissRefSegmentUi, reportError])
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (!selectedShotId || !viewportRef.current) return
+    if (preserveScrollOnSelectRef.current) {
+      viewportRef.current.scrollLeft = lastScrollLeftRef.current
+      preserveScrollOnSelectRef.current = false
+      return
+    }
     const card = viewportRef.current.querySelector(`[data-shot-id="${CSS.escape(selectedShotId)}"]`)
     if (card instanceof HTMLElement) {
       scrollCardIntoViewport(viewportRef.current, card)
@@ -510,7 +517,13 @@ export function BoardStrip() {
         </div>
       </div>
 
-      <div ref={viewportRef} className="board-strip-viewport">
+      <div
+        ref={viewportRef}
+        className="board-strip-viewport"
+        onScroll={(event) => {
+          lastScrollLeftRef.current = event.currentTarget.scrollLeft
+        }}
+      >
         {shots.length === 0 ? (
           <div className="board-strip-empty">
             <p>No boards yet</p>
@@ -554,6 +567,11 @@ export function BoardStrip() {
                   ]
                     .filter(Boolean)
                     .join(' ')}
+                  onPointerDown={() => {
+                    if (!viewportRef.current) return
+                    lastScrollLeftRef.current = viewportRef.current.scrollLeft
+                    preserveScrollOnSelectRef.current = true
+                  }}
                   onClick={() => setSelectedShotId(shot.shot_id)}
                   onDragStart={(e) => handleDragStart(e, shot.shot_id)}
                   onDragOver={(e) => handleCardDragOver(e, shot.shot_id)}
@@ -605,6 +623,19 @@ export function BoardStrip() {
                 </div>
               )
             })}
+            <div className="board-strip-item board-strip-add-item" role="listitem">
+              <button
+                type="button"
+                className="board-strip-add-card"
+                onClick={() => void handleInsertAt(shots.length)}
+                disabled={disabled}
+                title="Add board at the end"
+                aria-label="Add board at the end"
+              >
+                <span className="board-strip-add-mark" aria-hidden="true" />
+                <span>Add Board</span>
+              </button>
+            </div>
             </div>
             <div className="board-strip-dotrail-wrap">
             <div className="board-strip-dotrail" aria-label="Reference segment range">

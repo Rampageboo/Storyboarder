@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type DragEvent } from 'react'
 import {
   addScene2DPerspectiveToReferences,
   createScene2D,
@@ -8,8 +8,10 @@ import {
   importScene2DPerspective,
   listScene2D,
   listScene3D,
+  moveScene2DPerspective,
   openScene2DPerspective,
   refreshScene2DPerspectivePreview,
+  reorderScene2DPerspectives,
   scene2DPerspectivePreviewUrl,
   setPrimaryScene2DPerspective,
   updateScene2D,
@@ -18,7 +20,12 @@ import {
 import { useProject } from '../state/useProject'
 import { useBridgeStatus } from '../state/liveBridgeUtils'
 import type { Scene2D, Scene2DPerspective, Scene3DRecord } from '../types'
+import { ContextMenu, type ContextMenuItem, type ContextMenuState } from './ContextMenu'
 import './Scene2DPanel.css'
+
+// TODO(Part 4): Perspective ordering — backend does not yet persist order, so
+// drag-and-drop is intentionally omitted. Add when a stable ordering field is
+// available so UUIDs are never used to derive display order.
 
 const MIN_PREVIEW_ZOOM = 25
 const MAX_PREVIEW_ZOOM = 200
@@ -38,6 +45,11 @@ function clampPreviewZoom(value: number) {
 
 function replaceScene(scenes: Scene2D[], next: Scene2D): Scene2D[] {
   return scenes.map((scene) => (scene.id === next.id ? next : scene))
+}
+
+function dropIsAfter(event: DragEvent<HTMLElement>): boolean {
+  const rect = event.currentTarget.getBoundingClientRect()
+  return event.clientX > rect.left + rect.width / 2
 }
 
 function PerspectiveCardPreview({ scene, perspective }: { scene: Scene2D; perspective: Scene2DPerspective }) {
@@ -80,8 +92,18 @@ export function Scene2DPanel({ active = false }: { active?: boolean }) {
   const [previewFailedFor, setPreviewFailedFor] = useState('')
   const [previewZoom, setPreviewZoom] = useState(100)
   const [fitPreview, setFitPreview] = useState(true)
+  const [inspectorCollapsed, setInspectorCollapsed] = useState(false)
+  const [descriptionOpen, setDescriptionOpen] = useState(false)
+  const [contextMenu, setContextMenu] = useState<(ContextMenuState & { perspectiveId: string }) | null>(null)
+  const [dragPerspectiveId, setDragPerspectiveId] = useState<string | null>(null)
+  const [dropPerspectiveTarget, setDropPerspectiveTarget] = useState<{ id: string; after: boolean } | null>(null)
   const importRef = useRef<HTMLInputElement | null>(null)
+  const canvasAreaRef = useRef<HTMLDivElement | null>(null)
   const lastPluginChangeRevisionRef = useRef<number | null>(null)
+  const sceneSavingRef = useRef(false)
+  const perspectiveSavingRef = useRef(false)
+  // Tracks whether the canvas currently has something to zoom — avoids stale closure in wheel handler
+  const canWheelZoomRef = useRef(false)
 
   const selectedScene = useMemo(
     () => scenes.find((scene) => scene.id === selectedSceneId) ?? scenes[0] ?? null,
@@ -96,9 +118,26 @@ export function Scene2DPanel({ active = false }: { active?: boolean }) {
       null
     )
   }, [selectedPerspectiveId, selectedScene])
+
   const disabled = busy || projectActionBusy
   const previewKey = selectedScene && selectedPerspective ? `${selectedScene.id}:${selectedPerspective.id}` : ''
   const previewMissing = !selectedScene || !selectedPerspective || previewFailedFor === previewKey
+
+  // Dirty detection — Save button is only emphasized when there are unsaved edits
+  const sceneDirty =
+    sceneTitle !== (selectedScene?.title ?? '') ||
+    sceneDescription !== (selectedScene?.description ?? '') ||
+    scene3dLink !== (selectedScene?.linked_scene3d_id ?? '')
+
+  const perspectiveDirty =
+    perspectiveTitle !== (selectedPerspective?.title ?? '') ||
+    perspective3dLink !== (selectedPerspective?.linked_scene3d_id ?? '')
+
+  // Position label for canvas overlay
+  const perspectiveIndex = selectedScene
+    ? selectedScene.perspectives.findIndex((p) => p.id === selectedPerspective?.id) + 1
+    : 0
+  const perspectiveTotal = selectedScene?.perspectives.length ?? 0
 
   const loadScenes = useCallback(async () => {
     if (!project) {
@@ -120,7 +159,6 @@ export function Scene2DPanel({ active = false }: { active?: boolean }) {
     }
   }, [project, reportError])
 
-  // Lazy-load: only fetch scenes when the panel is first activated.
   useEffect(() => {
     if (!active) return
     hasBeenActivatedRef.current = true
@@ -156,9 +194,34 @@ export function Scene2DPanel({ active = false }: { active?: boolean }) {
     setFitPreview(true)
   }, [selectedPerspective?.id, selectedPerspective?.title, selectedPerspective?.linked_scene3d_id])
 
-  // Automatic refresh when the plugin exports a Scene 2D preview (Part 13).
-  // Watches plugin_change.revision; on a scene2d change, reloads scene data
-  // without resetting the zoom or selected perspective unless necessary.
+  // Auto-dismiss action feedback toast
+  useEffect(() => {
+    if (!note) return
+    const timer = setTimeout(() => setNote(''), 3000)
+    return () => clearTimeout(timer)
+  }, [note])
+
+  // Keep the wheel-zoom guard in sync with whether there's a perspective to zoom
+  useEffect(() => {
+    canWheelZoomRef.current = !!selectedPerspective && (selectedScene?.perspectives.length ?? 0) > 0
+  }, [selectedPerspective, selectedScene?.perspectives.length])
+
+  // Wheel-to-zoom on the canvas area (passive:false so we can preventDefault)
+  useEffect(() => {
+    const area = canvasAreaRef.current
+    if (!area) return
+    const onWheel = (e: WheelEvent) => {
+      if (!canWheelZoomRef.current) return
+      e.preventDefault()
+      const step = e.deltaY > 0 ? -ZOOM_STEP : ZOOM_STEP
+      setFitPreview(false)
+      setPreviewZoom((prev) => clampPreviewZoom(prev + step))
+    }
+    area.addEventListener('wheel', onWheel, { passive: false })
+    return () => area.removeEventListener('wheel', onWheel)
+  }, [])
+
+  // Reload when plugin exports a Scene 2D preview
   useEffect(() => {
     const change = bridgeStatus?.plugin_change
     if (!change || change.kind !== 'scene2d') return
@@ -168,9 +231,6 @@ export function Scene2DPanel({ active = false }: { active?: boolean }) {
     if (hasBeenActivatedRef.current) {
       void loadScenes()
     }
-    // Bust the preview image cache for the changed perspective by touching the
-    // previewFailedFor state — the timestamp is embedded in scene.updated_at via
-    // PerspectiveCardPreview's previewKey, so reloading scenes is sufficient.
   }, [bridgeStatus?.plugin_change, loadScenes])
 
   const setManualPreviewZoom = useCallback((value: number) => {
@@ -196,6 +256,8 @@ export function Scene2DPanel({ active = false }: { active?: boolean }) {
 
   const saveSceneDetails = useCallback(async () => {
     if (!selectedScene) return
+    if (sceneSavingRef.current) return
+    sceneSavingRef.current = true
     setBusy(true)
     try {
       await flushDirtyShots()
@@ -210,6 +272,7 @@ export function Scene2DPanel({ active = false }: { active?: boolean }) {
     } catch (error) {
       reportError(error)
     } finally {
+      sceneSavingRef.current = false
       setBusy(false)
     }
   }, [flushDirtyShots, reportError, scene3dLink, sceneDescription, sceneTitle, selectedScene])
@@ -258,6 +321,8 @@ export function Scene2DPanel({ active = false }: { active?: boolean }) {
 
   const savePerspectiveDetails = useCallback(async () => {
     if (!selectedScene || !selectedPerspective) return
+    if (perspectiveSavingRef.current) return
+    perspectiveSavingRef.current = true
     setBusy(true)
     try {
       await flushDirtyShots()
@@ -271,6 +336,7 @@ export function Scene2DPanel({ active = false }: { active?: boolean }) {
     } catch (error) {
       reportError(error)
     } finally {
+      perspectiveSavingRef.current = false
       setBusy(false)
     }
   }, [flushDirtyShots, perspective3dLink, perspectiveTitle, reportError, selectedPerspective, selectedScene])
@@ -335,6 +401,97 @@ export function Scene2DPanel({ active = false }: { active?: boolean }) {
     }
   }, [flushDirtyShots, reportError, selectedPerspective, selectedScene, setProject])
 
+  const movePerspectiveToScene = useCallback(
+    async (perspectiveId: string, targetSceneId: string) => {
+      if (!selectedScene || targetSceneId === selectedScene.id) return
+      setBusy(true)
+      try {
+        await flushDirtyShots()
+        const payload = await moveScene2DPerspective(selectedScene.id, perspectiveId, {
+          target_scene_id: targetSceneId,
+        })
+        setScenes(payload.scenes)
+        setSelectedSceneId(payload.target_scene.id)
+        setSelectedPerspectiveId(payload.perspective.id)
+        setNote(`Moved to ${sceneLabel(payload.target_scene)}.`)
+      } catch (error) {
+        reportError(error)
+      } finally {
+        setBusy(false)
+      }
+    },
+    [flushDirtyShots, reportError, selectedScene],
+  )
+
+  const handlePerspectiveDragStart = useCallback(
+    (event: DragEvent<HTMLButtonElement>, perspectiveId: string) => {
+      if (disabled) {
+        event.preventDefault()
+        return
+      }
+      setContextMenu(null)
+      setDragPerspectiveId(perspectiveId)
+      event.dataTransfer.effectAllowed = 'move'
+      try {
+        event.dataTransfer.setData('text/plain', perspectiveId)
+      } catch {
+        // Some embedded browsers reject setData; component state still tracks the drag.
+      }
+    },
+    [disabled],
+  )
+
+  const handlePerspectiveDragOver = useCallback(
+    (event: DragEvent<HTMLButtonElement>, perspectiveId: string) => {
+      if (!dragPerspectiveId || dragPerspectiveId === perspectiveId) return
+      event.preventDefault()
+      event.dataTransfer.dropEffect = 'move'
+      const after = dropIsAfter(event)
+      setDropPerspectiveTarget((prev) =>
+        prev && prev.id === perspectiveId && prev.after === after ? prev : { id: perspectiveId, after },
+      )
+    },
+    [dragPerspectiveId],
+  )
+
+  const handlePerspectiveDragEnd = useCallback(() => {
+    setDragPerspectiveId(null)
+    setDropPerspectiveTarget(null)
+  }, [])
+
+  const handlePerspectiveDrop = useCallback(
+    async (event: DragEvent<HTMLButtonElement>, perspectiveId: string) => {
+      event.preventDefault()
+      if (!selectedScene) return
+      const dragId = dragPerspectiveId
+      const after = dropIsAfter(event)
+      setDragPerspectiveId(null)
+      setDropPerspectiveTarget(null)
+      if (!dragId || dragId === perspectiveId) return
+
+      const ids = selectedScene.perspectives.map((item) => item.id).filter((id) => id !== dragId)
+      const targetIndex = ids.indexOf(perspectiveId)
+      if (targetIndex < 0) return
+      ids.splice(after ? targetIndex + 1 : targetIndex, 0, dragId)
+      const currentIds = selectedScene.perspectives.map((item) => item.id)
+      if (ids.length === currentIds.length && ids.every((id, index) => id === currentIds[index])) return
+
+      setBusy(true)
+      try {
+        await flushDirtyShots()
+        const payload = await reorderScene2DPerspectives(selectedScene.id, { perspective_ids: ids })
+        setScenes(payload.scenes)
+        setSelectedPerspectiveId(dragId)
+        setNote('Perspective order updated.')
+      } catch (error) {
+        reportError(error)
+      } finally {
+        setBusy(false)
+      }
+    },
+    [dragPerspectiveId, flushDirtyShots, reportError, selectedScene],
+  )
+
   const removePerspective = useCallback(async () => {
     if (!selectedScene || !selectedPerspective) return
     if (!window.confirm(`Delete perspective "${perspectiveLabel(selectedPerspective)}"?`)) return
@@ -369,255 +526,550 @@ export function Scene2DPanel({ active = false }: { active?: boolean }) {
     }
   }, [flushDirtyShots, reportError, selectedScene])
 
+  const perspectiveContextMenuItems = useMemo<ContextMenuItem[]>(() => {
+    if (!selectedScene || !contextMenu) return []
+    const perspective = selectedScene.perspectives.find((item) => item.id === contextMenu.perspectiveId)
+    if (!perspective) return []
+    const moveItems = scenes.map((scene) => ({
+      label: scene.id === selectedScene.id ? `${sceneLabel(scene)} (current)` : sceneLabel(scene),
+      disabled: disabled || scene.id === selectedScene.id,
+      onSelect: () => void movePerspectiveToScene(perspective.id, scene.id),
+    }))
+    return [
+      { kind: 'label', label: perspectiveLabel(perspective) },
+      { kind: 'separator' },
+      { kind: 'label', label: 'Move to scene' },
+      ...moveItems,
+    ]
+  }, [contextMenu, disabled, movePerspectiveToScene, scenes, selectedScene])
+
   if (!project) return null
+
+  // Plugin status badge for inspector
+  let pluginStatusLabel = ''
+  let pluginStatusClass = 'scene2d-plugin-status'
+  if (selectedScene && selectedPerspective && bridgeStatus?.plugin_linked) {
+    const workKey = `scene2d:${selectedScene.id}:${selectedPerspective.id}`
+    const isActive = bridgeStatus.plugin_active_work_key === workKey
+    const isOpen = (bridgeStatus.plugin_open_work_keys ?? []).includes(workKey)
+    const change = bridgeStatus.plugin_change
+    const recentlyExported =
+      change?.kind === 'scene2d' &&
+      change.scene_id === selectedScene.id &&
+      change.perspective_id === selectedPerspective.id
+    if (isActive) {
+      pluginStatusLabel = recentlyExported ? 'Preview updated' : 'Photoshop linked'
+      pluginStatusClass += ' linked'
+    } else if (isOpen) {
+      pluginStatusLabel = 'Open in Photoshop'
+      pluginStatusClass += ' open'
+    }
+  }
 
   return (
     <section className="scene2d-workspace-page" aria-label="Scene 2D workspace">
-          <div className="scene2d-workspace-header">
-            <div>
-              <div className="scene2d-workspace-title">Scene 2D Workspace</div>
-              <div className="scene2d-workspace-subtitle">
-                {selectedScene
-                  ? `${sceneLabel(selectedScene)} · ${selectedScene.perspectives.length} perspective${selectedScene.perspectives.length === 1 ? '' : 's'}`
-                  : 'Create a scene group to begin'}
-              </div>
-            </div>
-            <div className="scene2d-workspace-actions">
-              {note ? <span className="scene2d-note">{note}</span> : null}
-              <button type="button" onClick={() => void createScene()} disabled={disabled}>
-                Add Scene
-              </button>
-            </div>
+      <div className="scene2d-workspace">
+
+        {/* ── LEFT: Scene list ─────────────────────────────────────────── */}
+        <aside className="scene2d-scene-list">
+          <div className="scene2d-scene-list-header">
+            <span className="scene2d-workspace-section-title">Scene groups</span>
           </div>
 
-          <div className="scene2d-workspace-layout">
-            <aside className="scene2d-workspace-list">
-              <div className="scene2d-workspace-section-title">Scene groups</div>
-              {scenes.map((scene) => (
+          {scenes.map((scene) => (
+            <button
+              key={scene.id}
+              type="button"
+              className={scene.id === selectedScene?.id ? 'is-selected' : ''}
+              onClick={() => setSelectedSceneId(scene.id)}
+            >
+              <span>{sceneLabel(scene)}</span>
+              <small>
+                {scene.perspectives.length} perspective{scene.perspectives.length === 1 ? '' : 's'}
+              </small>
+            </button>
+          ))}
+
+          {scenes.length === 0 && (
+            <div className="scene2d-empty">No Scene 2D boards yet.</div>
+          )}
+
+          <button
+            type="button"
+            className="scene2d-scene-add-tile"
+            onClick={() => void createScene()}
+            disabled={disabled}
+            aria-label="Add scene"
+          >
+            <span className="scene2d-scene-add-tile-icon" aria-hidden="true" />
+            Add Scene
+          </button>
+        </aside>
+
+        {/* ── RIGHT: perspective strip + canvas ───────────────────────── */}
+        <div className="scene2d-main-col">
+
+          {/* Horizontal perspective strip */}
+          {selectedScene && (
+            <div className="scene2d-perspective-strip">
+              {selectedScene.perspectives.map((perspective) => (
                 <button
-                  key={scene.id}
                   type="button"
-                  className={scene.id === selectedScene?.id ? 'is-selected' : ''}
-                  onClick={() => setSelectedSceneId(scene.id)}
+                  key={perspective.id}
+                  draggable={!disabled}
+                  className={[
+                    perspective.id === selectedPerspective?.id ? 'is-selected' : '',
+                    dragPerspectiveId === perspective.id ? 'is-dragging' : '',
+                    dropPerspectiveTarget?.id === perspective.id
+                      ? dropPerspectiveTarget.after
+                        ? 'drop-after'
+                        : 'drop-before'
+                      : '',
+                  ]
+                    .filter(Boolean)
+                    .join(' ')}
+                  onClick={() => setSelectedPerspectiveId(perspective.id)}
+                  onContextMenu={(event) => {
+                    event.preventDefault()
+                    setSelectedPerspectiveId(perspective.id)
+                    setContextMenu({
+                      x: event.clientX,
+                      y: event.clientY,
+                      perspectiveId: perspective.id,
+                    })
+                  }}
+                  onDragStart={(event) => handlePerspectiveDragStart(event, perspective.id)}
+                  onDragOver={(event) => handlePerspectiveDragOver(event, perspective.id)}
+                  onDrop={(event) => void handlePerspectiveDrop(event, perspective.id)}
+                  onDragEnd={handlePerspectiveDragEnd}
                 >
-                  <span>{sceneLabel(scene)}</span>
-                  <small>{scene.perspectives.length} perspective{scene.perspectives.length === 1 ? '' : 's'}</small>
+                  <div className="scene2d-perspective-thumb">
+                    <PerspectiveCardPreview scene={selectedScene} perspective={perspective} />
+                  </div>
+                  <span>{perspectiveLabel(perspective)}</span>
+                  <small>
+                    <span className="scene2d-perspective-badge">{perspective.type}</span>
+                    {perspective.id === selectedScene.primary_perspective_id && (
+                      <span className="scene2d-perspective-badge primary">Primary</span>
+                    )}
+                  </small>
                 </button>
               ))}
-              {scenes.length === 0 ? <div className="scene2d-empty">No Scene 2D boards yet.</div> : null}
-            </aside>
 
-            <main className="scene2d-workspace-main">
-              {selectedScene ? (
+              <button
+                type="button"
+                className="scene2d-perspective-add-card"
+                onClick={() => void addPerspective()}
+                disabled={disabled}
+                aria-label="Add perspective"
+              >
+                <span className="scene2d-perspective-add-mark" aria-hidden="true" />
+                <span>Add Perspective</span>
+              </button>
+
+              <button
+                type="button"
+                className="scene2d-perspective-import-card"
+                onClick={() => importRef.current?.click()}
+                disabled={disabled}
+              >
+                Import image/PSD
+              </button>
+            </div>
+          )}
+
+          {/* ── Canvas area ──────────────────────────────────────────── */}
+          <div className="scene2d-canvas-area" ref={canvasAreaRef}>
+
+            {/* Canvas title overlay (top-left, non-blocking) */}
+            {selectedScene && selectedPerspective && (
+              <div className="scene2d-canvas-title" aria-hidden="true">
+                <div className="scene2d-canvas-title-scene">{sceneLabel(selectedScene)}</div>
+                <div className="scene2d-canvas-title-perspective">
+                  {perspectiveLabel(selectedPerspective)}
+                  {perspectiveTotal > 1 && (
+                    <span className="scene2d-canvas-title-index">
+                      {' '}· {perspectiveIndex} of {perspectiveTotal}
+                    </span>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {/* Toast (top-center, auto-dismissed) */}
+            {note && (
+              <div className="scene2d-toast" role="status" aria-live="polite">
+                {note}
+              </div>
+            )}
+
+            {/* ── Floating Inspector island (top-right) ─────────────── */}
+            <div
+              className={`scene2d-inspector${inspectorCollapsed ? ' is-collapsed' : ''}`}
+              aria-label="Inspector"
+            >
+              {inspectorCollapsed ? (
+                <button
+                  type="button"
+                  className="scene2d-inspector-pill"
+                  onClick={() => setInspectorCollapsed(false)}
+                  aria-label="Expand inspector"
+                  title="Expand inspector"
+                >
+                  <span className="scene2d-inspector-pill-label">
+                    {selectedScene ? sceneLabel(selectedScene) : 'Inspector'}
+                    {selectedPerspective ? ` / ${perspectiveLabel(selectedPerspective)}` : ''}
+                  </span>
+                  <span className="scene2d-inspector-pill-icon" aria-hidden="true">⊞</span>
+                </button>
+              ) : (
                 <>
-                  <section className="scene2d-workspace-fields" aria-label="Scene metadata">
-                    <label className="scene2d-field scene2d-field-title">
-                      <span>Scene title</span>
-                      <input value={sceneTitle} onChange={(event) => setSceneTitle(event.target.value)} disabled={disabled} />
-                    </label>
-                    <label className="scene2d-field scene2d-field-link">
-                      <span>Linked Scene 3D</span>
-                      <select value={scene3dLink} onChange={(event) => setScene3dLink(event.target.value)} disabled={disabled}>
-                        <option value="">No linked Scene 3D</option>
-                        {scene3ds.map((scene) => (
-                          <option key={scene.id} value={scene.id}>
-                            {scene.title || 'Untitled Scene 3D'}
-                          </option>
-                        ))}
-                      </select>
-                    </label>
-                    <div className="scene2d-workspace-field-actions">
-                      <button type="button" className="primary" onClick={() => void saveSceneDetails()} disabled={disabled}>
-                        Save scene
-                      </button>
-                      <button type="button" className="danger subtle" onClick={() => void removeScene()} disabled={disabled}>
-                        Delete
-                      </button>
-                    </div>
-                    <label className="scene2d-field scene2d-field-wide">
-                      <span>Description</span>
-                      <textarea value={sceneDescription} onChange={(event) => setSceneDescription(event.target.value)} disabled={disabled} rows={2} />
-                    </label>
-                  </section>
-
-                  <div className="scene2d-workspace-section-row">
-                    <div className="scene2d-workspace-section-title">Perspectives</div>
-                    <div className="scene2d-workspace-actions">
-                      <button type="button" onClick={() => void addPerspective()} disabled={disabled}>
-                        Add Perspective
-                      </button>
-                      <button type="button" onClick={() => importRef.current?.click()} disabled={disabled}>
-                        Import image/PSD
-                      </button>
-                    </div>
-                  </div>
-                  <input
-                    ref={importRef}
-                    type="file"
-                    accept=".psd,image/png,image/jpeg,image/webp"
-                    hidden
-                    onChange={(event) => {
-                      void importPerspective(event.target.files?.[0] ?? undefined)
-                    }}
-                  />
-
-                  <div className="scene2d-perspective-grid">
-                    {selectedScene.perspectives.map((perspective) => (
-                      <button
-                        type="button"
-                        key={perspective.id}
-                        className={perspective.id === selectedPerspective?.id ? 'is-selected' : ''}
-                        onClick={() => setSelectedPerspectiveId(perspective.id)}
-                      >
-                        <div className="scene2d-perspective-thumb">
-                          <PerspectiveCardPreview scene={selectedScene} perspective={perspective} />
-                        </div>
-                        <span>{perspectiveLabel(perspective)}</span>
-                        <small>
-                          <span className="scene2d-perspective-badge">{perspective.type}</span>
-                          {perspective.id === selectedScene.primary_perspective_id ? <span className="scene2d-perspective-badge primary">Primary</span> : null}
-                        </small>
-                      </button>
-                    ))}
-                    <button type="button" className="scene2d-perspective-add-card" onClick={() => void addPerspective()} disabled={disabled}>
-                      <span className="scene2d-perspective-add-mark">+</span>
-                      <span>Add Perspective</span>
+                  <div className="scene2d-inspector-header">
+                    <span className="scene2d-inspector-heading">Inspector</span>
+                    <button
+                      type="button"
+                      className="scene2d-inspector-close"
+                      onClick={() => setInspectorCollapsed(true)}
+                      aria-label="Collapse inspector"
+                      title="Collapse inspector"
+                    >
+                      ×
                     </button>
                   </div>
 
-                  <section className="scene2d-preview-area" aria-label="Selected perspective preview">
-                    <div className="scene2d-preview-stage">
-                      {selectedPerspective ? (
-                        previewMissing ? (
-                          <div className="scene2d-preview-placeholder">
-                            <strong>No preview available</strong>
-                            <span>Open the PSD in Photoshop, export or replace the preview PNG, then refresh the preview.</span>
-                            <div className="scene2d-preview-placeholder-actions">
-                              <button type="button" onClick={() => void openPerspective()} disabled={disabled}>
+                  <div className="scene2d-inspector-body">
+                    {selectedScene ? (
+                      <>
+                        {/* ── SCENE section ── */}
+                        <div className="scene2d-insp-section">
+                          <div className="scene2d-insp-section-label">SCENE</div>
+
+                          <label className="scene2d-insp-field">
+                            <span>Title</span>
+                            <input
+                              value={sceneTitle}
+                              onChange={(e) => setSceneTitle(e.target.value)}
+                              onBlur={() => {
+                                if (sceneDirty) void saveSceneDetails()
+                              }}
+                              onKeyDown={(e) => {
+                                if (e.key === 'Enter') e.currentTarget.blur()
+                              }}
+                              disabled={disabled}
+                              placeholder="Scene title"
+                            />
+                          </label>
+
+                          <label className="scene2d-insp-field">
+                            <span>Linked Scene 3D</span>
+                            <select
+                              value={scene3dLink}
+                              onChange={(e) => setScene3dLink(e.target.value)}
+                              disabled={disabled}
+                            >
+                              <option value="">No linked Scene 3D</option>
+                              {scene3ds.map((s) => (
+                                <option key={s.id} value={s.id}>
+                                  {s.title || 'Untitled Scene 3D'}
+                                </option>
+                              ))}
+                            </select>
+                          </label>
+
+                          <details
+                            className="scene2d-insp-desc-group"
+                            open={descriptionOpen}
+                            onToggle={(e) => setDescriptionOpen((e.target as HTMLDetailsElement).open)}
+                          >
+                            <summary className="scene2d-insp-desc-summary">
+                              Description{sceneDescription ? ' ·' : ''}
+                            </summary>
+                            <textarea
+                              className="scene2d-insp-desc-area"
+                              value={sceneDescription}
+                              onChange={(e) => setSceneDescription(e.target.value)}
+                              disabled={disabled}
+                              rows={3}
+                              placeholder="Scene description…"
+                            />
+                          </details>
+
+                          <div className="scene2d-insp-row">
+                            <button
+                              type="button"
+                              className={`scene2d-insp-save${sceneDirty ? ' is-dirty' : ''}`}
+                              onClick={() => void saveSceneDetails()}
+                              disabled={disabled}
+                            >
+                              Save scene
+                            </button>
+                          </div>
+                          <div className="scene2d-insp-danger-row">
+                            <button
+                              type="button"
+                              className="scene2d-insp-danger-btn"
+                              onClick={() => void removeScene()}
+                              disabled={disabled}
+                            >
+                              Delete scene
+                            </button>
+                          </div>
+                        </div>
+
+                        {/* ── PERSPECTIVE section ── */}
+                        {selectedPerspective ? (
+                          <div className="scene2d-insp-section">
+                            <div className="scene2d-insp-section-label">PERSPECTIVE</div>
+
+                            {pluginStatusLabel && (
+                              <div className={pluginStatusClass}>{pluginStatusLabel}</div>
+                            )}
+
+                            <label className="scene2d-insp-field">
+                              <span>Title</span>
+                              <input
+                                value={perspectiveTitle}
+                                onChange={(e) => setPerspectiveTitle(e.target.value)}
+                                onBlur={() => {
+                                  if (perspectiveDirty) void savePerspectiveDetails()
+                                }}
+                                onKeyDown={(e) => {
+                                  if (e.key === 'Enter') e.currentTarget.blur()
+                                }}
+                                disabled={disabled}
+                                placeholder="Perspective title"
+                              />
+                            </label>
+
+                            <div className="scene2d-insp-meta-row">
+                              <span className="scene2d-perspective-badge">
+                                {selectedPerspective.type}
+                              </span>
+                              {selectedPerspective.id === selectedScene.primary_perspective_id && (
+                                <span className="scene2d-perspective-badge primary">Primary</span>
+                              )}
+                            </div>
+
+                            <label className="scene2d-insp-field">
+                              <span>Linked Scene 3D (override)</span>
+                              <select
+                                value={perspective3dLink}
+                                onChange={(e) => setPerspective3dLink(e.target.value)}
+                                disabled={disabled}
+                              >
+                                <option value="">Use scene group link</option>
+                                {scene3ds.map((s) => (
+                                  <option key={s.id} value={s.id}>
+                                    {s.title || 'Untitled Scene 3D'}
+                                  </option>
+                                ))}
+                              </select>
+                            </label>
+
+                            <div className="scene2d-insp-row">
+                              <button
+                                type="button"
+                                className={`scene2d-insp-save${perspectiveDirty ? ' is-dirty' : ''}`}
+                                onClick={() => void savePerspectiveDetails()}
+                                disabled={disabled}
+                              >
+                                Save perspective
+                              </button>
+                            </div>
+
+                            <div className="scene2d-insp-primary-actions">
+                              <button
+                                type="button"
+                                className="scene2d-insp-open-ps"
+                                onClick={() => void openPerspective()}
+                                disabled={disabled}
+                              >
                                 Open in Photoshop
                               </button>
-                              <button type="button" onClick={() => void refreshPreview()} disabled={disabled}>
-                                Refresh Preview
+                              <button
+                                type="button"
+                                className="scene2d-insp-secondary-btn"
+                                onClick={() => void refreshPreview()}
+                                disabled={disabled}
+                              >
+                                Refresh preview
+                              </button>
+                            </div>
+
+                            <div className="scene2d-insp-secondary-actions">
+                              <button
+                                type="button"
+                                className={`scene2d-insp-secondary-btn${selectedPerspective.id === selectedScene.primary_perspective_id ? ' is-state-active' : ''}`}
+                                onClick={() => void setPrimary()}
+                                disabled={disabled || selectedPerspective.id === selectedScene.primary_perspective_id}
+                              >
+                                {selectedPerspective.id === selectedScene.primary_perspective_id
+                                  ? 'Is primary'
+                                  : 'Set primary'}
+                              </button>
+                              <button
+                                type="button"
+                                className="scene2d-insp-secondary-btn"
+                                onClick={() => void addToReferences()}
+                                disabled={disabled || previewMissing}
+                              >
+                                Add to References
+                              </button>
+                            </div>
+
+                            <div className="scene2d-insp-danger-row">
+                              <button
+                                type="button"
+                                className="scene2d-insp-danger-btn"
+                                onClick={() => void removePerspective()}
+                                disabled={disabled}
+                              >
+                                Delete perspective
                               </button>
                             </div>
                           </div>
                         ) : (
-                          <div
-                            className={`scene2d-preview-canvas ${fitPreview ? 'is-fit' : 'is-zoomed'}`}
-                            style={{ '--scene2d-preview-width': `${previewZoom}%` } as CSSProperties}
-                          >
-                            <img
-                              src={scene2DPerspectivePreviewUrl(selectedScene, selectedPerspective)}
-                              alt={`${perspectiveLabel(selectedPerspective)} preview`}
-                              onError={() => setPreviewFailedFor(previewKey)}
-                            />
+                          <div className="scene2d-insp-section">
+                            <div className="scene2d-insp-section-label">PERSPECTIVE</div>
+                            <div className="scene2d-insp-empty">No perspective selected</div>
                           </div>
-                        )
-                      ) : (
-                        <div className="scene2d-preview-placeholder">Select a perspective to preview and edit.</div>
-                      )}
-                    </div>
-
-                    <div className="scene2d-zoom-toolbar" aria-label="Preview zoom controls">
-                      <button type="button" className={fitPreview ? 'is-active' : ''} onClick={() => setFitPreview(true)} disabled={!selectedPerspective}>
-                        Fit
-                      </button>
-                      <button type="button" onClick={() => setManualPreviewZoom(previewZoom - 10)} disabled={!selectedPerspective || previewZoom <= MIN_PREVIEW_ZOOM}>
-                        -
-                      </button>
-                      <span>{MIN_PREVIEW_ZOOM}%</span>
-                      <input
-                        type="range"
-                        min={MIN_PREVIEW_ZOOM}
-                        max={MAX_PREVIEW_ZOOM}
-                        step={ZOOM_STEP}
-                        value={previewZoom}
-                        onChange={(event) => setManualPreviewZoom(Number(event.target.value))}
-                        disabled={!selectedPerspective}
-                      />
-                      <span>{MAX_PREVIEW_ZOOM}%</span>
-                      <button type="button" onClick={() => setManualPreviewZoom(previewZoom + 10)} disabled={!selectedPerspective || previewZoom >= MAX_PREVIEW_ZOOM}>
-                        +
-                      </button>
-                      <button type="button" onClick={() => setManualPreviewZoom(100)} disabled={!selectedPerspective}>
-                        100%
-                      </button>
-                      <output>{fitPreview ? 'Fit' : `${previewZoom}%`}</output>
-                    </div>
-                  </section>
-
-                  {selectedPerspective ? (
-                    <section className="scene2d-perspective-editor" aria-label="Selected perspective controls">
-                      <label className="scene2d-field">
-                        <span>Perspective title</span>
-                        <input value={perspectiveTitle} onChange={(event) => setPerspectiveTitle(event.target.value)} disabled={disabled} />
-                      </label>
-                      <label className="scene2d-field">
-                        <span>Perspective linked Scene 3D</span>
-                        <select value={perspective3dLink} onChange={(event) => setPerspective3dLink(event.target.value)} disabled={disabled}>
-                          <option value="">Use scene group link</option>
-                          {scene3ds.map((scene) => (
-                            <option key={scene.id} value={scene.id}>
-                              {scene.title || 'Untitled Scene 3D'}
-                            </option>
-                          ))}
-                        </select>
-                      </label>
-
-                      {(() => {
-                        // Part 14 — plugin status for this perspective
-                        if (!selectedScene || !selectedPerspective) return null
-                        const workKey = `scene2d:${selectedScene.id}:${selectedPerspective.id}`
-                        const openKeys = bridgeStatus?.plugin_open_work_keys ?? []
-                        const activeKey = bridgeStatus?.plugin_active_work_key ?? ''
-                        const change = bridgeStatus?.plugin_change
-                        const isActive = activeKey === workKey
-                        const isOpen = openKeys.includes(workKey)
-                        const recentlyExported =
-                          change?.kind === 'scene2d' &&
-                          change.scene_id === selectedScene.id &&
-                          change.perspective_id === selectedPerspective.id
-                        if (!bridgeStatus?.plugin_linked) return null
-                        let label = ''
-                        let className = 'scene2d-plugin-status'
-                        if (isActive) {
-                          label = recentlyExported ? 'Preview updated' : 'Linked'
-                          className += ' linked'
-                        } else if (isOpen) {
-                          label = 'Open in Photoshop'
-                          className += ' open'
-                        }
-                        return label ? <div className={className}>{label}</div> : null
-                      })()}
-
-                      <div className="scene2d-actions">
-                        <button type="button" className="primary" onClick={() => void savePerspectiveDetails()} disabled={disabled}>
-                          Save perspective
-                        </button>
-                        <button type="button" onClick={() => void openPerspective()} disabled={disabled}>
-                          Open in Photoshop
-                        </button>
-                        <button type="button" onClick={() => void refreshPreview()} disabled={disabled}>
-                          Refresh preview
-                        </button>
-                        <button type="button" onClick={() => void setPrimary()} disabled={disabled || selectedPerspective.id === selectedScene.primary_perspective_id}>
-                          Set primary
-                        </button>
-                        <button type="button" onClick={() => void addToReferences()} disabled={disabled || previewMissing}>
-                          Add to References
-                        </button>
-                        <button type="button" className="danger" onClick={() => void removePerspective()} disabled={disabled}>
-                          Delete perspective
-                        </button>
+                        )}
+                      </>
+                    ) : (
+                      <div className="scene2d-insp-empty scene2d-insp-empty-pad">
+                        No scene selected
                       </div>
-                    </section>
-                  ) : null}
+                    )}
+                  </div>
                 </>
-              ) : (
-                <div className="scene2d-empty">Create a Scene 2D group to add perspectives.</div>
               )}
-            </main>
-          </div>
+            </div>
+
+            {/* Preview / empty states */}
+            {!selectedScene ? (
+              <div className="scene2d-canvas-empty">
+                <strong>No Scene 2D groups yet</strong>
+                <span>Create a Scene to begin organizing Perspectives.</span>
+                <button
+                  type="button"
+                  className="scene2d-canvas-empty-btn"
+                  onClick={() => void createScene()}
+                  disabled={disabled}
+                >
+                  Create Scene
+                </button>
+              </div>
+            ) : selectedScene.perspectives.length === 0 ? (
+              <div className="scene2d-canvas-empty">
+                <strong>No Perspectives in this Scene</strong>
+                <div className="scene2d-canvas-empty-actions">
+                  <button type="button" onClick={() => void addPerspective()} disabled={disabled}>
+                    Create PSD Perspective
+                  </button>
+                  <button type="button" onClick={() => importRef.current?.click()} disabled={disabled}>
+                    Import image/PSD
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <div className="scene2d-preview-viewport">
+                {selectedPerspective && !previewMissing ? (
+                  <div
+                    className={`scene2d-preview-canvas ${fitPreview ? 'is-fit' : 'is-zoomed'}`}
+                    style={{ '--scene2d-preview-width': `${previewZoom}%` } as CSSProperties}
+                  >
+                    <img
+                      src={scene2DPerspectivePreviewUrl(selectedScene, selectedPerspective)}
+                      alt={`${perspectiveLabel(selectedPerspective)} preview`}
+                      onError={() => setPreviewFailedFor(previewKey)}
+                    />
+                  </div>
+                ) : (
+                  <div className="scene2d-preview-placeholder">
+                    <strong>No preview available</strong>
+                    <span>Open the PSD in Photoshop, export the preview, then refresh.</span>
+                    <div className="scene2d-preview-placeholder-actions">
+                      <button type="button" onClick={() => void openPerspective()} disabled={disabled}>
+                        Open in Photoshop
+                      </button>
+                      <button type="button" onClick={() => void refreshPreview()} disabled={disabled}>
+                        Refresh Preview
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Floating zoom island (bottom-center) */}
+            {selectedScene && selectedScene.perspectives.length > 0 && (
+              <div className="scene2d-zoom-island" aria-label="Preview zoom controls">
+                <button
+                  type="button"
+                  className={fitPreview ? 'is-active' : ''}
+                  onClick={() => setFitPreview(true)}
+                  disabled={!selectedPerspective}
+                  aria-label="Fit preview to screen"
+                  title="Fit"
+                >
+                  Fit
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setManualPreviewZoom(previewZoom - 10)}
+                  disabled={!selectedPerspective || previewZoom <= MIN_PREVIEW_ZOOM}
+                  aria-label="Zoom out"
+                  title="Zoom out"
+                >
+                  −
+                </button>
+                <input
+                  type="range"
+                  min={MIN_PREVIEW_ZOOM}
+                  max={MAX_PREVIEW_ZOOM}
+                  step={ZOOM_STEP}
+                  value={previewZoom}
+                  onChange={(e) => setManualPreviewZoom(Number(e.target.value))}
+                  disabled={!selectedPerspective}
+                  aria-label="Zoom level"
+                  className="scene2d-zoom-slider"
+                />
+                <button
+                  type="button"
+                  onClick={() => setManualPreviewZoom(previewZoom + 10)}
+                  disabled={!selectedPerspective || previewZoom >= MAX_PREVIEW_ZOOM}
+                  aria-label="Zoom in"
+                  title="Zoom in"
+                >
+                  +
+                </button>
+                <output
+                  className="scene2d-zoom-output"
+                  onClick={() => setManualPreviewZoom(100)}
+                  title="Click to reset to 100%"
+                >
+                  {fitPreview ? 'Fit' : `${previewZoom}%`}
+                </output>
+              </div>
+            )}
+          </div>{/* /.scene2d-canvas-area */}
+        </div>{/* /.scene2d-main-col */}
+      </div>{/* /.scene2d-workspace */}
+
+      <ContextMenu
+        menu={contextMenu}
+        items={perspectiveContextMenuItems}
+        onClose={() => setContextMenu(null)}
+        ariaLabel="Perspective actions"
+      />
+
+      <input
+        ref={importRef}
+        type="file"
+        accept=".psd,image/png,image/jpeg,image/webp"
+        hidden
+        onChange={(e) => void importPerspective(e.target.files?.[0] ?? undefined)}
+      />
     </section>
   )
 }

@@ -98,6 +98,57 @@ class Scene2DTests(unittest.TestCase):
         self.assertEqual(scenes[0]["id"], created["id"])
         self.assertEqual(scenes[0]["title"], "Map")
 
+    def test_update_scene_title_persists_after_reopening_project(self) -> None:
+        scene = self._create_scene("Map")
+        updated = _quiet(
+            lambda: self.client.patch(
+                f"/api/project/scenes2d/{scene['id']}",
+                json={"title": "Maps"},
+            )
+        )
+        self.assertEqual(updated.status_code, 200, updated.text)
+        self.assertEqual(updated.json()["scene"]["title"], "Maps")
+
+        listed = _quiet(lambda: self.client.get("/api/project/scenes2d"))
+        self.assertEqual(listed.status_code, 200, listed.text)
+        self.assertEqual(listed.json()["scenes"][0]["title"], "Maps")
+
+        app = api_module.create_app(self.root)
+        client = TestClient(app, raise_server_exceptions=False)
+        opened = _quiet(
+            lambda: client.post("/api/project/open", json={"project_json_path": str(self.project_root / "project.json")})
+        )
+        self.assertEqual(opened.status_code, 200, opened.text)
+        reloaded = _quiet(lambda: client.get("/api/project/scenes2d"))
+        self.assertEqual(reloaded.status_code, 200, reloaded.text)
+        self.assertEqual(reloaded.json()["scenes"][0]["title"], "Maps")
+
+    def test_update_perspective_title_persists_after_reopening_project(self) -> None:
+        scene = self._create_scene("Map")
+        perspective = scene["perspectives"][0]
+        updated = _quiet(
+            lambda: self.client.patch(
+                f"/api/project/scenes2d/{scene['id']}/perspectives/{perspective['id']}",
+                json={"title": "Plan view"},
+            )
+        )
+        self.assertEqual(updated.status_code, 200, updated.text)
+        self.assertEqual(updated.json()["perspective"]["title"], "Plan view")
+
+        listed = _quiet(lambda: self.client.get(f"/api/project/scenes2d/{scene['id']}/perspectives"))
+        self.assertEqual(listed.status_code, 200, listed.text)
+        self.assertEqual(listed.json()["perspectives"][0]["title"], "Plan view")
+
+        app = api_module.create_app(self.root)
+        client = TestClient(app, raise_server_exceptions=False)
+        opened = _quiet(
+            lambda: client.post("/api/project/open", json={"project_json_path": str(self.project_root / "project.json")})
+        )
+        self.assertEqual(opened.status_code, 200, opened.text)
+        reloaded = _quiet(lambda: client.get(f"/api/project/scenes2d/{scene['id']}/perspectives"))
+        self.assertEqual(reloaded.status_code, 200, reloaded.text)
+        self.assertEqual(reloaded.json()["perspectives"][0]["title"], "Plan view")
+
     def test_open_missing_source_recreates_psd_and_does_not_mutate_shots(self) -> None:
         scene = self._create_scene("Open source")
         source = self.project_root / scene["source_file_path"]
@@ -345,6 +396,95 @@ class Scene2DTests(unittest.TestCase):
         )
         self.assertEqual(refresh.status_code, 200, refresh.text)
         self.assertFalse(refresh.json()["preview_exists"])
+
+    def test_move_perspective_to_another_scene_updates_paths_primary_and_references(self) -> None:
+        source_scene = self._create_scene("Source scene")
+        target_scene = self._create_scene("Target scene")
+        created = _quiet(
+            lambda: self.client.post(
+                f"/api/project/scenes2d/{source_scene['id']}/perspectives",
+                json={"title": "Move me"},
+            )
+        )
+        self.assertEqual(created.status_code, 200, created.text)
+        perspective = created.json()["perspective"]
+        source_path = self.project_root / perspective["source_file_path"]
+        self.assertTrue(source_path.is_file())
+        (self.project_root / perspective["preview_image_path"]).write_bytes(MINI_PNG)
+
+        added = _quiet(
+            lambda: self.client.post(
+                f"/api/project/scenes2d/{source_scene['id']}/perspectives/{perspective['id']}/add-to-references"
+            )
+        )
+        self.assertEqual(added.status_code, 200, added.text)
+
+        primary = _quiet(
+            lambda: self.client.post(
+                f"/api/project/scenes2d/{source_scene['id']}/perspectives/{perspective['id']}/set-primary"
+            )
+        )
+        self.assertEqual(primary.status_code, 200, primary.text)
+
+        moved = _quiet(
+            lambda: self.client.post(
+                f"/api/project/scenes2d/{source_scene['id']}/perspectives/{perspective['id']}/move-to-scene",
+                json={"target_scene_id": target_scene["id"]},
+            )
+        )
+        self.assertEqual(moved.status_code, 200, moved.text)
+        body = moved.json()
+        moved_perspective = body["perspective"]
+        self.assertEqual(
+            moved_perspective["source_file_path"],
+            f"scenes2d/{target_scene['id']}/perspectives/{perspective['id']}/source.psd",
+        )
+        self.assertFalse(source_path.exists())
+        self.assertTrue((self.project_root / moved_perspective["source_file_path"]).is_file())
+        self.assertEqual(body["source_scene"]["primary_perspective_id"], source_scene["primary_perspective_id"])
+        self.assertIn(perspective["id"], [item["id"] for item in body["target_scene"]["perspectives"]])
+
+        project = _quiet(lambda: self.client.get("/api/project")).json()
+        moved_reference = next(
+            link
+            for link in project["settings"]["reference_links"]
+            if link.get("source_scene2d_perspective_id") == perspective["id"]
+        )
+        self.assertEqual(moved_reference["source_scene2d_id"], target_scene["id"])
+
+    def test_reorder_perspectives_persists_without_changing_primary(self) -> None:
+        scene = self._create_scene("Ordered scene")
+        second = _quiet(
+            lambda: self.client.post(
+                f"/api/project/scenes2d/{scene['id']}/perspectives",
+                json={"title": "Second"},
+            )
+        )
+        self.assertEqual(second.status_code, 200, second.text)
+        third = _quiet(
+            lambda: self.client.post(
+                f"/api/project/scenes2d/{scene['id']}/perspectives",
+                json={"title": "Third"},
+            )
+        )
+        self.assertEqual(third.status_code, 200, third.text)
+        listed = _quiet(lambda: self.client.get(f"/api/project/scenes2d/{scene['id']}/perspectives")).json()
+        original_ids = [item["id"] for item in listed["perspectives"]]
+        reordered_ids = [original_ids[2], original_ids[0], original_ids[1]]
+
+        response = _quiet(
+            lambda: self.client.post(
+                f"/api/project/scenes2d/{scene['id']}/perspectives/reorder",
+                json={"perspective_ids": reordered_ids},
+            )
+        )
+        self.assertEqual(response.status_code, 200, response.text)
+        body = response.json()
+        self.assertEqual([item["id"] for item in body["scene"]["perspectives"]], reordered_ids)
+        self.assertEqual(body["scene"]["primary_perspective_id"], scene["primary_perspective_id"])
+
+        reloaded = _quiet(lambda: self.client.get(f"/api/project/scenes2d/{scene['id']}/perspectives")).json()
+        self.assertEqual([item["id"] for item in reloaded["perspectives"]], reordered_ids)
 
 
 if __name__ == "__main__":
