@@ -18,6 +18,7 @@ from .models import Project
 SCENE2D_ROOT = "scenes2d"
 SCENE2D_INDEX = "scenes2d.json"
 UUID_MIGRATION_JOURNAL = ".uuid_migration.json"
+UUID_MIGRATION_BACKUP_ROOT = ".uuid_migration_backup"
 LEGACY_SCENE_ID_RE = re.compile(r"^scene_(\d{3,})$")
 LEGACY_PERSPECTIVE_ID_RE = re.compile(r"^persp_(\d{3,})$")
 IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp"}
@@ -49,6 +50,10 @@ def _index_path(project: Project) -> Path:
 
 def _journal_path(project: Project) -> Path:
     return _root_dir(project) / UUID_MIGRATION_JOURNAL
+
+
+def _backup_root(project: Project) -> Path:
+    return _root_dir(project) / UUID_MIGRATION_BACKUP_ROOT
 
 
 def _validate_scene_id(scene_id: str) -> str:
@@ -265,7 +270,7 @@ def _restore_bytes(path: Path, data: bytes | None) -> None:
 
 
 def _write_journal(project: Project, payload: dict[str, Any]) -> None:
-    journal = {"version": 1, **payload}
+    journal = {"version": 2, **payload}
     project_manager._atomic_write_json(_journal_path(project), journal)
 
 
@@ -273,6 +278,72 @@ def _remove_journal(project: Project) -> None:
     path = _journal_path(project)
     if path.exists():
         path.unlink()
+
+
+def _remove_backup_area(project: Project) -> None:
+    root = _backup_root(project)
+    if root.is_dir():
+        shutil.rmtree(root)
+
+
+def _project_rel(project: Project, path: Path) -> str:
+    return path.resolve().relative_to(project.root_path.resolve()).as_posix()
+
+
+def _backup_rel_for_original(original_rel: str) -> str:
+    rel = project_manager._normalize_rel_path(original_rel)
+    if rel.startswith(f"{SCENE2D_ROOT}/"):
+        rel = rel[len(SCENE2D_ROOT) + 1 :]
+    return f"{SCENE2D_ROOT}/{UUID_MIGRATION_BACKUP_ROOT}/{rel}"
+
+
+def _create_migration_backups(project: Project, original_paths: list[Path]) -> list[dict[str, Any]]:
+    files: list[dict[str, Any]] = []
+    for original in original_paths:
+        original_rel = _project_rel(project, original)
+        backup_rel = _backup_rel_for_original(original_rel)
+        backup = _safe_project_rel(project, backup_rel)
+        entry = {"path": original_rel, "backup_path": backup_rel, "existed": original.is_file()}
+        if original.is_file():
+            backup.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(original, backup)
+        files.append(entry)
+    return files
+
+
+def _validate_original_files(project: Project, original_files: Any) -> list[dict[str, Any]]:
+    if not isinstance(original_files, list):
+        raise ValueError("Scene 2D UUID migration journal has invalid original files.")
+    result: list[dict[str, Any]] = []
+    for item in original_files:
+        if not isinstance(item, dict):
+            raise ValueError("Scene 2D UUID migration journal has invalid original files.")
+        rel = project_manager._normalize_rel_path(str(item.get("path") or ""))
+        backup_rel = project_manager._normalize_rel_path(str(item.get("backup_path") or ""))
+        if not rel or not backup_rel:
+            raise ValueError("Scene 2D UUID migration journal has invalid original files.")
+        _safe_project_rel(project, rel)
+        backup_path = _safe_project_rel(project, backup_rel)
+        if _backup_root(project).resolve() not in backup_path.resolve().parents:
+            raise ValueError("Scene 2D UUID migration backup path is invalid.")
+        result.append({"path": rel, "backup_path": backup_rel, "existed": bool(item.get("existed"))})
+    return result
+
+
+def _restore_original_files(project: Project, original_files: list[dict[str, Any]]) -> None:
+    for item in original_files:
+        target = _safe_project_rel(project, item["path"])
+        backup = _safe_project_rel(project, item["backup_path"])
+        if item.get("existed"):
+            if not backup.is_file():
+                raise ValueError("Scene 2D UUID migration backup file is missing.")
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(backup, target)
+        elif target.exists():
+            if target.is_dir():
+                shutil.rmtree(target)
+            else:
+                target.unlink()
 
 
 def _safe_project_rel(project: Project, rel_path: str) -> Path:
@@ -338,7 +409,8 @@ def _recover_uuid_migration(project: Project) -> bool:
         journal = _read_json(path)
     except (OSError, json.JSONDecodeError) as exc:
         raise ValueError("Scene 2D UUID migration journal is corrupt.") from exc
-    if not isinstance(journal, dict) or journal.get("version") != 1:
+    version = journal.get("version")
+    if not isinstance(journal, dict) or version not in {1, 2}:
         raise ValueError("Scene 2D UUID migration journal is invalid.")
     state = journal.get("state")
     created_paths = journal.get("created_paths")
@@ -347,16 +419,43 @@ def _recover_uuid_migration(project: Project) -> bool:
         raise ValueError("Scene 2D UUID migration journal has invalid created paths.")
     if legacy_roots is not None and (not isinstance(legacy_roots, list) or not all(isinstance(item, str) for item in legacy_roots)):
         raise ValueError("Scene 2D UUID migration journal has invalid legacy roots.")
+    original_files: list[dict[str, Any]] = []
+    if version == 2:
+        original_files = _validate_original_files(project, journal.get("original_files"))
+        backup_root = project_manager._normalize_rel_path(str(journal.get("backup_root") or ""))
+        if backup_root != f"{SCENE2D_ROOT}/{UUID_MIGRATION_BACKUP_ROOT}":
+            raise ValueError("Scene 2D UUID migration backup root is invalid.")
     if state in {"prepared", "files_staged"}:
+        if original_files:
+            _restore_original_files(project, original_files)
         _remove_created_paths(project, created_paths)
         _remove_journal(project)
+        _remove_backup_area(project)
         return True
-    if state == "metadata_committed":
+    if state == "metadata_committing":
+        scene_map = journal.get("scene_map") if isinstance(journal.get("scene_map"), dict) else {}
+        expected = {str(value) for value in scene_map.values() if is_uuid(str(value))}
+        try:
+            _verify_uuid_payload(project, expected or None)
+        except Exception:
+            if original_files:
+                _restore_original_files(project, original_files)
+            _remove_created_paths(project, created_paths)
+            _remove_journal(project)
+            _remove_backup_area(project)
+            return True
+        _write_journal(project, {**journal, "state": "metadata_committed"})
+        if _cleanup_legacy_roots(project, legacy_roots or []):
+            _remove_journal(project)
+            _remove_backup_area(project)
+        return False
+    if state in {"metadata_committed", "cleanup_pending"}:
         scene_map = journal.get("scene_map") if isinstance(journal.get("scene_map"), dict) else {}
         expected = {str(value) for value in scene_map.values() if is_uuid(str(value))}
         _verify_uuid_payload(project, expected or None)
         if _cleanup_legacy_roots(project, legacy_roots or []):
             _remove_journal(project)
+            _remove_backup_area(project)
         return False
     raise ValueError("Scene 2D UUID migration journal has unknown state.")
 
@@ -488,17 +587,22 @@ def _migrate_scene2d_storage(project: Project, scenes: list[dict[str, Any]]) -> 
     original_settings = _read_bytes_if_exists(project.settings_path)
     original_settings_memory = dict(project.settings)
     original_meta: dict[Path, bytes | None] = {}
+    original_paths = [_index_path(project), project.settings_path]
     for scene in scenes:
         if is_uuid(scene["id"]):
             path = _meta_path(project, scene["id"])
         else:
             path = _root_dir(project) / scene["id"] / f"{scene['id']}_meta.json"
         original_meta[path] = _read_bytes_if_exists(path)
+        original_paths.append(path)
+    original_files = _create_migration_backups(project, original_paths)
     journal_base = {
         "scene_map": scene_map,
         "perspective_map": {f"{scene_id}/{perspective_id}": mapped for (scene_id, perspective_id), mapped in perspective_map.items()},
         "created_paths": [],
         "legacy_roots": legacy_root_rels,
+        "backup_root": f"{SCENE2D_ROOT}/{UUID_MIGRATION_BACKUP_ROOT}",
+        "original_files": original_files,
         "started_at": _now_iso(),
     }
     try:
@@ -543,6 +647,7 @@ def _migrate_scene2d_storage(project: Project, scenes: list[dict[str, Any]]) -> 
         root = _root_dir(project)
         root.mkdir(parents=True, exist_ok=True)
         normalized = _sort_scenes([_normalize_scene(scene) for scene in new_scenes])
+        _write_journal(project, {"state": "metadata_committing", **journal_base, "created_paths": sorted(created_rel_paths)})
         project_manager._atomic_write_json(_index_path(project), {"scenes": normalized})
         for scene in normalized:
             scene_dir = _scene_dir(project, scene["id"])
@@ -557,6 +662,9 @@ def _migrate_scene2d_storage(project: Project, scenes: list[dict[str, Any]]) -> 
         _write_journal(project, {"state": "metadata_committed", **journal_base, "created_paths": sorted(created_rel_paths)})
         if _cleanup_legacy_roots(project, legacy_root_rels):
             _remove_journal(project)
+            _remove_backup_area(project)
+        else:
+            _write_journal(project, {"state": "cleanup_pending", **journal_base, "created_paths": sorted(created_rel_paths)})
         return _sort_scenes(new_scenes)
     except BaseException:
         try:
@@ -575,6 +683,7 @@ def _migrate_scene2d_storage(project: Project, scenes: list[dict[str, Any]]) -> 
             except OSError:
                 pass
         _remove_journal(project)
+        _remove_backup_area(project)
         raise
 
 
