@@ -82,7 +82,9 @@
 }
 
 .scene2d-actions,
-.scene2d-workspace-actions {
+.scene2d-workspace-actions,
+.scene2d-workspace-field-actions,
+.scene2d-preview-placeholder-actions {
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
@@ -90,18 +92,30 @@
 
 .scene2d-actions button,
 .scene2d-workspace-actions button,
-.scene2d-workspace-fields button {
-  padding: 6px 8px;
+.scene2d-workspace-field-actions button,
+.scene2d-preview-placeholder-actions button,
+.scene2d-zoom-toolbar button {
+  padding: 6px 9px;
   border-radius: 8px;
   border: 1px solid var(--color-border);
   background: color-mix(in srgb, var(--bg-elevated) 82%, transparent);
+  color: var(--color-text);
   font-size: 11px;
   cursor: pointer;
 }
 
+.scene2d-actions button:hover:not(:disabled),
+.scene2d-workspace-actions button:hover:not(:disabled),
+.scene2d-workspace-field-actions button:hover:not(:disabled),
+.scene2d-preview-placeholder-actions button:hover:not(:disabled),
+.scene2d-zoom-toolbar button:hover:not(:disabled) {
+  border-color: color-mix(in srgb, var(--color-accent) 45%, var(--color-border));
+  background: color-mix(in srgb, var(--color-accent) 12%, var(--bg-elevated));
+}
+
 .scene2d-actions button.primary,
 .scene2d-workspace-actions button.primary,
-.scene2d-workspace-fields button.primary {
+.scene2d-workspace-field-actions button.primary {
   border-color: var(--color-accent);
   background: var(--color-accent);
   color: #120d05;
@@ -109,12 +123,20 @@
 }
 
 .scene2d-actions button.danger,
-.scene2d-workspace-fields button.danger {
-  color: #b42318;
-  border-color: rgba(180, 35, 24, 0.35);
+.scene2d-workspace-field-actions button.danger {
+  color: var(--color-danger);
+  border-color: color-mix(in srgb, var(--color-danger) 42%, transparent);
+}
+
+.scene2d-workspace-field-actions button.subtle {
+  background: transparent;
 }
 
 .scene2d-note {
+  max-width: min(420px, 38vw);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   color: var(--color-text);
   padding: 7px 8px;
   border-radius: 8px;
@@ -122,33 +144,17 @@
   background: var(--color-accent-soft);
 }
 
-.scene2d-workspace-overlay[hidden] {
-  display: none !important;
-}
-
-.scene2d-workspace-overlay {
-  position: fixed;
-  inset: 42px 18px 18px;
-  z-index: 895;
-  display: flex;
-  min-width: 0;
-  min-height: 0;
-  background: rgba(20, 22, 26, 0.72);
-  backdrop-filter: blur(2px);
-  padding: 16px;
-}
-
-.scene2d-workspace-card {
-  flex: 1 1 auto;
+.scene2d-workspace-page {
+  width: 100%;
+  height: 100%;
   min-width: 0;
   min-height: 0;
   display: flex;
   flex-direction: column;
   overflow: hidden;
-  border-radius: 14px;
-  border: 1px solid rgba(255, 255, 255, 0.18);
-  background: var(--color-surface);
-  box-shadow: 0 18px 60px rgba(0, 0, 0, 0.38);
+  background:
+    radial-gradient(circle at 50% 0%, color-mix(in srgb, var(--color-accent) 9%, transparent), transparent 34%),
+    var(--color-surface);
 }
 
 .scene2d-workspace-header {
@@ -158,8 +164,8 @@
   justify-content: space-between;
   gap: 12px;
   padding: 10px 12px;
-  border-bottom: 1px solid var(--color-border);
-  background: var(--bg-toolbar);
+  border-bottom: 1px solid color-mix(in srgb, var(--color-border) 80%, transparent);
+  background: color-mix(in srgb, var(--bg-toolbar) 92%, #000);
 }
 
 .scene2d-workspace-title {
@@ -173,42 +179,34 @@
   color: var(--color-muted);
 }
 
-.scene2d-workspace-close {
-  width: 32px;
-  min-width: 32px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 16px !important;
-  line-height: 1;
-}
-
 .scene2d-workspace-layout {
   flex: 1 1 auto;
   min-width: 0;
   min-height: 0;
   display: grid;
-  grid-template-columns: minmax(180px, 240px) minmax(320px, 1fr) minmax(260px, 340px);
+  grid-template-columns: minmax(200px, 240px) minmax(0, 1fr);
   overflow: hidden;
 }
 
 .scene2d-workspace-list,
-.scene2d-workspace-main,
-.scene2d-workspace-detail {
+.scene2d-workspace-main {
   min-width: 0;
   min-height: 0;
-  overflow: auto;
-  padding: 12px;
 }
 
 .scene2d-workspace-list {
-  border-right: 1px solid var(--color-border);
-  background: var(--bg-toolbar);
+  overflow: auto;
+  padding: 12px;
+  border-right: 1px solid color-mix(in srgb, var(--color-border) 80%, transparent);
+  background: color-mix(in srgb, var(--bg-toolbar) 90%, #000);
 }
 
-.scene2d-workspace-detail {
-  border-left: 1px solid var(--color-border);
-  background: var(--bg-panel);
+.scene2d-workspace-main {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  overflow: hidden;
+  padding: 12px;
 }
 
 .scene2d-workspace-section-title {
@@ -217,63 +215,72 @@
   font-size: 11px;
   font-weight: 700;
   text-transform: uppercase;
+  letter-spacing: 0.04em;
 }
 
 .scene2d-workspace-section-row {
+  flex: 0 0 auto;
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 10px;
-  margin-top: 14px;
 }
 
-.scene2d-workspace-list button,
-.scene2d-perspective-grid button {
+.scene2d-workspace-section-row .scene2d-workspace-section-title {
+  margin-bottom: 0;
+}
+
+.scene2d-workspace-list button {
   width: 100%;
   min-width: 0;
   display: flex;
   flex-direction: column;
   align-items: flex-start;
   gap: 3px;
-  padding: 8px;
-  margin-bottom: 6px;
-  border-radius: 8px;
-  border: 1px solid var(--color-border);
-  background: var(--bg-panel);
+  padding: 9px;
+  margin-bottom: 7px;
+  border-radius: 9px;
+  border: 1px solid color-mix(in srgb, var(--color-border) 78%, transparent);
+  background: color-mix(in srgb, var(--bg-panel) 84%, transparent);
   color: var(--color-text);
   cursor: pointer;
 }
 
-.scene2d-workspace-list button.is-selected,
-.scene2d-perspective-grid button.is-selected {
+.scene2d-workspace-list button.is-selected {
   border-color: var(--color-accent);
-  background: var(--color-accent-soft);
+  background:
+    linear-gradient(90deg, color-mix(in srgb, var(--color-accent) 16%, transparent), transparent),
+    var(--color-accent-soft);
 }
 
-.scene2d-workspace-list button span,
-.scene2d-perspective-grid button span {
+.scene2d-workspace-list button span {
   max-width: 100%;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   font-size: 12px;
+  font-weight: 700;
 }
 
-.scene2d-workspace-list button small,
-.scene2d-perspective-grid button small {
+.scene2d-workspace-list button small {
   color: var(--color-muted);
   font-size: 10px;
 }
 
 .scene2d-workspace-fields {
+  flex: 0 0 auto;
   display: grid;
-  grid-template-columns: minmax(160px, 1fr) minmax(160px, 1fr) auto auto;
+  grid-template-columns: minmax(180px, 1fr) minmax(180px, 320px) auto;
   gap: 8px;
   align-items: end;
+  padding: 10px;
+  border: 1px solid color-mix(in srgb, var(--color-border) 72%, transparent);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--bg-panel) 74%, transparent);
 }
 
 .scene2d-field-wide {
-  grid-column: span 2;
+  grid-column: 1 / -1;
 }
 
 .scene2d-field {
@@ -292,7 +299,7 @@
   padding: 7px 8px;
   border-radius: 8px;
   border: 1px solid var(--color-border);
-  background: var(--bg-panel);
+  background: color-mix(in srgb, var(--bg-elevated) 76%, transparent);
   color: var(--color-text);
   font: inherit;
 }
@@ -302,37 +309,260 @@
 }
 
 .scene2d-perspective-grid {
+  flex: 0 0 auto;
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
-  gap: 8px;
+  grid-auto-flow: column;
+  grid-auto-columns: minmax(150px, 176px);
+  gap: 9px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding: 2px 2px 8px;
+  scrollbar-width: thin;
 }
 
-.scene2d-workspace-preview {
-  min-height: 220px;
+.scene2d-perspective-grid button {
+  min-width: 0;
+  min-height: 132px;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 7px;
+  padding: 7px;
+  border-radius: 10px;
+  border: 1px solid color-mix(in srgb, var(--color-border) 76%, transparent);
+  background: color-mix(in srgb, var(--bg-panel) 82%, transparent);
+  color: var(--color-text);
+  cursor: pointer;
+}
+
+.scene2d-perspective-grid button.is-selected {
+  border-color: var(--color-accent);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--color-accent) 60%, transparent);
+}
+
+.scene2d-perspective-grid button > span {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+  font-weight: 700;
+  text-align: left;
+}
+
+.scene2d-perspective-grid button small {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.scene2d-perspective-thumb {
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  overflow: hidden;
   display: flex;
   align-items: center;
   justify-content: center;
-  overflow: hidden;
-  margin-bottom: 10px;
-  border-radius: 8px;
-  border: 1px solid var(--color-border);
+  border-radius: 7px;
   background:
-    linear-gradient(45deg, rgba(0, 0, 0, 0.04) 25%, transparent 25%),
-    linear-gradient(-45deg, rgba(0, 0, 0, 0.04) 25%, transparent 25%),
-    linear-gradient(45deg, transparent 75%, rgba(0, 0, 0, 0.04) 75%),
-    linear-gradient(-45deg, transparent 75%, rgba(0, 0, 0, 0.04) 75%);
-  background-position: 0 0, 0 8px, 8px -8px, -8px 0;
-  background-size: 16px 16px;
+    linear-gradient(135deg, rgba(255, 255, 255, 0.06), transparent),
+    #15171d;
 }
 
-.scene2d-workspace-preview img {
+.scene2d-perspective-thumb img {
   width: 100%;
-  max-height: 320px;
+  height: 100%;
   object-fit: contain;
   display: block;
 }
 
+.scene2d-perspective-thumb-fallback {
+  width: 100%;
+  height: 100%;
+  display: grid;
+  place-items: center;
+  color: var(--color-muted);
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+}
+
+.scene2d-perspective-badge {
+  display: inline-flex;
+  align-items: center;
+  min-height: 18px;
+  padding: 2px 6px;
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--color-border) 82%, transparent);
+  color: var(--color-muted);
+  font-size: 9px;
+  text-transform: uppercase;
+}
+
+.scene2d-perspective-badge.primary {
+  border-color: color-mix(in srgb, var(--color-accent) 55%, transparent);
+  color: var(--color-accent);
+  background: color-mix(in srgb, var(--color-accent) 12%, transparent);
+}
+
+.scene2d-perspective-add-card {
+  align-items: center !important;
+  justify-content: center;
+  border-style: dashed !important;
+  color: var(--color-muted) !important;
+}
+
+.scene2d-perspective-add-mark {
+  width: 32px;
+  height: 32px;
+  display: grid;
+  place-items: center;
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--color-accent) 55%, transparent);
+  color: var(--color-accent);
+  font-size: 20px !important;
+  line-height: 1;
+}
+
+.scene2d-preview-area {
+  flex: 1 1 auto;
+  min-height: 280px;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  overflow: hidden;
+}
+
+.scene2d-preview-stage {
+  flex: 1 1 auto;
+  min-height: 0;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: auto;
+  border-radius: 12px;
+  border: 1px solid color-mix(in srgb, var(--color-border) 74%, transparent);
+  background:
+    radial-gradient(circle at 50% 42%, color-mix(in srgb, var(--color-accent) 8%, transparent), transparent 40%),
+    linear-gradient(45deg, rgba(255, 255, 255, 0.025) 25%, transparent 25%),
+    linear-gradient(-45deg, rgba(255, 255, 255, 0.025) 25%, transparent 25%),
+    #101217;
+  background-position: center, 0 0, 0 8px;
+  background-size: auto, 16px 16px, 16px 16px;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.025);
+}
+
+.scene2d-preview-canvas {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-width: min-content;
+  min-height: min-content;
+  padding: 18px;
+}
+
+.scene2d-preview-canvas.is-fit {
+  width: 100%;
+  height: 100%;
+}
+
+.scene2d-preview-canvas img {
+  display: block;
+  border-radius: 6px;
+  box-shadow: 0 18px 44px rgba(0, 0, 0, 0.36);
+  background: #0b0d11;
+}
+
+.scene2d-preview-canvas.is-fit img {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+}
+
+.scene2d-preview-canvas.is-zoomed img {
+  max-width: none;
+  max-height: none;
+  width: var(--scene2d-preview-width, 100%);
+  height: auto;
+}
+
 .scene2d-preview-placeholder {
-  padding: 12px;
+  max-width: 440px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  padding: 22px;
   text-align: center;
+}
+
+.scene2d-preview-placeholder strong {
+  color: var(--color-text);
+  font-size: 14px;
+}
+
+.scene2d-zoom-toolbar {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 8px;
+  border-radius: 10px;
+  border: 1px solid color-mix(in srgb, var(--color-border) 68%, transparent);
+  background: color-mix(in srgb, var(--bg-toolbar) 80%, transparent);
+  color: var(--color-muted);
+  font-size: 10px;
+}
+
+.scene2d-zoom-toolbar button.is-active {
+  border-color: var(--color-accent);
+  background: var(--color-accent-soft);
+  color: var(--color-accent);
+}
+
+.scene2d-zoom-toolbar input[type='range'] {
+  width: min(260px, 28vw);
+  accent-color: var(--color-accent);
+}
+
+.scene2d-zoom-toolbar output {
+  min-width: 42px;
+  color: var(--color-text);
+  font-size: 11px;
+  text-align: right;
+}
+
+.scene2d-perspective-editor {
+  flex: 0 0 auto;
+  display: grid;
+  grid-template-columns: minmax(180px, 1fr) minmax(180px, 280px);
+  gap: 8px;
+  align-items: end;
+  padding: 10px;
+  border: 1px solid color-mix(in srgb, var(--color-border) 70%, transparent);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--bg-panel) 74%, transparent);
+}
+
+.scene2d-perspective-editor .scene2d-actions {
+  grid-column: 1 / -1;
+}
+
+@media (max-width: 1180px) {
+  .scene2d-workspace-layout {
+    grid-template-columns: minmax(170px, 210px) minmax(0, 1fr);
+  }
+
+  .scene2d-workspace-fields,
+  .scene2d-perspective-editor {
+    grid-template-columns: 1fr;
+  }
+
+  .scene2d-field-wide,
+  .scene2d-perspective-editor .scene2d-actions {
+    grid-column: auto;
+  }
 }

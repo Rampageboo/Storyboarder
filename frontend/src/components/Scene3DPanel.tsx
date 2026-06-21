@@ -1,4 +1,4 @@
-import { forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   createScene3D,
   getProject,
@@ -84,13 +84,8 @@ async function dataUrlToFile(dataUrl: string, name: string): Promise<File> {
   return new File([blob], name, { type: blob.type || 'image/png' })
 }
 
-export interface Scene3DPanelHandle {
-  openWorkspace: () => void
-}
-
-export const Scene3DPanel = forwardRef<Scene3DPanelHandle>(function Scene3DPanel(_, ref) {
+export function Scene3DPanel({ active }: { active: boolean }) {
   const { project, selectedShotId, setProject, flushDirtyShots, projectActionBusy, reportError } = useProject()
-  const [workspaceOpen, setWorkspaceOpen] = useState(false)
   const [busy, setBusy] = useState(false)
   const [note, setNote] = useState('')
   const [editorReady, setEditorReady] = useState(false)
@@ -105,6 +100,7 @@ export const Scene3DPanel = forwardRef<Scene3DPanelHandle>(function Scene3DPanel
   const projectRef = useRef<ProjectPayload | null>(null)
   const selectedShotIdRef = useRef<string | null>(null)
   const activeScene3dIdRef = useRef('')
+  const wasActiveRef = useRef(false)
 
   useEffect(() => {
     projectRef.current = project
@@ -232,7 +228,6 @@ export const Scene3DPanel = forwardRef<Scene3DPanelHandle>(function Scene3DPanel
       setScene3ds(payload.scenes)
       setActiveScene3dId(payload.active_scene3d_id)
       setProject(await getProject())
-      setWorkspaceOpen(true)
       setNote(`Created ${payload.scene.title || payload.scene.id}.`)
       return payload.scene.id
     } catch (error) {
@@ -315,7 +310,6 @@ export const Scene3DPanel = forwardRef<Scene3DPanelHandle>(function Scene3DPanel
           loadedSceneKeyRef.current = sceneKey(payload)
           requestAnimationFrame(() => editor._resize?.())
         }
-        setWorkspaceOpen(true)
         setNote(`Imported GLB: ${file.name}`)
       } catch (error) {
         reportError(error)
@@ -450,20 +444,6 @@ export const Scene3DPanel = forwardRef<Scene3DPanelHandle>(function Scene3DPanel
     requestAnimationFrame(() => editor._resize?.())
   }, [ensureEditorLoaded, getShotScene3dTime])
 
-  const openWorkspace = useCallback(() => {
-    setWorkspaceOpen(true)
-    void loadEditorScene().catch(reportError)
-  }, [loadEditorScene, reportError])
-
-  useImperativeHandle(ref, () => ({ openWorkspace }), [openWorkspace])
-
-  const closeWorkspace = useCallback(() => {
-    // Capture whatever view (incl. free-orbit) the user left the workspace at.
-    persistReferenceView()
-    editorRef.current?.pauseAnimation?.()
-    setWorkspaceOpen(false)
-  }, [persistReferenceView])
-
   const reloadGlb = useCallback(async () => {
     if (!editorRef.current?.reloadBlenderScene) {
       setNote('Open the Scene 3D workspace before reloading GLB.')
@@ -489,9 +469,20 @@ export const Scene3DPanel = forwardRef<Scene3DPanelHandle>(function Scene3DPanel
   }, [persistSceneSettings, reportError])
 
   useEffect(() => {
-    if (!workspaceOpen) return
-    void loadEditorScene().catch(reportError)
-  }, [workspaceOpen, currentSceneKey, selectedShotId, loadEditorScene, reportError])
+    if (active) {
+      wasActiveRef.current = true
+      void loadEditorScene()
+        .then(() => {
+          requestAnimationFrame(() => requestAnimationFrame(() => editorRef.current?._resize?.()))
+        })
+        .catch(reportError)
+      return
+    }
+    if (!wasActiveRef.current) return
+    persistReferenceView()
+    editorRef.current?.pauseAnimation?.()
+    wasActiveRef.current = false
+  }, [active, currentSceneKey, selectedShotId, loadEditorScene, persistReferenceView, reportError])
 
   useEffect(
     () => () => {
@@ -517,8 +508,7 @@ export const Scene3DPanel = forwardRef<Scene3DPanelHandle>(function Scene3DPanel
         }}
       />
 
-      <div className="scene3d-workspace-overlay" hidden={!workspaceOpen} role="dialog" aria-modal="true" aria-label="Scene 3D workspace">
-        <div className="scene3d-workspace-card">
+      <section className="scene3d-workspace-page" aria-label="Scene 3D workspace">
           <div className="scene3d-workspace-header">
             <div>
               <div className="scene3d-workspace-title">Scene 3D Workspace</div>
@@ -563,14 +553,10 @@ export const Scene3DPanel = forwardRef<Scene3DPanelHandle>(function Scene3DPanel
               <button type="button" onClick={() => void saveScene()} disabled={!editorReady || disabled}>
                 Save scene
               </button>
-              <button type="button" className="scene3d-workspace-close" onClick={closeWorkspace} title="Close Scene 3D" aria-label="Close Scene 3D">
-                ×
-              </button>
             </div>
           </div>
           <div className="scene3d-editor-root" ref={editorRootRef} />
-        </div>
-      </div>
+      </section>
     </>
   )
-})
+}

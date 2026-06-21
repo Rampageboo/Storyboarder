@@ -1,12 +1,3 @@
-.scene3d-workspace-overlay {
-  inset: 34px 12px 12px;
-  padding: 10px;
-}
-
-.scene3d-workspace-card {
-  border-radius: 12px;
-}
-
 .scene3d-workspace-header {
   padding: 12px 14px;
 }

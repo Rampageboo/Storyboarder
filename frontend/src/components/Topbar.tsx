@@ -7,6 +7,14 @@ import './Topbar.css'
 const PREHEAT_COUNTDOWN_SECONDS = 10
 let preheatSessionState: 'ready' | 'countdown' | 'cancelled' | 'attempted' = 'ready'
 
+type WorkspaceMode = 'board' | 'scene2d' | 'scene3d'
+
+const workspaceLabels: Record<WorkspaceMode, string> = {
+  board: 'Board workspace',
+  scene2d: 'Scene 2D workspace',
+  scene3d: 'Scene 3D workspace',
+}
+
 function shortShotId(shotId: string) {
   return shotId.length > 12 ? `${shotId.slice(0, 8)}...` : shotId
 }
@@ -26,7 +34,7 @@ function photoshopStatusTitle(label: string, selectedShotId: string, openShotIds
   return parts.join('\n')
 }
 
-export function Topbar() {
+export function Topbar({ workspaceMode }: { workspaceMode: WorkspaceMode }) {
   const { project, dirtyShotIds, initialLoading } = useProject()
   const bridgeStatus = useBridgeStatus()
   const [preheatState, setPreheatState] = useState<'idle' | 'countdown' | 'preheating'>('idle')
@@ -124,13 +132,15 @@ export function Topbar() {
 
   return (
     <header className="topbar">
-      <div className="topbar-left" />
-
-      <div className="topbar-center">
+      <div className="topbar-left">
         <div className="topbar-project-copy">
           <div className="topbar-title">{projectLabel}</div>
           <div className="topbar-subtitle">{subtitle}</div>
         </div>
+      </div>
+
+      <div className="topbar-center">
+        <div className="topbar-context">{workspaceLabels[workspaceMode]}</div>
       </div>
 
       <div className="topbar-right">

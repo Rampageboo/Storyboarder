@@ -5,8 +5,8 @@ import { BoardStrip } from './components/BoardStrip'
 import { CanvasBoard } from './components/CanvasBoard'
 import { ReferenceSidebar } from './components/ReferenceSidebar'
 import { ReferenceAssignmentPopover } from './components/ReferenceAssignmentPopover'
-import { Scene2DPanel, type Scene2DPanelHandle } from './components/Scene2DPanel'
-import { Scene3DPanel, type Scene3DPanelHandle } from './components/Scene3DPanel'
+import { Scene2DPanel } from './components/Scene2DPanel'
+import { Scene3DPanel } from './components/Scene3DPanel'
 import { NeighborContext } from './components/NeighborContext'
 import { AdvancedPanel } from './components/AdvancedPanel'
 import { SettingsModal } from './components/SettingsModal'
@@ -16,6 +16,8 @@ import { LiveBridgeProvider } from './state/LiveBridgeContext'
 import { useGlobalShortcuts } from './hooks/useGlobalShortcuts'
 import type { ProjectPathRequest } from './types'
 import './App.css'
+
+type WorkspaceMode = 'board' | 'scene2d' | 'scene3d'
 
 function WelcomePanel() {
   const { newProject, openProjectFromDialog, projectActionBusy } = useProject()
@@ -56,17 +58,17 @@ function WelcomePanel() {
 
 function LeftRail({
   showNav,
+  workspaceMode,
   refsOpen,
   onToggleRefs,
-  onOpen2D,
-  onOpen3D,
+  onSetWorkspaceMode,
   onOpenSettings,
 }: {
   showNav: boolean
+  workspaceMode: WorkspaceMode
   refsOpen: boolean
   onToggleRefs: () => void
-  onOpen2D: () => void
-  onOpen3D: () => void
+  onSetWorkspaceMode: (mode: WorkspaceMode) => void
   onOpenSettings: () => void
 }) {
   return (
@@ -77,15 +79,36 @@ function LeftRail({
       {showNav ? (
         <>
           <div className="left-rail-group">
-            <button type="button" className="left-rail-item is-active" title="Board" aria-current="page">
+            <button
+              type="button"
+              className={`left-rail-item ${workspaceMode === 'board' ? 'is-active' : ''}`}
+              onClick={() => onSetWorkspaceMode('board')}
+              title="Board"
+              aria-current={workspaceMode === 'board' ? 'page' : undefined}
+              aria-pressed={workspaceMode === 'board'}
+            >
               <span className="left-rail-icon">&#9638;</span>
               <span>Board</span>
             </button>
-            <button type="button" className="left-rail-item" onClick={onOpen2D} title="Scene 2D">
+            <button
+              type="button"
+              className={`left-rail-item ${workspaceMode === 'scene2d' ? 'is-active' : ''}`}
+              onClick={() => onSetWorkspaceMode('scene2d')}
+              title="Scene 2D"
+              aria-current={workspaceMode === 'scene2d' ? 'page' : undefined}
+              aria-pressed={workspaceMode === 'scene2d'}
+            >
               <span className="left-rail-icon">&#9636;</span>
               <span>2D</span>
             </button>
-            <button type="button" className="left-rail-item" onClick={onOpen3D} title="Scene 3D">
+            <button
+              type="button"
+              className={`left-rail-item ${workspaceMode === 'scene3d' ? 'is-active' : ''}`}
+              onClick={() => onSetWorkspaceMode('scene3d')}
+              title="Scene 3D"
+              aria-current={workspaceMode === 'scene3d' ? 'page' : undefined}
+              aria-pressed={workspaceMode === 'scene3d'}
+            >
               <span className="left-rail-icon">&#11042;</span>
               <span>3D</span>
             </button>
@@ -110,6 +133,22 @@ function LeftRail({
         </>
       ) : null}
     </nav>
+  )
+}
+
+function BoardWorkspace() {
+  return (
+    <>
+      <main className="main-center">
+        <CanvasBoard />
+        <NeighborContext />
+        <BoardStrip />
+      </main>
+      <aside className="main-right">
+        <ShotInspector />
+        <AdvancedPanel />
+      </aside>
+    </>
   )
 }
 
@@ -246,10 +285,9 @@ function RightRail({
 
 function AppInner() {
   const { project, initialLoading, lastError, clearError, reloadProject } = useProject()
+  const [workspaceMode, setWorkspaceMode] = useState<WorkspaceMode>('board')
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [refsOpen, setRefsOpen] = useState(false)
-  const scene2dRef = useRef<Scene2DPanelHandle>(null)
-  const scene3dRef = useRef<Scene3DPanelHandle>(null)
   useGlobalShortcuts()
 
   const themeVars: CSSProperties = {
@@ -261,18 +299,22 @@ function AppInner() {
     void reloadProject()
   }, [reloadProject])
 
+  useEffect(() => {
+    setWorkspaceMode('board')
+  }, [project?.project_json_path, project?.project_path])
+
   return (
     <div className="app-root" style={themeVars}>
       <LeftRail
         showNav={!!project}
+        workspaceMode={workspaceMode}
         refsOpen={refsOpen}
         onToggleRefs={() => setRefsOpen((v) => !v)}
-        onOpen2D={() => scene2dRef.current?.openWorkspace()}
-        onOpen3D={() => scene3dRef.current?.openWorkspace()}
+        onSetWorkspaceMode={setWorkspaceMode}
         onOpenSettings={() => setSettingsOpen(true)}
       />
       <div className="app-main">
-        <Topbar />
+        <Topbar workspaceMode={workspaceMode} />
         {lastError ? (
           <div className="app-banner" role="alert">
             <span>{lastError}</span>
@@ -282,7 +324,7 @@ function AppInner() {
           </div>
         ) : null}
         <div className="workspace-shell">
-          <div className="workspace">
+          <div className={`workspace workspace-${workspaceMode}`}>
             {initialLoading ? (
               <div className="loading-panel">Loading project...</div>
             ) : !project ? (
@@ -290,18 +332,16 @@ function AppInner() {
             ) : (
               <>
                 <ReferenceSidebar open={refsOpen} onOpenChange={setRefsOpen} />
-                <main className="main-center">
-                  <CanvasBoard />
-                  <NeighborContext />
-                  <BoardStrip />
-                </main>
-                <aside className="main-right">
-                  <ShotInspector />
-                  <AdvancedPanel />
-                </aside>
+                <div className="workspace-content workspace-content-board" hidden={workspaceMode !== 'board'}>
+                  <BoardWorkspace />
+                </div>
+                <div className="workspace-content workspace-content-scene" hidden={workspaceMode !== 'scene2d'}>
+                  <Scene2DPanel />
+                </div>
+                <div className="workspace-content workspace-content-scene" hidden={workspaceMode !== 'scene3d'}>
+                  <Scene3DPanel active={workspaceMode === 'scene3d'} />
+                </div>
                 <RightRail onOpenSettings={() => setSettingsOpen(true)} />
-                <Scene2DPanel ref={scene2dRef} />
-                <Scene3DPanel ref={scene3dRef} />
               </>
             )}
           </div>
