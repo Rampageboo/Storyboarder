@@ -294,9 +294,9 @@ function populatePerspectiveSelect(workItems, activeSceneId) {
   if (!sel) return;
   sel.innerHTML = "";
 
-  const sceneItems = (workItems || []).filter(
-    (item) => item.kind === "scene2d" && item.scene_id === activeSceneId
-  );
+  const sceneItems = typeof scene2DPerspectiveOptions === "function"
+    ? scene2DPerspectiveOptions(workItems, activeSceneId)
+    : (workItems || []).filter((item) => item.kind === "scene2d" && item.scene_id === activeSceneId);
 
   if (groupLabel) {
     const sceneName = sceneItems[0]?.scene_title || activeSceneId || "Scene 2D";
@@ -307,6 +307,7 @@ function populatePerspectiveSelect(workItems, activeSceneId) {
     const opt = document.createElement("option");
     opt.value = item.key || `scene2d:${item.scene_id}:${item.perspective_id}`;
     opt.textContent = item.perspective_title || item.perspective_id || "Perspective";
+    opt.dataset.perspectiveType = item.perspective_type || "psd";
     sel.appendChild(opt);
   }
 

@@ -91,6 +91,20 @@
     return `${index ?? "?"} / ${count ?? "?"}`;
   }
 
+  function scene2DPerspectiveOptions(workItems, activeSceneId) {
+    const sceneId = String(activeSceneId || "");
+    return (Array.isArray(workItems) ? workItems : [])
+      .filter((item) => item?.kind === "scene2d" && String(item.scene_id || "") === sceneId)
+      .map((item) => ({
+        key: item.key || `scene2d:${item.scene_id}:${item.perspective_id}`,
+        scene_id: item.scene_id || "",
+        perspective_id: item.perspective_id || "",
+        scene_title: item.scene_title || "",
+        perspective_title: item.perspective_title || item.perspective_id || "Perspective",
+        perspective_type: item.perspective_type || "psd",
+      }));
+  }
+
   Object.assign(global, {
     normalizeNativePath,
     sameNativePath,
@@ -101,5 +115,6 @@
     deriveActiveWorkKey,
     filterKnownOpenWorkKeys,
     displayPerspectiveIndex,
+    scene2DPerspectiveOptions,
   });
 })(typeof globalThis !== "undefined" ? globalThis : this);

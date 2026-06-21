@@ -451,6 +451,52 @@ class Scene2DTests(unittest.TestCase):
             if link.get("source_scene2d_perspective_id") == perspective["id"]
         )
         self.assertEqual(moved_reference["source_scene2d_id"], target_scene["id"])
+        self.assertEqual(
+            moved_reference["path"],
+            f"scenes2d/{target_scene['id']}/perspectives/{perspective['id']}/preview.png",
+        )
+
+    def test_move_perspective_rolls_back_files_metadata_and_references_on_commit_failure(self) -> None:
+        source_scene = self._create_scene("Rollback source")
+        target_scene = self._create_scene("Rollback target")
+        created = _quiet(
+            lambda: self.client.post(
+                f"/api/project/scenes2d/{source_scene['id']}/perspectives",
+                json={"title": "Rollback me"},
+            )
+        )
+        self.assertEqual(created.status_code, 200, created.text)
+        perspective = created.json()["perspective"]
+        source_path = self.project_root / perspective["source_file_path"]
+        preview_path = self.project_root / perspective["preview_image_path"]
+        preview_path.write_bytes(MINI_PNG)
+        added = _quiet(
+            lambda: self.client.post(
+                f"/api/project/scenes2d/{source_scene['id']}/perspectives/{perspective['id']}/add-to-references"
+            )
+        )
+        self.assertEqual(added.status_code, 200, added.text)
+        before_scenes = _quiet(lambda: self.client.get("/api/project/scenes2d")).json()["scenes"]
+        before_settings = json.loads((self.project_root / "settings.json").read_text(encoding="utf-8"))
+
+        with mock.patch("storyboard_tool.scene2d._save_scenes", side_effect=RuntimeError("forced save failure")):
+            moved = _quiet(
+                lambda: self.client.post(
+                    f"/api/project/scenes2d/{source_scene['id']}/perspectives/{perspective['id']}/move-to-scene",
+                    json={"target_scene_id": target_scene["id"]},
+                )
+            )
+
+        self.assertEqual(moved.status_code, 500, moved.text)
+        self.assertTrue(source_path.is_file())
+        self.assertTrue(preview_path.is_file())
+        self.assertFalse(
+            (self.project_root / "scenes2d" / target_scene["id"] / "perspectives" / perspective["id"]).exists()
+        )
+        after_scenes = _quiet(lambda: self.client.get("/api/project/scenes2d")).json()["scenes"]
+        after_settings = json.loads((self.project_root / "settings.json").read_text(encoding="utf-8"))
+        self.assertEqual(before_scenes, after_scenes)
+        self.assertEqual(before_settings, after_settings)
 
     def test_reorder_perspectives_persists_without_changing_primary(self) -> None:
         scene = self._create_scene("Ordered scene")

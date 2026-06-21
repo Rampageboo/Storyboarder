@@ -123,7 +123,14 @@ function init() {
   $("openPerspective")?.addEventListener("click", () => runPanelAction(openSelectedPerspective));
   $("focusCurrentPerspectiveTab")?.addEventListener("click", () => runPanelAction(focusCurrentPerspectiveTab));
   $("perspectiveSelect")?.addEventListener("change", (event) => {
-    const key = event.target?.value || "";
+    const select = event.target;
+    const option = select?.selectedOptions?.[0] || null;
+    const perspectiveType = String(option?.dataset?.perspectiveType || "psd").toLowerCase();
+    if (perspectiveType === "image") {
+      setStatus("Image perspectives can be referenced from Storyboarder, but cannot be opened as PSD tabs.");
+      return;
+    }
+    const key = select?.value || "";
     const [, sceneId, perspectiveId] = key.split(":");
     if (sceneId && perspectiveId) {
       runPanelAction(() => openPerspectiveById(sceneId, perspectiveId));
@@ -148,6 +155,44 @@ function setLinkedUi(linked) {
   const colorSection = $("colorSection");
   if (linkedPanel) linkedPanel.hidden = !linked;
   if (colorSection) colorSection.hidden = linked;
+}
+
+function clearScene2DWorkNavigation() {
+  const select = $("perspectiveSelect");
+  if (select) select.innerHTML = "";
+  const groupLabel = $("workScene2dGroup");
+  if (groupLabel) groupLabel.textContent = "";
+  for (const id of ["previousPerspective", "nextPerspective", "openPerspective", "focusCurrentPerspectiveTab"]) {
+    const button = $(id);
+    if (button) button.disabled = true;
+  }
+}
+
+function renderDisconnectedState(message = "Not connected") {
+  linkedFromStoryboard = false;
+  lastPluginContext = null;
+  setLinkedUi(false);
+  setLinkStatus(message, true);
+  if (typeof setWorkContext === "function") {
+    setWorkContext(null);
+  }
+  clearScene2DWorkNavigation();
+  const shotNav = $("workShotNav");
+  const scene2dNav = $("workScene2dNav");
+  const onionSkin = $("workOnionSkin");
+  const workNoCtx = $("workNoContext");
+  if (shotNav) shotNav.hidden = true;
+  if (scene2dNav) scene2dNav.hidden = true;
+  if (onionSkin) onionSkin.hidden = true;
+  if (workNoCtx) {
+    workNoCtx.hidden = false;
+    const msg = workNoCtx.querySelector?.(".empty-msg");
+    if (msg) msg.textContent = message;
+  }
+  const scene2dPanel = $("scene2dPanel");
+  const unmatchedCard = $("unmatchedCard");
+  if (scene2dPanel) scene2dPanel.hidden = true;
+  if (unmatchedCard) unmatchedCard.hidden = true;
 }
 
 function setPluginView(view) {
@@ -595,21 +640,16 @@ async function pollStoryboardBridge() {
   }
 
   if (!live) {
-    linkedFromStoryboard = false;
-    setLinkedUi(false);
-    setLinkStatus("Not connected", true);
+    renderDisconnectedState("Not connected");
     return;
   }
 
   if (!live.app_running) {
-    setLinkedUi(false);
-    setLinkStatus("Storyboard not running", true);
+    renderDisconnectedState("Storyboard not running");
     return;
   }
   if (!live.connected) {
-    linkedFromStoryboard = false;
-    setLinkedUi(false);
-    setLinkStatus("Open a project in Storyboard", true);
+    renderDisconnectedState("Open a project in Storyboard");
     return;
   }
 
@@ -1295,6 +1335,7 @@ function renderWorkModeUI(ctx) {
   if (scene2dNav) scene2dNav.hidden = mode !== "scene2d";
   if (onionSkin)  onionSkin.hidden  = mode !== "shot";
   if (workNoCtx)  workNoCtx.hidden  = mode !== "unmatched";
+  renderScene2DWorkNavigation(mode === "scene2d" ? ctx : null, lastPluginContext);
 
   for (const id of ["saveAndStay", "saveAndNext", "scene2dSaveAndStay", "scene2dSaveAndNext"]) {
     const button = $(id);
@@ -1304,6 +1345,29 @@ function renderWorkModeUI(ctx) {
   if (mode === "scene2d") {
     renderScene2DCard(ctx);
   }
+}
+
+function renderScene2DWorkNavigation(ctx, pluginContext) {
+  if (!ctx?.scene_id) {
+    clearScene2DWorkNavigation();
+    return;
+  }
+  const workItems = Array.isArray(pluginContext?.work_items) ? pluginContext.work_items : [];
+  populatePerspectiveSelect(workItems, ctx.scene_id);
+  const select = $("perspectiveSelect");
+  if (select) {
+    const key = ctx.key || `scene2d:${ctx.scene_id}:${ctx.perspective_id}`;
+    select.value = key;
+  }
+  const isImage = String(ctx.perspective_type || "psd").toLowerCase() === "image";
+  const previousButton = $("previousPerspective");
+  const nextButton = $("nextPerspective");
+  const openButton = $("openPerspective");
+  const focusButton = $("focusCurrentPerspectiveTab");
+  if (previousButton) previousButton.disabled = !ctx.previous_key;
+  if (nextButton) nextButton.disabled = !ctx.next_key;
+  if (openButton) openButton.disabled = isImage;
+  if (focusButton) focusButton.disabled = isImage;
 }
 
 function renderScene2DCard(ctx) {

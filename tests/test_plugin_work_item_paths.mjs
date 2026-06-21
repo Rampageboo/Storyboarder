@@ -14,6 +14,7 @@ const {
   deriveActiveWorkKey,
   filterKnownOpenWorkKeys,
   displayPerspectiveIndex,
+  scene2DPerspectiveOptions,
 } = context;
 
 const pluginContext = {
@@ -107,4 +108,39 @@ test("derives and filters work keys without accepting stale keys", () => {
 test("displays first perspective as one-based 1 / N", () => {
   assert.equal(displayPerspectiveIndex(1, 4), "1 / 4");
   assert.equal(displayPerspectiveIndex(4, 4), "4 / 4");
+});
+
+test("filters perspective selector options to the active scene group", () => {
+  const options = scene2DPerspectiveOptions([
+    {
+      kind: "scene2d",
+      key: "scene2d:scene-a:persp-a",
+      scene_id: "scene-a",
+      perspective_id: "persp-a",
+      scene_title: "Scene A",
+      perspective_title: "Main",
+      perspective_type: "psd",
+    },
+    {
+      kind: "scene2d",
+      key: "scene2d:scene-b:persp-b",
+      scene_id: "scene-b",
+      perspective_id: "persp-b",
+      scene_title: "Scene B",
+      perspective_title: "Other",
+      perspective_type: "image",
+    },
+    { kind: "shot", shot_id: "shot_001" },
+  ], "scene-b");
+
+  assert.deepEqual(JSON.parse(JSON.stringify(options)), [
+    {
+      key: "scene2d:scene-b:persp-b",
+      scene_id: "scene-b",
+      perspective_id: "persp-b",
+      scene_title: "Scene B",
+      perspective_title: "Other",
+      perspective_type: "image",
+    },
+  ]);
 });
