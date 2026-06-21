@@ -312,6 +312,25 @@ sp-textfield {
   display: none !important;
 }
 
+/* Scene 2D mode — work panel scene group label */
+.work-scene-group {
+  display: block;
+  font-weight: 700;
+  color: #9bd6ad;
+  margin-bottom: 6px;
+}
+
+/* Scene 2D panel card hidden override */
+#scene2dCard[hidden],
+#scene2dImageCard[hidden],
+#scene2dExportPanel[hidden],
+#scene2dPanel[hidden],
+#workShotNav[hidden],
+#workScene2dNav[hidden],
+#workOnionSkin[hidden] {
+  display: none !important;
+}
+
 /* Task groups */
 .panel-group {
   min-width: 0;

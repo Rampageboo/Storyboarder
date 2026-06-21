@@ -5,7 +5,7 @@ from typing import Any
 
 from fastapi import FastAPI, HTTPException
 
-from . import app_state, project_manager, runtime_state
+from . import app_state, project_manager, runtime_state, scene2d
 from .models import Shot
 
 
@@ -46,6 +46,8 @@ class PluginBridgeService:
             next_shot_id = project.shots[selected_index + 1].shot_id
         selected_shot = project.shots[selected_index] if selected_index >= 0 else None
         return {
+            "work_context": runtime_state.active_work_context(self.app),
+            "work_items": self.work_items(project),
             "project_name": project.name,
             "project_root": str(project.root_path),
             "project_json_path": str(project.json_path),
@@ -62,6 +64,40 @@ class PluginBridgeService:
             "paths": self.shot_paths(project, selected_shot) if selected_shot else {},
             "bridge": app_state._bridge_status_payload(self.app),
         }
+
+    def work_items(self, project) -> list[dict[str, Any]]:
+        """Return all editable PSD work items: shots + Scene 2D PSD Perspectives."""
+        items: list[dict[str, Any]] = []
+        for shot in project.shots:
+            items.append({
+                "kind": "shot",
+                "key": f"shot:{shot.shot_id}",
+                "label": shot.title or shot.shot_id,
+                "source_file_path": shot.source_file_path or f"shots/{shot.shot_id}/{shot.shot_id}.psd",
+                "preview_image_path": shot.preview_image_path or f"shots/{shot.shot_id}/{shot.shot_id}_preview.png",
+                "shot_id": shot.shot_id,
+            })
+        try:
+            scenes = scene2d.list_scenes(project)
+        except Exception:
+            scenes = []
+        for sc in scenes:
+            scene_id = sc.get("id", "")
+            scene_title = sc.get("title", "")
+            for persp in sc.get("perspectives") or []:
+                if persp.get("type") != "psd":
+                    continue
+                persp_id = persp.get("id", "")
+                items.append({
+                    "kind": "scene2d",
+                    "key": f"scene2d:{scene_id}:{persp_id}",
+                    "label": f"{scene_title} / {persp.get('title', 'Untitled')}",
+                    "source_file_path": persp.get("source_file_path", ""),
+                    "preview_image_path": persp.get("preview_image_path", ""),
+                    "scene_id": scene_id,
+                    "perspective_id": persp_id,
+                })
+        return items
 
     def export_preview(self, shot_id: str, payload: dict[str, Any] | None = None) -> dict[str, Any]:
         project = app_state._refresh_project_from_disk(self.app)
@@ -171,6 +207,105 @@ class PluginBridgeService:
             if candidate.is_file():
                 return candidate
         return None
+
+    # ── Scene 2D plugin methods ───────────────────────────────────────────
+
+    def scene2d_export_preview(self, scene_id: str, perspective_id: str) -> dict[str, Any]:
+        """Called after the plugin exports a Scene 2D preview PNG."""
+        project = app_state._refresh_project_from_disk(self.app)
+        try:
+            sc, scenes = scene2d._find_scene(project, scene_id)
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+        try:
+            perspective = scene2d._find_perspective(sc, perspective_id)
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+        if perspective.get("type") != "psd":
+            raise HTTPException(status_code=400, detail="Perspective is not a PSD — export not allowed.")
+
+        source_path = project.root_path / perspective["source_file_path"]
+        if not source_path.is_file():
+            raise HTTPException(status_code=400, detail=f"Source PSD not found: {perspective['source_file_path']}")
+
+        preview_rel = perspective.get("preview_image_path", "")
+        if not preview_rel:
+            raise HTTPException(status_code=400, detail="Perspective has no preview_image_path.")
+
+        preview_path = project.root_path / preview_rel
+        # Safety: preview must stay inside project root
+        try:
+            preview_path.resolve().relative_to(project.root_path.resolve())
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Preview path escapes project root.") from None
+
+        if not preview_path.is_file():
+            raise HTTPException(status_code=400, detail="Exported preview PNG not found — did the plugin save it?")
+
+        # Update timestamps atomically
+        timestamp = scene2d._now_iso()
+        perspective["updated_at"] = timestamp
+        sc["updated_at"] = timestamp
+        updated_scenes = scene2d._replace_scene(scenes, scene2d._with_legacy_aliases(sc))
+        scene2d._save_scenes(project, updated_scenes)
+
+        runtime_state.mark_scene2d_changed(self.app, scene_id, perspective_id)
+        app_state._touch_live_bridge(self.app)
+
+        work_ctx = runtime_state.active_work_context(self.app)
+        return {
+            "work_context": work_ctx,
+            "scene": scene2d._with_legacy_aliases(sc),
+            "perspective": perspective,
+            "preview_image_path": preview_rel,
+        }
+
+    def scene2d_psd_saved(self, scene_id: str, perspective_id: str) -> dict[str, Any]:
+        """Called when the artist saves the Scene 2D PSD (Ctrl+S in Photoshop)."""
+        project = app_state._refresh_project_from_disk(self.app)
+        try:
+            sc, scenes = scene2d._find_scene(project, scene_id)
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+        try:
+            perspective = scene2d._find_perspective(sc, perspective_id)
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+        source_path = project.root_path / perspective["source_file_path"]
+        if not source_path.is_file():
+            raise HTTPException(status_code=400, detail=f"Source PSD not found: {perspective['source_file_path']}")
+
+        timestamp = scene2d._now_iso()
+        perspective["updated_at"] = timestamp
+        sc["updated_at"] = timestamp
+        updated_scenes = scene2d._replace_scene(scenes, scene2d._with_legacy_aliases(sc))
+        scene2d._save_scenes(project, updated_scenes)
+
+        work_ctx = runtime_state.active_work_context(self.app)
+        return {"work_context": work_ctx, "scene": scene2d._with_legacy_aliases(sc), "perspective": perspective}
+
+    def scene2d_next_perspective(self, scene_id: str, perspective_id: str) -> dict[str, Any]:
+        """Return the next PSD Perspective in the same Scene group."""
+        project = app_state._refresh_project_from_disk(self.app)
+        try:
+            sc, _scenes = scene2d._find_scene(project, scene_id)
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+        psd_perspectives = [p for p in (sc.get("perspectives") or []) if p.get("type") == "psd"]
+        index = next((i for i, p in enumerate(psd_perspectives) if p.get("id") == perspective_id), -1)
+        if index < 0:
+            raise HTTPException(status_code=404, detail="Perspective not found in scene.")
+
+        if index >= len(psd_perspectives) - 1:
+            return {"next_perspective": None, "at_end": True}
+
+        next_persp = psd_perspectives[index + 1]
+        return {"next_perspective": next_persp, "scene": scene2d._with_legacy_aliases(sc), "at_end": False}
 
     def shot_health(self, project, shot: Shot) -> dict[str, Any]:
         psd = self.shot_psd_path(project, shot)

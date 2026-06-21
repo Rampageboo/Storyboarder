@@ -35,7 +35,11 @@ export function LiveBridgeProvider({ children }: PropsWithChildren) {
         const revision = Number(status.plugin_project_revision ?? 0)
         if (revision > 0 && revision !== lastPluginProjectRevisionRef.current) {
           lastPluginProjectRevisionRef.current = revision
-          await refreshProjectFromBridge(status.plugin_selected_shot_id)
+          // Only reload shot data for shot-kind changes. Scene2D changes are
+          // handled locally in Scene2DPanel via useBridgeStatus().
+          if (status.plugin_change?.kind !== 'scene2d') {
+            await refreshProjectFromBridge(status.plugin_selected_shot_id)
+          }
         }
       } catch {
         if (!cancelled) setBridgeStatus(null)

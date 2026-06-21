@@ -45,6 +45,7 @@
         <sp-detail id="shotCardHint" class="card-hint"></sp-detail>
       </section>
 
+      <!-- Shot mode card & export controls (shown when activeWorkMode === 'shot') -->
       <div id="linkedPanel" hidden>
         <div class="panel-group panel-group-save">
           <span class="group-label">Preview export</span>
@@ -53,6 +54,33 @@
           <sp-button id="saveAndStay" variant="primary">Export preview</sp-button>
           <sp-checkbox id="autoAddShot" checked>Auto-add at end</sp-checkbox>
           <sp-checkbox id="focusStoryboardAfterExport">Focus Storyboarder after preview export</sp-checkbox>
+        </div>
+      </div>
+
+      <!-- Scene 2D mode card & export controls (shown when activeWorkMode === 'scene2d') -->
+      <div id="scene2dPanel" hidden>
+        <section id="scene2dCard" class="current-shot-card" hidden>
+          <div class="card-kicker">Scene 2D</div>
+          <div class="card-title-row">
+            <div>
+              <div class="card-shot-id" id="scene2dPerspectiveIndex"></div>
+              <div class="card-title" id="scene2dSceneTitle"></div>
+            </div>
+            <div class="card-status-pill" id="scene2dPerspectiveType">PSD</div>
+          </div>
+          <div class="card-meta" id="scene2dPerspectiveTitle"></div>
+        </section>
+        <div id="scene2dImageCard" class="current-shot-card" hidden>
+          <div class="card-kicker">Image Perspective</div>
+          <div class="card-meta">Read-only source</div>
+          <sp-detail class="helper-text">Convert to PSD in Storyboarder to edit.</sp-detail>
+        </div>
+        <div class="panel-group panel-group-save" id="scene2dExportPanel" hidden>
+          <span class="group-label">Preview export</span>
+          <sp-detail class="helper-text">Exports the visible composite. Press Ctrl+S in Photoshop to save the PSD.</sp-detail>
+          <sp-button id="scene2dSaveAndNext" variant="cta">Export &amp; next perspective</sp-button>
+          <sp-button id="scene2dSaveAndStay" variant="primary">Export preview</sp-button>
+          <sp-checkbox id="scene2dFocusStoryboardAfterExport">Focus Storyboarder after export</sp-checkbox>
         </div>
       </div>
 
@@ -101,7 +129,8 @@
         </div>
       </header>
 
-      <div class="panel-group panel-group-nav">
+      <!-- Shot mode navigation (hidden in Scene 2D mode) -->
+      <div id="workShotNav" class="panel-group panel-group-nav">
         <sp-label for="shotSelect">Shot</sp-label>
         <select id="shotSelect" class="shot-select"></select>
         <div class="button-row">
@@ -114,7 +143,23 @@
         </div>
       </div>
 
-      <div class="panel-group">
+      <!-- Scene 2D mode navigation (hidden in Shot mode) -->
+      <div id="workScene2dNav" class="panel-group panel-group-nav" hidden>
+        <sp-detail id="workScene2dGroup" class="work-scene-group"></sp-detail>
+        <sp-label for="perspectiveSelect">Perspective</sp-label>
+        <select id="perspectiveSelect" class="shot-select"></select>
+        <div class="button-row">
+          <sp-button id="previousPerspective" variant="secondary">Previous</sp-button>
+          <sp-button id="nextPerspective" variant="secondary">Next</sp-button>
+        </div>
+        <div class="button-row">
+          <sp-button id="openPerspective" variant="secondary">Open perspective</sp-button>
+          <sp-button id="focusCurrentPerspectiveTab" variant="secondary">Focus open tab</sp-button>
+        </div>
+      </div>
+
+      <!-- Onion skin (shot mode only) -->
+      <div id="workOnionSkin" class="panel-group">
         <span class="group-label">Onion skin</span>
         <sp-label for="overlayCount">Overlay count</sp-label>
         <sp-textfield id="overlayCount" class="overlay-count" value="1" placeholder="1"></sp-textfield>

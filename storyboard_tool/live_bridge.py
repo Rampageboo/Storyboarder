@@ -89,6 +89,9 @@ def build_payload(
     port: int = DEFAULT_PORT,
     focus_shot_id: str = "",
     focus_token: int = 0,
+    work_context: dict[str, Any] | None = None,
+    focus_work_context: dict[str, Any] | None = None,
+    plugin_change: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     shot: Shot | None = None
     if project and selected_shot_id:
@@ -104,6 +107,18 @@ def build_payload(
     bridge_url = f"http://127.0.0.1:{port}/api/bridge/live"
     shared_path = str(shared_bridge_file_path())
     canvas_width, canvas_height = get_canvas_size(project) if project else (1920, 1080)
+
+    # Generic focus request: carries kind/key/source_file_path + legacy shot_id
+    fwc = focus_work_context or {}
+    focus_request: dict[str, Any] = {
+        "kind": str(fwc.get("kind") or "shot"),
+        "key": str(fwc.get("key") or ""),
+        "source_file_path": str(fwc.get("source_file_path") or ""),
+        # Legacy field: non-empty only for shot focus so old plugins keep working
+        "shot_id": str(fwc.get("shot_id") or focus_shot_id or "") if project else "",
+        "token": int(focus_token),
+    }
+
     return {
         "version": LIVE_BRIDGE_VERSION,
         "app_running": True,
@@ -124,12 +139,13 @@ def build_payload(
         "shot_folder": shot_folder,
         "source_file_path": source_file_path,
         "shot_count": len(project.shots) if project else 0,
-        # One-shot request asking the plugin to focus/open a shot tab. The plugin
-        # acts only when `token` increases, so passive polls never yank tabs.
-        "focus_request": {
-            "shot_id": focus_shot_id if project else "",
-            "token": int(focus_token),
-        },
+        # Active work context (shot or scene2d)
+        "work_context": work_context or {},
+        # One-shot request asking the plugin to focus/open a tab. The plugin acts
+        # only when `token` increases, so passive polls never yank tabs.
+        "focus_request": focus_request,
+        # Plugin change notification for Storyboarder auto-refresh
+        "plugin_change": plugin_change or {},
     }
 
 
@@ -164,6 +180,9 @@ def publish(
     port: int = DEFAULT_PORT,
     focus_shot_id: str = "",
     focus_token: int = 0,
+    work_context: dict[str, Any] | None = None,
+    focus_work_context: dict[str, Any] | None = None,
+    plugin_change: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     payload = build_payload(
         project=project,
@@ -171,6 +190,9 @@ def publish(
         port=port,
         focus_shot_id=focus_shot_id,
         focus_token=focus_token,
+        work_context=work_context,
+        focus_work_context=focus_work_context,
+        plugin_change=plugin_change,
     )
     write_payload_files(base_dir, project, payload)
     return payload

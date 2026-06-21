@@ -1,5 +1,29 @@
 import { requestJson } from './client'
 
+export interface PluginChange {
+  revision: number
+  kind: 'shot' | 'scene2d'
+  scene_id?: string
+  perspective_id?: string
+}
+
+export interface WorkContext {
+  kind?: 'shot' | 'scene2d'
+  key?: string
+  shot_id?: string
+  scene_id?: string
+  perspective_id?: string
+  scene_title?: string
+  perspective_title?: string
+  perspective_type?: string
+  source_file_path?: string
+  preview_image_path?: string
+  index?: number
+  count?: number
+  previous_key?: string
+  next_key?: string
+}
+
 export interface BridgeStatusPayload {
   app_running?: boolean
   project_open?: boolean
@@ -9,6 +33,10 @@ export interface BridgeStatusPayload {
   plugin_open_shot_ids?: string[]
   plugin_last_exported_preview?: Record<string, number>
   plugin_project_revision?: number
+  work_context?: WorkContext
+  plugin_active_work_key?: string
+  plugin_open_work_keys?: string[]
+  plugin_change?: PluginChange
   bridge_url?: string
   global_bridge_path?: string
   shared_bridge_path?: string

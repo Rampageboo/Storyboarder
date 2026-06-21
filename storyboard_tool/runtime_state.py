@@ -7,6 +7,7 @@ from fastapi import FastAPI
 
 
 def init_bridge_state(app: FastAPI, bridge_port: int) -> None:
+    # Legacy shot-specific fields (kept for backward compat)
     app.state.live_selected_shot_id = ""
     app.state.bridge_port = bridge_port
     app.state.plugin_last_seen = 0.0
@@ -16,6 +17,14 @@ def init_bridge_state(app: FastAPI, bridge_port: int) -> None:
     app.state.plugin_project_revision = 0
     app.state.live_focus_shot_id = ""
     app.state.live_focus_token = 0
+
+    # Generic work-context fields
+    app.state.active_work_context = {}
+    app.state.focus_work_context = {}
+    app.state.focus_token = 0
+    app.state.plugin_active_work_key = ""
+    app.state.plugin_open_work_keys = []
+    app.state.plugin_change = {}
 
 
 def live_selected_shot_id(app: FastAPI) -> str:
@@ -35,8 +44,20 @@ def live_focus_token(app: FastAPI) -> int:
 
 
 def request_live_focus(app: FastAPI, shot_id: str) -> None:
-    app.state.live_focus_shot_id = str(shot_id or "")
-    app.state.live_focus_token = live_focus_token(app) + 1
+    """Legacy shot focus — also updates the generic focus_token."""
+    shot_id = str(shot_id or "")
+    app.state.live_focus_shot_id = shot_id
+    new_token = live_focus_token(app) + 1
+    app.state.live_focus_token = new_token
+    app.state.focus_token = new_token
+    ctx = active_work_context(app)
+    source_path = ctx.get("source_file_path", "") if ctx.get("kind") == "shot" and ctx.get("shot_id") == shot_id else ""
+    app.state.focus_work_context = {
+        "kind": "shot",
+        "key": f"shot:{shot_id}",
+        "shot_id": shot_id,
+        "source_file_path": source_path,
+    }
 
 
 def plugin_last_seen(app: FastAPI) -> float:
@@ -63,12 +84,26 @@ def set_plugin_and_live_selected_shot_id(app: FastAPI, shot_id: str) -> None:
 def record_plugin_heartbeat(app: FastAPI, payload: dict[str, Any] | None = None) -> None:
     data = payload if isinstance(payload, dict) else {}
     app.state.plugin_last_seen = time.time()
+
+    # Legacy shot fields
     selected = str(data.get("selected_shot_id") or "").strip()
     if selected:
         set_plugin_and_live_selected_shot_id(app, selected)
     open_ids = data.get("open_shot_ids")
     if isinstance(open_ids, list):
         app.state.plugin_open_shot_ids = [str(item) for item in open_ids if item]
+
+    # Generic work-context fields (Part 5)
+    active_key = str(data.get("active_work_key") or "").strip()
+    if active_key and (active_key.startswith("shot:") or active_key.count(":") == 2):
+        app.state.plugin_active_work_key = active_key
+
+    open_keys = data.get("open_work_keys")
+    if isinstance(open_keys, list):
+        app.state.plugin_open_work_keys = [
+            str(k) for k in open_keys
+            if str(k or "").startswith("shot:") or str(k or "").count(":") == 2
+        ]
 
 
 def plugin_last_exported_preview(app: FastAPI) -> dict[str, float]:
@@ -89,3 +124,112 @@ def plugin_project_revision(app: FastAPI) -> int:
 
 def mark_plugin_project_changed(app: FastAPI) -> None:
     app.state.plugin_project_revision = plugin_project_revision(app) + 1
+
+
+# ── Generic work-context accessors ────────────────────────────────────────
+
+
+def active_work_context(app: FastAPI) -> dict[str, Any]:
+    ctx = getattr(app.state, "active_work_context", None)
+    return dict(ctx) if isinstance(ctx, dict) else {}
+
+
+def focus_work_context(app: FastAPI) -> dict[str, Any]:
+    ctx = getattr(app.state, "focus_work_context", None)
+    return dict(ctx) if isinstance(ctx, dict) else {}
+
+
+def focus_token(app: FastAPI) -> int:
+    return int(getattr(app.state, "focus_token", 0) or 0)
+
+
+def plugin_active_work_key(app: FastAPI) -> str:
+    return str(getattr(app.state, "plugin_active_work_key", "") or "")
+
+
+def plugin_open_work_keys(app: FastAPI) -> list[str]:
+    raw = getattr(app.state, "plugin_open_work_keys", None)
+    if not isinstance(raw, list):
+        return []
+    return [str(item) for item in raw if item]
+
+
+def plugin_change_payload(app: FastAPI) -> dict[str, Any]:
+    payload = getattr(app.state, "plugin_change", None)
+    return dict(payload) if isinstance(payload, dict) else {}
+
+
+def set_active_shot_context(
+    app: FastAPI,
+    shot_id: str,
+    source_file_path: str = "",
+    preview_image_path: str = "",
+) -> None:
+    shot_id = str(shot_id or "").strip()
+    app.state.active_work_context = {
+        "kind": "shot",
+        "key": f"shot:{shot_id}",
+        "shot_id": shot_id,
+        "source_file_path": source_file_path,
+        "preview_image_path": preview_image_path,
+    }
+    set_live_selected_shot_id(app, shot_id)
+
+
+def set_active_scene2d_context(
+    app: FastAPI,
+    scene_id: str,
+    perspective_id: str,
+    scene: dict[str, Any] | None = None,
+    perspective: dict[str, Any] | None = None,
+) -> None:
+    scene_id = str(scene_id or "").strip()
+    perspective_id = str(perspective_id or "").strip()
+    source_file_path = str((perspective or {}).get("source_file_path") or "")
+    preview_image_path = str((perspective or {}).get("preview_image_path") or "")
+
+    # Build prev/next keys from the PSD-only perspective list
+    perspectives = (scene or {}).get("perspectives") or []
+    psd_perspectives = [p for p in perspectives if p.get("type") == "psd"]
+    index = next((i for i, p in enumerate(psd_perspectives) if p.get("id") == perspective_id), -1)
+    count = len(psd_perspectives)
+    prev_key = f"scene2d:{scene_id}:{psd_perspectives[index - 1]['id']}" if index > 0 else ""
+    next_key = f"scene2d:{scene_id}:{psd_perspectives[index + 1]['id']}" if 0 <= index < count - 1 else ""
+
+    app.state.active_work_context = {
+        "kind": "scene2d",
+        "key": f"scene2d:{scene_id}:{perspective_id}",
+        "scene_id": scene_id,
+        "perspective_id": perspective_id,
+        "scene_title": str((scene or {}).get("title") or ""),
+        "perspective_title": str((perspective or {}).get("title") or ""),
+        "perspective_type": str((perspective or {}).get("type") or "psd"),
+        "source_file_path": source_file_path,
+        "preview_image_path": preview_image_path,
+        "index": index + 1 if index >= 0 else 1,
+        "count": count,
+        "previous_key": prev_key,
+        "next_key": next_key,
+    }
+    # Do NOT populate live_selected_shot_id for scene2d context
+
+
+def request_work_context_focus(app: FastAPI, context: dict[str, Any]) -> None:
+    new_token = focus_token(app) + 1
+    app.state.focus_token = new_token
+    app.state.focus_work_context = dict(context)
+    # Keep legacy fields in sync for shot focus
+    if context.get("kind") == "shot":
+        shot_id = str(context.get("shot_id") or "")
+        app.state.live_focus_shot_id = shot_id
+        app.state.live_focus_token = new_token
+
+
+def mark_scene2d_changed(app: FastAPI, scene_id: str, perspective_id: str) -> None:
+    app.state.plugin_project_revision = plugin_project_revision(app) + 1
+    app.state.plugin_change = {
+        "revision": plugin_project_revision(app),
+        "kind": "scene2d",
+        "scene_id": str(scene_id or ""),
+        "perspective_id": str(perspective_id or ""),
+    }

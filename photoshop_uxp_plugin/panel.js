@@ -105,6 +105,28 @@ function init() {
   );
   $("recoverPsd")?.addEventListener("click", () => runPanelAction(recoverCurrentShotPsd));
   $("relinkNow")?.addEventListener("click", () => runPanelAction(reconnectStoryboardBridge));
+
+  // Scene 2D export buttons (Part 9)
+  $("scene2dSaveAndStay")?.addEventListener("click", () => {
+    if (!_isScene2DSaving) runPanelAction(saveScene2DGuarded);
+  });
+  $("scene2dSaveAndNext")?.addEventListener("click", () => {
+    if (!_isScene2DSaving) runPanelAction(saveAndGoNextScene2DGuarded);
+  });
+
+  // Scene 2D work-panel navigation (Part 7)
+  $("previousPerspective")?.addEventListener("click", () => runPanelAction(goToPreviousPerspective));
+  $("nextPerspective")?.addEventListener("click", () => runPanelAction(goToNextPerspective));
+  $("openPerspective")?.addEventListener("click", () => runPanelAction(openSelectedPerspective));
+  $("focusCurrentPerspectiveTab")?.addEventListener("click", () => runPanelAction(focusCurrentPerspectiveTab));
+  $("perspectiveSelect")?.addEventListener("change", (event) => {
+    const key = event.target?.value || "";
+    const [, sceneId, perspectiveId] = key.split(":");
+    if (sceneId && perspectiveId) {
+      runPanelAction(() => openPerspectiveById(sceneId, perspectiveId));
+    }
+  });
+
   setPluginView("main");
   setLinkedUi(false);
   setLinkStatus("Connecting…", true);
@@ -421,8 +443,38 @@ async function ensureSharedBridgeDir() {
   }
 }
 
+function getOpenWorkKeys() {
+  // Enumerate all open documents and map each to a work key.
+  const keys = new Set();
+  const ctx = (typeof activeWorkContext === "function") ? activeWorkContext() : null;
+  try {
+    for (const doc of app.documents) {
+      const name = String(doc.name || "");
+      const shotId = shotIdFromDocumentName(name);
+      if (shotId) {
+        keys.add(`shot:${shotId}`);
+      }
+    }
+  } catch {
+    // Document enumeration is best-effort.
+  }
+  if (ctx?.kind === "scene2d" && ctx.scene_id && ctx.perspective_id) {
+    keys.add(`scene2d:${ctx.scene_id}:${ctx.perspective_id}`);
+  }
+  return [...keys];
+}
+
 async function sendPluginHeartbeat(live) {
   const openShotIds = getOpenShotIds();
+  const openWorkKeys = getOpenWorkKeys();
+  const ctx = (typeof activeWorkContext === "function") ? activeWorkContext() : null;
+  let activeWorkKey = "";
+  if (ctx?.kind === "scene2d" && ctx.scene_id && ctx.perspective_id) {
+    activeWorkKey = `scene2d:${ctx.scene_id}:${ctx.perspective_id}`;
+  } else {
+    const shotId = detectShotFromDocument() || live?.selected_shot_id || "";
+    if (shotId) activeWorkKey = `shot:${shotId}`;
+  }
   const selectedShotId = detectShotFromDocument() || live?.selected_shot_id || "";
   const payload = JSON.stringify({
     at: new Date().toISOString(),
@@ -430,6 +482,8 @@ async function sendPluginHeartbeat(live) {
     project_root: live?.project_root || "",
     selected_shot_id: selectedShotId,
     open_shot_ids: openShotIds,
+    active_work_key: activeWorkKey,
+    open_work_keys: openWorkKeys,
   });
   try {
     const dir = await ensureSharedBridgeDir();
@@ -447,7 +501,12 @@ async function sendPluginHeartbeat(live) {
     urls.push(`http://127.0.0.1:${port}/api/bridge/plugin-heartbeat`);
     urls.push(`http://localhost:${port}/api/bridge/plugin-heartbeat`);
   }
-  const body = JSON.stringify({ open_shot_ids: openShotIds, selected_shot_id: selectedShotId });
+  const body = JSON.stringify({
+    open_shot_ids: openShotIds,
+    selected_shot_id: selectedShotId,
+    active_work_key: activeWorkKey,
+    open_work_keys: openWorkKeys,
+  });
   for (const url of urls) {
     try {
       await fetch(url, {
@@ -594,10 +653,10 @@ async function applyLiveBridge(live) {
   updateCurrentShotIndicator();
 }
 
-// Storyboard Tool sets a focus request (shot_id + monotonic token) when the user
-// asks to open a shot that is already a tab in Photoshop. Acting only on a new
-// token — and adopting the current token as a baseline on first sight — means
-// passive polls never yank tabs and stale requests are not replayed on reload.
+// Storyboard Tool sets a focus request (kind + key/shot_id + monotonic token)
+// when the user asks to open a work item that is already a tab in Photoshop.
+// Acting only on a new token prevents passive polls from yanking tabs, and
+// adopting the current token as a baseline on first sight stops stale replay.
 async function maybeHandleFocusRequest(live) {
   const request = live?.focus_request;
   const token = Number(request?.token || 0);
@@ -610,6 +669,35 @@ async function maybeHandleFocusRequest(live) {
     return;
   }
   lastFocusToken = token;
+
+  const kind = String(request?.kind || "shot");
+
+  if (kind === "scene2d") {
+    const sceneId = String(request?.scene_id || "").trim();
+    const perspectiveId = String(request?.perspective_id || "").trim();
+    if (!sceneId || !perspectiveId) return;
+    focusSwitchInFlight = true;
+    try {
+      // Try to focus an already-open document for this perspective
+      const docName = `${perspectiveId}.psd`;
+      const doc = Array.from(app.documents).find(
+        (d) => String(d.name || "").toLowerCase() === docName.toLowerCase()
+      );
+      if (doc) {
+        await app.setActiveDocument(doc);
+        setStatus(`Switched to perspective ${perspectiveId} (already open).`);
+      } else {
+        setStatus(`Perspective ${perspectiveId} not open in Photoshop.`);
+      }
+    } catch (error) {
+      setStatus(error.message || String(error));
+    } finally {
+      focusSwitchInFlight = false;
+    }
+    return;
+  }
+
+  // Default: shot focus
   const shotId = String(request?.shot_id || "").trim().toLowerCase();
   if (!shotId) {
     return;
@@ -1104,6 +1192,123 @@ function renderCurrentShotCard() {
   }
 }
 
+// ── Work mode UI routing (Part 6 / 7) ────────────────────────────────────────
+// Switches Bridge and Work panels between shot mode and Scene 2D mode.
+// Called from backend_client.js:applyWorkContext() whenever mode changes.
+function renderWorkModeUI(ctx) {
+  const mode = ctx?.kind === "scene2d" ? "scene2d" : "shot";
+
+  // Bridge panel
+  const linkedPanel = $("linkedPanel");
+  const scene2dPanel = $("scene2dPanel");
+  if (linkedPanel) linkedPanel.hidden = mode !== "shot";
+  if (scene2dPanel) scene2dPanel.hidden = mode !== "scene2d";
+
+  // Work panel
+  const shotNav = $("workShotNav");
+  const scene2dNav = $("workScene2dNav");
+  const onionSkin = $("workOnionSkin");
+  if (shotNav) shotNav.hidden = mode !== "shot";
+  if (scene2dNav) scene2dNav.hidden = mode !== "scene2d";
+  if (onionSkin) onionSkin.hidden = mode !== "shot";
+
+  if (mode === "scene2d") {
+    renderScene2DCard(ctx);
+  }
+}
+
+function renderScene2DCard(ctx) {
+  if (!ctx) return;
+
+  // PSD perspective card
+  const card = $("scene2dCard");
+  const imageCard = $("scene2dImageCard");
+  const exportPanel = $("scene2dExportPanel");
+
+  if (ctx.perspective_type === "image") {
+    if (card) card.hidden = true;
+    if (imageCard) imageCard.hidden = false;
+    if (exportPanel) exportPanel.hidden = true;
+    return;
+  }
+
+  // PSD perspective
+  if (card) {
+    card.hidden = false;
+    const indexEl = $("scene2dPerspectiveIndex");
+    if (indexEl) {
+      const idx = ctx.index != null ? ctx.index + 1 : "?";
+      const total = ctx.count != null ? ctx.count : "?";
+      indexEl.textContent = `${idx} / ${total}`;
+    }
+    const sceneTitleEl = $("scene2dSceneTitle");
+    if (sceneTitleEl) sceneTitleEl.textContent = ctx.scene_title || "";
+    const perspTitleEl = $("scene2dPerspectiveTitle");
+    if (perspTitleEl) perspTitleEl.textContent = ctx.perspective_title || "";
+    const typeEl = $("scene2dPerspectiveType");
+    if (typeEl) typeEl.textContent = (ctx.perspective_type || "psd").toUpperCase();
+  }
+  if (imageCard) imageCard.hidden = true;
+  if (exportPanel) exportPanel.hidden = false;
+}
+
+// ── Scene 2D navigation (Work panel, Part 7) ─────────────────────────────────
+
+async function goToPreviousPerspective() {
+  const ctx = activeScene2DContext();
+  if (!ctx?.previous_key) {
+    setStatus("No previous perspective.");
+    return;
+  }
+  const [, sceneId, perspectiveId] = ctx.previous_key.split(":");
+  if (sceneId && perspectiveId) {
+    await openPerspectiveById(sceneId, perspectiveId);
+  }
+}
+
+async function goToNextPerspective() {
+  const ctx = activeScene2DContext();
+  if (!ctx?.next_key) {
+    setStatus("No next perspective.");
+    return;
+  }
+  const [, sceneId, perspectiveId] = ctx.next_key.split(":");
+  if (sceneId && perspectiveId) {
+    await openPerspectiveById(sceneId, perspectiveId);
+  }
+}
+
+async function openPerspectiveById(sceneId, perspectiveId) {
+  const payload = await requestStoryboardApi(
+    `/api/project/scenes2d/${encodeURIComponent(sceneId)}/perspectives/${encodeURIComponent(perspectiveId)}/open`,
+    { method: "POST" }
+  );
+  if (payload?.work_context) {
+    applyWorkContext(payload.work_context);
+  }
+}
+
+async function openSelectedPerspective() {
+  const ctx = activeScene2DContext();
+  if (!ctx?.scene_id || !ctx?.perspective_id) {
+    throw new Error("No active Scene 2D perspective to open.");
+  }
+  await openPerspectiveById(ctx.scene_id, ctx.perspective_id);
+}
+
+async function focusCurrentPerspectiveTab() {
+  const ctx = activeScene2DContext();
+  if (!ctx?.perspective_id) throw new Error("No active perspective.");
+  const docName = `${ctx.perspective_id}.psd`;
+  const doc = Array.from(app.documents).find(
+    (d) => String(d.name || "").toLowerCase() === docName.toLowerCase()
+  );
+  if (!doc) {
+    throw new Error(`${docName} is not open. Use 'Open perspective' to open it first.`);
+  }
+  await app.setActiveDocument(doc);
+}
+
 function shotUpdatePayload(shot, status) {
   return {
     title: shot.title || "",
@@ -1179,6 +1384,46 @@ function shotIdFromDocumentName(name) {
 
 function detectShotFromDocument() {
   return shotIdFromDocumentName(app.activeDocument?.name);
+}
+
+// ── Generic work-item detection (Part 6) ─────────────────────────────────────
+// Checks the active document path against all work_items from the plugin context
+// (both shots and PSD perspectives). Returns a minimal work context object or null.
+function detectWorkItemFromDocument(context) {
+  const docName = String(app.activeDocument?.name || "");
+  if (!docName) return null;
+  const docBase = docName.replace(/\.[^.]+$/, "").toLowerCase();
+
+  // Check PSD perspectives first (higher specificity: UUID filename)
+  const items = Array.isArray(context?.work_items) ? context.work_items : [];
+  for (const item of items) {
+    if (item.kind !== "scene2d") continue;
+    // Perspective PSDs are stored as <perspective_id>.psd inside their folder
+    const perspBase = String(item.perspective_id || "").toLowerCase();
+    if (docBase === perspBase) {
+      return {
+        kind: "scene2d",
+        key: item.key || `scene2d:${item.scene_id}:${item.perspective_id}`,
+        scene_id: item.scene_id,
+        perspective_id: item.perspective_id,
+        scene_title: item.scene_title || "",
+        perspective_title: item.perspective_title || "",
+        perspective_type: item.perspective_type || "psd",
+        source_file_path: item.source_file_path || "",
+        index: item.index,
+        count: item.count,
+        previous_key: item.previous_key || null,
+        next_key: item.next_key || null,
+      };
+    }
+  }
+
+  // Fall back to shot detection
+  const shotId = shotIdFromDocumentName(docName);
+  if (shotId) {
+    return { kind: "shot", shot_id: shotId };
+  }
+  return null;
 }
 
 function getOpenShotIds() {

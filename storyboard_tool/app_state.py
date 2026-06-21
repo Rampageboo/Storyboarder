@@ -196,7 +196,10 @@ def _touch_live_bridge(app: FastAPI, *, selected_shot_id: str | None = None) -> 
         selected_shot_id=runtime_state.live_selected_shot_id(app),
         port=int(app.state.bridge_port),
         focus_shot_id=runtime_state.live_focus_shot_id(app),
-        focus_token=runtime_state.live_focus_token(app),
+        focus_token=runtime_state.focus_token(app),
+        work_context=runtime_state.active_work_context(app),
+        focus_work_context=runtime_state.focus_work_context(app),
+        plugin_change=runtime_state.plugin_change_payload(app),
     )
 
 
@@ -269,6 +272,11 @@ def _bridge_status_payload(app: FastAPI) -> dict[str, Any]:
         "plugin_open_shot_ids": open_shot_ids,
         "plugin_last_exported_preview": last_exported,
         "plugin_project_revision": runtime_state.plugin_project_revision(app),
+        # Generic work context fields
+        "work_context": runtime_state.active_work_context(app),
+        "plugin_active_work_key": runtime_state.plugin_active_work_key(app),
+        "plugin_open_work_keys": runtime_state.plugin_open_work_keys(app),
+        "plugin_change": runtime_state.plugin_change_payload(app),
         "bridge_url": live.get("bridge_url", f"http://127.0.0.1:{app.state.bridge_port}/api/bridge/live"),
         "global_bridge_path": live.get("global_bridge_path", str(live_bridge.global_bridge_file_path())),
         "shared_bridge_path": live.get("shared_bridge_path", str(live_bridge.shared_bridge_file_path())),

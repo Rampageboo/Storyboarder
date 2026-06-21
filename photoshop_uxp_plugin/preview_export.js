@@ -1,4 +1,5 @@
 // Preview export and post-save project update helpers.
+// Includes both shot-mode (transparent foreground) and Scene 2D (composite) export.
 //
 // Depends on: layer_roles.js, layer_sync.js, backend_client.js (loaded first).
 // Runtime deps on panel.js globals: activeShotId, ensureShotStructure,
@@ -136,6 +137,152 @@ async function updateProjectAfterSave(shotId = currentShotId(), folder = null) {
     }
   }
   await requestShotSync(shotId, true);
+}
+
+// ── Scene 2D export (Part 9) ──────────────────────────────────────────────
+// Unlike shot export, Scene 2D preserves ALL user layers (background, artwork,
+// any reference). Only plugin-owned overlay layers (SB ref:) are hidden.
+
+async function exportScene2DCompositeInModal(folder, perspectiveId) {
+  const doc = app.activeDocument;
+  const previousActiveIds = captureActiveLayerIds(doc);
+  const hiddenLayers = [];
+  // Only hide plugin overlay layers (SB ref:) — keep background and user layers
+  for (const layer of doc.layers) {
+    const name = String(layer.name || "");
+    if (name.startsWith("SB ref:") && layer.visible) {
+      await setLayerVisibilityInModal(layer, false);
+      hiddenLayers.push(layer);
+    }
+  }
+  try {
+    const file = await folder.createFile(`preview.png`, { overwrite: true });
+    await app.activeDocument.saveAs.png(file, {}, true);
+    return file;
+  } finally {
+    for (const layer of hiddenLayers) {
+      await setLayerVisibilityInModal(layer, true);
+    }
+    restoreActiveLayersByIds(doc, previousActiveIds);
+  }
+}
+
+async function exportScene2DPerspectivePreview() {
+  const ctx = activeScene2DContext();
+  if (!ctx) {
+    throw new Error("No active Scene 2D perspective. Open one from Storyboarder first.");
+  }
+  if (ctx.perspective_type === "image") {
+    throw new Error("Image perspectives are read-only. Convert to PSD in Storyboarder to edit.");
+  }
+  const { scene_id, perspective_id } = ctx;
+
+  // Resolve the perspective folder via UXP filesystem
+  const perspFolder = await resolvePerspectiveFolder(scene_id, perspective_id);
+  if (!perspFolder) {
+    throw new Error("Could not resolve the perspective folder. Is the project folder accessible?");
+  }
+
+  await runModal("Export Scene 2D preview", async () => {
+    await exportScene2DCompositeInModal(perspFolder, perspective_id);
+  });
+
+  if (!linkedFromStoryboard) {
+    setStatus(`Preview exported for ${scene_id}/${perspective_id}.`);
+    return;
+  }
+
+  const payload = await requestStoryboardApi(
+    `/api/plugin/scenes2d/${encodeURIComponent(scene_id)}/perspectives/${encodeURIComponent(perspective_id)}/export-preview`,
+    { method: "POST" }
+  );
+  if (payload?.work_context) {
+    applyWorkContext(payload.work_context);
+  }
+  await refreshProjectDataFromBackend();
+  setStatus(`Scene 2D preview exported.`);
+
+  if (typeof focusStoryboardAfterPreviewExportIfEnabled === "function") {
+    focusStoryboardAfterPreviewExportIfEnabled();
+  }
+}
+
+async function resolvePerspectiveFolder(sceneId, perspectiveId) {
+  if (!projectRoot) return null;
+  try {
+    const scenes2dDir = await projectRoot.getEntry("scenes2d");
+    const sceneDir = await scenes2dDir.getEntry(sceneId);
+    const perspectivesDir = await sceneDir.getEntry("perspectives");
+    try {
+      return await perspectivesDir.getEntry(perspectiveId);
+    } catch {
+      return await perspectivesDir.createFolder(perspectiveId);
+    }
+  } catch {
+    return null;
+  }
+}
+
+let _isScene2DSaving = false;
+
+async function saveScene2DGuarded() {
+  if (_isScene2DSaving) return;
+  _isScene2DSaving = true;
+  const stayBtn = document.getElementById("scene2dSaveAndStay");
+  const nextBtn = document.getElementById("scene2dSaveAndNext");
+  if (stayBtn) stayBtn.disabled = true;
+  if (nextBtn) nextBtn.disabled = true;
+  try {
+    await exportScene2DPerspectivePreview();
+  } finally {
+    _isScene2DSaving = false;
+    if (stayBtn) stayBtn.disabled = false;
+    if (nextBtn) nextBtn.disabled = false;
+  }
+}
+
+async function saveAndGoNextScene2DGuarded() {
+  if (_isScene2DSaving) return;
+  _isScene2DSaving = true;
+  const stayBtn = document.getElementById("scene2dSaveAndStay");
+  const nextBtn = document.getElementById("scene2dSaveAndNext");
+  if (stayBtn) stayBtn.disabled = true;
+  if (nextBtn) nextBtn.disabled = true;
+  try {
+    await exportAndGoNextScene2D();
+  } finally {
+    _isScene2DSaving = false;
+    if (stayBtn) stayBtn.disabled = false;
+    if (nextBtn) nextBtn.disabled = false;
+  }
+}
+
+async function exportAndGoNextScene2D() {
+  const ctx = activeScene2DContext();
+  if (!ctx) throw new Error("No active Scene 2D perspective.");
+
+  // Step 1: export current perspective
+  await exportScene2DPerspectivePreview();
+
+  // Step 2: ask backend for next perspective
+  const { scene_id, perspective_id } = ctx;
+  const payload = await requestStoryboardApi(
+    `/api/plugin/scenes2d/${encodeURIComponent(scene_id)}/perspectives/${encodeURIComponent(perspective_id)}/next-perspective`,
+    { method: "POST" }
+  );
+
+  if (payload?.at_end || !payload?.next_perspective) {
+    setStatus("Last perspective in this scene.");
+    return;
+  }
+
+  const next = payload.next_perspective;
+  // Step 3: open or focus the next PSD perspective
+  await requestStoryboardApi(
+    `/api/project/scenes2d/${encodeURIComponent(scene_id)}/perspectives/${encodeURIComponent(next.id)}/open`,
+    { method: "POST" }
+  );
+  setStatus(`Moved to next perspective: ${next.title || next.id}`);
 }
 
 function applySavedPaths(shot, shotId, mtime, hasPsd = true) {

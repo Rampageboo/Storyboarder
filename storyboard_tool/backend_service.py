@@ -1014,14 +1014,70 @@ class StoryboardBackendService(ExportServiceMixin):
         return {"scene": scene, "scenes": scenes}
 
     def method_open_scene2d_perspective(self, scene_id: str, perspective_id: str) -> dict[str, Any]:
+        from . import runtime_state
         project = app_state._require_project(self.app)
+
         try:
-            scene, opened, relative_path = scene2d.open_perspective(project, scene_id, perspective_id)
+            sc, _scenes = scene2d._find_scene(project, scene_id)
         except FileNotFoundError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-        return {"path": opened, "relative_path": relative_path, "scene": scene}
+
+        try:
+            perspective = scene2d._find_perspective(sc, perspective_id)
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+        if perspective.get("type") != "psd":
+            raise HTTPException(status_code=400, detail="Only PSD Perspectives can be opened for editing.")
+
+        source_rel = perspective.get("source_file_path", "")
+        source_path = project.root_path / source_rel if source_rel else None
+
+        if not source_path or not source_path.is_file():
+            # source.psd doesn't exist yet — call open_perspective to recreate it
+            try:
+                sc, opened, relative_path = scene2d.open_perspective(project, scene_id, perspective_id)
+            except (FileNotFoundError, ValueError) as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+        else:
+            opened = str(source_path)
+            relative_path = source_rel
+
+        # Set active work context before publishing bridge
+        runtime_state.set_active_scene2d_context(self.app, scene_id, perspective_id, sc, perspective)
+
+        # If plugin already has this PSD open, request focus; otherwise OS-open
+        work_key = f"scene2d:{scene_id}:{perspective_id}"
+        if work_key in runtime_state.plugin_open_work_keys(self.app):
+            runtime_state.request_work_context_focus(self.app, runtime_state.active_work_context(self.app))
+        else:
+            import subprocess, sys
+            try:
+                if sys.platform == "win32":
+                    subprocess.Popen(["explorer", opened])
+                elif sys.platform == "darwin":
+                    subprocess.Popen(["open", opened])
+                else:
+                    subprocess.Popen(["xdg-open", opened])
+            except OSError:
+                pass
+
+        app_state._touch_live_bridge(self.app)
+        return {
+            "path": opened,
+            "relative_path": relative_path,
+            "scene": scene2d._with_legacy_aliases(sc),
+            "work_context": runtime_state.active_work_context(self.app),
+        }
+
+    def method_plugin_scene2d_export_preview(self, scene_id: str, perspective_id: str) -> dict[str, Any]:
+        return self._plugin_service().scene2d_export_preview(scene_id, perspective_id)
+
+    def method_plugin_scene2d_psd_saved(self, scene_id: str, perspective_id: str) -> dict[str, Any]:
+        return self._plugin_service().scene2d_psd_saved(scene_id, perspective_id)
+
+    def method_plugin_scene2d_next_perspective(self, scene_id: str, perspective_id: str) -> dict[str, Any]:
+        return self._plugin_service().scene2d_next_perspective(scene_id, perspective_id)
 
     def method_refresh_scene2d_perspective_preview(self, scene_id: str, perspective_id: str) -> dict[str, Any]:
         project = app_state._require_project(self.app)

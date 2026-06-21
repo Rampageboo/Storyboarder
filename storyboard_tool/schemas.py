@@ -37,6 +37,10 @@ class PluginHeartbeatRequest(BaseModel):
 
     open_shot_ids: list[str] = Field(default_factory=list)
     selected_shot_id: str | None = None
+    # Generic work-context fields (Part 5)
+    active_work_key: str | None = None
+    open_work_keys: list[str] = Field(default_factory=list)
+    active_document_path: str | None = None
 
 
 class PluginShotEventRequest(BaseModel):

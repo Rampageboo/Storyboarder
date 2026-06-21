@@ -551,6 +551,28 @@
   grid-column: 1 / -1;
 }
 
+.scene2d-plugin-status {
+  grid-column: 1 / -1;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 4px 8px;
+  border-radius: 4px;
+  border: 1px solid color-mix(in srgb, var(--color-border) 60%, transparent);
+  color: var(--color-text-muted, #aaa);
+}
+
+.scene2d-plugin-status.linked {
+  color: #7be07b;
+  border-color: color-mix(in srgb, #7be07b 40%, transparent);
+  background: color-mix(in srgb, #7be07b 8%, transparent);
+}
+
+.scene2d-plugin-status.open {
+  color: #7abcff;
+  border-color: color-mix(in srgb, #7abcff 40%, transparent);
+  background: color-mix(in srgb, #7abcff 8%, transparent);
+}
+
 @media (max-width: 1180px) {
   .scene2d-workspace-layout {
     grid-template-columns: minmax(170px, 210px) minmax(0, 1fr);

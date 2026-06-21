@@ -275,6 +275,18 @@ def create_app(base_dir: Path, bridge_port: int = 8000) -> FastAPI:
     def plugin_next_shot(request: PluginNextShotRequest) -> dict[str, Any]:
         return _svc().method_plugin_next_shot(request.current_shot_id, request.auto_add)
 
+    @app.post("/api/plugin/scenes2d/{scene_id}/perspectives/{perspective_id}/export-preview")
+    def plugin_scene2d_export_preview(scene_id: str, perspective_id: str) -> dict[str, Any]:
+        return _svc().method_plugin_scene2d_export_preview(scene_id, perspective_id)
+
+    @app.post("/api/plugin/scenes2d/{scene_id}/perspectives/{perspective_id}/psd-saved")
+    def plugin_scene2d_psd_saved(scene_id: str, perspective_id: str) -> dict[str, Any]:
+        return _svc().method_plugin_scene2d_psd_saved(scene_id, perspective_id)
+
+    @app.post("/api/plugin/scenes2d/{scene_id}/perspectives/{perspective_id}/next-perspective")
+    def plugin_scene2d_next_perspective(scene_id: str, perspective_id: str) -> dict[str, Any]:
+        return _svc().method_plugin_scene2d_next_perspective(scene_id, perspective_id)
+
     @app.get("/api/project/missing-files")
     def missing_project_files() -> dict[str, Any]:
         return _svc().method_get_missing_files()

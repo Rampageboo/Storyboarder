@@ -7,8 +7,36 @@
 //
 // Runtime deps on panel.js globals: loadBridgeCache, populateShotSelect,
 //   setSelectedShotId, renderCurrentShotCard, normalizeHexColor,
-//   normalizeCanvasSize, updateColorSwatch, detectShotFromDocument,
-//   linkedFromStoryboard, projectData, canvasColor, canvasWidth, canvasHeight.
+//   normalizeCanvasSize, updateColorSwatch, detectWorkItemFromDocument,
+//   linkedFromStoryboard, projectData, canvasColor, canvasWidth, canvasHeight,
+//   currentWorkContext, setWorkContext.
+
+// ── Work context state (Part 6) ──────────────────────────────────────────────
+// A single mutable slot holding the current active work context.
+// Kind is "shot" | "scene2d". panel.js reads this for UI routing.
+let _activeWorkContext = null;
+
+function activeWorkContext() {
+  return _activeWorkContext;
+}
+
+function activeScene2DContext() {
+  if (_activeWorkContext?.kind === "scene2d") return _activeWorkContext;
+  return null;
+}
+
+function setWorkContext(ctx) {
+  _activeWorkContext = ctx || null;
+}
+
+// Called by panel.js when a focus_request arrives from the live bridge.
+// Also called from applyPluginContext() if the backend sends work_context.
+function applyWorkContext(ctx) {
+  setWorkContext(ctx);
+  if (typeof renderWorkModeUI === "function") {
+    renderWorkModeUI(ctx);
+  }
+}
 
 async function storyboardApiOrigins() {
   const cache = await loadBridgeCache();
@@ -123,7 +151,34 @@ function applyPluginContext(context) {
     canvasHeight = size.height;
     updateColorSwatch();
   }
-  const shotId = detectShotFromDocument() || context.selected_shot_id || "";
+
+  // Apply work context (Part 6) — routes UI to shot vs. scene2d mode.
+  if (context.work_context) {
+    applyWorkContext(context.work_context);
+  } else {
+    // Detect from active document if backend hasn't told us the mode yet.
+    const detected = (typeof detectWorkItemFromDocument === "function")
+      ? detectWorkItemFromDocument(context)
+      : null;
+    if (detected) {
+      applyWorkContext(detected);
+    } else {
+      // Default to shot mode so existing UI behaviour is unchanged.
+      const fallback = { kind: "shot", shot_id: context.selected_shot_id || "" };
+      applyWorkContext(fallback);
+    }
+  }
+
+  const workCtx = activeWorkContext();
+  if (workCtx?.kind === "scene2d") {
+    // In scene2d mode the shot selector stays hidden; no shot preselect needed.
+    renderCurrentShotCard();
+    return;
+  }
+
+  const shotId = (typeof detectWorkItemFromDocument === "function"
+    ? detectWorkItemFromDocument(context)?.shot_id
+    : null) || context.selected_shot_id || "";
   if (shotId) {
     setSelectedShotId(shotId);
   }
@@ -193,4 +248,58 @@ async function requestShotSync(shotId, force = true) {
     }
   }
   return null;
+}
+
+// ── Scene 2D API helpers (Part 9 / 10) ───────────────────────────────────────
+
+async function requestScene2DPsdSaved(sceneId, perspectiveId) {
+  return requestStoryboardApi(
+    `/api/plugin/scenes2d/${encodeURIComponent(sceneId)}/perspectives/${encodeURIComponent(perspectiveId)}/psd-saved`,
+    { method: "POST" }
+  );
+}
+
+async function requestScene2DFocus(sceneId, perspectiveId) {
+  return requestStoryboardApi(
+    `/api/project/scenes2d/${encodeURIComponent(sceneId)}/perspectives/${encodeURIComponent(perspectiveId)}/open`,
+    { method: "POST" }
+  );
+}
+
+async function requestScene2DNextPerspective(sceneId, perspectiveId) {
+  return requestStoryboardApi(
+    `/api/plugin/scenes2d/${encodeURIComponent(sceneId)}/perspectives/${encodeURIComponent(perspectiveId)}/next-perspective`,
+    { method: "POST" }
+  );
+}
+
+// Populate the perspective <select> in the Work panel with all PSD perspectives
+// from work_items (provided in the plugin context payload).
+function populatePerspectiveSelect(workItems, activeSceneId) {
+  const sel = document.getElementById("perspectiveSelect");
+  const groupLabel = document.getElementById("workScene2dGroup");
+  if (!sel) return;
+  sel.innerHTML = "";
+
+  const sceneItems = (workItems || []).filter(
+    (item) => item.kind === "scene2d" && item.scene_id === activeSceneId
+  );
+
+  if (groupLabel) {
+    const sceneName = sceneItems[0]?.scene_title || activeSceneId || "Scene 2D";
+    groupLabel.textContent = sceneName;
+  }
+
+  for (const item of sceneItems) {
+    const opt = document.createElement("option");
+    opt.value = item.key || `scene2d:${item.scene_id}:${item.perspective_id}`;
+    opt.textContent = item.perspective_title || item.perspective_id || "Perspective";
+    sel.appendChild(opt);
+  }
+
+  const ctx = activeScene2DContext();
+  if (ctx) {
+    const key = `scene2d:${ctx.scene_id}:${ctx.perspective_id}`;
+    sel.value = key;
+  }
 }

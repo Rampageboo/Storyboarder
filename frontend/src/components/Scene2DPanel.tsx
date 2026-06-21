@@ -16,6 +16,7 @@ import {
   updateScene2DPerspective,
 } from '../api'
 import { useProject } from '../state/useProject'
+import { useBridgeStatus } from '../state/liveBridgeUtils'
 import type { Scene2D, Scene2DPerspective, Scene3DRecord } from '../types'
 import './Scene2DPanel.css'
 
@@ -63,6 +64,7 @@ function PerspectiveCardPreview({ scene, perspective }: { scene: Scene2D; perspe
 
 export function Scene2DPanel({ active = false }: { active?: boolean }) {
   const { project, setProject, flushDirtyShots, projectActionBusy, reportError } = useProject()
+  const bridgeStatus = useBridgeStatus()
   const hasBeenActivatedRef = useRef(false)
   const [scenes, setScenes] = useState<Scene2D[]>([])
   const [scene3ds, setScene3ds] = useState<Scene3DRecord[]>([])
@@ -79,6 +81,7 @@ export function Scene2DPanel({ active = false }: { active?: boolean }) {
   const [previewZoom, setPreviewZoom] = useState(100)
   const [fitPreview, setFitPreview] = useState(true)
   const importRef = useRef<HTMLInputElement | null>(null)
+  const lastPluginChangeRevisionRef = useRef<number | null>(null)
 
   const selectedScene = useMemo(
     () => scenes.find((scene) => scene.id === selectedSceneId) ?? scenes[0] ?? null,
@@ -152,6 +155,23 @@ export function Scene2DPanel({ active = false }: { active?: boolean }) {
     setPreviewZoom(100)
     setFitPreview(true)
   }, [selectedPerspective?.id, selectedPerspective?.title, selectedPerspective?.linked_scene3d_id])
+
+  // Automatic refresh when the plugin exports a Scene 2D preview (Part 13).
+  // Watches plugin_change.revision; on a scene2d change, reloads scene data
+  // without resetting the zoom or selected perspective unless necessary.
+  useEffect(() => {
+    const change = bridgeStatus?.plugin_change
+    if (!change || change.kind !== 'scene2d') return
+    const revision = Number(change.revision ?? 0)
+    if (revision <= 0 || revision === lastPluginChangeRevisionRef.current) return
+    lastPluginChangeRevisionRef.current = revision
+    if (hasBeenActivatedRef.current) {
+      void loadScenes()
+    }
+    // Bust the preview image cache for the changed perspective by touching the
+    // previewFailedFor state — the timestamp is embedded in scene.updated_at via
+    // PerspectiveCardPreview's previewKey, so reloading scenes is sufficient.
+  }, [bridgeStatus?.plugin_change, loadScenes])
 
   const setManualPreviewZoom = useCallback((value: number) => {
     setFitPreview(false)
@@ -543,6 +563,32 @@ export function Scene2DPanel({ active = false }: { active?: boolean }) {
                           ))}
                         </select>
                       </label>
+
+                      {(() => {
+                        // Part 14 — plugin status for this perspective
+                        if (!selectedScene || !selectedPerspective) return null
+                        const workKey = `scene2d:${selectedScene.id}:${selectedPerspective.id}`
+                        const openKeys = bridgeStatus?.plugin_open_work_keys ?? []
+                        const activeKey = bridgeStatus?.plugin_active_work_key ?? ''
+                        const change = bridgeStatus?.plugin_change
+                        const isActive = activeKey === workKey
+                        const isOpen = openKeys.includes(workKey)
+                        const recentlyExported =
+                          change?.kind === 'scene2d' &&
+                          change.scene_id === selectedScene.id &&
+                          change.perspective_id === selectedPerspective.id
+                        if (!bridgeStatus?.plugin_linked) return null
+                        let label = ''
+                        let className = 'scene2d-plugin-status'
+                        if (isActive) {
+                          label = recentlyExported ? 'Preview updated' : 'Linked'
+                          className += ' linked'
+                        } else if (isOpen) {
+                          label = 'Open in Photoshop'
+                          className += ' open'
+                        }
+                        return label ? <div className={className}>{label}</div> : null
+                      })()}
 
                       <div className="scene2d-actions">
                         <button type="button" className="primary" onClick={() => void savePerspectiveDetails()} disabled={disabled}>
