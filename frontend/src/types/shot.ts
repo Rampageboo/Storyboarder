@@ -49,6 +49,7 @@ export interface Shot {
   has_board_background?: boolean
   has_artwork_preview?: boolean
   preview_has_transparency?: boolean
+  preview_analysis_state?: 'missing' | 'provisional' | 'cached'
 }
 
 export interface ShotUpdate {

@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import logging
+import uuid
 from pathlib import Path
 from typing import Any
 
@@ -34,13 +35,20 @@ def load_cache(project_root: Path) -> dict[str, Any]:
 def save_cache(project_root: Path, cache: dict[str, Any]) -> None:
     """Atomically write the cache. Silently ignores write failures."""
     path = _cache_file(project_root)
+    tmp: Path | None = None
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = path.with_suffix(".tmp")
+        # Unique sibling temp file avoids collisions when two workers write concurrently.
+        tmp = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
         tmp.write_text(json.dumps(cache), encoding="utf-8")
         tmp.replace(path)
     except Exception:
         logger.debug("Preview analysis cache write failed", exc_info=True)
+        if tmp is not None:
+            try:
+                tmp.unlink(missing_ok=True)
+            except Exception:
+                pass
 
 
 def _key(preview_path: Path) -> str:

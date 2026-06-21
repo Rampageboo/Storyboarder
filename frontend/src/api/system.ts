@@ -37,6 +37,24 @@ export function reportUiReady(): Promise<{ ok: boolean }> {
   return requestJson<{ ok: boolean }>('/api/app/ui-ready', { method: 'POST' })
 }
 
+export type PreviewAnalysisStatus = 'no_project' | 'started' | 'already_running' | 'complete' | 'failed' | 'idle'
+
+export interface PreviewAnalysisResult {
+  ok: boolean
+  status: PreviewAnalysisStatus
+  task_id?: string
+  project_path?: string
+  revision?: number
+}
+
+export function refreshPreviewAnalysis(): Promise<PreviewAnalysisResult> {
+  return requestJson<PreviewAnalysisResult>('/api/project/preview-analysis/refresh', { method: 'POST' })
+}
+
+export function getPreviewAnalysisStatus(): Promise<{ ok: boolean; status: PreviewAnalysisStatus; job: unknown }> {
+  return requestJson<{ ok: boolean; status: PreviewAnalysisStatus; job: unknown }>('/api/project/preview-analysis/status')
+}
+
 export interface AppFocusResult {
   ok: boolean
   focused: boolean

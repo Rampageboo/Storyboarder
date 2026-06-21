@@ -231,6 +231,10 @@ def create_app(base_dir: Path, bridge_port: int = 8000) -> FastAPI:
     def refresh_preview_analysis() -> dict[str, Any]:
         return _svc().method_refresh_preview_analysis()
 
+    @app.get("/api/project/preview-analysis/status")
+    def preview_analysis_status() -> dict[str, Any]:
+        return _svc().method_preview_analysis_status()
+
     @app.get("/api/bridge/live")
     def get_live_bridge() -> dict[str, Any]:
         return _svc().method_touch_live_bridge()

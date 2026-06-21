@@ -24,6 +24,14 @@ export interface WorkContext {
   next_key?: string
 }
 
+export interface PreviewAnalysisEvent {
+  task_id: string
+  project_path: string
+  state: 'running' | 'complete' | 'failed'
+  decoded_count: number
+  revision: number
+}
+
 export interface BridgeStatusPayload {
   app_running?: boolean
   project_open?: boolean
@@ -43,6 +51,7 @@ export interface BridgeStatusPayload {
   plugin_heartbeat_path?: string
   server_port?: number
   live?: Record<string, unknown>
+  preview_analysis?: PreviewAnalysisEvent
   [key: string]: unknown
 }
 

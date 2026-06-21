@@ -30,7 +30,7 @@ import {
   updateSettings,
   updateShot,
 } from '../api'
-import { bootstrapApp, browseFolder, updateAppSession } from '../api'
+import { bootstrapApp, browseFolder, refreshPreviewAnalysis, updateAppSession } from '../api'
 import type { MissingFileRow, ProjectPathRequest, ProjectPayload, SettingsUpdate, ShotUpdate } from '../types'
 import { shotToUpdate } from '../utils/shotUpdate'
 import { ProjectContext } from './useProject'
@@ -94,6 +94,7 @@ export interface ProjectContextValue {
   missingFiles: MissingFileRow[] | null
   missingFilesLoading: boolean
   refreshMissingFiles: () => void
+  refreshPreviewFields: () => Promise<void>
 }
 
 function projectJsonInFolder(folderPath: string): string {
@@ -259,6 +260,49 @@ export function ProjectProvider({ children }: PropsWithChildren) {
       }
     }
   }, [project?.project_json_path, refreshMissingFiles])
+
+  // Narrow project refresh: merge only preview-analysis fields from the server
+  // without touching undo/redo history, selected shot, or unsaved drafts.
+  const refreshPreviewFields = useCallback(async () => {
+    if (!projectRef.current) return
+    const payload = await getProject()
+    const shotMap = new Map(payload.shots.map((s) => [s.shot_id, s]))
+    setProject((prev) => {
+      if (!prev) return payload
+      return {
+        ...prev,
+        shots: prev.shots.map((s) => {
+          const fresh = shotMap.get(s.shot_id)
+          if (!fresh) return s
+          return {
+            ...s,
+            has_artwork_preview: fresh.has_artwork_preview,
+            preview_has_transparency: fresh.preview_has_transparency,
+            preview_analysis_state: fresh.preview_analysis_state,
+            preview_disk_mtime: fresh.preview_disk_mtime,
+          }
+        }),
+      }
+    })
+  }, [])
+
+  // Trigger preview analysis once per project path, after initial loading clears.
+  // Fires for both the first project load and subsequent project switches.
+  const lastAnalysisProjectRef = useRef<string | null>(null)
+  useEffect(() => {
+    if (initialLoading) return
+    if (!project) { lastAnalysisProjectRef.current = null; return }
+    if (project.project_path === lastAnalysisProjectRef.current) return
+    lastAnalysisProjectRef.current = project.project_path
+    const doAnalysis = () => { void refreshPreviewAnalysis().catch(() => {}) }
+    const hasIdleCallback = typeof window !== 'undefined' && 'requestIdleCallback' in window
+    if (hasIdleCallback) {
+      const id = (window as Window & typeof globalThis).requestIdleCallback(doAnalysis)
+      return () => (window as Window & typeof globalThis).cancelIdleCallback(id)
+    }
+    const id = window.setTimeout(doAnalysis, 500)
+    return () => clearTimeout(id)
+  }, [initialLoading, project?.project_path])
 
   const setSegmentAnchor = useCallback((shotId: string | null) => {
     setSegmentRange((range) => ({ ...range, anchorShotId: shotId }))
@@ -782,8 +826,9 @@ export function ProjectProvider({ children }: PropsWithChildren) {
       missingFiles,
       missingFilesLoading,
       refreshMissingFiles,
+      refreshPreviewFields,
     }),
-    [project, selectedShotId, replaceProject, refreshProjectFromBridge, reloadProject, newProjectAction, openProjectFromDialog, saveProjectAction, addShotAfterSelection, insertShotAtIndex, deleteSelectedShot, moveSelectedShot, reorderBoards, deleteActiveRefSegment, deleteRefSegmentUndoable, recordRefApply, undo, redo, undoStack, redoStack, syncSelectedShot, openSelectedShotSource, initialLoading, projectActionBusy, getDraft, editShotField, isShotDirty, dirtyShotIds, savingShots, saveShot, flushDirtyShots, visualEpoch, segmentRange, setSegmentAnchor, setSegmentEnd, pickSegmentShot, clearSegmentRange, activeAppliedSegmentId, setActiveAppliedSegmentId, clearActiveAppliedSegment, refSegmentInspectOpen, openRefSegmentInspect, closeRefSegmentInspect, dismissRefSegmentUi, refApplyUndoToken, lastError, clearError, reportError, missingFiles, missingFilesLoading, refreshMissingFiles],
+    [project, selectedShotId, replaceProject, refreshProjectFromBridge, reloadProject, newProjectAction, openProjectFromDialog, saveProjectAction, addShotAfterSelection, insertShotAtIndex, deleteSelectedShot, moveSelectedShot, reorderBoards, deleteActiveRefSegment, deleteRefSegmentUndoable, recordRefApply, undo, redo, undoStack, redoStack, syncSelectedShot, openSelectedShotSource, initialLoading, projectActionBusy, getDraft, editShotField, isShotDirty, dirtyShotIds, savingShots, saveShot, flushDirtyShots, visualEpoch, segmentRange, setSegmentAnchor, setSegmentEnd, pickSegmentShot, clearSegmentRange, activeAppliedSegmentId, setActiveAppliedSegmentId, clearActiveAppliedSegment, refSegmentInspectOpen, openRefSegmentInspect, closeRefSegmentInspect, dismissRefSegmentUi, refApplyUndoToken, lastError, clearError, reportError, missingFiles, missingFilesLoading, refreshMissingFiles, refreshPreviewFields],
   )
 
   return <ProjectContext.Provider value={value}>{children}</ProjectContext.Provider>

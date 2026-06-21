@@ -47,7 +47,6 @@ from .system_utils import (
 logger = logging.getLogger(__name__)
 
 _TOKEN_RE = re.compile(r'^[a-zA-Z0-9_-]{1,64}$')
-_preview_analysis_lock = threading.Lock()
 
 
 def _normalize_upload_bytes(data: list[int] | bytes | bytearray) -> bytes:
@@ -177,29 +176,91 @@ class StoryboardBackendService(ExportServiceMixin):
 
     def method_refresh_preview_analysis(self) -> dict[str, Any]:
         """
-        Trigger background preview analysis for uncached previews.
-        Non-blocking: if analysis is already running, returns immediately.
+        Trigger background preview analysis for the current project.
+        Returns immediately; only one active job per project root.
+        Revision increments only when at least one cache entry is written.
         """
+        import uuid as _uuid
         project = self.app.state.project
         if project is None:
             return {"ok": True, "status": "no_project"}
-        if not _preview_analysis_lock.acquire(blocking=False):
-            return {"ok": True, "status": "already_running"}
 
-        project_root = project.root_path
+        project_root = str(project.root_path.resolve()).replace("\\", "/")
+        existing = runtime_state.get_preview_analysis_job(self.app, project_root)
+        if existing and existing["state"] == "running":
+            return {
+                "ok": True,
+                "status": "already_running",
+                "task_id": existing["task_id"],
+                "project_path": project_root,
+                "revision": existing.get("revision", 0),
+            }
+
+        task_id = str(_uuid.uuid4())
+        prior_revision = existing.get("revision", 0) if existing else 0
+        job: dict[str, Any] = {
+            "task_id": task_id,
+            "project_root": project_root,
+            "state": "running",
+            "started_at": time.time(),
+            "completed_at": None,
+            "decoded_count": 0,
+            "error": None,
+            "revision": prior_revision,
+        }
+        runtime_state.set_preview_analysis_job(self.app, job)
+        logger.info("[analysis] starting task %s for %s", task_id[:8], project_root)
+
+        app = self.app
+        captured_project = project
+        captured_root = project_root
 
         def _run() -> None:
+            decoded = 0
             try:
-                count = app_state._analyse_uncached_previews(project)
-                logger.info("[startup] deferred preview analysis: %d previews decoded", count)
-            except Exception:
-                logger.debug("Preview analysis background task failed", exc_info=True)
-            finally:
-                _preview_analysis_lock.release()
+                decoded = app_state._analyse_uncached_previews(captured_project)
+                new_rev = prior_revision + 1 if decoded > 0 else prior_revision
+                logger.info("[analysis] task %s: %d decoded, revision %d→%d", task_id[:8], decoded, prior_revision, new_rev)
+            except Exception as exc:
+                j = runtime_state.get_preview_analysis_job(app, captured_root)
+                if j and j["task_id"] == task_id:
+                    j.update({"state": "failed", "completed_at": time.time(), "error": str(exc)})
+                    runtime_state.set_preview_analysis_job(app, j)
+                logger.debug("Preview analysis task %s failed", task_id[:8], exc_info=True)
+                return
 
-        t = threading.Thread(target=_run, name="sb-preview-analysis", daemon=True)
-        t.start()
-        return {"ok": True, "status": "started", "project_path": str(project_root)}
+            j = runtime_state.get_preview_analysis_job(app, captured_root)
+            if j and j["task_id"] == task_id:
+                j.update({"state": "complete", "completed_at": time.time(), "decoded_count": decoded, "revision": new_rev})
+                runtime_state.set_preview_analysis_job(app, j)
+
+            # Only notify when work changed — zero-work jobs must not trigger project reloads
+            if decoded > 0:
+                current = app.state.project
+                if current and str(current.root_path.resolve()).replace("\\", "/") == captured_root:
+                    try:
+                        app_state._touch_live_bridge(app)
+                    except Exception:
+                        pass
+
+        threading.Thread(target=_run, name=f"sb-pa-{task_id[:8]}", daemon=True).start()
+        return {
+            "ok": True,
+            "status": "started",
+            "task_id": task_id,
+            "project_path": project_root,
+            "revision": prior_revision,
+        }
+
+    def method_preview_analysis_status(self) -> dict[str, Any]:
+        """Return the current preview-analysis job status for the open project."""
+        project = self.app.state.project
+        if project is None:
+            return {"ok": True, "status": "no_project", "job": None}
+        project_root = str(project.root_path.resolve()).replace("\\", "/")
+        job = runtime_state.get_preview_analysis_job(self.app, project_root)
+        status = job["state"] if job else "idle"
+        return {"ok": True, "status": status, "job": job}
 
     def method_app_focus(self) -> dict[str, Any]:
         """Best-effort desktop focus. Browser/dev mode is a clean no-op."""

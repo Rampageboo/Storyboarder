@@ -99,7 +99,7 @@ class CacheUnitTests(unittest.TestCase):
             self.assertTrue(result["preview_has_transparency"])
 
     def test_save_is_atomic(self) -> None:
-        """save_cache writes to a temp file then replaces — no partial reads."""
+        """save_cache writes to a unique sibling temp file then replaces — no stale .tmp remains."""
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             cache_path = root / "workspace" / "cache" / "preview_analysis.json"
@@ -109,8 +109,23 @@ class CacheUnitTests(unittest.TestCase):
             pac.set_cached(cache, preview, has_artwork_preview=False, preview_has_transparency=False)
             pac.save_cache(root, cache)
             self.assertTrue(cache_path.is_file())
-            # Temp file must not remain
-            self.assertFalse(cache_path.with_suffix(".tmp").exists())
+            # No stale temp files should remain in the cache directory
+            tmp_files = list(cache_path.parent.glob("*.tmp"))
+            self.assertEqual(len(tmp_files), 0, f"Stale temp files remain: {tmp_files}")
+
+    def test_save_uses_unique_temp_name(self) -> None:
+        """Two concurrent saves use different temp names — fixed .tmp collisions are impossible."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            preview = root / "preview.png"
+            preview.write_bytes(MINI_PNG)
+            cache: dict = {}
+            pac.set_cached(cache, preview, has_artwork_preview=True, preview_has_transparency=False)
+            pac.save_cache(root, cache)
+            pac.save_cache(root, cache)
+            cache_path = root / "workspace" / "cache" / "preview_analysis.json"
+            tmp_files = list(cache_path.parent.glob("*.tmp"))
+            self.assertEqual(len(tmp_files), 0)
 
     def test_missing_preview_returns_none(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

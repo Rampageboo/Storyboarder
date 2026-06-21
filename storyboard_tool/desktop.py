@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 import logging
+import os
+import re
 import sys
 import tempfile
 import threading
@@ -30,6 +32,23 @@ _t0: float = time.perf_counter()
 def _log_stage(label: str) -> None:
     elapsed = time.perf_counter() - _t0
     _LOGGER.info("[startup] %+.3fs  %s", elapsed, label)
+
+
+_TOKEN_RE_DESKTOP = re.compile(r'^[a-zA-Z0-9_-]{1,64}$')
+
+
+def _write_launch_ready_marker() -> None:
+    """Option A: write the per-launch ready marker from the pywebview shown callback."""
+    token = os.environ.get("STORYBOARDER_LAUNCH_TOKEN", "").strip()
+    if not token or not _TOKEN_RE_DESKTOP.match(token):
+        return
+    try:
+        Path(tempfile.gettempdir()).joinpath(f"storyboarder-launch-{token}.ready").write_text(
+            "ready", encoding="utf-8"
+        )
+        _log_stage("pywebview shown: ready marker written (Option A fallback)")
+    except OSError:
+        pass
 
 
 def _configure_windows_taskbar_identity() -> None:
@@ -241,6 +260,9 @@ def open_desktop_window(app, title: str = "Storyboard Tool") -> int:
                 window.maximize()
             except Exception:
                 pass
+        # Option A fallback: write ready marker once the native window is visible,
+        # so the splash closes even when /api/app/ui-ready is not reached.
+        _write_launch_ready_marker()
 
     def _on_resized(width, height):
         # Any user-driven resize means the window is no longer maximized.

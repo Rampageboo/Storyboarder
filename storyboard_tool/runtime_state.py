@@ -26,6 +26,9 @@ def init_bridge_state(app: FastAPI, bridge_port: int) -> None:
     app.state.plugin_open_work_keys = []
     app.state.plugin_change = {}
 
+    # Per-project preview-analysis jobs: norm_root → job dict
+    app.state.preview_analysis_jobs = {}
+
 
 def live_selected_shot_id(app: FastAPI) -> str:
     return str(getattr(app.state, "live_selected_shot_id", "") or "")
@@ -223,6 +226,41 @@ def request_work_context_focus(app: FastAPI, context: dict[str, Any]) -> None:
         shot_id = str(context.get("shot_id") or "")
         app.state.live_focus_shot_id = shot_id
         app.state.live_focus_token = new_token
+
+
+def _norm_root(root: str) -> str:
+    from pathlib import Path
+    return str(Path(root).resolve()).replace("\\", "/")
+
+
+def get_preview_analysis_job(app: FastAPI, project_root: str) -> dict[str, Any] | None:
+    """Return the analysis job for the given project root, or None."""
+    jobs = getattr(app.state, "preview_analysis_jobs", {})
+    return jobs.get(_norm_root(project_root))
+
+
+def set_preview_analysis_job(app: FastAPI, job: dict[str, Any]) -> None:
+    """Upsert a preview-analysis job keyed by its normalized project root."""
+    if not hasattr(app.state, "preview_analysis_jobs"):
+        app.state.preview_analysis_jobs = {}
+    app.state.preview_analysis_jobs[_norm_root(job["project_root"])] = job
+
+
+def preview_analysis_status_for_project(app: FastAPI, project_root: str) -> dict[str, Any] | None:
+    """Return a serialisable status snapshot for the current project, or None."""
+    job = get_preview_analysis_job(app, project_root)
+    if job is None:
+        return None
+    return {
+        "task_id": job["task_id"],
+        "project_path": job["project_root"],
+        "state": job["state"],
+        "decoded_count": job.get("decoded_count", 0),
+        "revision": job.get("revision", 0),
+        "started_at": job.get("started_at"),
+        "completed_at": job.get("completed_at"),
+        "error": job.get("error"),
+    }
 
 
 def mark_scene2d_changed(app: FastAPI, scene_id: str, perspective_id: str) -> None:

@@ -60,16 +60,18 @@ def _shot_payload(project: Project, shot: Shot, cache: dict[str, Any] | None = N
     if preview_path is not None and preview_path.is_file():
         hit = preview_analysis_cache.get_cached(cache or {}, preview_path)
         if hit is not None:
-            # Fast path: use cached result (no image decode)
             data["has_artwork_preview"] = hit["has_artwork_preview"]
             data["preview_has_transparency"] = hit["preview_has_transparency"]
+            data["preview_analysis_state"] = "cached"
         else:
-            # Provisional: preview file exists, defer analysis to background worker
+            # Provisional: preview file exists, real result deferred to background worker
             data["has_artwork_preview"] = True
             data["preview_has_transparency"] = False
+            data["preview_analysis_state"] = "provisional"
     else:
         data["has_artwork_preview"] = False
         data["preview_has_transparency"] = False
+        data["preview_analysis_state"] = "missing"
     return data
 
 
@@ -263,7 +265,7 @@ def _bridge_status_payload(app: FastAPI) -> dict[str, Any]:
     file_seen = live_bridge.read_plugin_heartbeat_mtime()
     plugin_linked, age, open_shot_ids = _plugin_link_state(app)
     last_exported = runtime_state.plugin_last_exported_preview(app)
-    return {
+    result: dict[str, Any] = {
         "app_running": True,
         "project_open": project is not None,
         "plugin_linked": plugin_linked,
@@ -284,6 +286,11 @@ def _bridge_status_payload(app: FastAPI) -> dict[str, Any]:
         "server_port": int(app.state.bridge_port),
         "live": live,
     }
+    if project is not None:
+        pa = runtime_state.preview_analysis_status_for_project(app, str(project.root_path))
+        if pa is not None:
+            result["preview_analysis"] = pa
+    return result
 
 
 def _persist_app_session(app: FastAPI, *, selected_shot_id: str | None = None) -> None:
