@@ -3,6 +3,11 @@ from __future__ import annotations
 import io
 import json
 import logging
+import os
+import re
+import tempfile
+import threading
+import time
 from pathlib import Path
 from typing import Any, BinaryIO
 
@@ -40,6 +45,9 @@ from .system_utils import (
 )
 
 logger = logging.getLogger(__name__)
+
+_TOKEN_RE = re.compile(r'^[a-zA-Z0-9_-]{1,64}$')
+_preview_analysis_lock = threading.Lock()
 
 
 def _normalize_upload_bytes(data: list[int] | bytes | bytearray) -> bytes:
@@ -90,6 +98,108 @@ class StoryboardBackendService(ExportServiceMixin):
             advanced_panel_open=data.get("advanced_panel_open"),
             ui_theme=data.get("ui_theme"),
         )
+
+    def method_bootstrap(self) -> dict[str, Any]:
+        """
+        Single-round-trip startup: read session, open last project if needed.
+
+        Returns {session, project, opened_last_project, startup_timings}.
+        Never raises for a missing or invalid previous project path — returns project: null
+        with a non-fatal warning instead.
+        """
+        t_start = time.perf_counter()
+        session = session_store.read_session(self.app.state.base_dir)
+        t_session = time.perf_counter()
+        opened_last = False
+        warning: str | None = None
+        project_payload: dict[str, Any] | None = None
+
+        if self.app.state.project is not None:
+            # Project already open (hot-reload / multiple clients).
+            project_payload = app_state._project_payload(self.app.state.project, self.app.state.dirty)
+        else:
+            last_path = session.get("last_project_json_path", "") or ""
+            if last_path:
+                try:
+                    app_state._track_project(
+                        self.app,
+                        project_manager.open_project(Path(last_path).expanduser()),
+                    )
+                    app_state._remember_recent(self.app.state.project)
+                    app_state._touch_live_bridge(self.app)
+                    self.app.state.dirty = False
+                    opened_last = True
+                    project_payload = app_state._project_payload(self.app.state.project, self.app.state.dirty)
+                except (FileNotFoundError, ValueError) as exc:
+                    warning = f"Previous project unavailable ({exc}); starting without a project."
+                    logger.info("Bootstrap: %s", warning)
+                    try:
+                        session_store.update_session(self.app.state.base_dir, last_project_json_path="")
+                    except Exception:
+                        pass
+
+        t_project = time.perf_counter()
+        timings = {
+            "session_load_ms": round((t_session - t_start) * 1000, 1),
+            "project_load_ms": round((t_project - t_session) * 1000, 1),
+            "total_ms": round((t_project - t_start) * 1000, 1),
+        }
+        result: dict[str, Any] = {
+            "session": session,
+            "project": project_payload,
+            "opened_last_project": opened_last,
+            "startup_timings": timings,
+        }
+        if warning:
+            result["warning"] = warning
+        return result
+
+    def method_ui_ready(self) -> dict[str, Any]:
+        """
+        Called by the frontend once the Welcome or Board UI has painted.
+        Writes the per-launch ready marker so the native splash can close.
+        Safe no-op when no launch token is present.
+        """
+        token = os.environ.get("STORYBOARDER_LAUNCH_TOKEN", "").strip()
+        if not token:
+            return {"ok": True, "marker_written": False, "reason": "no_token"}
+        if not _TOKEN_RE.match(token):
+            logger.warning("ui-ready: ignoring invalid STORYBOARDER_LAUNCH_TOKEN format")
+            return {"ok": True, "marker_written": False, "reason": "invalid_token"}
+        marker = Path(tempfile.gettempdir()) / f"storyboarder-launch-{token}.ready"
+        try:
+            marker.write_text("ready", encoding="utf-8")
+            logger.info("[startup] ui-ready marker written: %s", marker)
+            return {"ok": True, "marker_written": True, "path": str(marker)}
+        except OSError as exc:
+            logger.warning("ui-ready: could not write marker: %s", exc)
+            return {"ok": False, "marker_written": False, "reason": str(exc)}
+
+    def method_refresh_preview_analysis(self) -> dict[str, Any]:
+        """
+        Trigger background preview analysis for uncached previews.
+        Non-blocking: if analysis is already running, returns immediately.
+        """
+        project = self.app.state.project
+        if project is None:
+            return {"ok": True, "status": "no_project"}
+        if not _preview_analysis_lock.acquire(blocking=False):
+            return {"ok": True, "status": "already_running"}
+
+        project_root = project.root_path
+
+        def _run() -> None:
+            try:
+                count = app_state._analyse_uncached_previews(project)
+                logger.info("[startup] deferred preview analysis: %d previews decoded", count)
+            except Exception:
+                logger.debug("Preview analysis background task failed", exc_info=True)
+            finally:
+                _preview_analysis_lock.release()
+
+        t = threading.Thread(target=_run, name="sb-preview-analysis", daemon=True)
+        t.start()
+        return {"ok": True, "status": "started", "project_path": str(project_root)}
 
     def method_app_focus(self) -> dict[str, Any]:
         """Best-effort desktop focus. Browser/dev mode is a clean no-op."""

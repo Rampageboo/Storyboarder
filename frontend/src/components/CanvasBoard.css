@@ -245,9 +245,12 @@
   min-height: 0;
   padding: 28px 34px;
   background:
-    radial-gradient(circle at center, color-mix(in srgb, var(--color-accent) 8%, transparent), transparent 44%),
-    linear-gradient(180deg, rgba(255, 255, 255, 0.018), transparent 28%),
-    var(--canvas-empty-bg, var(--canvas-well));
+    radial-gradient(circle at 50% 42%, color-mix(in srgb, var(--color-accent) 8%, transparent), transparent 40%),
+    linear-gradient(45deg, rgba(255, 255, 255, 0.025) 25%, transparent 25%),
+    linear-gradient(-45deg, rgba(255, 255, 255, 0.025) 25%, transparent 25%),
+    #101217;
+  background-position: center, 0 0, 0 8px;
+  background-size: auto, 16px 16px, 16px 16px;
   overflow: auto;
 }
 
@@ -270,7 +273,13 @@
   aspect-ratio: var(--canvas-aspect, 16 / 9);
   border: 1px solid color-mix(in srgb, var(--color-accent) 22%, var(--color-border));
   border-radius: 9px;
-  background: var(--canvas-empty-bg, var(--canvas-well));
+  background:
+    radial-gradient(circle at 50% 42%, color-mix(in srgb, var(--color-accent) 8%, transparent), transparent 40%),
+    linear-gradient(45deg, rgba(255, 255, 255, 0.025) 25%, transparent 25%),
+    linear-gradient(-45deg, rgba(255, 255, 255, 0.025) 25%, transparent 25%),
+    #101217;
+  background-position: center, 0 0, 0 8px;
+  background-size: auto, 16px 16px, 16px 16px;
   box-shadow:
     0 22px 56px rgba(0, 0, 0, 0.42),
     0 0 0 1px rgba(255, 255, 255, 0.025),

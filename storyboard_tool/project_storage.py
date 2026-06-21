@@ -129,7 +129,7 @@ def project_disk_mtime(project: Project) -> float:
     scenes2d_index = scenes2d_dir / "scenes2d.json"
     scenes2d_mtime = scenes2d_index.stat().st_mtime if scenes2d_index.is_file() else 0.0
     if scenes2d_dir.is_dir():
-        for meta_path in scenes2d_dir.glob("scene_*/scene_*_meta.json"):
+        for meta_path in scenes2d_dir.glob("*/*_meta.json"):
             if meta_path.is_file():
                 scenes2d_mtime = max(scenes2d_mtime, meta_path.stat().st_mtime)
     scenes3d_dir = project.root_path / "scenes3d"

@@ -15,7 +15,7 @@ from typing import Any
 
 from fastapi import FastAPI, HTTPException
 
-from . import live_bridge, project_manager, runtime_state, session_store, shot_service
+from . import live_bridge, preview_analysis_cache, project_manager, runtime_state, session_store, shot_service
 from .errors import AppErrorCode, app_error
 from .models import Project, SHOT_STATUSES, Shot
 
@@ -23,6 +23,7 @@ logger = logging.getLogger(__name__)
 
 
 def _project_payload(project: Project, dirty: bool) -> dict[str, Any]:
+    cache = preview_analysis_cache.load_cache(project.root_path)
     return {
         "project_path": str(project.root_path),
         "project_json_path": str(project.json_path),
@@ -30,31 +31,78 @@ def _project_payload(project: Project, dirty: bool) -> dict[str, Any]:
         "dirty": dirty,
         "settings": project.settings,
         "statuses": list(SHOT_STATUSES),
-        "shots": [_shot_payload(project, shot) for shot in project.shots],
+        "shots": [_shot_payload(project, shot, cache) for shot in project.shots],
     }
 
 
-def _shot_payload(project: Project, shot: Shot) -> dict[str, Any]:
-    from .image_utils import image_has_transparency, is_solid_color_image
-
+def _shot_payload(project: Project, shot: Shot, cache: dict[str, Any] | None = None) -> dict[str, Any]:
     data = shot.to_dict()
     preview_path = project_manager.resolve_shot_preview_path(project, shot)
     if preview_path is not None:
-        data["preview_disk_mtime"] = preview_path.stat().st_mtime
+        try:
+            data["preview_disk_mtime"] = preview_path.stat().st_mtime
+        except OSError:
+            pass
     thumb_path = project_manager.resolve_shot_thumbnail_path(project, shot)
     if thumb_path is not None:
-        data["thumbnail_disk_mtime"] = thumb_path.stat().st_mtime
+        try:
+            data["thumbnail_disk_mtime"] = thumb_path.stat().st_mtime
+        except OSError:
+            pass
     board_background_path = project_manager.get_shot_board_background_path(project, shot)
     data["has_board_background"] = board_background_path is not None
     if board_background_path is not None:
-        data["board_background_disk_mtime"] = board_background_path.stat().st_mtime
+        try:
+            data["board_background_disk_mtime"] = board_background_path.stat().st_mtime
+        except OSError:
+            pass
+
     if preview_path is not None and preview_path.is_file():
-        data["has_artwork_preview"] = not is_solid_color_image(preview_path)
-        data["preview_has_transparency"] = image_has_transparency(preview_path)
+        hit = preview_analysis_cache.get_cached(cache or {}, preview_path)
+        if hit is not None:
+            # Fast path: use cached result (no image decode)
+            data["has_artwork_preview"] = hit["has_artwork_preview"]
+            data["preview_has_transparency"] = hit["preview_has_transparency"]
+        else:
+            # Provisional: preview file exists, defer analysis to background worker
+            data["has_artwork_preview"] = True
+            data["preview_has_transparency"] = False
     else:
         data["has_artwork_preview"] = False
         data["preview_has_transparency"] = False
     return data
+
+
+def _analyse_uncached_previews(project: Project) -> int:
+    """
+    Analyse previews that are missing from the cache and update it.
+    Called by the deferred background worker — never on the critical startup path.
+    Returns the number of previews actually decoded.
+    """
+    from .image_utils import image_has_transparency, is_solid_color_image
+
+    cache = preview_analysis_cache.load_cache(project.root_path)
+    analysed = 0
+    dirty = False
+    for shot in project.shots:
+        preview_path = project_manager.resolve_shot_preview_path(project, shot)
+        if preview_path is None or not preview_path.is_file():
+            continue
+        if preview_analysis_cache.get_cached(cache, preview_path) is not None:
+            continue
+        try:
+            has_artwork = not is_solid_color_image(preview_path)
+            has_alpha = image_has_transparency(preview_path)
+        except Exception:
+            logger.debug("Preview analysis failed for %s", preview_path, exc_info=True)
+            continue
+        preview_analysis_cache.set_cached(cache, preview_path, has_artwork, has_alpha)
+        analysed += 1
+        dirty = True
+
+    if dirty:
+        preview_analysis_cache.save_cache(project.root_path, cache)
+    return analysed
 
 
 def _require_project(app: FastAPI) -> Project:

@@ -1,4 +1,5 @@
 import { requestJson } from './client'
+import type { ProjectPayload } from '../types'
 
 export interface BrowseResult {
   path: string
@@ -18,6 +19,22 @@ export function getAppSession(): Promise<AppSession> {
 
 export function updateAppSession(body: AppSession): Promise<AppSession> {
   return requestJson<AppSession>('/api/app/session', { method: 'PUT', body })
+}
+
+export interface BootstrapPayload {
+  session: AppSession
+  project: ProjectPayload | null
+  opened_last_project: boolean
+  startup_timings: Record<string, number>
+  warning?: string
+}
+
+export function bootstrapApp(): Promise<BootstrapPayload> {
+  return requestJson<BootstrapPayload>('/api/app/bootstrap')
+}
+
+export function reportUiReady(): Promise<{ ok: boolean }> {
+  return requestJson<{ ok: boolean }>('/api/app/ui-ready', { method: 'POST' })
 }
 
 export interface AppFocusResult {

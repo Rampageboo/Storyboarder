@@ -211,6 +211,14 @@ def create_app(base_dir: Path, bridge_port: int = 8000) -> FastAPI:
     def put_app_session(request: AppSessionUpdateRequest) -> dict[str, Any]:
         return _svc().method_update_session(request.model_dump(exclude_unset=True))
 
+    @app.get("/api/app/bootstrap")
+    def bootstrap() -> dict[str, Any]:
+        return _svc().method_bootstrap()
+
+    @app.post("/api/app/ui-ready")
+    def ui_ready() -> dict[str, Any]:
+        return _svc().method_ui_ready()
+
     @app.post("/api/app/focus")
     def focus_app() -> dict[str, Any]:
         return _svc().method_app_focus()
@@ -218,6 +226,10 @@ def create_app(base_dir: Path, bridge_port: int = 8000) -> FastAPI:
     @app.post("/api/app/preheat-photoshop")
     def preheat_photoshop() -> dict[str, Any]:
         return _svc().method_preheat_photoshop()
+
+    @app.post("/api/project/preview-analysis/refresh")
+    def refresh_preview_analysis() -> dict[str, Any]:
+        return _svc().method_refresh_preview_analysis()
 
     @app.get("/api/bridge/live")
     def get_live_bridge() -> dict[str, Any]:

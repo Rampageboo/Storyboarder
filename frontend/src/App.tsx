@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState, type CSSProperties } from 'react'
+import { reportUiReady } from './api'
 import { Topbar } from './components/Topbar'
 import { ShotInspector } from './components/ShotInspector'
 import { BoardStrip } from './components/BoardStrip'
@@ -288,6 +289,7 @@ function AppInner() {
   const [workspaceMode, setWorkspaceMode] = useState<WorkspaceMode>('board')
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [refsOpen, setRefsOpen] = useState(false)
+  const uiReadyReportedRef = useRef(false)
   useGlobalShortcuts()
 
   const themeVars: CSSProperties = {
@@ -302,6 +304,19 @@ function AppInner() {
   useEffect(() => {
     setWorkspaceMode('board')
   }, [project?.project_json_path, project?.project_path])
+
+  // Report UI-ready after Welcome or Board UI paints (double rAF = 2 frames).
+  // This lets the native splash window close at the right moment.
+  useEffect(() => {
+    if (initialLoading) return
+    if (uiReadyReportedRef.current) return
+    uiReadyReportedRef.current = true
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        void reportUiReady().catch(() => {})
+      })
+    })
+  }, [initialLoading])
 
   return (
     <div className="app-root" style={themeVars}>
@@ -336,7 +351,7 @@ function AppInner() {
                   <BoardWorkspace />
                 </div>
                 <div className="workspace-content workspace-content-scene" hidden={workspaceMode !== 'scene2d'}>
-                  <Scene2DPanel />
+                  <Scene2DPanel active={workspaceMode === 'scene2d'} />
                 </div>
                 <div className="workspace-content workspace-content-scene" hidden={workspaceMode !== 'scene3d'}>
                   <Scene3DPanel active={workspaceMode === 'scene3d'} />

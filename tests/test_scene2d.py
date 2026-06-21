@@ -5,6 +5,7 @@ import io
 import json
 import tempfile
 import unittest
+import uuid
 import warnings
 from pathlib import Path
 from unittest import mock
@@ -28,6 +29,13 @@ def _quiet(fn):
         return fn()
 
 
+def _is_uuid(value: str) -> bool:
+    try:
+        return str(uuid.UUID(value)) == value
+    except ValueError:
+        return False
+
+
 class Scene2DTests(unittest.TestCase):
     def setUp(self) -> None:
         self._tmp = tempfile.TemporaryDirectory()
@@ -49,19 +57,25 @@ class Scene2DTests(unittest.TestCase):
     def test_create_scene2d_creates_index_folder_psd_and_meta_without_shots(self) -> None:
         scene = self._create_scene("Living room layout")
 
-        self.assertEqual(scene["id"], "scene_001")
-        self.assertEqual(scene["primary_perspective_id"], "persp_001")
-        self.assertEqual(scene["source_file_path"], "scenes2d/scene_001/scene_001.psd")
-        self.assertEqual(scene["preview_image_path"], "scenes2d/scene_001/scene_001_preview.png")
+        self.assertTrue(_is_uuid(scene["id"]))
+        self.assertTrue(_is_uuid(scene["primary_perspective_id"]))
+        self.assertEqual(
+            scene["source_file_path"],
+            f"scenes2d/{scene['id']}/perspectives/{scene['primary_perspective_id']}/source.psd",
+        )
+        self.assertEqual(
+            scene["preview_image_path"],
+            f"scenes2d/{scene['id']}/perspectives/{scene['primary_perspective_id']}/preview.png",
+        )
         self.assertTrue(scene["can_be_reference"])
-        self.assertEqual(scene["perspectives"][0]["id"], "persp_001")
+        self.assertEqual(scene["perspectives"][0]["id"], scene["primary_perspective_id"])
         self.assertEqual(scene["perspectives"][0]["source_file_path"], scene["source_file_path"])
 
-        scene_dir = self.project_root / "scenes2d" / "scene_001"
+        scene_dir = self.project_root / "scenes2d" / scene["id"]
         self.assertTrue((self.project_root / "scenes2d" / "scenes2d.json").is_file())
         self.assertTrue(scene_dir.is_dir())
-        self.assertTrue((scene_dir / "scene_001.psd").is_file())
-        self.assertTrue((scene_dir / "scene_001_meta.json").is_file())
+        self.assertTrue((scene_dir / "perspectives" / scene["primary_perspective_id"] / "source.psd").is_file())
+        self.assertTrue((scene_dir / f"{scene['id']}_meta.json").is_file())
 
         shots_json = self.project_root / "shots.json"
         shots_data = json.loads(shots_json.read_text(encoding="utf-8")) if shots_json.is_file() else {"shots": []}
@@ -230,10 +244,15 @@ class Scene2DTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200, response.text)
         scene = response.json()["scenes"][0]
-        self.assertEqual(scene["primary_perspective_id"], "persp_001")
+        self.assertTrue(_is_uuid(scene["id"]))
+        self.assertTrue(_is_uuid(scene["primary_perspective_id"]))
         self.assertEqual(len(scene["perspectives"]), 1)
-        self.assertEqual(scene["perspectives"][0]["source_file_path"], "scenes2d/scene_001/scene_001.psd")
+        self.assertEqual(
+            scene["perspectives"][0]["source_file_path"],
+            f"scenes2d/{scene['id']}/perspectives/{scene['primary_perspective_id']}/source.psd",
+        )
         self.assertEqual(scene["source_file_path"], scene["perspectives"][0]["source_file_path"])
+        self.assertFalse((self.project_root / "scenes2d" / "scene_001").exists())
 
     def test_blank_perspective_open_refresh_primary_and_delete_behaviors(self) -> None:
         scene = self._create_scene("Perspective scene")
@@ -246,9 +265,9 @@ class Scene2DTests(unittest.TestCase):
         )
         self.assertEqual(created.status_code, 200, created.text)
         perspective = created.json()["perspective"]
-        self.assertEqual(perspective["id"], "persp_002")
+        self.assertTrue(_is_uuid(perspective["id"]))
         self.assertTrue((self.project_root / perspective["source_file_path"]).is_file())
-        self.assertIn("perspectives/persp_002", perspective["source_file_path"])
+        self.assertEqual(perspective["source_file_path"], f"scenes2d/{scene['id']}/perspectives/{perspective['id']}/source.psd")
 
         refresh = _quiet(
             lambda: self.client.post(
@@ -286,7 +305,7 @@ class Scene2DTests(unittest.TestCase):
             )
         )
         self.assertEqual(deleted.status_code, 200, deleted.text)
-        self.assertEqual(deleted.json()["scene"]["primary_perspective_id"], "persp_001")
+        self.assertEqual(deleted.json()["scene"]["primary_perspective_id"], scene["primary_perspective_id"])
 
     def test_import_image_and_psd_perspectives_and_reference_source_ids(self) -> None:
         scene = self._create_scene("Import scene")

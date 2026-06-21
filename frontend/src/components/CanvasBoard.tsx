@@ -1,7 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import {
   createShotCanvas,
-  getMissingFiles,
   openShotPreview,
   openShotSource,
   recoverShotSource,
@@ -21,7 +20,7 @@ import './CanvasBoard.css'
 type SyncResult = { synced?: boolean; message?: string }
 
 export function CanvasBoard() {
-  const { project, selectedShotId, setProject, flushDirtyShots, projectActionBusy, reportError } = useProject()
+  const { project, selectedShotId, setProject, flushDirtyShots, projectActionBusy, reportError, missingFiles } = useProject()
   const [bust, setBust] = useState(0)
   const [loadFailed, setLoadFailed] = useState(false)
   const [busy, setBusy] = useState(false)
@@ -93,28 +92,19 @@ export function CanvasBoard() {
     setRelinkPath(cur?.preview_image_path || cur?.image_path || '')
   }
 
-  // On-disk missing-file status for the selected shot (metadata path present but file gone).
-  // Stale-guarded and silent — an ordinary missing thumbnail must never raise the error banner.
+  // Derive missing-file status from the shared context scan (no per-shot API call).
   useEffect(() => {
-    if (!selectedShotId) return
-    let cancelled = false
-    getMissingFiles()
-      .then((payload) => {
-        if (cancelled) return
-        const rows = (payload.missing_files ?? []).filter((r) => r.shot_id === selectedShotId)
-        setMissing({
-          source: rows.some((r) => r.field === 'source_file_path'),
-          preview: rows.some((r) => r.field === 'preview_image_path'),
-          refs: rows.filter((r) => r.field === 'reference_image_paths').length,
-        })
-      })
-      .catch(() => {
-        if (!cancelled) setMissing(null)
-      })
-    return () => {
-      cancelled = true
+    if (!selectedShotId || !missingFiles) {
+      setMissing(null)
+      return
     }
-  }, [selectedShotId, sourcePath, previewPath, shot?.preview_disk_mtime, shot?.reference_image_paths?.length])
+    const rows = missingFiles.filter((r) => r.shot_id === selectedShotId)
+    setMissing({
+      source: rows.some((r) => r.field === 'source_file_path'),
+      preview: rows.some((r) => r.field === 'preview_image_path'),
+      refs: rows.filter((r) => r.field === 'reference_image_paths').length,
+    })
+  }, [selectedShotId, missingFiles])
 
   const disabled = busy || projectActionBusy
 

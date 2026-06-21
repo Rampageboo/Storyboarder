@@ -15,6 +15,7 @@ import {
   createShotCanvas,
   deleteRefSegment,
   deleteShot,
+  getMissingFiles,
   getProject,
   moveShotDown,
   moveShotUp,
@@ -29,8 +30,8 @@ import {
   updateSettings,
   updateShot,
 } from '../api'
-import { browseFolder, getAppSession, isNoProjectOpenError, updateAppSession, type AppSession } from '../api'
-import type { ProjectPathRequest, ProjectPayload, SettingsUpdate, ShotUpdate } from '../types'
+import { bootstrapApp, browseFolder, updateAppSession } from '../api'
+import type { MissingFileRow, ProjectPathRequest, ProjectPayload, SettingsUpdate, ShotUpdate } from '../types'
 import { shotToUpdate } from '../utils/shotUpdate'
 import { ProjectContext } from './useProject'
 
@@ -90,6 +91,9 @@ export interface ProjectContextValue {
   lastError: string | null
   clearError: () => void
   reportError: (error: unknown) => void
+  missingFiles: MissingFileRow[] | null
+  missingFilesLoading: boolean
+  refreshMissingFiles: () => void
 }
 
 function projectJsonInFolder(folderPath: string): string {
@@ -164,12 +168,15 @@ export function ProjectProvider({ children }: PropsWithChildren) {
   const [refSegmentInspectOpen, setRefSegmentInspectOpen] = useState(false)
   const [undoStack, setUndoStack] = useState<HistoryEntry[]>([])
   const [redoStack, setRedoStack] = useState<HistoryEntry[]>([])
+  const [missingFiles, setMissingFiles] = useState<MissingFileRow[] | null>(null)
+  const [missingFilesLoading, setMissingFilesLoading] = useState(false)
   const versionsRef = useRef<Record<string, number>>({})
   const projectRef = useRef<ProjectPayload | null>(null)
   const draftsRef = useRef<Record<string, ShotUpdate>>({})
   const undoStackRef = useRef<HistoryEntry[]>([])
   const redoStackRef = useRef<HistoryEntry[]>([])
   const historyBusyRef = useRef(false)
+  const missingFilesInFlightRef = useRef(false)
 
   // Keep refs current after every render so stable callbacks always read latest values.
   useLayoutEffect(() => {
@@ -213,7 +220,45 @@ export function ProjectProvider({ children }: PropsWithChildren) {
     setRefSegmentInspectOpen(false)
     setUndoStack([])
     setRedoStack([])
+    setMissingFiles(null)
   }, [])
+
+  const refreshMissingFiles = useCallback(() => {
+    if (missingFilesInFlightRef.current) return
+    if (!projectRef.current) return
+    missingFilesInFlightRef.current = true
+    setMissingFilesLoading(true)
+    getMissingFiles()
+      .then((payload) => {
+        setMissingFiles(payload.missing_files ?? [])
+      })
+      .catch(() => {
+        // Silently ignore: missing-file errors must never break the UI
+      })
+      .finally(() => {
+        missingFilesInFlightRef.current = false
+        setMissingFilesLoading(false)
+      })
+  }, [])
+
+  // Defer missing-files scan until after first paint so it never blocks initial loading.
+  useEffect(() => {
+    if (!project) return
+    const hasIdleCallback = typeof window !== 'undefined' && 'requestIdleCallback' in window
+    let id: number
+    if (hasIdleCallback) {
+      id = (window as Window & typeof globalThis).requestIdleCallback(refreshMissingFiles)
+    } else {
+      id = window.setTimeout(refreshMissingFiles, 500)
+    }
+    return () => {
+      if (hasIdleCallback) {
+        (window as Window & typeof globalThis).cancelIdleCallback(id)
+      } else {
+        clearTimeout(id)
+      }
+    }
+  }, [project?.project_json_path, refreshMissingFiles])
 
   const setSegmentAnchor = useCallback((shotId: string | null) => {
     setSegmentRange((range) => ({ ...range, anchorShotId: shotId }))
@@ -382,22 +427,21 @@ export function ProjectProvider({ children }: PropsWithChildren) {
   const reloadProject = useCallback(async () => {
     setInitialLoading(true)
     try {
-      const session: AppSession = await getAppSession().catch((): AppSession => ({}))
-      try {
-        const payload = await getProject()
-        openPayload(payload, typeof session.selected_shot_id === 'string' ? session.selected_shot_id : null)
-      } catch (error) {
-        if (!isNoProjectOpenError(error)) throw error
-        const lastPath = typeof session.last_project_json_path === 'string' ? session.last_project_json_path : ''
-        if (!lastPath) {
-          resetEditState()
-          setProject(null)
-          setSelectedShotId(null)
-          setLastError(null)
-          return
-        }
-        const payload = await openProject({ project_json_path: lastPath })
-        openPayload(payload, typeof session.selected_shot_id === 'string' ? session.selected_shot_id : null)
+      const bootstrap = await bootstrapApp()
+      const session = bootstrap.session
+      const selectedShotIdFromSession = typeof session.selected_shot_id === 'string' ? session.selected_shot_id : null
+      if (bootstrap.project) {
+        openPayload(bootstrap.project, selectedShotIdFromSession)
+      } else {
+        // No project from bootstrap (none open, no last path, or invalid last path)
+        resetEditState()
+        setProject(null)
+        setSelectedShotId(null)
+        setLastError(null)
+      }
+      if (bootstrap.warning) {
+        // Non-fatal: stale last-project path etc.
+        console.warn('[bootstrap]', bootstrap.warning)
       }
     } catch (error) {
       resetEditState()
@@ -735,8 +779,11 @@ export function ProjectProvider({ children }: PropsWithChildren) {
       lastError,
       clearError,
       reportError,
+      missingFiles,
+      missingFilesLoading,
+      refreshMissingFiles,
     }),
-    [project, selectedShotId, replaceProject, refreshProjectFromBridge, reloadProject, newProjectAction, openProjectFromDialog, saveProjectAction, addShotAfterSelection, insertShotAtIndex, deleteSelectedShot, moveSelectedShot, reorderBoards, deleteActiveRefSegment, deleteRefSegmentUndoable, recordRefApply, undo, redo, undoStack, redoStack, syncSelectedShot, openSelectedShotSource, initialLoading, projectActionBusy, getDraft, editShotField, isShotDirty, dirtyShotIds, savingShots, saveShot, flushDirtyShots, visualEpoch, segmentRange, setSegmentAnchor, setSegmentEnd, pickSegmentShot, clearSegmentRange, activeAppliedSegmentId, setActiveAppliedSegmentId, clearActiveAppliedSegment, refSegmentInspectOpen, openRefSegmentInspect, closeRefSegmentInspect, dismissRefSegmentUi, refApplyUndoToken, lastError, clearError, reportError],
+    [project, selectedShotId, replaceProject, refreshProjectFromBridge, reloadProject, newProjectAction, openProjectFromDialog, saveProjectAction, addShotAfterSelection, insertShotAtIndex, deleteSelectedShot, moveSelectedShot, reorderBoards, deleteActiveRefSegment, deleteRefSegmentUndoable, recordRefApply, undo, redo, undoStack, redoStack, syncSelectedShot, openSelectedShotSource, initialLoading, projectActionBusy, getDraft, editShotField, isShotDirty, dirtyShotIds, savingShots, saveShot, flushDirtyShots, visualEpoch, segmentRange, setSegmentAnchor, setSegmentEnd, pickSegmentShot, clearSegmentRange, activeAppliedSegmentId, setActiveAppliedSegmentId, clearActiveAppliedSegment, refSegmentInspectOpen, openRefSegmentInspect, closeRefSegmentInspect, dismissRefSegmentUi, refApplyUndoToken, lastError, clearError, reportError, missingFiles, missingFilesLoading, refreshMissingFiles],
   )
 
   return <ProjectContext.Provider value={value}>{children}</ProjectContext.Provider>

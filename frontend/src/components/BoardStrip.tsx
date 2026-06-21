@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type DragEvent } from 'react'
-import { getMissingFiles } from '../api'
 import { useProject } from '../state/useProject'
 import { shotDisplayLabel } from '../utils/shotDisplay'
 import {
@@ -62,10 +61,15 @@ export function BoardStrip() {
     dismissRefSegmentUi,
     deleteRefSegmentUndoable,
     reportError,
+    missingFiles,
   } = useProject()
   const [busy, setBusy] = useState(false)
   const [segmentDeleting, setSegmentDeleting] = useState(false)
-  const [missingShots, setMissingShots] = useState<Set<string>>(new Set())
+  const missingShots = useMemo(() => {
+    const s = new Set<string>()
+    for (const row of missingFiles ?? []) s.add(row.shot_id)
+    return s
+  }, [missingFiles])
   const [dragShotId, setDragShotId] = useState<string | null>(null)
   const [dropTarget, setDropTarget] = useState<{ id: string; after: boolean } | null>(null)
   const [playing, setPlaying] = useState(false)
@@ -206,24 +210,7 @@ export function BoardStrip() {
     return () => viewport.removeEventListener('wheel', onWheel)
   }, [])
 
-  // Project-wide missing-file map for the per-card warning dot. Refetched whenever committed
-  // project data changes (visualEpoch). Stale-guarded and silent — no error banner for this.
-  useEffect(() => {
-    let cancelled = false
-    getMissingFiles()
-      .then((payload) => {
-        if (cancelled) return
-        const next = new Set<string>()
-        for (const row of payload.missing_files ?? []) next.add(row.shot_id)
-        setMissingShots(next)
-      })
-      .catch(() => {
-        if (!cancelled) setMissingShots(new Set())
-      })
-    return () => {
-      cancelled = true
-    }
-  }, [visualEpoch])
+  // missingShots is derived from the shared ProjectContext.missingFiles (no per-strip API call).
 
   // These delegate to the history-aware project actions so the toolbar buttons and the
   // keyboard shortcuts share one code path and both record undo/redo entries.

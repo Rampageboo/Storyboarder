@@ -24,11 +24,11 @@ const MAX_PREVIEW_ZOOM = 200
 const ZOOM_STEP = 5
 
 function sceneLabel(scene: Scene2D | null) {
-  return scene?.title || scene?.id || ''
+  return scene?.title || 'Untitled Scene'
 }
 
 function perspectiveLabel(perspective: Scene2DPerspective | null) {
-  return perspective?.title || perspective?.id || ''
+  return perspective?.title || 'Untitled Perspective'
 }
 
 function clampPreviewZoom(value: number) {
@@ -61,8 +61,9 @@ function PerspectiveCardPreview({ scene, perspective }: { scene: Scene2D; perspe
   )
 }
 
-export function Scene2DPanel() {
+export function Scene2DPanel({ active = false }: { active?: boolean }) {
   const { project, setProject, flushDirtyShots, projectActionBusy, reportError } = useProject()
+  const hasBeenActivatedRef = useRef(false)
   const [scenes, setScenes] = useState<Scene2D[]>([])
   const [scene3ds, setScene3ds] = useState<Scene3DRecord[]>([])
   const [selectedSceneId, setSelectedSceneId] = useState('')
@@ -116,9 +117,16 @@ export function Scene2DPanel() {
     }
   }, [project, reportError])
 
+  // Lazy-load: only fetch scenes when the panel is first activated.
   useEffect(() => {
+    if (!active) return
+    hasBeenActivatedRef.current = true
+  }, [active])
+
+  useEffect(() => {
+    if (!hasBeenActivatedRef.current) return
     void loadScenes()
-  }, [loadScenes, project?.project_json_path])
+  }, [loadScenes, project?.project_json_path, active])
 
   useEffect(() => {
     setSceneTitle(selectedScene?.title ?? '')
@@ -393,7 +401,7 @@ export function Scene2DPanel() {
                         <option value="">No linked Scene 3D</option>
                         {scene3ds.map((scene) => (
                           <option key={scene.id} value={scene.id}>
-                            {scene.title || scene.id}
+                            {scene.title || 'Untitled Scene 3D'}
                           </option>
                         ))}
                       </select>
@@ -530,7 +538,7 @@ export function Scene2DPanel() {
                           <option value="">Use scene group link</option>
                           {scene3ds.map((scene) => (
                             <option key={scene.id} value={scene.id}>
-                              {scene.title || scene.id}
+                              {scene.title || 'Untitled Scene 3D'}
                             </option>
                           ))}
                         </select>

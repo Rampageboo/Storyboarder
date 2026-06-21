@@ -23,6 +23,14 @@ APP_USER_MODEL_ID = "StoryboardTool.StoryboardTool.1"
 _WEBVIEW_STORAGE_WARNED_PATHS: set[str] = set()
 _LOGGER = logging.getLogger(__name__)
 
+# t0 is set at process entry; all stage timings are relative to it.
+_t0: float = time.perf_counter()
+
+
+def _log_stage(label: str) -> None:
+    elapsed = time.perf_counter() - _t0
+    _LOGGER.info("[startup] %+.3fs  %s", elapsed, label)
+
 
 def _configure_windows_taskbar_identity() -> None:
     if sys.platform != "win32":
@@ -112,6 +120,7 @@ def _ignore_connection_reset(loop, context) -> None:
 
 def start_internal_server(app, host: str = _HOST, port: int = _PORT) -> tuple[threading.Thread, int]:
     """Start the private localhost server that pywebview loads. Not a public endpoint."""
+    _log_stage("internal server thread starting")
     if port <= 0:
         port = resolve_server_port(host, port)
     app.state.bridge_port = port
@@ -131,6 +140,7 @@ def start_internal_server(app, host: str = _HOST, port: int = _PORT) -> tuple[th
     thread = threading.Thread(target=run, name="storyboard-server", daemon=True)
     thread.start()
     wait_for_server(host, port)
+    _log_stage("server ready")
     return thread, port
 
 
@@ -174,6 +184,7 @@ def _save_window_state(window, maximized: bool = False) -> None:
 
 
 def open_desktop_window(app, title: str = "Storyboard Tool") -> int:
+    _log_stage("desktop process entered open_desktop_window")
     try:
         import webview
     except ImportError as exc:
@@ -194,6 +205,7 @@ def open_desktop_window(app, title: str = "Storyboard Tool") -> int:
 
     _configure_windows_asyncio_noise()
     start_internal_server(app, _HOST, port)
+    _log_stage("pywebview window about to be created")
     react_index = Path(__file__).resolve().parent / "web" / "dist" / "index.html"
     if not react_index.is_file():
         print(

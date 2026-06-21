@@ -140,9 +140,16 @@ export function Scene3DPanel({ active }: { active: boolean }) {
     }
   }, [project, reportError])
 
+  // Lazy-load: defer until the panel is first made active.
   useEffect(() => {
+    if (!active) return
+    wasActiveRef.current = true
+  }, [active])
+
+  useEffect(() => {
+    if (!wasActiveRef.current) return
     void loadScene3DList()
-  }, [loadScene3DList, project?.project_json_path])
+  }, [loadScene3DList, project?.project_json_path, active])
 
   const currentShot = useCallback((): Shot | null => {
     const shotId = selectedShotIdRef.current
