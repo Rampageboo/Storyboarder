@@ -192,21 +192,20 @@ export function BoardStrip() {
     }
   }, [selectedShotId, shots.length])
 
-  // Restore wheel/trackpad scrolling broken by the rotateX(180deg) scrollbar trick.
-  // The CSS transform confuses the browser's built-in wheel-to-scroll mapping, so we
-  // attach a non-passive native listener and drive scrollLeft directly.
+  // Convert vertical mouse-wheel delta to horizontal scroll. Horizontal trackpad
+  // deltas are handled by the browser natively on the overflow-x container.
+  // Using passive:true lets the browser composite without waiting for this handler,
+  // which eliminates the jank that the previous passive:false approach caused.
   useEffect(() => {
     const viewport = viewportRef.current
     if (!viewport) return
     const onWheel = (e: WheelEvent) => {
       if (viewport.scrollWidth <= viewport.clientWidth) return
-      // Prefer horizontal trackpad delta; fall back to vertical mouse-wheel delta.
-      const delta = Math.abs(e.deltaX) > Math.abs(e.deltaY) ? e.deltaX : e.deltaY
-      if (delta === 0) return
-      e.preventDefault()
-      viewport.scrollLeft += delta
+      // Only intercept vertical-dominant events; horizontal (trackpad) scroll natively.
+      if (Math.abs(e.deltaX) >= Math.abs(e.deltaY)) return
+      viewport.scrollLeft += e.deltaY
     }
-    viewport.addEventListener('wheel', onWheel, { passive: false })
+    viewport.addEventListener('wheel', onWheel, { passive: true })
     return () => viewport.removeEventListener('wheel', onWheel)
   }, [])
 

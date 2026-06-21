@@ -144,6 +144,7 @@
 
 /* Horizontal scroll viewport — only cards move, not the strip chrome */
 .board-strip-viewport {
+  position: relative; /* establishes offsetParent so card.offsetLeft is viewport-relative */
   flex: 1 1 auto;
   min-height: 0;
   min-width: 0;
@@ -153,7 +154,6 @@
   padding: 8px 12px 10px;
   overscroll-behavior-x: contain;
   scrollbar-gutter: stable;
-  transform: rotateX(180deg);
 }
 
 .board-strip-scroller {
@@ -161,7 +161,6 @@
   flex-direction: column;
   gap: 6px;
   width: max-content;
-  transform: rotateX(180deg);
 }
 
 .board-strip-dotrail-wrap {

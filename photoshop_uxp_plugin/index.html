@@ -6,169 +6,204 @@
   </head>
   <body>
     <!--
-      One shared document for BOTH panels. A UXP plugin runs a single HTML
-      document + JavaScript context; per-panel "main" files are not a thing.
-      panel.js routes each container to its panel through the
-      entrypoints.setup() show(rootNode) hook: #bridge-panel is moved into the
-      "Storyboard Bridge" panel and #work-panel into the "Storyboard Work" panel.
+      One shared document for BOTH panels. panel.js routes each container into its
+      panel through entrypoints.setup() show(rootNode) → appendChild.
+      #bridge-panel → "Storyboard Bridge"
+      #work-panel   → "Storyboard Work"
     -->
 
-    <!-- ── Bridge panel ────────────────────────────────────────── -->
+    <!-- ── Bridge panel ──────────────────────────────────────────────── -->
     <div id="bridge-panel">
-      <header class="plugin-header">
-        <div class="plugin-title">
-          <sp-heading size="S">Storyboard Bridge</sp-heading>
-          <sp-detail id="linkStatus" class="link-status">Connecting...</sp-detail>
-        </div>
-      </header>
 
-      <sp-detail id="currentShot" class="current-shot" hidden></sp-detail>
+      <!-- 1. Compact connection row -->
+      <div class="conn-row">
+        <span class="conn-dot" id="connDot" data-state="off"></span>
+        <span id="linkStatus" class="conn-status">Connecting…</span>
+      </div>
 
-      <section id="currentShotCard" class="current-shot-card" hidden>
-        <div class="card-kicker" id="shotCardMode">Linked shot</div>
-        <div class="card-title-row">
-          <div>
-            <div class="card-shot-id" id="shotCardIndex">No shot selected</div>
-            <div class="card-title" id="shotCardTitle">Untitled shot</div>
-          </div>
-          <div class="card-status-pill" id="shotCardStatus">Draft</div>
+      <!-- 2a. Unmatched context (mode=unmatched) -->
+      <div id="unmatchedCard" class="ctx-card ctx-unmatched" hidden>
+        <div class="ctx-kicker">UNLINKED DOCUMENT</div>
+        <div class="ctx-title" id="unmatchedDocName"></div>
+        <div class="ctx-meta">Not linked to this Storyboarder project</div>
+      </div>
+
+      <!-- 2b. Shot context card (mode=shot) -->
+      <section id="currentShotCard" class="ctx-card" hidden>
+        <div class="ctx-kicker" id="shotCardMode">Linked to Storyboard Tool</div>
+        <div class="ctx-id" id="shotCardIndex"></div>
+        <div class="ctx-title-row">
+          <div class="ctx-title" id="shotCardTitle">Untitled shot</div>
+          <span class="ctx-pill" id="shotCardStatus">Draft</span>
         </div>
-        <div class="card-meta" id="shotCardMeta"></div>
-        <div class="card-section" id="shotCardAction" hidden></div>
-        <div class="card-section" id="shotCardCamera" hidden></div>
-        <div class="card-section" id="shotCardNotes" hidden></div>
+        <div class="ctx-meta" id="shotCardMeta"></div>
+        <div class="ctx-section" id="shotCardAction" hidden></div>
+        <div class="ctx-section" id="shotCardCamera" hidden></div>
+        <div class="ctx-section" id="shotCardNotes" hidden></div>
         <div class="status-buttons" id="quickStatusButtons"></div>
         <div class="quick-note-row">
-          <textarea id="quickNoteText" class="quick-note-input" rows="2" placeholder="Add quick note"></textarea>
-          <sp-button id="addQuickNote" variant="secondary">Add note</sp-button>
+          <textarea id="quickNoteText" class="quick-note-input" rows="2"
+            placeholder="Add quick note…"></textarea>
+          <button id="addQuickNote" type="button" class="btn-secondary btn-sm">Add note</button>
         </div>
-        <sp-detail id="shotCardHint" class="card-hint"></sp-detail>
+        <div class="ctx-hint" id="shotCardHint"></div>
       </section>
 
-      <!-- Shot mode card & export controls (shown when activeWorkMode === 'shot') -->
-      <div id="linkedPanel" hidden>
-        <div class="panel-group panel-group-save">
-          <span class="group-label">Preview export</span>
-          <sp-detail class="helper-text">Export preview updates Storyboard Tool. Press Ctrl+S in Photoshop to save the PSD.</sp-detail>
-          <sp-button id="saveAndNext" variant="cta">Export &amp; next</sp-button>
-          <sp-button id="saveAndStay" variant="primary">Export preview</sp-button>
-          <sp-checkbox id="autoAddShot" checked>Auto-add at end</sp-checkbox>
-          <sp-checkbox id="focusStoryboardAfterExport">Focus Storyboarder after preview export</sp-checkbox>
-        </div>
+      <!-- Shot export actions (mode=shot AND linked) -->
+      <div id="linkedPanel" class="export-section" hidden>
+        <button id="saveAndNext" type="button" class="btn-primary">Export &amp; next</button>
+        <button id="saveAndStay" type="button" class="btn-secondary">Export preview</button>
+        <label class="check-row">
+          <input type="checkbox" id="autoAddShot" checked> Auto-add at end
+        </label>
+        <label class="check-row">
+          <input type="checkbox" id="focusStoryboardAfterExport"> Focus Storyboarder after export
+        </label>
       </div>
 
-      <!-- Scene 2D mode card & export controls (shown when activeWorkMode === 'scene2d') -->
+      <!-- 2c. Scene 2D context + export (mode=scene2d) -->
       <div id="scene2dPanel" hidden>
-        <section id="scene2dCard" class="current-shot-card" hidden>
-          <div class="card-kicker">Scene 2D</div>
-          <div class="card-title-row">
-            <div>
-              <div class="card-shot-id" id="scene2dPerspectiveIndex"></div>
-              <div class="card-title" id="scene2dSceneTitle"></div>
+        <!-- PSD perspective card -->
+        <section id="scene2dCard" class="ctx-card" hidden>
+          <div class="ctx-kicker">SCENE 2D</div>
+          <div class="ctx-title" id="scene2dSceneTitle"></div>
+          <div class="ctx-title-row">
+            <div class="ctx-meta" id="scene2dPerspectiveTitle"></div>
+            <div class="ctx-pill-group">
+              <span class="ctx-pill ctx-pill-subtle" id="scene2dPerspectiveType">PSD</span>
+              <span class="ctx-index" id="scene2dPerspectiveIndex"></span>
             </div>
-            <div class="card-status-pill" id="scene2dPerspectiveType">PSD</div>
           </div>
-          <div class="card-meta" id="scene2dPerspectiveTitle"></div>
         </section>
-        <div id="scene2dImageCard" class="current-shot-card" hidden>
-          <div class="card-kicker">Image Perspective</div>
-          <div class="card-meta">Read-only source</div>
-          <sp-detail class="helper-text">Convert to PSD in Storyboarder to edit.</sp-detail>
+
+        <!-- Image perspective (read-only) -->
+        <div id="scene2dImageCard" class="ctx-card ctx-image-note" hidden>
+          <div class="ctx-kicker">IMAGE PERSPECTIVE</div>
+          <div class="ctx-meta">Read-only source — convert to PSD in Storyboarder to edit.</div>
         </div>
-        <div class="panel-group panel-group-save" id="scene2dExportPanel" hidden>
-          <span class="group-label">Preview export</span>
-          <sp-detail class="helper-text">Exports the visible composite. Press Ctrl+S in Photoshop to save the PSD.</sp-detail>
-          <sp-button id="scene2dSaveAndNext" variant="cta">Export &amp; next perspective</sp-button>
-          <sp-button id="scene2dSaveAndStay" variant="primary">Export preview</sp-button>
-          <sp-checkbox id="scene2dFocusStoryboardAfterExport">Focus Storyboarder after export</sp-checkbox>
+
+        <!-- Scene 2D export actions -->
+        <div id="scene2dExportPanel" class="export-section" hidden>
+          <div class="export-hint">Save the PSD with Ctrl+S first.</div>
+          <button id="scene2dSaveAndNext" type="button" class="btn-primary">Export &amp; next perspective</button>
+          <button id="scene2dSaveAndStay" type="button" class="btn-secondary">Export preview</button>
+          <label class="check-row">
+            <input type="checkbox" id="scene2dFocusStoryboardAfterExport"> Focus Storyboarder after export
+          </label>
         </div>
       </div>
 
+      <!-- 3. Status footer -->
+      <div class="status-footer">
+        <span id="status" class="status-text"></span>
+      </div>
+
+      <!-- 4. Advanced collapsible -->
       <details class="advanced-section">
         <summary class="advanced-summary">Advanced</summary>
 
-        <div class="panel-group">
-          <span class="group-label">Connection</span>
-          <sp-button id="relinkNow" variant="secondary">Reconnect</sp-button>
+        <div class="adv-group">
+          <div class="adv-label">Connection</div>
+          <button id="relinkNow" type="button" class="btn-minor">Reconnect</button>
         </div>
 
-        <div class="panel-group">
-          <span class="group-label">Layers</span>
-          <sp-detail class="helper-text">Template: Rough / Clean / Notes</sp-detail>
-          <sp-button id="ensureTemplateLayers" variant="secondary">Ensure template layers</sp-button>
+        <div class="adv-group">
+          <div class="adv-label">Layers</div>
+          <div class="adv-hint">Template: Rough / Clean / Notes</div>
+          <button id="ensureTemplateLayers" type="button" class="btn-minor">Ensure template layers</button>
         </div>
 
-        <div class="panel-group">
-          <span class="group-label">Project files</span>
-          <sp-button id="recoverPsd" variant="secondary">Recover broken PSD</sp-button>
-          <sp-button id="chooseProject" variant="secondary">Choose project folder</sp-button>
-          <sp-button id="chooseFolder" variant="secondary">Choose shot folder</sp-button>
+        <div class="adv-group">
+          <div class="adv-label">Project files</div>
+          <button id="recoverPsd" type="button" class="btn-minor">Recover broken PSD</button>
+          <button id="chooseProject" type="button" class="btn-minor">Choose project folder</button>
+          <button id="chooseFolder" type="button" class="btn-minor">Choose shot folder</button>
         </div>
 
-        <div id="colorSection" class="panel-group" hidden>
-          <span class="group-label">Canvas color</span>
-          <sp-detail id="colorSwatch" class="color-swatch">#E8E8E8</sp-detail>
-          <sp-checkbox id="autoApplyColor" checked>Auto-apply color</sp-checkbox>
-          <sp-button id="applyBackground" variant="secondary">Apply canvas color</sp-button>
+        <div id="colorSection" class="adv-group" hidden>
+          <div class="adv-label">Canvas color</div>
+          <div id="colorSwatch" class="color-swatch">#E8E8E8</div>
+          <label class="check-row">
+            <input type="checkbox" id="autoApplyColor" checked> Auto-apply color
+          </label>
+          <button id="applyBackground" type="button" class="btn-minor">Apply canvas color</button>
         </div>
       </details>
 
-      <!-- Hidden utility elements used by panel.js. Kept inside the Bridge panel
-           so status messages surface here. -->
-      <sp-textfield id="shotId" placeholder="shot_001" value="shot_001" hidden></sp-textfield>
-      <sp-detail id="projectLabel" class="meta" hidden></sp-detail>
-      <sp-detail id="folderLabel" class="meta" hidden></sp-detail>
-      <sp-detail id="status" class="meta" hidden></sp-detail>
+      <!-- Hidden utility elements -->
+      <input id="shotId" type="text" value="shot_001" hidden>
+      <span id="currentShot" hidden></span>
+      <span id="projectLabel" hidden></span>
+      <span id="folderLabel" hidden></span>
     </div><!-- /#bridge-panel -->
 
-    <!-- ── Work panel ─────────────────────────────────────────── -->
+    <!-- ── Work panel ─────────────────────────────────────────────────── -->
     <div id="work-panel">
-      <header class="plugin-header">
-        <div class="plugin-title">
-          <sp-heading size="S">Storyboard Work</sp-heading>
-        </div>
-      </header>
 
-      <!-- Shot mode navigation (hidden in Scene 2D mode) -->
-      <div id="workShotNav" class="panel-group panel-group-nav">
-        <sp-label for="shotSelect">Shot</sp-label>
-        <select id="shotSelect" class="shot-select"></select>
-        <div class="button-row">
-          <sp-button id="previousShot" variant="secondary">Previous</sp-button>
-          <sp-button id="nextShot" variant="secondary">Next</sp-button>
+      <!-- Compact panel header -->
+      <div class="work-header">
+        <span class="work-title">Storyboard Work</span>
+      </div>
+
+      <!-- Shot navigation (mode=shot) -->
+      <div id="workShotNav" class="nav-section" hidden>
+        <div class="nav-kicker">SHOT</div>
+        <select id="shotSelect" class="nav-select"></select>
+        <div class="btn-pair">
+          <button id="previousShot" type="button" class="btn-nav">← Prev</button>
+          <button id="nextShot"     type="button" class="btn-nav">Next →</button>
         </div>
-        <div class="button-row">
-          <sp-button id="openShot" variant="secondary">Open canvas</sp-button>
-          <sp-button id="focusCurrentTab" variant="secondary">Focus open tab</sp-button>
+        <div class="btn-pair">
+          <button id="openShot"        type="button" class="btn-secondary">Open</button>
+          <button id="focusCurrentTab" type="button" class="btn-secondary">Focus tab</button>
         </div>
       </div>
 
-      <!-- Scene 2D mode navigation (hidden in Shot mode) -->
-      <div id="workScene2dNav" class="panel-group panel-group-nav" hidden>
-        <sp-detail id="workScene2dGroup" class="work-scene-group"></sp-detail>
-        <sp-label for="perspectiveSelect">Perspective</sp-label>
-        <select id="perspectiveSelect" class="shot-select"></select>
-        <div class="button-row">
-          <sp-button id="previousPerspective" variant="secondary">Previous</sp-button>
-          <sp-button id="nextPerspective" variant="secondary">Next</sp-button>
+      <!-- Scene 2D navigation (mode=scene2d) -->
+      <div id="workScene2dNav" class="nav-section" hidden>
+        <div class="nav-breadcrumb">
+          <span class="nav-bc-label">Scene 2D</span>
+          <span class="nav-bc-sep"> / </span>
+          <span id="workScene2dGroup" class="nav-bc-scene"></span>
         </div>
-        <div class="button-row">
-          <sp-button id="openPerspective" variant="secondary">Open perspective</sp-button>
-          <sp-button id="focusCurrentPerspectiveTab" variant="secondary">Focus open tab</sp-button>
+        <div class="nav-kicker">PERSPECTIVE</div>
+        <select id="perspectiveSelect" class="nav-select"></select>
+        <div class="btn-pair">
+          <button id="previousPerspective" type="button" class="btn-nav">← Prev</button>
+          <button id="nextPerspective"     type="button" class="btn-nav">Next →</button>
+        </div>
+        <div class="btn-pair">
+          <button id="openPerspective"          type="button" class="btn-secondary">Open perspective</button>
+          <button id="focusCurrentPerspectiveTab" type="button" class="btn-secondary">Focus tab</button>
         </div>
       </div>
 
-      <!-- Onion skin (shot mode only) -->
-      <div id="workOnionSkin" class="panel-group">
-        <span class="group-label">Onion skin</span>
-        <sp-label for="overlayCount">Overlay count</sp-label>
-        <sp-textfield id="overlayCount" class="overlay-count" value="1" placeholder="1"></sp-textfield>
-        <sp-label for="overlayOpacity">Opacity</sp-label>
-        <sp-textfield id="overlayOpacity" class="overlay-count" value="45" placeholder="45"></sp-textfield>
-        <sp-button id="overlayPrevious" variant="secondary">Apply previous overlay</sp-button>
-        <sp-button id="overlayNext" variant="secondary">Apply next overlay</sp-button>
-        <sp-button id="clearOverlay" variant="secondary">Clear overlay</sp-button>
+      <!-- Work empty state (mode=unmatched) -->
+      <div id="workNoContext" class="work-empty" hidden>
+        <div class="empty-msg">No linked document active</div>
+        <div class="empty-hint">Open a shot or perspective from Storyboarder.</div>
       </div>
+
+      <!-- Onion skin (mode=shot only) -->
+      <div id="workOnionSkin" class="nav-section" hidden>
+        <div class="nav-kicker">ONION SKIN</div>
+        <div class="btn-pair">
+          <button id="overlayPrevious" type="button" class="btn-nav">← Previous</button>
+          <button id="overlayNext"     type="button" class="btn-nav">Next →</button>
+        </div>
+        <div class="onion-fields">
+          <div class="onion-field">
+            <label class="onion-label" for="overlayCount">Count</label>
+            <input id="overlayCount" class="onion-input" type="text" value="1" placeholder="1">
+          </div>
+          <div class="onion-field">
+            <label class="onion-label" for="overlayOpacity">Opacity</label>
+            <input id="overlayOpacity" class="onion-input" type="text" value="45" placeholder="45">
+          </div>
+        </div>
+        <button id="clearOverlay" type="button" class="btn-minor">Clear overlays</button>
+      </div>
+
     </div><!-- /#work-panel -->
 
     <script src="layer_roles.js"></script>

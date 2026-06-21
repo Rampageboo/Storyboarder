@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "uxp-plugin-preview",
+      "runtimeExecutable": "npx",
+      "runtimeArgs": ["serve", "-p", "5900", "-s", "photoshop_uxp_plugin"],
+      "port": 5900
+    }
+  ]
+}

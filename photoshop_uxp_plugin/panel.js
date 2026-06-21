@@ -246,6 +246,12 @@ function setLinkStatus(message, waiting = false) {
   if (!node) return;
   node.textContent = message;
   node.classList.toggle("waiting", waiting);
+  const isConnected = !waiting && (message.startsWith("Linked") || message.startsWith("Manual"));
+  node.classList.toggle("connected", isConnected);
+  const dot = $("connDot");
+  if (dot) {
+    dot.setAttribute("data-state", waiting ? "waiting" : isConnected ? "connected" : "off");
+  }
 }
 
 function pathToFileUrl(nativePath) {
@@ -1218,6 +1224,12 @@ function renderCurrentShotCard() {
   if (!card) {
     return;
   }
+  // Shot card must not appear in scene2d or unmatched mode.
+  const ctx = (typeof activeWorkContext === "function") ? activeWorkContext() : null;
+  if (ctx?.kind === "scene2d" || ctx?.kind === "unmatched") {
+    card.hidden = true;
+    return;
+  }
   const shot = currentShotFromProjectData();
   const selectedId = selectedShotIdValue();
   const hasStandaloneSelection = !linkedFromStoryboard && selectedId;
@@ -1253,24 +1265,36 @@ function renderCurrentShotCard() {
 }
 
 // ── Work mode UI routing (Part 6 / 7) ────────────────────────────────────────
-// Switches Bridge and Work panels between shot mode and Scene 2D mode.
-// Called from backend_client.js:applyWorkContext() whenever mode changes.
+// Switches Bridge and Work panels between shot / scene2d / unmatched modes.
+// CRITICAL: only one context card may be visible at a time.
 function renderWorkModeUI(ctx) {
   const mode = ctx?.kind === "scene2d" ? "scene2d" : (ctx?.kind === "unmatched" ? "unmatched" : "shot");
 
-  // Bridge panel
-  const linkedPanel = $("linkedPanel");
-  const scene2dPanel = $("scene2dPanel");
-  if (linkedPanel) linkedPanel.hidden = mode !== "shot";
-  if (scene2dPanel) scene2dPanel.hidden = mode !== "scene2d";
+  // Bridge panel — exactly one context section visible
+  const currentShotCard = $("currentShotCard");
+  const linkedPanel     = $("linkedPanel");
+  const scene2dPanel    = $("scene2dPanel");
+  const unmatchedCard   = $("unmatchedCard");
+  if (currentShotCard) currentShotCard.hidden = mode !== "shot";
+  if (linkedPanel)     linkedPanel.hidden     = mode !== "shot";
+  if (scene2dPanel)    scene2dPanel.hidden    = mode !== "scene2d";
+  if (unmatchedCard) {
+    unmatchedCard.hidden = mode !== "unmatched";
+    if (mode === "unmatched") {
+      const nameEl = $("unmatchedDocName");
+      if (nameEl) nameEl.textContent = ctx?.document_name || "";
+    }
+  }
 
   // Work panel
-  const shotNav = $("workShotNav");
-  const scene2dNav = $("workScene2dNav");
-  const onionSkin = $("workOnionSkin");
-  if (shotNav) shotNav.hidden = mode !== "shot";
+  const shotNav      = $("workShotNav");
+  const scene2dNav   = $("workScene2dNav");
+  const onionSkin    = $("workOnionSkin");
+  const workNoCtx    = $("workNoContext");
+  if (shotNav)    shotNav.hidden    = mode !== "shot";
   if (scene2dNav) scene2dNav.hidden = mode !== "scene2d";
-  if (onionSkin) onionSkin.hidden = mode !== "shot";
+  if (onionSkin)  onionSkin.hidden  = mode !== "shot";
+  if (workNoCtx)  workNoCtx.hidden  = mode !== "unmatched";
 
   for (const id of ["saveAndStay", "saveAndNext", "scene2dSaveAndStay", "scene2dSaveAndNext"]) {
     const button = $(id);
