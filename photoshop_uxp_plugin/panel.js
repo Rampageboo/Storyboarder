@@ -47,6 +47,7 @@ let canvasColor = DEFAULT_CANVAS_COLOR;
 let canvasWidth = DEFAULT_CANVAS_WIDTH;
 let canvasHeight = DEFAULT_CANVAS_HEIGHT;
 let linkedFromStoryboard = false;
+let connectionMode = "disconnected";
 let lastBridgeSignature = "";
 let linkedProjectRootPath = "";
 let bridgePollTimer = null;
@@ -169,18 +170,34 @@ function clearScene2DWorkNavigation() {
 }
 
 function renderDisconnectedState(message = "Not connected") {
+  connectionMode = "disconnected";
   linkedFromStoryboard = false;
   lastPluginContext = null;
+  projectData = null;
   setLinkedUi(false);
   setLinkStatus(message, true);
   if (typeof setWorkContext === "function") {
     setWorkContext(null);
   }
   clearScene2DWorkNavigation();
+  const currentShotCard = $("currentShotCard");
+  const linkedPanel = $("linkedPanel");
+  const scene2dPanel = $("scene2dPanel");
+  const scene2dCard = $("scene2dCard");
+  const scene2dImageCard = $("scene2dImageCard");
+  const scene2dExportPanel = $("scene2dExportPanel");
+  const unmatchedCard = $("unmatchedCard");
   const shotNav = $("workShotNav");
   const scene2dNav = $("workScene2dNav");
   const onionSkin = $("workOnionSkin");
   const workNoCtx = $("workNoContext");
+  if (currentShotCard) currentShotCard.hidden = true;
+  if (linkedPanel) linkedPanel.hidden = true;
+  if (scene2dPanel) scene2dPanel.hidden = true;
+  if (scene2dCard) scene2dCard.hidden = true;
+  if (scene2dImageCard) scene2dImageCard.hidden = true;
+  if (scene2dExportPanel) scene2dExportPanel.hidden = true;
+  if (unmatchedCard) unmatchedCard.hidden = true;
   if (shotNav) shotNav.hidden = true;
   if (scene2dNav) scene2dNav.hidden = true;
   if (onionSkin) onionSkin.hidden = true;
@@ -189,10 +206,52 @@ function renderDisconnectedState(message = "Not connected") {
     const msg = workNoCtx.querySelector?.(".empty-msg");
     if (msg) msg.textContent = message;
   }
-  const scene2dPanel = $("scene2dPanel");
-  const unmatchedCard = $("unmatchedCard");
-  if (scene2dPanel) scene2dPanel.hidden = true;
-  if (unmatchedCard) unmatchedCard.hidden = true;
+  const shotSelect = $("shotSelect");
+  if (shotSelect) shotSelect.innerHTML = "";
+  const quickNote = $("quickNoteText");
+  if (quickNote) {
+    quickNote.value = "";
+    quickNote.disabled = true;
+  }
+  renderQuickStatusButtons(null, false);
+  for (const id of [
+    "saveAndStay",
+    "saveAndNext",
+    "scene2dSaveAndStay",
+    "scene2dSaveAndNext",
+    "previousShot",
+    "nextShot",
+    "openShot",
+    "focusCurrentTab",
+    "addQuickNote",
+  ]) {
+    const button = $(id);
+    if (button) button.disabled = true;
+  }
+  for (const id of [
+    "shotCardMode",
+    "shotCardIndex",
+    "shotCardTitle",
+    "shotCardStatus",
+    "shotCardMeta",
+    "shotCardAction",
+    "shotCardCamera",
+    "shotCardNotes",
+    "scene2dSceneTitle",
+    "scene2dPerspectiveTitle",
+    "scene2dPerspectiveType",
+    "scene2dPerspectiveIndex",
+  ]) {
+    const node = $(id);
+    if (node) node.textContent = "";
+  }
+}
+
+function renderFolderAccessErrorState(message = "Folder access failed") {
+  renderDisconnectedState(message);
+  connectionMode = "folder-error";
+  setLinkStatus("Folder access failed", true);
+  setStatus("Use Advanced to choose the project folder or reconnect.");
 }
 
 function setPluginView(view) {
@@ -234,6 +293,7 @@ async function chooseProjectFolder() {
     setSelectedShotId(projectData.shots[0].shot_id);
   }
   linkedFromStoryboard = false;
+  connectionMode = "manual-project";
   setLinkedUi(false);
   setLinkStatus("Manual project", true);
   setStatus(`Project loaded (${projectData.shots.length} shots).`);
@@ -262,6 +322,7 @@ async function chooseShotFolder() {
   canvasColor = await readProjectCanvasColor(shotFolder);
   updateColorSwatch();
   linkedFromStoryboard = false;
+  connectionMode = "manual-folder";
   setLinkedUi(false);
   setLinkStatus("Manual folder", true);
   setStatus(`Shot folder selected.`);
@@ -640,15 +701,27 @@ async function pollStoryboardBridge() {
   }
 
   if (!live) {
+    if (shouldPreserveManualMode(connectionMode)) {
+      setLinkStatus("Storyboarder unavailable", true);
+      return;
+    }
     renderDisconnectedState("Not connected");
     return;
   }
 
   if (!live.app_running) {
+    if (shouldPreserveManualMode(connectionMode)) {
+      setLinkStatus("Storyboard not running", true);
+      return;
+    }
     renderDisconnectedState("Storyboard not running");
     return;
   }
   if (!live.connected) {
+    if (shouldPreserveManualMode(connectionMode)) {
+      setLinkStatus("Open a project in Storyboard", true);
+      return;
+    }
     renderDisconnectedState("Open a project in Storyboard");
     return;
   }
@@ -671,16 +744,10 @@ async function applyLiveBridge(live) {
   ].join("|");
   const isSame = signature === lastBridgeSignature;
   lastBridgeSignature = signature;
-  linkedFromStoryboard = true;
 
   const root = await resolveFolderEntry(live.project_root);
   if (!root) {
-    setLinkedUi(false);
-    setLinkStatus("Folder access failed — use Advanced", true);
-    if (context) {
-      applyPluginContext(context);
-      return;
-    }
+    renderFolderAccessErrorState("Folder access failed");
     canvasColor = normalizeHexColor(live.canvas_background_color);
     const fallbackSize = normalizeCanvasSize(live.canvas_width, live.canvas_height);
     canvasWidth = fallbackSize.width;
@@ -689,6 +756,8 @@ async function applyLiveBridge(live) {
     return;
   }
 
+  connectionMode = "linked";
+  linkedFromStoryboard = true;
   setLinkedUi(true);
 
   if (!isSame || linkedProjectRootPath !== live.project_root) {
@@ -1336,6 +1405,12 @@ function renderWorkModeUI(ctx) {
   if (onionSkin)  onionSkin.hidden  = mode !== "shot";
   if (workNoCtx)  workNoCtx.hidden  = mode !== "unmatched";
   renderScene2DWorkNavigation(mode === "scene2d" ? ctx : null, lastPluginContext);
+  if (mode === "shot") {
+    for (const id of ["previousShot", "nextShot", "openShot", "focusCurrentTab"]) {
+      const button = $(id);
+      if (button) button.disabled = false;
+    }
+  }
 
   for (const id of ["saveAndStay", "saveAndNext", "scene2dSaveAndStay", "scene2dSaveAndNext"]) {
     const button = $(id);

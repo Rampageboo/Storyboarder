@@ -15,6 +15,7 @@ const {
   filterKnownOpenWorkKeys,
   displayPerspectiveIndex,
   scene2DPerspectiveOptions,
+  shouldPreserveManualMode,
 } = context;
 
 const pluginContext = {
@@ -143,4 +144,12 @@ test("filters perspective selector options to the active scene group", () => {
       perspective_type: "image",
     },
   ]);
+});
+
+test("preserves only explicit manual connection modes during bridge failures", () => {
+  assert.equal(shouldPreserveManualMode("manual-project"), true);
+  assert.equal(shouldPreserveManualMode("manual-folder"), true);
+  assert.equal(shouldPreserveManualMode("linked"), false);
+  assert.equal(shouldPreserveManualMode("disconnected"), false);
+  assert.equal(shouldPreserveManualMode("folder-error"), false);
 });

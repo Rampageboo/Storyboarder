@@ -3,11 +3,13 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import os
 import re
 import shutil
 import tempfile
 import uuid
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -26,6 +28,15 @@ LEGACY_SCENE_ID_RE = re.compile(r"^scene_(\d{3,})$")
 LEGACY_PERSPECTIVE_ID_RE = re.compile(r"^persp_(\d{3,})$")
 IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp"}
 PSD_EXTENSIONS = {".psd"}
+LOGGER = logging.getLogger(__name__)
+
+
+@dataclass
+class MoveRollbackResult:
+    files_restored: bool = False
+    metadata_restored: bool = False
+    settings_restored: bool = False
+    verified: bool = False
 
 
 def _now_iso() -> str:
@@ -370,34 +381,82 @@ def _move_journal_path(tx_dir: Path) -> Path:
 
 def _write_move_journal(tx_dir: Path, payload: dict[str, Any]) -> None:
     tx_dir.mkdir(parents=True, exist_ok=True)
-    project_manager._atomic_write_json(_move_journal_path(tx_dir), {"version": 1, **payload})
+    project_manager._atomic_write_json(_move_journal_path(tx_dir), {"version": 2, **payload, "updated_at": _now_iso()})
 
 
-def _move_metadata_backup_paths(tx_dir: Path) -> tuple[Path, Path]:
-    return tx_dir / "scenes2d.json.bak", tx_dir / "settings.json.bak"
+def _move_backup_root_rel(project: Project, tx_dir: Path) -> str:
+    return _project_rel(project, tx_dir / "backup")
 
 
-def _backup_move_metadata(project: Project, tx_dir: Path) -> None:
+def _move_backup_rel(project: Project, tx_dir: Path, name: str) -> str:
+    return f"{_move_backup_root_rel(project, tx_dir)}/{name}"
+
+
+def _move_metadata_files(project: Project, source_scene_id: str, target_scene_id: str) -> list[tuple[str, Path]]:
+    return [
+        ("scenes2d.json", _index_path(project)),
+        ("settings.json", project.settings_path),
+        ("source_scene_meta.json", _meta_path(project, source_scene_id)),
+        ("target_scene_meta.json", _meta_path(project, target_scene_id)),
+    ]
+
+
+def _backup_move_metadata(project: Project, tx_dir: Path, source_scene_id: str, target_scene_id: str) -> list[dict[str, Any]]:
     tx_dir.mkdir(parents=True, exist_ok=True)
-    scenes_backup, settings_backup = _move_metadata_backup_paths(tx_dir)
-    if _index_path(project).is_file():
-        shutil.copy2(_index_path(project), scenes_backup)
-    if project.settings_path.is_file():
-        shutil.copy2(project.settings_path, settings_backup)
+    originals: list[dict[str, Any]] = []
+    for backup_name, path in _move_metadata_files(project, source_scene_id, target_scene_id):
+        original_rel = _project_rel(project, path)
+        backup_rel = _move_backup_rel(project, tx_dir, backup_name)
+        backup_path = _safe_project_rel(project, backup_rel)
+        entry = {"path": original_rel, "backup_path": backup_rel, "existed": path.is_file()}
+        if path.is_file():
+            backup_path.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(path, backup_path)
+        originals.append(entry)
+    return originals
 
 
-def _restore_move_metadata(project: Project, tx_dir: Path) -> None:
-    scenes_backup, settings_backup = _move_metadata_backup_paths(tx_dir)
-    if scenes_backup.is_file():
-        _restore_bytes(_index_path(project), scenes_backup.read_bytes())
-    if settings_backup.is_file():
-        _restore_bytes(project.settings_path, settings_backup.read_bytes())
-        try:
-            restored = _read_json(project.settings_path)
-            if isinstance(restored, dict):
-                project.settings = restored
-        except Exception:
-            pass
+def _validated_move_original_files(project: Project, tx_dir: Path, journal: dict[str, Any]) -> list[dict[str, Any]]:
+    original_files = journal.get("original_files")
+    if not isinstance(original_files, list):
+        raise ValueError("Perspective move journal has invalid original_files.")
+    tx_root = tx_dir.resolve()
+    result: list[dict[str, Any]] = []
+    for item in original_files:
+        if not isinstance(item, dict):
+            raise ValueError("Perspective move journal has invalid original file entry.")
+        path_rel = project_manager._normalize_rel_path(str(item.get("path") or ""))
+        backup_rel = project_manager._normalize_rel_path(str(item.get("backup_path") or ""))
+        if not path_rel or not backup_rel:
+            raise ValueError("Perspective move journal has empty original file paths.")
+        _safe_project_rel(project, path_rel)
+        backup_path = _safe_project_rel(project, backup_rel)
+        if backup_path.resolve() != tx_root and tx_root not in backup_path.resolve().parents:
+            raise ValueError("Perspective move backup path is outside the transaction directory.")
+        result.append({"path": path_rel, "backup_path": backup_rel, "existed": bool(item.get("existed"))})
+    return result
+
+
+def _restore_move_metadata(project: Project, tx_dir: Path, journal: dict[str, Any]) -> MoveRollbackResult:
+    result = MoveRollbackResult(files_restored=True)
+    for item in _validated_move_original_files(project, tx_dir, journal):
+        target = _safe_project_rel(project, item["path"])
+        backup = _safe_project_rel(project, item["backup_path"])
+        if item["existed"]:
+            if not backup.is_file():
+                raise ValueError(f"Perspective move backup is missing: {item['backup_path']}")
+            _restore_bytes(target, backup.read_bytes())
+        else:
+            _restore_bytes(target, None)
+    result.metadata_restored = True
+    settings_backup = next((item for item in journal.get("original_files", []) if item.get("path") == "settings.json"), None)
+    if settings_backup and settings_backup.get("existed"):
+        restored = _read_json(project.settings_path)
+        if not isinstance(restored, dict):
+            raise ValueError("Restored settings.json is invalid.")
+        project.settings = restored
+    result.settings_restored = True
+    return result
 
 
 def _cleanup_move_tx(tx_dir: Path) -> None:
@@ -409,6 +468,7 @@ def _rollback_perspective_move(project: Project, tx_dir: Path, journal: dict[str
     source_dir = _safe_project_rel(project, str(journal.get("source_dir") or ""))
     target_dir = _safe_project_rel(project, str(journal.get("target_dir") or ""))
     target_preexisted = bool(journal.get("target_preexisted"))
+    result = MoveRollbackResult()
     try:
         if target_dir.is_dir() and not source_dir.exists():
             source_dir.parent.mkdir(parents=True, exist_ok=True)
@@ -418,34 +478,141 @@ def _rollback_perspective_move(project: Project, tx_dir: Path, journal: dict[str
                 shutil.rmtree(target_dir, ignore_errors=True)
             else:
                 target_dir.unlink()
-    finally:
-        _restore_move_metadata(project, tx_dir)
+        result.files_restored = True
+        metadata_result = _restore_move_metadata(project, tx_dir, journal)
+        result.metadata_restored = metadata_result.metadata_restored
+        result.settings_restored = metadata_result.settings_restored
+        _verify_perspective_move_rollback(project, journal)
+        result.verified = True
         _cleanup_move_tx(tx_dir)
+    except BaseException as exc:
+        LOGGER.exception("Perspective move rollback failed.")
+        try:
+            _write_move_journal(
+                tx_dir,
+                {
+                    **journal,
+                    "state": "rollback_failed",
+                    "rollback_error": str(exc),
+                    "rollback_result": {
+                        "files_restored": result.files_restored,
+                        "metadata_restored": result.metadata_restored,
+                        "settings_restored": result.settings_restored,
+                        "verified": result.verified,
+                    },
+                },
+            )
+        except Exception:
+            LOGGER.exception("Failed to write rollback_failed journal.")
+        raise RuntimeError(
+            "Perspective move failed and automatic rollback was incomplete. "
+            "Recovery data has been preserved. Restart Storyboarder to retry recovery."
+        ) from exc
+
+
+def _raw_scene_records(project: Project) -> list[dict[str, Any]]:
+    data = _read_json(_index_path(project))
+    raw_scenes = data.get("scenes") if isinstance(data, dict) else data
+    if not isinstance(raw_scenes, list):
+        raise ValueError("Scene 2D perspective move verification failed: invalid scenes2d.json.")
+    return [_normalize_scene(item) for item in raw_scenes if isinstance(item, dict)]
+
+
+def _scene_by_id(scenes: list[dict[str, Any]], scene_id: str) -> dict[str, Any]:
+    scene = next((item for item in scenes if item.get("id") == scene_id), None)
+    if not scene:
+        raise ValueError(f"Scene 2D perspective move verification failed: scene {scene_id!r} missing.")
+    return scene
+
+
+def _perspective_occurrences(scenes: list[dict[str, Any]], perspective_id: str) -> list[tuple[dict[str, Any], dict[str, Any]]]:
+    occurrences: list[tuple[dict[str, Any], dict[str, Any]]] = []
+    for scene in scenes:
+        for perspective in scene.get("perspectives") or []:
+            if perspective.get("id") == perspective_id:
+                occurrences.append((scene, perspective))
+    return occurrences
+
+
+def _assert_primary_is_valid(scene: dict[str, Any], label: str) -> None:
+    perspective_ids = {item["id"] for item in scene.get("perspectives") or []}
+    primary_id = str(scene.get("primary_perspective_id") or "")
+    if perspective_ids and primary_id not in perspective_ids:
+        raise ValueError(f"Scene 2D perspective move verification failed: {label} primary perspective is invalid.")
+    if not perspective_ids and primary_id:
+        raise ValueError(f"Scene 2D perspective move verification failed: empty {label} scene has a primary perspective.")
+
+
+def _path_uses_scene_and_perspective(rel_path: str, scene_id: str, perspective_id: str) -> bool:
+    parts = Path(project_manager._normalize_rel_path(rel_path)).parts
+    return len(parts) >= 4 and parts[0] == SCENE2D_ROOT and parts[1] == scene_id and parts[2] == "perspectives" and parts[3] == perspective_id
+
+
+def _assert_scene_meta_agrees(project: Project, scene: dict[str, Any], perspective_id: str, expected_source: str | None = None, expected_preview: str | None = None) -> None:
+    meta_path = _meta_path(project, scene["id"])
+    if not meta_path.is_file():
+        raise ValueError("Scene 2D perspective move verification failed: scene meta JSON is missing.")
+    meta = _normalize_scene(_read_json(meta_path))
+    if meta["id"] != scene["id"]:
+        raise ValueError("Scene 2D perspective move verification failed: scene meta id mismatch.")
+    if meta.get("primary_perspective_id") != scene.get("primary_perspective_id"):
+        raise ValueError("Scene 2D perspective move verification failed: scene meta primary mismatch.")
+    index_ids = [item["id"] for item in scene.get("perspectives") or []]
+    meta_ids = [item["id"] for item in meta.get("perspectives") or []]
+    if meta_ids != index_ids:
+        raise ValueError("Scene 2D perspective move verification failed: scene meta perspective membership mismatch.")
+    if perspective_id in index_ids:
+        meta_perspective = _find_perspective(meta, perspective_id)
+        scene_perspective = _find_perspective(scene, perspective_id)
+        if meta_perspective.get("source_file_path") != scene_perspective.get("source_file_path"):
+            raise ValueError("Scene 2D perspective move verification failed: scene meta source path mismatch.")
+        if meta_perspective.get("preview_image_path") != scene_perspective.get("preview_image_path"):
+            raise ValueError("Scene 2D perspective move verification failed: scene meta preview path mismatch.")
+        if expected_source is not None and meta_perspective.get("source_file_path") != expected_source:
+            raise ValueError("Scene 2D perspective move verification failed: moved source path mismatch in scene meta.")
+        if expected_preview is not None and meta_perspective.get("preview_image_path") != expected_preview:
+            raise ValueError("Scene 2D perspective move verification failed: moved preview path mismatch in scene meta.")
 
 
 def _verify_perspective_move_commit(project: Project, journal: dict[str, Any]) -> None:
+    source_scene_id = str(journal.get("source_scene_id") or "")
     scene_id = str(journal.get("target_scene_id") or "")
     perspective_id = str(journal.get("perspective_id") or "")
     expected_source = str(journal.get("expected_source_file_path") or "")
     expected_preview = str(journal.get("expected_preview_image_path") or "")
+    original_source = str(journal.get("original_source_file_path") or "")
     target_dir = _safe_project_rel(project, str(journal.get("target_dir") or ""))
+    source_dir = _safe_project_rel(project, str(journal.get("source_dir") or ""))
     if not target_dir.is_dir():
         raise ValueError("Scene 2D perspective move verification failed: target folder is missing.")
-    data = _read_json(_index_path(project))
-    raw_scenes = data.get("scenes") if isinstance(data, dict) else None
-    if not isinstance(raw_scenes, list):
-        raise ValueError("Scene 2D perspective move verification failed: invalid scenes2d.json.")
-    target_scene = next((item for item in raw_scenes if isinstance(item, dict) and item.get("id") == scene_id), None)
-    if not target_scene:
-        raise ValueError("Scene 2D perspective move verification failed: target scene missing.")
-    perspectives = target_scene.get("perspectives") if isinstance(target_scene.get("perspectives"), list) else []
-    perspective = next((item for item in perspectives if isinstance(item, dict) and item.get("id") == perspective_id), None)
-    if not perspective:
-        raise ValueError("Scene 2D perspective move verification failed: perspective missing from target scene.")
+    if source_dir.exists():
+        raise ValueError("Scene 2D perspective move verification failed: source folder still exists.")
+    expected_source_path = _safe_rel_path(project, expected_source)
+    if not expected_source_path.is_file():
+        raise ValueError("Scene 2D perspective move verification failed: expected source file missing.")
+    if bool(journal.get("preview_existed_before")) and expected_preview != expected_source and not _safe_rel_path(project, expected_preview).is_file():
+        raise ValueError("Scene 2D perspective move verification failed: expected preview file missing.")
+    scenes = _raw_scene_records(project)
+    source_scene = _scene_by_id(scenes, source_scene_id)
+    target_scene = _scene_by_id(scenes, scene_id)
+    occurrences = _perspective_occurrences(scenes, perspective_id)
+    if len(occurrences) != 1 or occurrences[0][0]["id"] != scene_id:
+        raise ValueError("Scene 2D perspective move verification failed: perspective ownership is inconsistent.")
+    perspective = occurrences[0][1]
     if perspective.get("source_file_path") != expected_source or perspective.get("preview_image_path") != expected_preview:
         raise ValueError("Scene 2D perspective move verification failed: perspective paths not committed.")
+    if not _path_uses_scene_and_perspective(expected_source, scene_id, perspective_id):
+        raise ValueError("Scene 2D perspective move verification failed: source path is not canonical.")
+    if not _path_uses_scene_and_perspective(expected_preview, scene_id, perspective_id):
+        raise ValueError("Scene 2D perspective move verification failed: preview path is not canonical.")
+    expected_canonical_source = _image_source_rel(scene_id, perspective_id, Path(original_source).suffix.lower()) if perspective.get("type") == "image" else _source_rel(scene_id, perspective_id)
+    expected_canonical_preview = expected_canonical_source if perspective.get("type") == "image" else _preview_rel(scene_id, perspective_id)
+    if expected_source != expected_canonical_source or expected_preview != expected_canonical_preview:
+        raise ValueError("Scene 2D perspective move verification failed: expected paths are not canonical.")
+    _assert_primary_is_valid(source_scene, "source")
+    _assert_primary_is_valid(target_scene, "target")
     if not project.settings_path.is_file():
-        return
+        raise ValueError("Scene 2D perspective move verification failed: settings.json is missing.")
     settings = _read_json(project.settings_path)
     if not isinstance(settings, dict):
         raise ValueError("Scene 2D perspective move verification failed: settings.json is invalid.")
@@ -465,6 +632,63 @@ def _verify_perspective_move_commit(project: Project, journal: dict[str, Any]) -
                 raise ValueError("Scene 2D perspective move verification failed: reference link not committed.")
         if not found:
             raise ValueError("Scene 2D perspective move verification failed: reference link missing.")
+    disk_normalized = dict(settings)
+    memory_normalized = dict(project.settings)
+    disk_normalized["reference_links"] = project_manager.normalize_reference_links(disk_normalized.get("reference_links"))
+    memory_normalized["reference_links"] = project_manager.normalize_reference_links(memory_normalized.get("reference_links"))
+    if disk_normalized != memory_normalized:
+        raise ValueError("Scene 2D perspective move verification failed: in-memory settings differ from settings.json.")
+    _assert_scene_meta_agrees(project, source_scene, perspective_id)
+    _assert_scene_meta_agrees(project, target_scene, perspective_id, expected_source, expected_preview)
+
+
+def _verify_perspective_move_rollback(project: Project, journal: dict[str, Any]) -> None:
+    source_scene_id = str(journal.get("source_scene_id") or "")
+    target_scene_id = str(journal.get("target_scene_id") or "")
+    perspective_id = str(journal.get("perspective_id") or "")
+    source_dir = _safe_project_rel(project, str(journal.get("source_dir") or ""))
+    target_dir = _safe_project_rel(project, str(journal.get("target_dir") or ""))
+    original_source = str(journal.get("original_source_file_path") or "")
+    original_preview = str(journal.get("original_preview_image_path") or "")
+    if not source_dir.is_dir():
+        raise ValueError("Perspective move rollback verification failed: source folder is missing.")
+    if target_dir.exists():
+        raise ValueError("Perspective move rollback verification failed: target folder still exists.")
+    if not _safe_rel_path(project, original_source).is_file():
+        raise ValueError("Perspective move rollback verification failed: original source file is missing.")
+    if bool(journal.get("preview_existed_before")) and original_preview != original_source and not _safe_rel_path(project, original_preview).is_file():
+        raise ValueError("Perspective move rollback verification failed: original preview file is missing.")
+    scenes = _raw_scene_records(project)
+    source_scene = _scene_by_id(scenes, source_scene_id)
+    target_scene = _scene_by_id(scenes, target_scene_id)
+    occurrences = _perspective_occurrences(scenes, perspective_id)
+    if len(occurrences) != 1 or occurrences[0][0]["id"] != source_scene_id:
+        raise ValueError("Perspective move rollback verification failed: perspective ownership is not restored.")
+    perspective = occurrences[0][1]
+    if perspective.get("source_file_path") != original_source or perspective.get("preview_image_path") != original_preview:
+        raise ValueError("Perspective move rollback verification failed: original paths are not restored.")
+    _assert_primary_is_valid(source_scene, "source")
+    _assert_primary_is_valid(target_scene, "target")
+    settings = _read_json(project.settings_path)
+    if not isinstance(settings, dict):
+        raise ValueError("Perspective move rollback verification failed: settings.json is invalid.")
+    disk_normalized = dict(settings)
+    memory_normalized = dict(project.settings)
+    disk_normalized["reference_links"] = project_manager.normalize_reference_links(disk_normalized.get("reference_links"))
+    memory_normalized["reference_links"] = project_manager.normalize_reference_links(memory_normalized.get("reference_links"))
+    if disk_normalized != memory_normalized:
+        raise ValueError("Perspective move rollback verification failed: in-memory settings differ from settings.json.")
+    for expected in journal.get("original_reference_links") or []:
+        if not isinstance(expected, dict):
+            continue
+        match = next((link for link in project_manager.normalize_reference_links(settings.get("reference_links")) if str(link.get("id") or "") == str(expected.get("id") or "")), None)
+        if match is None:
+            raise ValueError("Perspective move rollback verification failed: original reference link is missing.")
+        for key in ("source_scene2d_id", "source_scene2d_perspective_id", "path"):
+            if str(match.get(key) or "") != str(expected.get(key) or ""):
+                raise ValueError("Perspective move rollback verification failed: original reference link is not restored.")
+    _assert_scene_meta_agrees(project, source_scene, perspective_id, original_source, original_preview)
+    _assert_scene_meta_agrees(project, target_scene, perspective_id)
 
 
 def _recover_perspective_moves(project: Project) -> bool:
@@ -478,18 +702,53 @@ def _recover_perspective_moves(project: Project) -> bool:
             journal = _read_json(journal_path)
         except (OSError, json.JSONDecodeError) as exc:
             raise ValueError("Scene 2D perspective move journal is corrupt.") from exc
-        if not isinstance(journal, dict) or journal.get("version") != 1:
+        if not isinstance(journal, dict) or journal.get("version") not in {1, 2}:
             raise ValueError("Scene 2D perspective move journal is invalid.")
         state = str(journal.get("state") or "")
+        if state == "prepared":
+            _restore_move_metadata(project, tx_dir, journal)
+            _verify_perspective_move_rollback(project, journal)
+            _cleanup_move_tx(tx_dir)
+            recovered = True
+            continue
+        if state == "files_moved":
+            _rollback_perspective_move(project, tx_dir, journal)
+            recovered = True
+            continue
+        if state == "metadata_committing":
+            try:
+                _verify_perspective_move_commit(project, journal)
+                _write_move_journal(tx_dir, {**journal, "state": "metadata_committed"})
+                _write_move_journal(tx_dir, {**journal, "state": "verified"})
+                _cleanup_move_tx(tx_dir)
+            except Exception:
+                _rollback_perspective_move(project, tx_dir, journal)
+                recovered = True
+            continue
         if state == "metadata_committed":
             try:
                 _verify_perspective_move_commit(project, journal)
+                _write_move_journal(tx_dir, {**journal, "state": "verified"})
                 _cleanup_move_tx(tx_dir)
                 continue
             except Exception:
-                pass
-        _rollback_perspective_move(project, tx_dir, journal)
-        recovered = True
+                _rollback_perspective_move(project, tx_dir, journal)
+                recovered = True
+                continue
+        if state == "verified":
+            _verify_perspective_move_commit(project, journal)
+            _cleanup_move_tx(tx_dir)
+            continue
+        if state == "rollback_failed":
+            try:
+                _rollback_perspective_move(project, tx_dir, journal)
+                recovered = True
+                continue
+            except Exception as exc:
+                raise RuntimeError(
+                    "Perspective move recovery is still incomplete. Recovery data has been preserved."
+                ) from exc
+        raise ValueError("Scene 2D perspective move journal has unknown state.")
     if root.is_dir() and not any(root.iterdir()):
         root.rmdir()
     return recovered
@@ -1314,14 +1573,27 @@ def move_perspective(
 
     links = project_manager.normalize_reference_links(project.settings.get("reference_links"))
     expected_reference_links: list[dict[str, Any]] = []
+    original_reference_links: list[dict[str, Any]] = []
     for link in links:
         link_scene_id = str(link.get("source_scene2d_id") or "")
         link_perspective_id = str(link.get("source_scene2d_perspective_id") or "")
         if link_perspective_id == perspective["id"] and link_scene_id in {"", source_scene["id"]}:
             expected_reference_links.append({"id": str(link.get("id") or "")})
+            original_reference_links.append(
+                {
+                    "id": str(link.get("id") or ""),
+                    "source_scene2d_id": str(link.get("source_scene2d_id") or ""),
+                    "source_scene2d_perspective_id": str(link.get("source_scene2d_perspective_id") or ""),
+                    "path": str(link.get("path") or ""),
+                }
+            )
 
     tx_dir = _move_root(project) / uuid.uuid4().hex
+    source_file_path = _safe_rel_path(project, perspective["source_file_path"])
+    preview_file_path = _safe_rel_path(project, perspective["preview_image_path"])
+    operation_id = tx_dir.name
     journal_base = {
+        "operation_id": operation_id,
         "state": "prepared",
         "source_scene_id": source_scene["id"],
         "target_scene_id": target_scene["id"],
@@ -1329,14 +1601,20 @@ def move_perspective(
         "source_dir": _project_rel(project, source_dir),
         "target_dir": _project_rel(project, target_dir),
         "target_preexisted": False,
+        "source_existed_before": source_file_path.is_file(),
+        "preview_existed_before": preview_file_path.is_file(),
+        "original_source_file_path": perspective["source_file_path"],
+        "original_preview_image_path": perspective["preview_image_path"],
         "expected_source_file_path": expected_source,
         "expected_preview_image_path": expected_preview,
+        "original_reference_links": original_reference_links,
         "expected_reference_links": expected_reference_links,
         "started_at": _now_iso(),
     }
 
     try:
-        _backup_move_metadata(project, tx_dir)
+        original_files = _backup_move_metadata(project, tx_dir, source_scene["id"], target_scene["id"])
+        journal_base = {**journal_base, "original_files": original_files}
         _write_move_journal(tx_dir, journal_base)
         target_dir.parent.mkdir(parents=True, exist_ok=True)
         shutil.move(str(source_dir), str(target_dir))
@@ -1379,8 +1657,9 @@ def move_perspective(
         final_journal = {**journal_base, "state": "metadata_committed"}
         _verify_perspective_move_commit(project, final_journal)
         _write_move_journal(tx_dir, final_journal)
+        _write_move_journal(tx_dir, {**journal_base, "state": "verified"})
         _cleanup_move_tx(tx_dir)
-    except BaseException:
+    except BaseException as operation_error:
         journal = {**journal_base}
         try:
             if _move_journal_path(tx_dir).is_file():
@@ -1388,9 +1667,16 @@ def move_perspective(
                 if isinstance(loaded, dict):
                     journal = loaded
             _rollback_perspective_move(project, tx_dir, journal)
-        except Exception:
-            pass
-        raise
+        except BaseException as rollback_error:
+            LOGGER.error(
+                "Perspective move failed before rollback also failed.",
+                exc_info=(type(operation_error), operation_error, operation_error.__traceback__),
+            )
+            raise RuntimeError(
+                "Perspective move failed and automatic rollback was incomplete. "
+                "Recovery data has been preserved. Restart Storyboarder to retry recovery."
+            ) from rollback_error
+        raise operation_error
     return _with_legacy_aliases(source_scene), _with_legacy_aliases(target_scene), perspective, scenes
 
 

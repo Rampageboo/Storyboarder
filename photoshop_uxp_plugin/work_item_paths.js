@@ -105,6 +105,10 @@
       }));
   }
 
+  function shouldPreserveManualMode(mode) {
+    return mode === "manual-project" || mode === "manual-folder";
+  }
+
   Object.assign(global, {
     normalizeNativePath,
     sameNativePath,
@@ -116,5 +120,6 @@
     filterKnownOpenWorkKeys,
     displayPerspectiveIndex,
     scene2DPerspectiveOptions,
+    shouldPreserveManualMode,
   });
 })(typeof globalThis !== "undefined" ? globalThis : this);
