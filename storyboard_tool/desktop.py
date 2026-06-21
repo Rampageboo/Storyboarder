@@ -37,8 +37,8 @@ def _log_stage(label: str) -> None:
 _TOKEN_RE_DESKTOP = re.compile(r'^[a-zA-Z0-9_-]{1,64}$')
 
 
-def _write_launch_ready_marker() -> None:
-    """Option A: write the per-launch ready marker from the pywebview shown callback."""
+def _write_launch_ready_marker(source: str = "pywebview loaded fallback") -> None:
+    """Write the per-launch ready marker as a fallback after the page has loaded."""
     token = os.environ.get("STORYBOARDER_LAUNCH_TOKEN", "").strip()
     if not token or not _TOKEN_RE_DESKTOP.match(token):
         return
@@ -46,9 +46,15 @@ def _write_launch_ready_marker() -> None:
         Path(tempfile.gettempdir()).joinpath(f"storyboarder-launch-{token}.ready").write_text(
             "ready", encoding="utf-8"
         )
-        _log_stage("pywebview shown: ready marker written (Option A fallback)")
+        _log_stage(f"{source}: ready marker written")
     except OSError:
         pass
+
+
+def _schedule_launch_ready_marker(source: str, delay_seconds: float) -> None:
+    timer = threading.Timer(delay_seconds, lambda: _write_launch_ready_marker(source))
+    timer.daemon = True
+    timer.start()
 
 
 def _configure_windows_taskbar_identity() -> None:
@@ -260,15 +266,21 @@ def open_desktop_window(app, title: str = "Storyboard Tool") -> int:
                 window.maximize()
             except Exception:
                 pass
-        # Option A fallback: write ready marker once the native window is visible,
-        # so the splash closes even when /api/app/ui-ready is not reached.
-        _write_launch_ready_marker()
 
     def _on_resized(width, height):
         # Any user-driven resize means the window is no longer maximized.
         _maximized[0] = False
 
+    def _on_loaded():
+        _write_launch_ready_marker("pywebview loaded fallback")
+
     window.events.shown += _on_shown
+    try:
+        window.events.loaded += _on_loaded
+    except Exception:
+        # Older pywebview builds may not expose loaded. Do not close the splash
+        # on shown; wait long enough for the local React bundle to render.
+        window.events.shown += lambda: _schedule_launch_ready_marker("pywebview shown delayed fallback", 3.0)
     try:
         window.events.resized += _on_resized
     except Exception:

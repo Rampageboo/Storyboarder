@@ -286,14 +286,25 @@ export function ProjectProvider({ children }: PropsWithChildren) {
     })
   }, [])
 
-  // Trigger preview analysis once per project path, after initial loading clears.
-  // Fires for both the first project load and subsequent project switches.
-  const lastAnalysisProjectRef = useRef<string | null>(null)
+  const requestedAnalysisSignaturesRef = useRef(new Set<string>())
+  const previewAnalysisSignature = project
+    ? [
+        project.project_path,
+        ...project.shots
+          .filter((shot) => shot.preview_analysis_state === 'provisional')
+          .map((shot) => `${shot.shot_id}:${shot.preview_disk_mtime ?? 0}:${shot.preview_analysis_state}`)
+          .sort(),
+      ].join('|')
+    : ''
+
+  // Trigger preview analysis for each new provisional-preview signature.
+  // The signature changes when Photoshop exports a preview and the backend
+  // reports a new preview_disk_mtime, but completed/cached states stop repeats.
   useEffect(() => {
     if (initialLoading) return
-    if (!project) { lastAnalysisProjectRef.current = null; return }
-    if (project.project_path === lastAnalysisProjectRef.current) return
-    lastAnalysisProjectRef.current = project.project_path
+    if (!project || !previewAnalysisSignature || !project.shots.some((shot) => shot.preview_analysis_state === 'provisional')) return
+    if (requestedAnalysisSignaturesRef.current.has(previewAnalysisSignature)) return
+    requestedAnalysisSignaturesRef.current.add(previewAnalysisSignature)
     const doAnalysis = () => { void refreshPreviewAnalysis().catch(() => {}) }
     const hasIdleCallback = typeof window !== 'undefined' && 'requestIdleCallback' in window
     if (hasIdleCallback) {
@@ -302,7 +313,7 @@ export function ProjectProvider({ children }: PropsWithChildren) {
     }
     const id = window.setTimeout(doAnalysis, 500)
     return () => clearTimeout(id)
-  }, [initialLoading, project?.project_path])
+  }, [initialLoading, project, previewAnalysisSignature])
 
   const setSegmentAnchor = useCallback((shotId: string | null) => {
     setSegmentRange((range) => ({ ...range, anchorShotId: shotId }))
@@ -833,4 +844,3 @@ export function ProjectProvider({ children }: PropsWithChildren) {
 
   return <ProjectContext.Provider value={value}>{children}</ProjectContext.Provider>
 }
-
