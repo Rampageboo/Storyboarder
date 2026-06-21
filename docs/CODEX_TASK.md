@@ -1,777 +1,680 @@
-# CODEX_TASK.md — Photoshop plugin Scene 2D work-context handoff
+# CODEX_TASK.md — Complete Storyboarder startup responsiveness and preview-analysis lifecycle
 
 Repo: `Rampageboo/Storyboarder`
 
-Prerequisite:
+Base:
 
 ```text
-The Scene 2D UUID and stable-path migration task has already landed.
+Use the commit produced by the Scene 2D migration reliability task.
+It must contain 08dafe37b77c60f5e2c67c41faabfd6a2abb3def.
 ```
-
-Do not begin this task while Scene 2D still uses mutable or sequential canonical IDs.
 
 ## Goal
 
-Allow the Photoshop UXP plugin to naturally take over when a user opens a Scene 2D PSD Perspective from Storyboarder.
+Complete the startup optimization introduced in `08dafe...`.
 
-The plugin must explicitly understand whether the active Photoshop document represents:
+The existing implementation has useful foundations:
 
 ```text
-a Storyboard shot
-or
-a Scene 2D Perspective
+single-round-trip bootstrap
+UI-ready endpoint
+per-launch token marker
+native WinForms splash
+deferred missing-file scan
+Scene 2D / Scene 3D lazy loading
+persistent preview-analysis cache
+background preview-analysis endpoint
 ```
 
-Do not represent a Scene 2D Perspective as a fake shot.
+However, three parts are incomplete:
 
-Do not infer identity from editable titles.
+```text
+1. The splash starts after virtual-environment and dependency checks,
+   so launch feedback is not truly immediate.
 
-Use immutable Scene 2D and Perspective UUIDs.
+2. Preview analysis is implemented on the backend,
+   but the frontend does not reliably start it after first paint.
+
+3. When background analysis completes,
+   the current project UI is not notified to reload the real results.
+```
+
+Fix these without changing Photoshop plugin behavior.
 
 ---
 
-# Core principle
+# Scope
 
-Introduce a generic work context shared by:
-
-```text
-Storyboarder frontend
-FastAPI backend
-live bridge
-Photoshop UXP plugin
-```
-
-Supported work-context kinds:
+Likely files:
 
 ```text
-shot
-scene2d
-```
-
-The context must explicitly define the active editable asset.
-
----
-
-# Canonical work-context shapes
-
-## Shot
-
-```json
-{
-  "kind": "shot",
-  "key": "shot:shot_001",
-  "shot_id": "shot_001",
-  "source_file_path": "shots/shot_001/shot_001.psd",
-  "preview_image_path": "shots/shot_001/shot_001_preview.png"
-}
-```
-
-## Scene 2D Perspective
-
-```json
-{
-  "kind": "scene2d",
-  "key": "scene2d:550e8400-e29b-41d4-a716-446655440000:f0b14cf5-15ad-44ae-a623-871930a92d3f",
-  "scene_id": "550e8400-e29b-41d4-a716-446655440000",
-  "perspective_id": "f0b14cf5-15ad-44ae-a623-871930a92d3f",
-  "scene_title": "Living Room",
-  "perspective_title": "Door View",
-  "perspective_type": "psd",
-  "source_file_path": "scenes2d/550e8400-e29b-41d4-a716-446655440000/perspectives/f0b14cf5-15ad-44ae-a623-871930a92d3f/source.psd",
-  "preview_image_path": "scenes2d/550e8400-e29b-41d4-a716-446655440000/perspectives/f0b14cf5-15ad-44ae-a623-871930a92d3f/preview.png",
-  "index": 1,
-  "count": 4,
-  "previous_key": "",
-  "next_key": "scene2d:550e8400-e29b-41d4-a716-446655440000:..."
-}
-```
-
-Titles are display metadata only.
-
-Identity must use UUIDs and stable source paths.
-
----
-
-# Part 1 — Generic runtime work context
-
-Current runtime state is shot-specific.
-
-Add generic state such as:
-
-```text
-active_work_context
-focus_work_context
-focus_token
-plugin_active_work_key
-plugin_open_work_keys
-```
-
-Preserve existing shot-specific fields temporarily for backward compatibility:
-
-```text
-live_selected_shot_id
-plugin_selected_shot_id
-plugin_open_shot_ids
-```
-
-When the active work context is a shot, keep old fields synchronized.
-
-When it is Scene 2D, do not populate a fake selected shot.
-
-Add typed helpers:
-
-```python
-def active_work_context(app) -> dict[str, Any]:
-    ...
-
-def set_active_shot_context(app, shot_id: str) -> None:
-    ...
-
-def set_active_scene2d_context(
-    app,
-    scene_id: str,
-    perspective_id: str,
-) -> None:
-    ...
-
-def request_work_context_focus(app, context: dict[str, Any]) -> None:
-    ...
-```
-
-Validate that Scene and Perspective UUIDs exist before accepting context.
-
----
-
-# Part 2 — Plugin context payload
-
-Extend:
-
-```text
-GET /api/plugin/context
-```
-
-to return:
-
-```json
-{
-  "work_context": {},
-  "work_items": [],
-  "selected_shot_id": "...",
-  "shots": [],
-  "canvas": {},
-  "bridge": {}
-}
-```
-
-Keep existing shot fields so the current plugin does not break during migration.
-
-## work_items
-
-Return editable PSD work items for:
-
-```text
-all shots
-all Scene 2D PSD Perspectives
-```
-
-Suggested shape:
-
-```json
-{
-  "kind": "scene2d",
-  "key": "scene2d:<scene_uuid>:<perspective_uuid>",
-  "label": "Living Room / Door View",
-  "source_file_path": ".../source.psd",
-  "preview_image_path": ".../preview.png",
-  "scene_id": "<uuid>",
-  "perspective_id": "<uuid>"
-}
-```
-
-Do not include image Perspectives as directly editable PSD work items.
-
-For image Perspectives, provide read-only metadata if useful.
-
----
-
-# Part 3 — Opening Scene 2D from Storyboarder
-
-When the user clicks:
-
-```text
-Open in Photoshop
-```
-
-for a Scene 2D PSD Perspective, backend behavior must become:
-
-```text
-1. Validate Scene UUID and Perspective UUID.
-2. Verify Perspective type is PSD.
-3. Ensure source.psd exists.
-4. Set active Scene 2D work context.
-5. Publish bridge state.
-6. If plugin reports the PSD already open:
-   request plugin focus using work key.
-7. Otherwise launch/open Photoshop with source.psd.
-8. Return the active work context.
-```
-
-Update:
-
-```text
-POST /api/project/scenes2d/{scene_id}/perspectives/{perspective_id}/open
-```
-
-Do not merely call the OS open function without updating context.
-
----
-
-# Part 4 — Generic focus requests
-
-Current bridge focus request is shot-specific.
-
-Replace or extend:
-
-```json
-{
-  "focus_request": {
-    "kind": "scene2d",
-    "key": "scene2d:<scene_uuid>:<perspective_uuid>",
-    "source_file_path": ".../source.psd",
-    "token": 12
-  }
-}
-```
-
-Maintain backward-compatible:
-
-```text
-shot_id
-```
-
-for shot focus requests if needed.
-
-The plugin must act only when the token increases.
-
-Passive bridge polling must never unexpectedly switch Photoshop tabs.
-
----
-
-# Part 5 — Plugin heartbeat
-
-Extend plugin heartbeat to report:
-
-```json
-{
-  "active_work_key": "scene2d:<scene_uuid>:<perspective_uuid>",
-  "active_document_path": "C:/.../source.psd",
-  "open_work_keys": [
-    "shot:shot_001",
-    "scene2d:<scene_uuid>:<perspective_uuid>"
-  ],
-  "selected_shot_id": "",
-  "open_shot_ids": []
-}
-```
-
-Preserve the old shot fields.
-
-Backend must store and expose:
-
-```text
-plugin_active_work_key
-plugin_open_work_keys
-```
-
-Do not trust arbitrary keys from the plugin without matching them against backend-generated work items.
-
----
-
-# Part 6 — Active Photoshop document detection
-
-Current plugin detection is shot-specific.
-
-Add generic detection:
-
-```js
-detectWorkItemFromDocument()
-```
-
-Matching order:
-
-```text
-1. normalized full native source path
-2. normalized project-relative source path
-3. exact backend work-item path
-4. filename only as final non-authoritative fallback
-```
-
-Do not use titles for identity.
-
-Do not identify Scene 2D Perspective by:
-
-```text
-Living Room
-Door View
-source filename derived from title
-```
-
-because titles can change.
-
-Normalize Windows paths case-insensitively.
-
-Handle slash differences safely.
-
----
-
-# Part 7 — Plugin UI modes
-
-The plugin has two panels:
-
-```text
-Storyboard Bridge
-Storyboard Work
-```
-
-Keep both panels.
-
-Add two UI modes:
-
-```text
-Shot mode
-Scene 2D mode
-```
-
-## Bridge panel — Shot mode
-
-Preserve current behavior:
-
-```text
-shot card
-shot status
-quick note
-shot notes
-Export preview
-Export & next
-auto-add at end
-```
-
-## Bridge panel — Scene 2D mode
-
-Display:
-
-```text
-Scene 2D
-Scene title
-Perspective title
-Perspective X of Y
-PSD
-```
-
-Buttons:
-
-```text
-Export preview
-Export & next perspective
-Focus Storyboarder after preview export
-```
-
-Hide:
-
-```text
-shot status buttons
-quick note
-shot notes
-duration
-auto-add shot
-shot-specific recovery actions unless explicitly compatible
-```
-
-Update the current card dynamically rather than duplicating an entirely separate panel if practical.
-
----
-
-# Part 8 — Work panel Scene 2D mode
-
-## Shot mode
-
-Preserve:
-
-```text
-Shot selector
-Previous
-Next
-Open canvas
-Focus open tab
-Onion skin
-```
-
-## Scene 2D mode
-
-Show:
-
-```text
-Scene group
-Perspective selector
-Previous perspective
-Next perspective
-Open perspective
-Focus open tab
-```
-
-Hide shot onion-skin tools for the first Scene 2D integration.
-
-Do not apply shot onion-skin semantics to Scene 2D Perspectives.
-
-Do not add Perspective overlay behavior in this task.
-
----
-
-# Part 9 — Separate Scene 2D preview export
-
-This is a critical safety boundary.
-
-Do not route Scene 2D export through shot export logic.
-
-Add a dedicated function:
-
-```js
-exportScene2DPerspectivePreview()
-```
-
-and a dedicated endpoint:
-
-```text
-POST /api/plugin/scenes2d/{scene_id}/perspectives/{perspective_id}/export-preview
-```
-
-## Scene 2D export behavior
-
-Export the visible Scene 2D composite to:
-
-```text
-perspective.preview_image_path
-```
-
-For Scene 2D:
-
-```text
-- preserve normal visible artwork/background layers
-- hide only temporary plugin overlay layers if present
-- do not force transparent artist-foreground semantics
-- do not hide normal user background layers
-```
-
-Shot export behavior must remain unchanged.
-
-The backend must derive the destination path from Scene 2D metadata.
-
-Do not allow the plugin to supply an arbitrary destination filesystem path.
-
-Backend validation:
-
-```text
-Scene exists
-Perspective exists
-Perspective type is PSD
-source file exists
-preview path resolves inside project root
-exported PNG exists
-```
-
-After success:
-
-```text
-update Perspective.updated_at
-update Scene.updated_at
-save Scene 2D metadata atomically
-increment plugin change revision
-return updated work context
+launch_storyboarder.bat
+scripts/launch-storyboarder-splash.ps1
+
+storyboard_tool/api.py
+storyboard_tool/backend_service.py
+storyboard_tool/app_state.py
+storyboard_tool/runtime_state.py
+storyboard_tool/live_bridge.py
+storyboard_tool/desktop.py
+storyboard_tool/preview_analysis_cache.py
+
+frontend/src/api/system.ts
+frontend/src/state/ProjectContext.tsx
+frontend/src/state/LiveBridgeContext.tsx
+frontend/src/App.tsx
+
+tests/test_bootstrap.py
+tests/test_preview_analysis_cache.py
+tests/test_ui_ready.py
+new startup/preview-analysis lifecycle tests if needed
 ```
 
 Do not modify:
 
 ```text
-shots.csv
-shot.source_file_path
-shot.preview_image_path
-shot.image_path
-shot.thumbnail_path
-shot status
+photoshop_uxp_plugin/*
+Scene 2D UUID model
+Scene 2D migration
+Scene 3D storage
+shot PSD structure
+SB bg behavior
+shot preview export behavior
+reference segment semantics
 ```
 
 ---
 
-# Part 10 — PSD saved event
+# Part 1 — Show the splash before all Python/venv work
 
-Add:
-
-```text
-POST /api/plugin/scenes2d/{scene_id}/perspectives/{perspective_id}/psd-saved
-```
-
-This endpoint should:
+Current launcher broadly does:
 
 ```text
-verify the expected source.psd exists
-update timestamps if required
-increment Scene 2D change revision
-return updated work context
+check/create venv
+activate venv
+import dependencies
+possibly pip install
+generate token
+show splash
+launch app
 ```
 
-It must not update shot state.
+Change it to:
+
+```text
+cd to repository root
+generate per-launch token
+start splash immediately
+then validate/create venv
+then validate/install dependencies
+then launch Storyboarder
+```
+
+The splash must appear before:
+
+```text
+py -m venv
+python --version
+activate.bat
+python -c "import ..."
+pip install
+python main.py
+```
+
+The user should receive visible feedback even on:
+
+```text
+first launch
+broken virtual environment
+missing dependencies
+slow dependency import
+dependency installation
+```
 
 ---
 
-# Part 11 — Export & next perspective
+# Part 2 — Launcher status communication
 
-Scene 2D behavior:
+Use the existing per-launch token.
 
-```text
-1. Export current Perspective preview.
-2. Find the next Perspective in the same Scene group.
-3. If it is a PSD:
-   open or focus it.
-4. Set active work context to that Perspective.
-```
-
-At the final Perspective:
+Add a token-specific status marker:
 
 ```text
-- do not create a new Perspective
-- do not move to another Scene group
-- remain on the current Perspective
-- display “Last perspective in this scene”
+%TEMP%\storyboarder-launch-<token>.status
 ```
 
-Do not reuse:
+The launcher may update it with simple status strings:
 
 ```text
-autoAddAtEnd
+Preparing Python environment…
+Checking dependencies…
+Installing dependencies…
+Starting Storyboarder…
 ```
 
-That setting is shot-specific.
+Requirements:
 
-Image Perspectives should be skipped or handled as read-only, with clear behavior.
+```text
+- status content is plain text only
+- no arbitrary path is accepted from the frontend
+- status writes are best-effort
+- launch must not block if status write fails
+- stale token files must not affect a different launch
+```
+
+The splash should read this status file at its existing low polling interval.
+
+If there is no status file, retain elapsed-time fallback messages.
+
+Do not display fake percentages.
 
 ---
 
-# Part 12 — Image Perspective behavior
+# Part 3 — Failure handling for launcher setup
 
-For:
-
-```text
-perspective.type == "image"
-```
-
-do not let the plugin overwrite the imported source image.
-
-Display:
+If venv creation, activation, dependency installation, or Python launch fails:
 
 ```text
-Image Perspective
-Read-only source
-Convert to PSD in Storyboarder to edit
+- write a clear failure message to the token status file
+- keep the splash visible briefly or change it into an error state
+- provide a Close button
+- keep Escape functional
+- ensure the batch process returns a non-zero exit code
 ```
 
-Do not implement image-to-PSD conversion in this task.
+Suggested splash error state:
 
-Do not include image Perspectives in Export & next editable sequence unless a clear read-only skip is implemented.
+```text
+Storyboarder could not start
+
+Failed to install Python dependencies.
+Check logs/desktop.log for details.
+
+[Close]
+```
+
+Do not leave an indeterminate progress bar running for 120 seconds after a known fatal error.
+
+A token-specific failure marker may be used:
+
+```text
+%TEMP%\storyboarder-launch-<token>.failed
+```
+
+Clean it after the splash exits where practical.
 
 ---
 
-# Part 13 — Storyboarder automatic preview refresh
+# Part 4 — Main-window fallback for splash dismissal
 
-After plugin exports a Scene 2D preview, the Scene 2D workspace should refresh automatically.
+The ready marker remains the primary success signal.
 
-Extend bridge status with a generic plugin change payload:
+Add a safe secondary signal so the TopMost splash does not cover an already usable Storyboarder window for up to 120 seconds if `/api/app/ui-ready` fails.
+
+Preferred options, in order:
+
+```text
+Option A:
+desktop.py writes the same token ready marker from a pywebview loaded/shown callback
+after the main window is genuinely visible.
+
+Option B:
+the splash detects a visible Storyboarder top-level window with a plausible size.
+
+Option C:
+a separate desktop-visible marker is written by the Python process.
+```
+
+Do not close the splash merely when FastAPI starts.
+
+Acceptable fallback timing:
+
+```text
+React UI-ready marker = primary
+visible pywebview main window after load = fallback
+120-second timeout = last resort
+```
+
+Avoid broad process enumeration or killing unrelated processes.
+
+---
+
+# Part 5 — Preview-analysis frontend API
+
+Add typed frontend API methods for:
+
+```text
+POST /api/project/preview-analysis/refresh
+GET  /api/project/preview-analysis/status
+```
+
+The refresh result should include:
 
 ```json
 {
-  "plugin_change": {
-    "revision": 15,
-    "kind": "scene2d",
-    "scene_id": "<scene_uuid>",
-    "perspective_id": "<perspective_uuid>"
+  "ok": true,
+  "status": "started",
+  "task_id": "...",
+  "project_path": "...",
+  "revision": 12
+}
+```
+
+Possible statuses:
+
+```text
+no_project
+started
+already_running
+complete
+failed
+stale_project
+```
+
+Do not expose arbitrary filesystem paths as writable inputs.
+
+---
+
+# Part 6 — Per-project analysis jobs
+
+Replace the single global preview-analysis lock with project-aware job state.
+
+Problem with one global lock:
+
+```text
+Project A analysis is running
+→ user opens Project B
+→ Project B request receives already_running
+→ Project B may never retry
+```
+
+Manage jobs by stable project identity, preferably normalized project root.
+
+Each job should track:
+
+```text
+task_id
+project_root
+state
+started_at
+completed_at
+decoded_count
+error
+revision
+```
+
+Requirements:
+
+```text
+- only one active analysis job per project
+- different projects may not corrupt each other
+- a worker captures the intended project/root at task creation
+- switching active project does not cause it to update the wrong project
+- stale worker completion must not announce a change for the wrong active project
+- failed workers release their running state
+```
+
+Concurrency may remain conservative; correctness is more important than maximizing parallelism.
+
+---
+
+# Part 7 — Automatic analysis trigger
+
+After initial UI paint and `reportUiReady()`, schedule preview analysis outside the critical rendering path.
+
+Suggested order:
+
+```text
+bootstrap completes
+→ Welcome or Board renders
+→ two requestAnimationFrame ticks
+→ report UI ready
+→ requestIdleCallback / delayed callback
+→ request preview analysis
+```
+
+Do not delay splash closure waiting for image analysis.
+
+Do not block project opening on preview decoding.
+
+Only trigger when a project is open.
+
+When switching projects:
+
+```text
+schedule analysis for the new project
+do not reuse an old project task result
+```
+
+If refresh returns `already_running`, subscribe to or poll the existing task instead of abandoning the lifecycle.
+
+---
+
+# Part 8 — Analysis completion notification
+
+When the worker completes and saves cache:
+
+```text
+increment a preview-analysis revision
+publish a lightweight change event
+```
+
+Suggested bridge payload:
+
+```json
+{
+  "preview_analysis": {
+    "revision": 8,
+    "project_path": "D:/.../Storyboard_Project",
+    "state": "complete",
+    "decoded_count": 14,
+    "task_id": "..."
   }
 }
 ```
 
-For shot changes, preserve current project refresh behavior.
-
-For Scene 2D changes:
+The frontend should react only when:
 
 ```text
-Scene2DPanel reloads Scene 2D data
-preserves selectedSceneId
-preserves selectedPerspectiveId
-refreshes preview cache key
-does not reset zoom unnecessarily unless the Perspective changed
+event project_path matches the currently open project
+revision is newer than the last handled revision
+state is complete
 ```
 
-Do not reload the entire project solely to update a Scene 2D preview.
+Then perform one controlled project refresh:
+
+```text
+GET /api/project
+```
+
+This refresh should update:
+
+```text
+has_artwork_preview
+preview_has_transparency
+```
+
+Do not reset:
+
+```text
+selected shot
+workspace mode
+timeline scroll
+Scene 2D selection
+Scene 3D selection
+unsaved shot drafts
+```
+
+Because replacing project data can conflict with local unsaved drafts, use the existing safe merge/refresh mechanism.
+
+Do not silently discard unsaved edits.
+
+If the existing `refreshProjectFromBridge()` discards undo/redo or affects selection unnecessarily, add a narrower preview-analysis refresh path that merges only server-computed preview fields and disk mtimes.
 
 ---
 
-# Part 14 — Frontend plugin status
+# Part 9 — Correct provisional preview state
 
-When Scene 2D Perspective is open in Photoshop, Storyboarder should show an appropriate state such as:
+On cache miss, the current provisional values are:
 
 ```text
-Open in Photoshop
-Linked
-Preview updated
-Preview out of date
+has_artwork_preview = true
+preview_has_transparency = false
 ```
 
-Do not label it as a shot.
+This can temporarily misclassify a blank preview as artwork.
 
-The frontend should use UUID identity and source path.
+Add an explicit analysis state to shot payloads:
+
+```text
+preview_analysis_state:
+  missing
+  provisional
+  cached
+```
+
+Suggested behavior:
+
+```text
+no preview file:
+  has_artwork_preview = false
+  preview_analysis_state = missing
+
+preview file, cache hit:
+  real cached values
+  preview_analysis_state = cached
+
+preview file, cache miss:
+  provisional values
+  preview_analysis_state = provisional
+```
+
+Frontend should avoid presenting a provisional result as certain.
+
+For example, do not show a definitive “artwork exists” warning solely from a provisional result.
+
+Keep backward-compatible existing boolean fields.
 
 ---
 
-# Part 15 — Backward compatibility
+# Part 10 — Cache lifecycle
 
-Existing shot plugin behavior must continue to work:
+Keep cache identity based on:
 
 ```text
-shot selection
-open/focus shot
-shot heartbeat
-Export preview
-Export & next
-auto-add at end
-status update
-quick note
-onion skin
-SB bg workflow
+normalized path
+mtime_ns
+file size
 ```
 
-Keep old plugin context fields while introducing generic work context.
+Add or verify:
 
-Do not perform a simultaneous full plugin rewrite.
+```text
+- stale cache entries are ignored
+- corrupt cache returns empty state safely
+- atomic writes use uniquely named temporary files
+- concurrent writers cannot replace each other with partial data
+- orphaned entries may be pruned periodically
+```
+
+Current fixed `.tmp` naming can collide if two writes occur concurrently.
+
+Use a unique sibling temporary file and `os.replace`.
+
+Do not make cache write failure break project use.
 
 ---
 
-# Part 16 — Tests
+# Part 11 — Analysis after preview changes
 
-## Backend tests
+The lifecycle must also work after Photoshop or another process updates a preview.
+
+When project/plugin revision indicates preview files changed:
+
+```text
+- cache lookup naturally misses due to mtime/size
+- schedule analysis for uncached changed previews
+- notify frontend on completion
+- refresh computed preview fields once
+```
+
+Avoid creating an infinite loop:
+
+```text
+project refresh
+→ trigger analysis
+→ zero files decoded
+→ revision change
+→ project refresh
+→ trigger analysis ...
+```
+
+Only emit a completion revision when:
+
+```text
+a job state meaningfully changed
+or at least one cache entry changed
+```
+
+For zero-work analysis, mark the task complete but do not repeatedly cause UI reloads.
+
+---
+
+# Part 12 — Startup timing instrumentation
+
+Preserve existing timing instrumentation.
+
+Add useful stages where missing:
+
+```text
+launcher splash started
+venv check started/completed
+dependency check started/completed
+Python app entered
+server ready
+bootstrap requested
+session loaded
+project opened
+project payload built
+frontend UI-ready received
+preview analysis scheduled
+preview analysis completed
+```
+
+Do not log on every render or every polling tick.
+
+Include elapsed milliseconds where practical.
+
+Do not log full sensitive filesystem contents unnecessarily.
+
+---
+
+# Part 13 — Tests
+
+## Launcher/splash tests
+
+Where fully automated WinForms testing is impractical, test pure/token/file logic and document manual validation.
+
+Required automated checks where feasible:
+
+```text
+1. Token-specific status/ready/failure paths are derived safely.
+2. Invalid token cannot escape TEMP directory.
+3. Different tokens do not interfere.
+4. Fatal launcher state does not wait for normal timeout.
+5. Ready marker still closes the matching splash.
+```
+
+## Preview analysis tests
 
 Add tests for:
 
 ```text
-1. Scene 2D open sets active work context.
-2. Work context contains UUID Scene/Perspective IDs.
-3. Already-open Perspective triggers focus request.
-4. Focus token increments.
-5. Scene 2D export validates destination.
-6. Scene 2D export cannot write outside project root.
-7. Scene 2D export updates only Scene 2D metadata.
-8. Shot records remain byte-for-byte unchanged after Scene 2D export.
-9. Scene 2D psd-saved updates correct record.
-10. Export & next stays inside the same Scene group.
-11. Export & next stops at final Perspective.
-12. Image Perspective is not overwritten.
-13. Invalid UUID returns safe 400/404.
-14. Heartbeat work keys are validated.
-15. Existing shot plugin tests still pass.
+1. Initial bootstrap does not decode preview images synchronously.
+2. Frontend/API refresh starts a background job.
+3. Cache miss becomes cached after worker completion.
+4. Completion increments revision.
+5. Status endpoint reports running and complete states.
+6. Same-project duplicate request returns existing task information.
+7. Project A worker cannot announce Project B revision.
+8. Opening Project B while Project A runs still allows B analysis.
+9. Worker failure releases job state.
+10. Cache write failure does not crash the worker lifecycle.
+11. Corrupt cache is handled safely.
+12. Changed mtime invalidates cached values.
+13. Zero-work job does not trigger an infinite revision loop.
+14. Temporary cache file names are collision-safe.
 ```
 
-## Plugin/manual tests
+## Frontend behavior
+
+Add focused tests if the project already has frontend test infrastructure.
+
+Otherwise verify through build plus manual smoke tests.
+
+---
+
+# Manual smoke test
+
+Run the actual user-facing launcher:
+
+```powershell
+.\launch_storyboarder.bat
+```
+
+Do not validate only with:
+
+```powershell
+python main.py
+```
+
+Manual scenarios:
 
 ```text
-1. Open a shot PSD.
-2. Confirm plugin enters Shot mode.
-3. Open a Scene 2D PSD from Storyboarder.
-4. Confirm plugin enters Scene 2D mode.
-5. Confirm Scene and Perspective titles display.
-6. Confirm UUID is not shown as the normal label.
-7. Switch Photoshop tabs between shot and Scene 2D.
-8. Confirm plugin mode follows the active document.
-9. Export Scene 2D preview.
-10. Confirm preview.png updates.
-11. Confirm no shot preview changes.
-12. Confirm Storyboarder refreshes automatically.
-13. Test Export & next perspective.
-14. Confirm final Perspective does not auto-create.
-15. Open an image Perspective.
-16. Confirm it is read-only in plugin.
-17. Rename Scene and Perspective in Storyboarder.
-18. Reopen PSD.
-19. Confirm plugin identity still works.
-20. Restart Photoshop and reconnect.
-21. Confirm context recovers from immutable path/UUID.
+1. Normal warm launch:
+   splash appears immediately
+   main app appears
+   splash closes after UI paint
+
+2. Missing/broken venv simulation:
+   splash appears before venv work
+
+3. Missing dependency simulation:
+   splash shows environment/dependency status
+
+4. Known startup failure:
+   splash enters visible error state
+   Escape and Close work
+
+5. UI-ready request failure simulation:
+   visible-main-window fallback closes splash
+
+6. Project with many previews:
+   Board renders before preview analysis finishes
+   background analysis completes
+   artwork/transparency states update automatically
+
+7. Switch projects during analysis:
+   no cross-project UI refresh
+   both projects remain analysable
+
+8. No project:
+   Welcome UI appears
+   splash closes
+   no preview-analysis request loops
 ```
+
+---
+
+# Commands
 
 Run:
 
 ```powershell
+.venv\Scripts\python.exe -m pytest tests/test_bootstrap.py -q
+.venv\Scripts\python.exe -m pytest tests/test_preview_analysis_cache.py -q
+.venv\Scripts\python.exe -m pytest tests/test_ui_ready.py -q
 .venv\Scripts\python.exe -m pytest tests/ -q
 
 cd frontend
 npm.cmd run build
 ```
 
-Reload the UXP plugin and perform manual Photoshop validation.
+Do not claim WinForms behavior is verified unless the launcher was manually run.
 
 ---
 
-# Files likely affected
+# Commit boundary
+
+Create one focused commit.
+
+Suggested commit message:
 
 ```text
-storyboard_tool/runtime_state.py
-storyboard_tool/live_bridge.py
-storyboard_tool/app_state.py
-storyboard_tool/plugin_service.py
-storyboard_tool/backend_service.py
-storyboard_tool/api.py
-frontend/src/api.ts
-frontend/src/state/LiveBridgeContext.tsx
-frontend/src/components/Scene2DPanel.tsx
-photoshop_uxp_plugin/backend_client.js
-photoshop_uxp_plugin/panel.js
-photoshop_uxp_plugin/preview_export.js
-photoshop_uxp_plugin/index.html
-photoshop_uxp_plugin/style.css
-tests/test_plugin_scene2d.py
-tests/test_plugin_bridge.py
+fix: complete startup and preview analysis lifecycle
 ```
 
----
-
-# Do not change
-
-```text
-Scene 2D UUID model
-Scene 2D stable path layout
-Scene 3D capture workflow
-shot ID format
-shot PSD structure
-SB bg behavior
-shot transparent foreground export semantics
-Reference segment behavior
-image-to-PSD conversion
-```
-
----
-
-# Implementation order
-
-```text
-1. Add generic runtime work context.
-2. Add backend work-context payload.
-3. Add generic focus request.
-4. Add Scene 2D open handoff.
-5. Extend heartbeat.
-6. Add plugin active-document detection.
-7. Add plugin Shot/Scene2D UI modes.
-8. Add dedicated Scene 2D export endpoint.
-9. Add Export & next perspective.
-10. Add Storyboarder automatic preview refresh.
-11. Run backend tests.
-12. Run frontend build.
-13. Perform manual UXP validation.
-```
+Do not include Photoshop plugin or Scene 2D migration changes.
 
 ---
 
@@ -781,18 +684,17 @@ Report:
 
 ```text
 Changed files
-Work-context schema
-How UUID identity is used
-How active Photoshop documents are matched
-Scene 2D open/focus behavior
-Plugin Shot mode
-Plugin Scene 2D mode
-Dedicated Scene 2D export behavior
-Export & next perspective behavior
-Image Perspective behavior
-Automatic Storyboarder refresh
-Backward compatibility
-Tests and build results
-Manual Photoshop validation
+New launcher execution order
+Splash status and failure behavior
+Splash fallback close behavior
+Preview-analysis API and job model
+How automatic analysis is scheduled
+Completion revision/event design
+How frontend project state is refreshed safely
+Cache atomic-write changes
+Tests run
+Frontend build result
+Manual launcher scenarios tested
 Known limitations
+Commit SHA
 ```
