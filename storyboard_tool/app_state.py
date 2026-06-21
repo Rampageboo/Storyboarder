@@ -317,7 +317,23 @@ def _plugin_work_key_state(
         active = file_active if file_has_active else http_active
         open_keys = file_open if file_has_open else http_open
         return active, open_keys
-    return http_active or file_active, http_open or file_open
+    # HTTP is definitively newer — its values are authoritative.
+    # Do NOT fall back to stale file state: an explicit empty [] must mean [].
+    return http_active, http_open
+
+
+def plugin_work_key_state(app: FastAPI) -> tuple[str, list[str]]:
+    """Public: return (active_work_key, open_work_keys) from the newest validated heartbeat.
+
+    Uses whichever of the file or HTTP/runtime heartbeat is more recent.
+    All returned keys are validated against the current project's work items.
+    Callers that need to decide open-vs-focus must use this instead of reading
+    runtime_state directly, which may hold stale HTTP-only values.
+    """
+    http_seen = runtime_state.plugin_last_seen(app)
+    file_seen = live_bridge.read_plugin_heartbeat_mtime()
+    plugin_linked, _age, _open_shot_ids = _plugin_link_state(app)
+    return _plugin_work_key_state(app, plugin_linked, file_seen, http_seen)
 
 
 def _bridge_status_payload(app: FastAPI) -> dict[str, Any]:

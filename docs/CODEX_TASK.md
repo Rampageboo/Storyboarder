@@ -1,45 +1,775 @@
-# CODEX_TASK.md — Complete Storyboarder startup responsiveness and preview-analysis lifecycle
+# CODEX_TASK_P1_FIXES.md — Fix remaining Scene 2D plugin P1 reliability issues
 
-Repo: `Rampageboo/Storyboarder`
-
-Base:
+Repo:
 
 ```text
-Use the commit produced by the Scene 2D migration reliability task.
-It must contain 08dafe37b77c60f5e2c67c41faabfd6a2abb3def.
+Rampageboo/Storyboarder
+```
+
+Base commit:
+
+```text
+2f810d7281e2232bf38f3277443af15fb6c983d1
 ```
 
 ## Goal
 
-Complete the startup optimization introduced in `08dafe...`.
-
-The existing implementation has useful foundations:
+Fix the three remaining P1 reliability issues in the Scene 2D Photoshop integration:
 
 ```text
-single-round-trip bootstrap
-UI-ready endpoint
-per-launch token marker
-native WinForms splash
-deferred missing-file scan
-Scene 2D / Scene 3D lazy loading
-persistent preview-analysis cache
-background preview-analysis endpoint
+1. Backend open/focus decisions use stale runtime heartbeat state instead of the newest validated heartbeat source.
+
+2. Shot-only automatic background/canvas synchronization may still modify a Scene 2D or unrelated Photoshop document.
+
+3. Scene 2D UUID migration crash recovery may roll forward after scenes2d.json is committed even when settings.json/reference_links are still legacy or incomplete.
 ```
 
-However, three parts are incomplete:
+These are release-blocking data-safety and workflow issues.
+
+Do not include P2 cleanup, broad refactors, or UI redesign.
+
+---
+
+# P1-1 — Use one authoritative validated plugin work-key state
+
+## Current problem
+
+The plugin normally writes its heartbeat to:
 
 ```text
-1. The splash starts after virtual-environment and dependency checks,
-   so launch feedback is not truly immediate.
-
-2. Preview analysis is implemented on the backend,
-   but the frontend does not reliably start it after first paint.
-
-3. When background analysis completes,
-   the current project UI is not notified to reload the real results.
+C:/Users/Public/StoryboardTool/storyboard_plugin_heartbeat.json
 ```
 
-Fix these without changing Photoshop plugin behavior.
+When that succeeds, it may not send the HTTP heartbeat.
+
+`/api/bridge/status` now combines:
+
+```text
+file heartbeat
+HTTP/runtime heartbeat
+timestamp freshness
+backend work-item validation
+```
+
+However, `method_open_scene2d_perspective()` still directly checks:
+
+```python
+runtime_state.plugin_open_work_keys(self.app)
+```
+
+That value may be stale or empty even when the file heartbeat is newer.
+
+This creates two failure modes:
+
+```text
+Perspective is already open
+→ runtime state says closed
+→ Storyboarder opens it again
+
+Perspective was closed
+→ stale runtime state says open
+→ backend sends a dead focus request
+→ PSD is not reopened
+```
+
+---
+
+## Required solution
+
+Create one shared backend helper that returns the newest validated plugin state for the current project.
+
+Suggested public helper location:
+
+```text
+storyboard_tool/app_state.py
+```
+
+Suggested API:
+
+```python
+def plugin_work_key_state(app: FastAPI) -> tuple[str, list[str]]:
+    """
+    Return:
+      active_work_key
+      open_work_keys
+
+    Source:
+      newest valid file or HTTP heartbeat
+
+    Validation:
+      only backend-generated current-project work-item keys
+    """
+```
+
+It may reuse the current internal logic in:
+
+```text
+_plugin_work_key_state()
+_valid_plugin_work_keys()
+```
+
+Rename or expose these helpers cleanly rather than duplicating the logic.
+
+---
+
+## Authoritative source rules
+
+The helper must:
+
+```text
+1. Determine whether file heartbeat or HTTP heartbeat is newer.
+2. Respect explicitly empty fields from the newer heartbeat.
+3. Validate all work keys against current PluginBridgeService.work_items(project).
+4. Remove duplicate open keys.
+5. Ignore malformed, deleted, stale, or cross-project keys.
+6. Return empty state when no project or plugin is not linked.
+```
+
+Important:
+
+```text
+newer heartbeat says open_work_keys: []
+```
+
+must mean “nothing is open”.
+
+Do not fall back to an older non-empty value merely because the newer list is empty.
+
+The same applies to:
+
+```text
+active_work_key: ""
+selected_shot_id: ""
+open_shot_ids: []
+```
+
+---
+
+## Use the shared helper everywhere decisions are made
+
+Replace direct reads of:
+
+```python
+runtime_state.plugin_open_work_keys(app)
+runtime_state.plugin_active_work_key(app)
+```
+
+where the code is making a real open/focus decision.
+
+At minimum update:
+
+```text
+storyboard_tool/backend_service.py
+  method_open_scene2d_perspective()
+
+any shot open/focus path that decides:
+  already open → focus
+  not open → launch/open PSD
+```
+
+The bridge status payload must also continue using this same helper.
+
+Target behavior:
+
+```python
+active_key, open_keys = app_state.plugin_work_key_state(self.app)
+
+if work_key in open_keys:
+    request path-based focus
+else:
+    open the PSD
+```
+
+Do not use unvalidated heartbeat values for open/focus decisions.
+
+---
+
+## Tests for P1-1
+
+Add tests covering both heartbeat channels and freshness.
+
+Required cases:
+
+```text
+1. File heartbeat newer, Perspective open:
+   open endpoint issues focus request
+   open_project_file is not called
+
+2. File heartbeat newer, explicitly empty open_work_keys:
+   stale HTTP runtime says open
+   open endpoint opens the PSD instead of focusing
+
+3. HTTP heartbeat newer:
+   its validated open keys are used
+
+4. File heartbeat includes unknown key:
+   key is ignored
+   PSD is opened
+
+5. File heartbeat reports deleted Perspective:
+   key is ignored
+
+6. Two identical source.psd work items:
+   correct key is used only when explicitly reported
+
+7. Newer heartbeat has active_work_key = "":
+   stale active key is not resurrected
+```
+
+Tests should assert whether:
+
+```text
+project_manager.open_project_file
+runtime_state.request_work_context_focus
+```
+
+were called.
+
+Do not only assert the final HTTP status.
+
+---
+
+# P1-2 — Isolate all shot-only Photoshop automation
+
+## Current problem
+
+The plugin now correctly detects:
+
+```text
+shot
+scene2d
+unmatched
+```
+
+However, parts of the old shot workflow still run globally inside bridge polling.
+
+Examples include:
+
+```js
+const shotId = detectShotFromDocument() || live.selected_shot_id;
+```
+
+and:
+
+```js
+if (colorChanged && app.activeDocument && isAutoApplyColorEnabled()) {
+  await applyCanvasBackground();
+}
+```
+
+When the active document is a Scene 2D `source.psd`, the fallback to `live.selected_shot_id` may cause shot-only automation to modify that Scene 2D PSD.
+
+This can alter:
+
+```text
+Background layer
+SB bg
+canvas color
+shot-specific layer state
+```
+
+Scene 2D must preserve its own visible composite and normal user background layers.
+
+---
+
+## Required rule
+
+The active work context controls what automation may run.
+
+```text
+active context kind == shot
+  shot-only behavior allowed
+
+active context kind == scene2d
+  no shot-only document mutation
+
+active context kind == unmatched
+  no project document mutation
+```
+
+Do not use `live.selected_shot_id` as proof that the active Photoshop document is a shot.
+
+The actual active document match is authoritative.
+
+---
+
+## Add explicit context predicates
+
+Suggested helpers:
+
+```js
+function activeIsShot() {
+  return activeWorkContext()?.kind === "shot";
+}
+
+function activeIsScene2D() {
+  return activeWorkContext()?.kind === "scene2d";
+}
+
+function activeIsUnmatched() {
+  return activeWorkContext()?.kind === "unmatched";
+}
+```
+
+Use them consistently.
+
+---
+
+## Protect all shot-only behavior
+
+Audit and guard at least:
+
+```text
+applyCanvasBackground()
+scheduleBackgroundSyncForActiveDocument()
+syncActiveDocumentBackground()
+ensureTemplateLayersForActiveDocument()
+shotFolder assignment based on selected shot
+shot status/quick note actions
+shot onion skin operations
+shot preview save/export
+SB bg synchronization
+shot-only layer repair
+auto-apply canvas color
+```
+
+The required pattern is:
+
+```js
+const ctx = activeWorkContext();
+
+if (ctx?.kind !== "shot") {
+  return;
+}
+```
+
+For user-triggered shot buttons, throw a clear message instead of silently returning:
+
+```text
+The active Photoshop document is not a storyboard shot.
+Activate a linked shot PSD first.
+```
+
+For automatic background polling, silently skip Scene 2D and unmatched documents.
+
+---
+
+## Fix `applyLiveBridge()`
+
+Do not do this globally:
+
+```js
+const shotId = detectShotFromDocument() || live.selected_shot_id;
+```
+
+Use the synchronized active context:
+
+```js
+const activeCtx = activeWorkContext();
+
+if (activeCtx?.kind === "shot") {
+  const shotId = activeCtx.shot_id;
+  // shot selection, shot folder, background sync
+}
+```
+
+`live.selected_shot_id` may remain useful as a pending Storyboarder selection only when:
+
+```text
+there is no active Photoshop document
+```
+
+It must not override a Scene 2D or unmatched active document.
+
+---
+
+## Auto canvas color rule
+
+Change:
+
+```js
+if (colorChanged && app.activeDocument && isAutoApplyColorEnabled()) {
+  await applyCanvasBackground();
+}
+```
+
+to the equivalent of:
+
+```js
+if (
+  colorChanged &&
+  app.activeDocument &&
+  activeWorkContext()?.kind === "shot" &&
+  isAutoApplyColorEnabled()
+) {
+  await applyCanvasBackground();
+}
+```
+
+Also make `applyCanvasBackground()` itself validate the context so it remains safe if called from another path.
+
+Use defense in depth:
+
+```text
+caller guard
++
+function-level guard
+```
+
+---
+
+## Scene 2D must never receive shot background automation
+
+Verify that while a Scene 2D tab is active:
+
+```text
+canvas background color changes in Storyboarder
+plugin bridge polling occurs
+selected shot changes in Storyboarder
+plugin reconnects
+```
+
+none of these operations modify the Scene 2D document.
+
+The same rule applies to an unrelated PSD.
+
+---
+
+## Tests for P1-2
+
+Where possible, extract pure decision helpers.
+
+Suggested pure helper:
+
+```js
+function shouldRunShotAutomation(workContext) {
+  return workContext?.kind === "shot";
+}
+```
+
+Add Node tests for:
+
+```text
+shot → true
+scene2d → false
+unmatched → false
+null → false
+```
+
+Also add static or integration checks ensuring:
+
+```text
+applyCanvasBackground has an internal shot guard
+syncActiveDocumentBackground has a shot guard
+applyLiveBridge only schedules shot background sync in shot mode
+```
+
+Manual UXP test remains mandatory:
+
+```text
+1. Open a shot PSD.
+2. Confirm normal shot background sync still works.
+3. Open a Scene 2D source.psd.
+4. Change Storyboarder canvas color.
+5. Wait through several bridge polls.
+6. Confirm Scene 2D layers and background remain unchanged.
+7. Open an unrelated PSD and repeat.
+8. Return to shot PSD.
+9. Confirm shot background sync resumes.
+```
+
+---
+
+# P1-3 — Verify settings/reference links before migration roll-forward
+
+## Current problem
+
+Migration commit order is broadly:
+
+```text
+write UUID scenes2d.json
+write UUID scene meta files
+write migrated settings.json/reference_links
+mark metadata_committed
+```
+
+A hard crash can occur after `scenes2d.json` is valid but before `settings.json` is updated.
+
+Current crash recovery for:
+
+```text
+state == metadata_committing
+```
+
+mainly verifies the UUID Scene payload and source files.
+
+It may roll forward even though `settings.json` still contains:
+
+```text
+source_scene2d_id = scene_001
+source_scene2d_perspective_id = persp_001
+legacy preview path
+```
+
+Then legacy directories may be deleted while reference links remain stale.
+
+---
+
+## Required journal additions
+
+When preparing the migration, persist enough expected information to verify the settings commit.
+
+Add fields such as:
+
+```json
+{
+  "settings_changed": true,
+  "expected_reference_links": [
+    {
+      "id": "...",
+      "source_scene2d_id": "<scene_uuid>",
+      "source_scene2d_perspective_id": "<perspective_uuid>",
+      "path": "scenes2d/<scene_uuid>/perspectives/<perspective_uuid>/preview.png"
+    }
+  ],
+  "expected_settings_hash": "<sha256>"
+}
+```
+
+Choose either:
+
+```text
+full expected migrated settings hash
+```
+
+or:
+
+```text
+canonical expected affected reference links
+```
+
+Using both is acceptable.
+
+Do not place sensitive absolute filesystem paths in the journal.
+
+All stored paths must remain project-relative.
+
+---
+
+## Canonical hashing
+
+If using a settings hash:
+
+```python
+json.dumps(
+    settings,
+    sort_keys=True,
+    separators=(",", ":"),
+    ensure_ascii=False,
+)
+```
+
+Then compute:
+
+```python
+hashlib.sha256(encoded_json).hexdigest()
+```
+
+Do not hash raw pretty-printed file bytes because formatting changes are not semantic.
+
+---
+
+## Add a complete commit verifier
+
+Create a helper such as:
+
+```python
+def _verify_migration_commit(
+    project: Project,
+    journal: dict[str, Any],
+) -> None:
+    ...
+```
+
+It must validate all of the following:
+
+### Scene payload
+
+```text
+- scenes2d.json is valid JSON
+- expected migrated Scene UUIDs exist
+- every Perspective ID is a UUID
+- every Perspective source path is canonical
+- every Perspective preview path is canonical
+- required source files exist
+- image Perspective preview/source exists
+```
+
+### Settings payload
+
+If `settings_changed` is true:
+
+```text
+- settings.json exists
+- settings.json is valid JSON
+- semantic settings hash matches the expected migrated settings
+  OR all affected reference links match the expected migrated values
+```
+
+### Reference links
+
+For every migrated Scene 2D reference:
+
+```text
+- source_scene2d_id uses the expected Scene UUID
+- source_scene2d_perspective_id uses the expected Perspective UUID
+- path points to the expected UUID preview path
+- no affected legacy scene_### or persp_### key remains
+```
+
+Do not reject unrelated non-Scene2D reference links.
+
+---
+
+## Recovery decision
+
+For journal state:
+
+```text
+metadata_committing
+```
+
+Roll forward only when `_verify_migration_commit()` fully passes.
+
+If any Scene or settings requirement fails:
+
+```text
+restore original canonical files from .uuid_migration_backup
+restore settings.json
+restore in-memory project.settings
+remove only UUID paths created by this migration
+keep all legacy files
+remove journal and backup only after successful rollback
+```
+
+For:
+
+```text
+metadata_committed
+cleanup_pending
+```
+
+also run the complete verifier before deleting legacy roots.
+
+If verification fails at these states:
+
+```text
+do not delete legacy roots
+do not remove backups
+raise a clear recovery error
+```
+
+Be conservative. Data preservation is more important than automatic cleanup.
+
+---
+
+## Ensure in-memory settings consistency
+
+After successful roll-forward:
+
+```python
+project.settings = parsed_verified_settings
+```
+
+After rollback:
+
+```python
+project.settings = restored_original_settings
+```
+
+Do not leave disk and memory different.
+
+---
+
+## Tests for P1-3
+
+Add crash-recovery tests.
+
+### Case 1 — Scene metadata committed, settings still legacy
+
+Setup:
+
+```text
+journal state = metadata_committing
+UUID scenes2d.json is valid
+UUID source files exist
+settings.json still references scene_001 / persp_001
+```
+
+Expected:
+
+```text
+rollback
+legacy canonical metadata restored
+legacy files retained
+UUID staged paths removed
+```
+
+### Case 2 — Settings partially migrated
+
+One field UUID, another field legacy.
+
+Expected:
+
+```text
+rollback
+```
+
+### Case 3 — Reference path remains legacy
+
+IDs are UUID but `path` points to old preview.
+
+Expected:
+
+```text
+rollback
+```
+
+### Case 4 — Complete UUID Scene and settings payload
+
+Expected:
+
+```text
+roll forward
+legacy roots cleaned
+journal removed
+backup area removed
+project.settings equals verified disk settings
+```
+
+### Case 5 — Unrelated reference links
+
+Ensure non-Scene2D references do not block valid roll-forward.
+
+### Case 6 — Corrupt settings JSON
+
+Expected:
+
+```text
+no roll-forward
+no legacy deletion
+safe rollback or clear recovery error
+```
+
+### Case 7 — `metadata_committed` but settings invalid
+
+Expected:
+
+```text
+legacy roots are not deleted
+backup and journal remain available
+clear error is returned
+```
 
 ---
 
@@ -48,633 +778,148 @@ Fix these without changing Photoshop plugin behavior.
 Likely files:
 
 ```text
-launch_storyboarder.bat
-scripts/launch-storyboarder-splash.ps1
-
-storyboard_tool/api.py
-storyboard_tool/backend_service.py
 storyboard_tool/app_state.py
+storyboard_tool/backend_service.py
+storyboard_tool/plugin_service.py
 storyboard_tool/runtime_state.py
-storyboard_tool/live_bridge.py
-storyboard_tool/desktop.py
-storyboard_tool/preview_analysis_cache.py
+storyboard_tool/scene2d.py
 
-frontend/src/api/system.ts
-frontend/src/state/ProjectContext.tsx
-frontend/src/state/LiveBridgeContext.tsx
-frontend/src/App.tsx
+photoshop_uxp_plugin/panel.js
+photoshop_uxp_plugin/preview_export.js
+photoshop_uxp_plugin/backend_client.js
 
-tests/test_bootstrap.py
-tests/test_preview_analysis_cache.py
-tests/test_ui_ready.py
-new startup/preview-analysis lifecycle tests if needed
+tests/test_plugin_scene2d.py
+tests/test_photoshop_bridge.py
+tests/test_scene2d_migration.py
+tests/test_plugin_work_item_paths.mjs
 ```
 
-Do not modify:
+Change additional files only where required by these three P1 issues.
+
+---
+
+# Do not change
 
 ```text
-photoshop_uxp_plugin/*
 Scene 2D UUID model
-Scene 2D migration
-Scene 3D storage
-shot PSD structure
-SB bg behavior
-shot preview export behavior
-reference segment semantics
+Scene 2D canonical source.psd / preview.png paths
+shot ID format
+shot folder structure
+Scene 3D architecture
+SB bg embedded reference behavior
+shot transparent preview export semantics
+Scene 2D visible-composite export semantics
+preview-analysis lifecycle
+splash lifecycle
+plugin package/two-panel architecture
+```
+
+Do not include:
+
+```text
+Windows full-path lowercase P2
+preview-analysis retry P2
+plugin UI redesign
+image-to-PSD conversion
+Perspective onion skin
 ```
 
 ---
 
-# Part 1 — Show the splash before all Python/venv work
+# Required validation
 
-Current launcher broadly does:
-
-```text
-check/create venv
-activate venv
-import dependencies
-possibly pip install
-generate token
-show splash
-launch app
-```
-
-Change it to:
-
-```text
-cd to repository root
-generate per-launch token
-start splash immediately
-then validate/create venv
-then validate/install dependencies
-then launch Storyboarder
-```
-
-The splash must appear before:
-
-```text
-py -m venv
-python --version
-activate.bat
-python -c "import ..."
-pip install
-python main.py
-```
-
-The user should receive visible feedback even on:
-
-```text
-first launch
-broken virtual environment
-missing dependencies
-slow dependency import
-dependency installation
-```
-
----
-
-# Part 2 — Launcher status communication
-
-Use the existing per-launch token.
-
-Add a token-specific status marker:
-
-```text
-%TEMP%\storyboarder-launch-<token>.status
-```
-
-The launcher may update it with simple status strings:
-
-```text
-Preparing Python environment…
-Checking dependencies…
-Installing dependencies…
-Starting Storyboarder…
-```
-
-Requirements:
-
-```text
-- status content is plain text only
-- no arbitrary path is accepted from the frontend
-- status writes are best-effort
-- launch must not block if status write fails
-- stale token files must not affect a different launch
-```
-
-The splash should read this status file at its existing low polling interval.
-
-If there is no status file, retain elapsed-time fallback messages.
-
-Do not display fake percentages.
-
----
-
-# Part 3 — Failure handling for launcher setup
-
-If venv creation, activation, dependency installation, or Python launch fails:
-
-```text
-- write a clear failure message to the token status file
-- keep the splash visible briefly or change it into an error state
-- provide a Close button
-- keep Escape functional
-- ensure the batch process returns a non-zero exit code
-```
-
-Suggested splash error state:
-
-```text
-Storyboarder could not start
-
-Failed to install Python dependencies.
-Check logs/desktop.log for details.
-
-[Close]
-```
-
-Do not leave an indeterminate progress bar running for 120 seconds after a known fatal error.
-
-A token-specific failure marker may be used:
-
-```text
-%TEMP%\storyboarder-launch-<token>.failed
-```
-
-Clean it after the splash exits where practical.
-
----
-
-# Part 4 — Main-window fallback for splash dismissal
-
-The ready marker remains the primary success signal.
-
-Add a safe secondary signal so the TopMost splash does not cover an already usable Storyboarder window for up to 120 seconds if `/api/app/ui-ready` fails.
-
-Preferred options, in order:
-
-```text
-Option A:
-desktop.py writes the same token ready marker from a pywebview loaded/shown callback
-after the main window is genuinely visible.
-
-Option B:
-the splash detects a visible Storyboarder top-level window with a plausible size.
-
-Option C:
-a separate desktop-visible marker is written by the Python process.
-```
-
-Do not close the splash merely when FastAPI starts.
-
-Acceptable fallback timing:
-
-```text
-React UI-ready marker = primary
-visible pywebview main window after load = fallback
-120-second timeout = last resort
-```
-
-Avoid broad process enumeration or killing unrelated processes.
-
----
-
-# Part 5 — Preview-analysis frontend API
-
-Add typed frontend API methods for:
-
-```text
-POST /api/project/preview-analysis/refresh
-GET  /api/project/preview-analysis/status
-```
-
-The refresh result should include:
-
-```json
-{
-  "ok": true,
-  "status": "started",
-  "task_id": "...",
-  "project_path": "...",
-  "revision": 12
-}
-```
-
-Possible statuses:
-
-```text
-no_project
-started
-already_running
-complete
-failed
-stale_project
-```
-
-Do not expose arbitrary filesystem paths as writable inputs.
-
----
-
-# Part 6 — Per-project analysis jobs
-
-Replace the single global preview-analysis lock with project-aware job state.
-
-Problem with one global lock:
-
-```text
-Project A analysis is running
-→ user opens Project B
-→ Project B request receives already_running
-→ Project B may never retry
-```
-
-Manage jobs by stable project identity, preferably normalized project root.
-
-Each job should track:
-
-```text
-task_id
-project_root
-state
-started_at
-completed_at
-decoded_count
-error
-revision
-```
-
-Requirements:
-
-```text
-- only one active analysis job per project
-- different projects may not corrupt each other
-- a worker captures the intended project/root at task creation
-- switching active project does not cause it to update the wrong project
-- stale worker completion must not announce a change for the wrong active project
-- failed workers release their running state
-```
-
-Concurrency may remain conservative; correctness is more important than maximizing parallelism.
-
----
-
-# Part 7 — Automatic analysis trigger
-
-After initial UI paint and `reportUiReady()`, schedule preview analysis outside the critical rendering path.
-
-Suggested order:
-
-```text
-bootstrap completes
-→ Welcome or Board renders
-→ two requestAnimationFrame ticks
-→ report UI ready
-→ requestIdleCallback / delayed callback
-→ request preview analysis
-```
-
-Do not delay splash closure waiting for image analysis.
-
-Do not block project opening on preview decoding.
-
-Only trigger when a project is open.
-
-When switching projects:
-
-```text
-schedule analysis for the new project
-do not reuse an old project task result
-```
-
-If refresh returns `already_running`, subscribe to or poll the existing task instead of abandoning the lifecycle.
-
----
-
-# Part 8 — Analysis completion notification
-
-When the worker completes and saves cache:
-
-```text
-increment a preview-analysis revision
-publish a lightweight change event
-```
-
-Suggested bridge payload:
-
-```json
-{
-  "preview_analysis": {
-    "revision": 8,
-    "project_path": "D:/.../Storyboard_Project",
-    "state": "complete",
-    "decoded_count": 14,
-    "task_id": "..."
-  }
-}
-```
-
-The frontend should react only when:
-
-```text
-event project_path matches the currently open project
-revision is newer than the last handled revision
-state is complete
-```
-
-Then perform one controlled project refresh:
-
-```text
-GET /api/project
-```
-
-This refresh should update:
-
-```text
-has_artwork_preview
-preview_has_transparency
-```
-
-Do not reset:
-
-```text
-selected shot
-workspace mode
-timeline scroll
-Scene 2D selection
-Scene 3D selection
-unsaved shot drafts
-```
-
-Because replacing project data can conflict with local unsaved drafts, use the existing safe merge/refresh mechanism.
-
-Do not silently discard unsaved edits.
-
-If the existing `refreshProjectFromBridge()` discards undo/redo or affects selection unnecessarily, add a narrower preview-analysis refresh path that merges only server-computed preview fields and disk mtimes.
-
----
-
-# Part 9 — Correct provisional preview state
-
-On cache miss, the current provisional values are:
-
-```text
-has_artwork_preview = true
-preview_has_transparency = false
-```
-
-This can temporarily misclassify a blank preview as artwork.
-
-Add an explicit analysis state to shot payloads:
-
-```text
-preview_analysis_state:
-  missing
-  provisional
-  cached
-```
-
-Suggested behavior:
-
-```text
-no preview file:
-  has_artwork_preview = false
-  preview_analysis_state = missing
-
-preview file, cache hit:
-  real cached values
-  preview_analysis_state = cached
-
-preview file, cache miss:
-  provisional values
-  preview_analysis_state = provisional
-```
-
-Frontend should avoid presenting a provisional result as certain.
-
-For example, do not show a definitive “artwork exists” warning solely from a provisional result.
-
-Keep backward-compatible existing boolean fields.
-
----
-
-# Part 10 — Cache lifecycle
-
-Keep cache identity based on:
-
-```text
-normalized path
-mtime_ns
-file size
-```
-
-Add or verify:
-
-```text
-- stale cache entries are ignored
-- corrupt cache returns empty state safely
-- atomic writes use uniquely named temporary files
-- concurrent writers cannot replace each other with partial data
-- orphaned entries may be pruned periodically
-```
-
-Current fixed `.tmp` naming can collide if two writes occur concurrently.
-
-Use a unique sibling temporary file and `os.replace`.
-
-Do not make cache write failure break project use.
-
----
-
-# Part 11 — Analysis after preview changes
-
-The lifecycle must also work after Photoshop or another process updates a preview.
-
-When project/plugin revision indicates preview files changed:
-
-```text
-- cache lookup naturally misses due to mtime/size
-- schedule analysis for uncached changed previews
-- notify frontend on completion
-- refresh computed preview fields once
-```
-
-Avoid creating an infinite loop:
-
-```text
-project refresh
-→ trigger analysis
-→ zero files decoded
-→ revision change
-→ project refresh
-→ trigger analysis ...
-```
-
-Only emit a completion revision when:
-
-```text
-a job state meaningfully changed
-or at least one cache entry changed
-```
-
-For zero-work analysis, mark the task complete but do not repeatedly cause UI reloads.
-
----
-
-# Part 12 — Startup timing instrumentation
-
-Preserve existing timing instrumentation.
-
-Add useful stages where missing:
-
-```text
-launcher splash started
-venv check started/completed
-dependency check started/completed
-Python app entered
-server ready
-bootstrap requested
-session loaded
-project opened
-project payload built
-frontend UI-ready received
-preview analysis scheduled
-preview analysis completed
-```
-
-Do not log on every render or every polling tick.
-
-Include elapsed milliseconds where practical.
-
-Do not log full sensitive filesystem contents unnecessarily.
-
----
-
-# Part 13 — Tests
-
-## Launcher/splash tests
-
-Where fully automated WinForms testing is impractical, test pure/token/file logic and document manual validation.
-
-Required automated checks where feasible:
-
-```text
-1. Token-specific status/ready/failure paths are derived safely.
-2. Invalid token cannot escape TEMP directory.
-3. Different tokens do not interfere.
-4. Fatal launcher state does not wait for normal timeout.
-5. Ready marker still closes the matching splash.
-```
-
-## Preview analysis tests
-
-Add tests for:
-
-```text
-1. Initial bootstrap does not decode preview images synchronously.
-2. Frontend/API refresh starts a background job.
-3. Cache miss becomes cached after worker completion.
-4. Completion increments revision.
-5. Status endpoint reports running and complete states.
-6. Same-project duplicate request returns existing task information.
-7. Project A worker cannot announce Project B revision.
-8. Opening Project B while Project A runs still allows B analysis.
-9. Worker failure releases job state.
-10. Cache write failure does not crash the worker lifecycle.
-11. Corrupt cache is handled safely.
-12. Changed mtime invalidates cached values.
-13. Zero-work job does not trigger an infinite revision loop.
-14. Temporary cache file names are collision-safe.
-```
-
-## Frontend behavior
-
-Add focused tests if the project already has frontend test infrastructure.
-
-Otherwise verify through build plus manual smoke tests.
-
----
-
-# Manual smoke test
-
-Run the actual user-facing launcher:
-
-```powershell
-.\launch_storyboarder.bat
-```
-
-Do not validate only with:
-
-```powershell
-python main.py
-```
-
-Manual scenarios:
-
-```text
-1. Normal warm launch:
-   splash appears immediately
-   main app appears
-   splash closes after UI paint
-
-2. Missing/broken venv simulation:
-   splash appears before venv work
-
-3. Missing dependency simulation:
-   splash shows environment/dependency status
-
-4. Known startup failure:
-   splash enters visible error state
-   Escape and Close work
-
-5. UI-ready request failure simulation:
-   visible-main-window fallback closes splash
-
-6. Project with many previews:
-   Board renders before preview analysis finishes
-   background analysis completes
-   artwork/transparency states update automatically
-
-7. Switch projects during analysis:
-   no cross-project UI refresh
-   both projects remain analysable
-
-8. No project:
-   Welcome UI appears
-   splash closes
-   no preview-analysis request loops
-```
-
----
-
-# Commands
+## Backend tests
 
 Run:
 
 ```powershell
-.venv\Scripts\python.exe -m pytest tests/test_bootstrap.py -q
-.venv\Scripts\python.exe -m pytest tests/test_preview_analysis_cache.py -q
-.venv\Scripts\python.exe -m pytest tests/test_ui_ready.py -q
-.venv\Scripts\python.exe -m pytest tests/ -q
+.venv\Scripts\python.exe -m pytest tests/test_plugin_scene2d.py -q
+.venv\Scripts\python.exe -m pytest tests/test_photoshop_bridge.py -q
+.venv\Scripts\python.exe -m pytest tests/test_scene2d_migration.py -q
+```
 
+Then:
+
+```powershell
+.venv\Scripts\python.exe -m pytest tests/ -q
+```
+
+## Plugin helper tests
+
+Run:
+
+```powershell
+node --test tests/test_plugin_work_item_paths.mjs
+```
+
+## Frontend build
+
+Even if no frontend code changes are expected, run:
+
+```powershell
 cd frontend
 npm.cmd run build
 ```
 
-Do not claim WinForms behavior is verified unless the launcher was manually run.
+## Manual Photoshop validation
+
+Mandatory:
+
+```text
+1. Open a shot PSD.
+2. Confirm shot background sync works.
+3. Open a Scene 2D source.psd.
+4. Change canvas background color in Storyboarder.
+5. Confirm Scene 2D PSD is not modified.
+6. Switch selected shot in Storyboarder.
+7. Confirm Scene 2D PSD remains untouched.
+8. Open an unrelated PSD.
+9. Confirm no shot automation affects it.
+10. Return to shot PSD.
+11. Confirm shot automation resumes.
+12. Open an already-open Scene 2D Perspective from Storyboarder.
+13. Confirm path-based focus occurs.
+14. Close that tab.
+15. Wait for a fresh file heartbeat.
+16. Click Open again.
+17. Confirm the PSD reopens instead of receiving a dead focus request.
+```
+
+Do not claim manual validation passed unless Photoshop was actually used.
 
 ---
 
-# Commit boundary
+# Acceptance criteria
 
-Create one focused commit.
-
-Suggested commit message:
+This task is complete only when:
 
 ```text
-fix: complete startup and preview analysis lifecycle
+- every backend open/focus decision uses the same newest validated heartbeat state
+- explicitly empty newer heartbeat values override stale non-empty state
+- Scene 2D and unmatched documents cannot receive shot background/canvas automation
+- Scene 2D export remains functional
+- shot background workflow remains functional
+- migration cannot roll forward while settings/reference links are incomplete
+- metadata_committed cleanup never deletes legacy roots when full commit verification fails
+- all focused and full tests pass
+- manual Photoshop smoke test is reported honestly
 ```
 
-Do not include Photoshop plugin or Scene 2D migration changes.
+---
+
+# Suggested commit structure
+
+One remediation task, optionally split into three commits:
+
+```text
+fix: use authoritative plugin heartbeat state
+
+fix: isolate shot automation from Scene2D documents
+
+fix: verify migration settings before roll-forward
+```
+
+All three must be completed before stopping.
 
 ---
 
@@ -683,18 +928,28 @@ Do not include Photoshop plugin or Scene 2D migration changes.
 Report:
 
 ```text
+Commits created
 Changed files
-New launcher execution order
-Splash status and failure behavior
-Splash fallback close behavior
-Preview-analysis API and job model
-How automatic analysis is scheduled
-Completion revision/event design
-How frontend project state is refreshed safely
-Cache atomic-write changes
-Tests run
+
+Authoritative heartbeat-state helper
+Every caller migrated to the shared helper
+How explicit empty heartbeat fields are handled
+Tests covering file-vs-HTTP freshness
+
+Shot-only automation guards
+Functions protected
+Manual Scene2D/unmatched document validation
+
+Migration journal additions
+Settings/reference verification algorithm
+Rollback and roll-forward decision rules
+Crash-recovery tests added
+
+Focused pytest results
+Full pytest result
+Node test result
 Frontend build result
-Manual launcher scenarios tested
+Manual Photoshop validation result
 Known limitations
-Commit SHA
+Final commit SHA
 ```

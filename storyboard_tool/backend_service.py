@@ -1120,9 +1120,13 @@ class StoryboardBackendService(ExportServiceMixin):
             source_native_path=str(source_path.resolve()).replace("\\", "/") if source_path else "",
         )
 
-        # If plugin already has this PSD open, request focus; otherwise OS-open
+        # If plugin already has this PSD open, request focus; otherwise OS-open.
+        # Use the authoritative shared helper so freshness between file and HTTP
+        # heartbeats is respected: a newer explicit empty list is not overridden
+        # by stale runtime state, and an unknown or cross-project key is ignored.
         work_key = f"scene2d:{scene_id}:{perspective_id}"
-        if work_key in runtime_state.plugin_open_work_keys(self.app):
+        _active_key, open_keys = app_state.plugin_work_key_state(self.app)
+        if work_key in open_keys:
             runtime_state.request_work_context_focus(self.app, runtime_state.active_work_context(self.app))
         else:
             try:

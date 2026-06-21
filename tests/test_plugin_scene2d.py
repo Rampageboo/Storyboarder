@@ -26,6 +26,7 @@ from __future__ import annotations
 import contextlib
 import io
 import json
+import time
 import tempfile
 import unittest
 import warnings
@@ -362,6 +363,194 @@ class PluginScene2DTests(unittest.TestCase):
         status = self.client.get("/api/bridge/status").json()
         self.assertEqual(status["plugin_active_work_key"], "")
         self.assertNotIn(bogus, status["plugin_open_work_keys"])
+
+
+class HeartbeatFreshnessTests(unittest.TestCase):
+    """P1-1: Authoritative plugin work-key state via file vs HTTP heartbeat freshness."""
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self._tmp.name)
+        self._bridge_dir = self.root / "_bridge"
+        self._bridge_dir.mkdir(parents=True, exist_ok=True)
+        for name in ("global_bridge_dir", "shared_bridge_dir"):
+            patcher = mock.patch.object(live_bridge, name, return_value=self._bridge_dir)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+        self.app = api_module.create_app(self.root)
+        self.client = TestClient(self.app, raise_server_exceptions=False)
+
+    def tearDown(self) -> None:
+        self._tmp.cleanup()
+
+    def _new_project(self) -> Path:
+        r = _quiet(lambda: self.client.post("/api/project/new", json={"path": self._tmp.name}))
+        self.assertEqual(r.status_code, 200)
+        return Path(r.json()["project_path"])
+
+    def _add_psd_perspective(self) -> tuple[str, str]:
+        r = _quiet(lambda: self.client.post("/api/project/scenes2d", json={"title": "Scene A"}))
+        self.assertEqual(r.status_code, 200)
+        scene_id = r.json()["scene"]["id"]
+        r2 = _quiet(lambda: self.client.post(
+            f"/api/project/scenes2d/{scene_id}/perspectives",
+            json={"title": "P1", "type": "psd"},
+        ))
+        self.assertEqual(r2.status_code, 200)
+        perspective_id = r2.json()["perspective"]["id"]
+        proj_root = Path(self.client.get("/api/project").json()["project_path"])
+        persp_dir = proj_root / "scenes2d" / scene_id / "perspectives" / perspective_id
+        persp_dir.mkdir(parents=True, exist_ok=True)
+        (persp_dir / "source.psd").write_bytes(b"8BPS" + b"\0" * 32)
+        return scene_id, perspective_id
+
+    def _open_perspective(self, scene_id: str, perspective_id: str, open_mock: mock.MagicMock) -> dict:
+        with mock.patch("storyboard_tool.project_manager.open_project_file", open_mock):
+            r = _quiet(lambda: self.client.post(
+                f"/api/project/scenes2d/{scene_id}/perspectives/{perspective_id}/open"
+            ))
+        self.assertEqual(r.status_code, 200, r.text)
+        return r.json()
+
+    # ── helpers ────────────────────────────────────────────────────────────────
+
+    def _write_file_heartbeat(self, payload: dict) -> None:
+        """Write a file heartbeat that will be read by live_bridge.read_plugin_heartbeat()."""
+        import json as _json
+        hb_path = self._bridge_dir / "storyboard_plugin_heartbeat.json"
+        hb_path.write_text(_json.dumps(payload), encoding="utf-8")
+        # Patch read_plugin_heartbeat to return this payload
+        mock.patch.object(live_bridge, "read_plugin_heartbeat", return_value=payload).start()
+        self.addCleanup(mock.patch.stopall)
+
+    # ── tests ──────────────────────────────────────────────────────────────────
+
+    def test_file_newer_perspective_open_triggers_focus_not_os_open(self) -> None:
+        """File heartbeat newer, Perspective in open_work_keys → focus, not OS-open."""
+        self._new_project()
+        scene_id, perspective_id = self._add_psd_perspective()
+        work_key = f"scene2d:{scene_id}:{perspective_id}"
+
+        # No HTTP heartbeat → http_seen = 0. File mtime slightly in the future so
+        # plugin_linked=True and file is definitively newer.
+        file_future = time.time() + 5.0
+        file_payload = {"active_work_key": work_key, "open_work_keys": [work_key]}
+        with mock.patch.object(live_bridge, "read_plugin_heartbeat", return_value=file_payload), \
+             mock.patch.object(live_bridge, "read_plugin_heartbeat_mtime", return_value=file_future):
+            open_file_mock = mock.MagicMock(return_value=Path("/fake.psd"))
+            body = self._open_perspective(scene_id, perspective_id, open_file_mock)
+
+        # Focus should have been requested; OS-open should NOT have been called
+        open_file_mock.assert_not_called()
+        live = self.client.get("/api/bridge/status").json().get("live") or {}
+        fr = live.get("focus_request") or {}
+        self.assertEqual(fr.get("kind"), "scene2d")
+
+    def test_file_newer_empty_open_keys_overrides_stale_http(self) -> None:
+        """File heartbeat newer, open_work_keys=[] → OS-open even if stale HTTP says open."""
+        self._new_project()
+        scene_id, perspective_id = self._add_psd_perspective()
+        work_key = f"scene2d:{scene_id}:{perspective_id}"
+
+        # HTTP says open (will become stale once file mtime is later)
+        self.client.post("/api/plugin/heartbeat", json={
+            "selected_shot_id": "", "open_shot_ids": [],
+            "active_work_key": work_key, "open_work_keys": [work_key],
+        })
+
+        # File heartbeat is newer (mtime after the HTTP POST) and reports nothing open
+        file_future = time.time() + 5.0
+        file_payload = {"active_work_key": "", "open_work_keys": []}
+        with mock.patch.object(live_bridge, "read_plugin_heartbeat", return_value=file_payload), \
+             mock.patch.object(live_bridge, "read_plugin_heartbeat_mtime", return_value=file_future):
+            open_file_mock = mock.MagicMock(return_value=Path("/fake.psd"))
+            body = self._open_perspective(scene_id, perspective_id, open_file_mock)
+
+        # OS-open must have been called — the newer file heartbeat's empty list wins
+        open_file_mock.assert_called_once()
+
+    def test_http_newer_its_open_keys_are_used(self) -> None:
+        """HTTP heartbeat newer → its validated open_work_keys are used."""
+        self._new_project()
+        scene_id, perspective_id = self._add_psd_perspective()
+        work_key = f"scene2d:{scene_id}:{perspective_id}"
+
+        # Send HTTP heartbeat with perspective open (http_seen ≈ now)
+        self.client.post("/api/plugin/heartbeat", json={
+            "selected_shot_id": "", "open_shot_ids": [],
+            "active_work_key": work_key, "open_work_keys": [work_key],
+        })
+
+        # File heartbeat is STALE (mtime = 0) so HTTP wins
+        with mock.patch.object(live_bridge, "read_plugin_heartbeat", return_value={}), \
+             mock.patch.object(live_bridge, "read_plugin_heartbeat_mtime", return_value=0.0):
+            open_file_mock = mock.MagicMock(return_value=Path("/fake.psd"))
+            body = self._open_perspective(scene_id, perspective_id, open_file_mock)
+
+        # HTTP said open → should focus, not OS-open
+        open_file_mock.assert_not_called()
+
+    def test_file_heartbeat_unknown_key_ignored_opens_psd(self) -> None:
+        """File heartbeat with a key that's not in the project's work items is ignored."""
+        self._new_project()
+        scene_id, perspective_id = self._add_psd_perspective()
+        bogus_key = "scene2d:00000000-0000-0000-0000-000000000000:00000000-0000-0000-0000-000000000000"
+
+        file_future = time.time() + 5.0
+        file_payload = {"active_work_key": bogus_key, "open_work_keys": [bogus_key]}
+        with mock.patch.object(live_bridge, "read_plugin_heartbeat", return_value=file_payload), \
+             mock.patch.object(live_bridge, "read_plugin_heartbeat_mtime", return_value=file_future):
+            open_file_mock = mock.MagicMock(return_value=Path("/fake.psd"))
+            body = self._open_perspective(scene_id, perspective_id, open_file_mock)
+
+        # Unknown key is rejected → should OS-open the actual PSD
+        open_file_mock.assert_called_once()
+
+    def test_newer_heartbeat_empty_active_key_not_resurrected(self) -> None:
+        """Newer file heartbeat reports active_work_key="" → stale HTTP active key NOT resurrected."""
+        from storyboard_tool import app_state
+        self._new_project()
+        scene_id, perspective_id = self._add_psd_perspective()
+        work_key = f"scene2d:{scene_id}:{perspective_id}"
+
+        # HTTP heartbeat (now stale) says a key is active
+        self.client.post("/api/plugin/heartbeat", json={
+            "selected_shot_id": "", "open_shot_ids": [],
+            "active_work_key": work_key, "open_work_keys": [work_key],
+        })
+
+        # File heartbeat is newer and reports "" active key — must win
+        file_future = time.time() + 5.0
+        file_payload = {"active_work_key": "", "open_work_keys": []}
+        with mock.patch.object(live_bridge, "read_plugin_heartbeat", return_value=file_payload), \
+             mock.patch.object(live_bridge, "read_plugin_heartbeat_mtime", return_value=file_future):
+            active_key, open_keys = app_state.plugin_work_key_state(self.app)
+
+        # Active key should be "" (from newer file heartbeat), not the stale HTTP value
+        self.assertEqual(active_key, "")
+        self.assertEqual(open_keys, [])
+
+    def test_http_newer_explicit_empty_not_overridden_by_stale_file(self) -> None:
+        """HTTP is newer with open_work_keys=[] — stale file's non-empty list must NOT be used."""
+        from storyboard_tool import app_state
+        self._new_project()
+        scene_id, perspective_id = self._add_psd_perspective()
+        work_key = f"scene2d:{scene_id}:{perspective_id}"
+
+        # HTTP heartbeat (newer) says nothing open
+        self.client.post("/api/plugin/heartbeat", json={
+            "selected_shot_id": "", "open_shot_ids": [],
+            "active_work_key": "", "open_work_keys": [],
+        })
+
+        # File heartbeat (stale, mtime = 0) says open — must lose
+        file_payload = {"active_work_key": work_key, "open_work_keys": [work_key]}
+        with mock.patch.object(live_bridge, "read_plugin_heartbeat", return_value=file_payload), \
+             mock.patch.object(live_bridge, "read_plugin_heartbeat_mtime", return_value=0.0):
+            active_key, open_keys = app_state.plugin_work_key_state(self.app)
+
+        self.assertEqual(active_key, "")
+        self.assertEqual(open_keys, [])
 
 
 if __name__ == "__main__":

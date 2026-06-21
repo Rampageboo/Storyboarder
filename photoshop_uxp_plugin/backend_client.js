@@ -25,6 +25,18 @@ function activeScene2DContext() {
   return null;
 }
 
+function activeIsShot() {
+  return _activeWorkContext?.kind === "shot";
+}
+
+function activeIsScene2D() {
+  return _activeWorkContext?.kind === "scene2d";
+}
+
+function activeIsUnmatched() {
+  return _activeWorkContext?.kind === "unmatched";
+}
+
 function setWorkContext(ctx) {
   _activeWorkContext = ctx || null;
 }

@@ -89,6 +89,12 @@ async function ensureDrawingLayerInModal(doc) {
 }
 
 async function ensureTemplateLayersForActiveDocument() {
+  const ctx = typeof activeWorkContext === "function" ? activeWorkContext() : null;
+  if (ctx && ctx.kind !== "shot") {
+    throw new Error(
+      "The active Photoshop document is not a storyboard shot. Activate a linked shot PSD first.",
+    );
+  }
   if (!app.activeDocument) {
     throw new Error("Open a shot canvas first.");
   }

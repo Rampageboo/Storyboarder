@@ -547,5 +547,283 @@ class Scene2DMigrationTests(unittest.TestCase):
         self.assertTrue((self.project_root / "scenes2d" / ".uuid_migration.json").exists())
 
 
+class MigrationCommitVerificationTests(unittest.TestCase):
+    """P1-3: Verify settings/reference links before crash-recovery roll-forward.
+
+    These tests inject a partial-commit journal and verify that recovery makes
+    the correct rollback or roll-forward decision.
+    """
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self._tmp.name)
+        self.app = api_module.create_app(self.root)
+        self.client = TestClient(self.app, raise_server_exceptions=False)
+        created = _quiet(lambda: self.client.post("/api/project/new", json={"path": self._tmp.name}))
+        self.assertEqual(created.status_code, 200, created.text)
+        self.project_root = Path(created.json()["project_path"])
+        self.settings_path = self.project_root / "settings.json"
+
+    def tearDown(self) -> None:
+        self._tmp.cleanup()
+
+    # ── helpers ───────────────────────────────────────────────────────────────
+
+    def _new_uuid(self) -> str:
+        return str(uuid.uuid4())
+
+    def _write_scenes2d_json(self, scene_id: str, persp_id: str) -> None:
+        scenes_dir = self.project_root / "scenes2d"
+        scenes_dir.mkdir(exist_ok=True)
+        source_rel = f"scenes2d/{scene_id}/perspectives/{persp_id}/source.psd"
+        preview_rel = f"scenes2d/{scene_id}/perspectives/{persp_id}/preview.png"
+        persp_dir = self.project_root / f"scenes2d/{scene_id}/perspectives/{persp_id}"
+        persp_dir.mkdir(parents=True, exist_ok=True)
+        (persp_dir / "source.psd").write_bytes(b"8BPS" + b"\x00" * 26)
+        (persp_dir / "preview.png").write_bytes(MINI_PNG)
+        payload = {"scenes": [{"id": scene_id, "title": "Scene A", "perspectives": [
+            {"id": persp_id, "title": "P1", "type": "psd",
+             "source_file_path": source_rel, "preview_image_path": preview_rel,
+             "linked_scene3d_id": "", "linked_scene3d_view": None,
+             "created_at": "2025-01-01T00:00:00Z", "updated_at": "2025-01-01T00:00:00Z"},
+        ], "primary_perspective_id": persp_id, "created_at": "2025-01-01T00:00:00Z",
+           "updated_at": "2025-01-01T00:00:00Z"}]}
+        (scenes_dir / "scenes2d.json").write_text(json.dumps(payload), encoding="utf-8")
+
+    def _write_settings_with_link(self, scene_id: str, persp_id: str, *,
+                                   preview_rel: str | None = None) -> None:
+        if preview_rel is None:
+            preview_rel = f"scenes2d/{scene_id}/perspectives/{persp_id}/preview.png"
+        settings = {
+            "canvas_background_color": "#E8E8E8",
+            "reference_links": [{
+                "id": "ref-1",
+                "source_scene2d_id": scene_id,
+                "source_scene2d_perspective_id": persp_id,
+                "path": preview_rel,
+            }],
+        }
+        self.settings_path.write_text(json.dumps(settings), encoding="utf-8")
+
+    def _write_journal(self, journal: dict) -> None:
+        journal_path = self.project_root / "scenes2d" / ".uuid_migration.json"
+        (self.project_root / "scenes2d").mkdir(exist_ok=True)
+        journal_path.write_text(json.dumps(journal), encoding="utf-8")
+
+    def _trigger_recovery(self) -> None:
+        """Call list_scenes2d to trigger _recover_uuid_migration()."""
+        _quiet(lambda: self.client.get("/api/project/scenes2d"))
+
+    def _base_journal(self, scene_id: str, persp_id: str, *,
+                      old_scene_id: str = "scene_001",
+                      settings_changed: bool = True,
+                      expected_hash: str | None = None,
+                      expected_links: list | None = None) -> dict:
+        import hashlib as _hl
+        persp_preview_rel = f"scenes2d/{scene_id}/perspectives/{persp_id}/preview.png"
+        if expected_links is None and settings_changed:
+            expected_links = [{
+                "source_scene2d_id": scene_id,
+                "source_scene2d_perspective_id": persp_id,
+                "path": persp_preview_rel,
+            }]
+        target_settings = {
+            "canvas_background_color": "#E8E8E8",
+            "reference_links": [{"id": "ref-1", "source_scene2d_id": scene_id,
+                                  "source_scene2d_perspective_id": persp_id,
+                                  "path": persp_preview_rel}],
+        }
+        if expected_hash is None and settings_changed:
+            canon = json.dumps(target_settings, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+            expected_hash = _hl.sha256(canon.encode("utf-8")).hexdigest()
+        return {
+            "version": 2,
+            "state": "metadata_committing",
+            "scene_map": {old_scene_id: scene_id},
+            "perspective_map": {f"{old_scene_id}/persp_001": persp_id},
+            "created_paths": [f"scenes2d/{scene_id}"],
+            "legacy_roots": [f"scenes2d/{old_scene_id}"],
+            "backup_root": "scenes2d/.uuid_migration_backup",
+            "original_files": [],
+            "started_at": "2025-01-01T00:00:00Z",
+            "settings_changed": settings_changed,
+            "expected_settings_hash": expected_hash or "",
+            "expected_reference_links": expected_links or [],
+        }
+
+    # ── Case 1: scenes committed, settings still legacy ───────────────────────
+
+    def test_case1_rollback_when_settings_still_legacy(self) -> None:
+        """Journal=metadata_committing, UUID scenes valid, settings still references scene_001/persp_001.
+        Expect: rollback (legacy IDs remain in reference links)."""
+        scene_id = self._new_uuid()
+        persp_id = self._new_uuid()
+        self._write_scenes2d_json(scene_id, persp_id)
+        # Settings still has legacy IDs
+        legacy_settings = {
+            "canvas_background_color": "#E8E8E8",
+            "reference_links": [{"id": "ref-1", "source_scene2d_id": "scene_001",
+                                  "source_scene2d_perspective_id": "persp_001",
+                                  "path": "scenes2d/scene_001/scene_001_preview.png"}],
+        }
+        self.settings_path.write_text(json.dumps(legacy_settings), encoding="utf-8")
+        journal = self._base_journal(scene_id, persp_id)
+        self._write_journal(journal)
+
+        self._trigger_recovery()
+
+        # Journal should be gone (rollback completed)
+        journal_path = self.project_root / "scenes2d" / ".uuid_migration.json"
+        self.assertFalse(journal_path.exists(), "Journal must be removed after rollback")
+        # Settings should be unchanged (it was already pointing to legacy — no restore needed)
+        current_settings = json.loads(self.settings_path.read_text())
+        ref_link = current_settings["reference_links"][0]
+        self.assertEqual(ref_link["source_scene2d_id"], "scene_001",
+                         "Settings must not have been mutated during rollback")
+
+    # ── Case 2: Settings partially migrated (one field UUID, one still legacy) ─
+
+    def test_case2_rollback_when_settings_partially_migrated(self) -> None:
+        """scene_id is UUID but perspective_id is still legacy → rollback."""
+        scene_id = self._new_uuid()
+        persp_id = self._new_uuid()
+        self._write_scenes2d_json(scene_id, persp_id)
+        # scene_id already UUID in settings, but perspective still legacy
+        partial_settings = {
+            "canvas_background_color": "#E8E8E8",
+            "reference_links": [{"id": "ref-1", "source_scene2d_id": scene_id,
+                                  "source_scene2d_perspective_id": "persp_001",
+                                  "path": f"scenes2d/{scene_id}/perspectives/persp_001/preview.png"}],
+        }
+        self.settings_path.write_text(json.dumps(partial_settings), encoding="utf-8")
+        journal = self._base_journal(scene_id, persp_id)
+        self._write_journal(journal)
+
+        self._trigger_recovery()
+
+        journal_path = self.project_root / "scenes2d" / ".uuid_migration.json"
+        self.assertFalse(journal_path.exists())
+
+    # ── Case 3: Reference path remains legacy ──────────────────────────────────
+
+    def test_case3_rollback_when_reference_path_is_legacy(self) -> None:
+        """IDs are UUID but path points to the old preview → rollback."""
+        scene_id = self._new_uuid()
+        persp_id = self._new_uuid()
+        self._write_scenes2d_json(scene_id, persp_id)
+        settings_with_bad_path = {
+            "canvas_background_color": "#E8E8E8",
+            "reference_links": [{"id": "ref-1", "source_scene2d_id": scene_id,
+                                  "source_scene2d_perspective_id": persp_id,
+                                  "path": "scenes2d/scene_001/scene_001_preview.png"}],
+        }
+        self.settings_path.write_text(json.dumps(settings_with_bad_path), encoding="utf-8")
+        journal = self._base_journal(scene_id, persp_id)
+        self._write_journal(journal)
+
+        self._trigger_recovery()
+
+        journal_path = self.project_root / "scenes2d" / ".uuid_migration.json"
+        self.assertFalse(journal_path.exists())
+
+    # ── Case 4: Complete UUID scene and settings → roll forward ────────────────
+
+    def test_case4_roll_forward_when_fully_committed(self) -> None:
+        """All UUID, settings correct → roll forward, legacy roots cleaned, journal removed."""
+        scene_id = self._new_uuid()
+        persp_id = self._new_uuid()
+        self._write_scenes2d_json(scene_id, persp_id)
+        self._write_settings_with_link(scene_id, persp_id)
+        journal = self._base_journal(scene_id, persp_id)
+        self._write_journal(journal)
+
+        r = _quiet(lambda: self.client.get("/api/project/scenes2d"))
+        self.assertEqual(r.status_code, 200, r.text)
+
+        journal_path = self.project_root / "scenes2d" / ".uuid_migration.json"
+        self.assertFalse(journal_path.exists(), "Journal must be removed after successful roll-forward")
+        # project.settings in memory should reflect the verified disk settings
+        scenes = r.json().get("scenes", [])
+        self.assertTrue(any(s["id"] == scene_id for s in scenes))
+
+    # ── Case 5: Unrelated reference links do not block roll-forward ─────────────
+
+    def test_case5_unrelated_reference_links_ignored(self) -> None:
+        """Non-Scene2D reference links must not block a valid roll-forward."""
+        scene_id = self._new_uuid()
+        persp_id = self._new_uuid()
+        self._write_scenes2d_json(scene_id, persp_id)
+        persp_preview_rel = f"scenes2d/{scene_id}/perspectives/{persp_id}/preview.png"
+        settings = {
+            "canvas_background_color": "#E8E8E8",
+            "reference_links": [
+                {"id": "ref-1", "source_scene2d_id": scene_id,
+                 "source_scene2d_perspective_id": persp_id,
+                 "path": persp_preview_rel},
+                {"id": "ref-2", "source_scene3d_id": "scene3d_001",
+                 "path": "shots/shot_001/shot_001_preview.png"},
+            ],
+        }
+        self.settings_path.write_text(json.dumps(settings), encoding="utf-8")
+        journal = self._base_journal(scene_id, persp_id)
+        self._write_journal(journal)
+
+        r = _quiet(lambda: self.client.get("/api/project/scenes2d"))
+        self.assertEqual(r.status_code, 200, r.text)
+        journal_path = self.project_root / "scenes2d" / ".uuid_migration.json"
+        self.assertFalse(journal_path.exists())
+
+    # ── Case 6: Corrupt settings JSON → no roll-forward ───────────────────────
+
+    def test_case6_corrupt_settings_json_prevents_roll_forward(self) -> None:
+        """Corrupt settings.json → recovery must not delete legacy data."""
+        scene_id = self._new_uuid()
+        persp_id = self._new_uuid()
+        self._write_scenes2d_json(scene_id, persp_id)
+        self.settings_path.write_text("{this is not json", encoding="utf-8")
+        journal = self._base_journal(scene_id, persp_id)
+        self._write_journal(journal)
+
+        # Recovery should rollback (settings unverifiable) — no 200 or error from legacy paths
+        self._trigger_recovery()
+
+        # Journal should be removed (rollback completed)
+        journal_path = self.project_root / "scenes2d" / ".uuid_migration.json"
+        self.assertFalse(journal_path.exists())
+
+    # ── Case 7: metadata_committed state, invalid settings → no legacy delete ──
+
+    def test_case7_metadata_committed_invalid_settings_no_legacy_delete(self) -> None:
+        """metadata_committed but settings verify fails → legacy roots not deleted, error raised."""
+        scene_id = self._new_uuid()
+        persp_id = self._new_uuid()
+        self._write_scenes2d_json(scene_id, persp_id)
+        # Settings still has legacy IDs — verification must fail
+        legacy_settings = {
+            "canvas_background_color": "#E8E8E8",
+            "reference_links": [{"id": "ref-1", "source_scene2d_id": "scene_001",
+                                  "source_scene2d_perspective_id": "persp_001",
+                                  "path": "scenes2d/scene_001/scene_001_preview.png"}],
+        }
+        self.settings_path.write_text(json.dumps(legacy_settings), encoding="utf-8")
+
+        # Create a fake legacy root dir that should NOT be deleted
+        legacy_dir = self.project_root / "scenes2d" / "scene_001"
+        legacy_dir.mkdir(parents=True, exist_ok=True)
+        (legacy_dir / "marker.txt").write_text("legacy content", encoding="utf-8")
+
+        journal = {**self._base_journal(scene_id, persp_id), "state": "metadata_committed",
+                   "legacy_roots": ["scenes2d/scene_001"]}
+        self._write_journal(journal)
+
+        r = _quiet(lambda: self.client.get("/api/project/scenes2d"))
+
+        # Legacy directory must NOT have been deleted
+        self.assertTrue(legacy_dir.exists(), "Legacy root must not be deleted when verification fails")
+        # Journal must still exist (not cleaned up on failed committed state)
+        journal_path = self.project_root / "scenes2d" / ".uuid_migration.json"
+        self.assertTrue(journal_path.exists(), "Journal must remain when metadata_committed verification fails")
+
+
 if __name__ == "__main__":
     unittest.main()

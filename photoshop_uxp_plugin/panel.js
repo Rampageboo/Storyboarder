@@ -658,11 +658,20 @@ async function applyLiveBridge(live) {
     applyPluginContext(context);
   }
 
-  // Prefer the shot the artist is actually editing (the active Photoshop tab) so
-  // picking a shot in the panel — which opens it — sticks, instead of being reset
-  // to Storyboard Tool's selection on the next poll. Fall back to ST's selection
-  // only when no shot document is open.
-  const shotId = detectShotFromDocument() || live.selected_shot_id;
+  // Determine the effective shot ID:
+  // - When the active document IS a shot, trust it (not Storyboarder's selection).
+  // - When there is no active document, use Storyboarder's pending selection as a hint.
+  // - When the active document is a Scene 2D or unmatched, do NOT fall back to
+  //   live.selected_shot_id — that would map shot-only automation onto the wrong PSD.
+  const activeCtx = activeWorkContext();
+  let shotId;
+  if (activeCtx?.kind === "shot") {
+    shotId = activeCtx.shot_id;
+  } else if (!app.activeDocument) {
+    shotId = live.selected_shot_id || null;
+  } else {
+    shotId = null;
+  }
   if (shotId) {
     setSelectedShotId(shotId);
     shotFolder = await getShotFolderEntry(shotId);
@@ -679,7 +688,9 @@ async function applyLiveBridge(live) {
   canvasHeight = nextSize.height;
   updateColorSwatch();
 
-  if (colorChanged && app.activeDocument && isAutoApplyColorEnabled()) {
+  // Only apply the canvas color to the active document when it is a shot.
+  // Scene 2D and unmatched documents must not receive shot background automation.
+  if (colorChanged && app.activeDocument && activeCtx?.kind === "shot" && isAutoApplyColorEnabled()) {
     await applyCanvasBackground();
   }
 
@@ -689,7 +700,7 @@ async function applyLiveBridge(live) {
     setStatus(`Synced: ${shotId}`);
   }
 
-  if (shotId && app.activeDocument && detectShotFromDocument() === shotId) {
+  if (shotId && app.activeDocument && activeCtx?.kind === "shot" && detectShotFromDocument() === shotId) {
     scheduleBackgroundSyncForActiveDocument();
   }
 
@@ -1832,6 +1843,11 @@ function scheduleBackgroundSyncForActiveDocument() {
 }
 
 async function syncActiveDocumentBackground() {
+  // Scene 2D and unmatched documents must never receive shot background automation.
+  const activeCtx = activeWorkContext();
+  if (activeCtx && activeCtx.kind !== "shot") {
+    return;
+  }
   const shotId = detectShotFromDocument();
   if (!shotId || !app.activeDocument) {
     return;
@@ -1894,6 +1910,12 @@ async function overlayPreviousShotsInModal(doc, previousShots) {
 }
 
 async function overlayPreviousShots() {
+  const ctx = activeWorkContext();
+  if (ctx && ctx.kind !== "shot") {
+    throw new Error(
+      "The active Photoshop document is not a storyboard shot. Activate a linked shot PSD first.",
+    );
+  }
   if (!app.activeDocument) {
     throw new Error("Open a shot canvas first.");
   }
@@ -1918,6 +1940,12 @@ async function overlayPreviousShots() {
 }
 
 async function overlayNextShots() {
+  const ctx = activeWorkContext();
+  if (ctx && ctx.kind !== "shot") {
+    throw new Error(
+      "The active Photoshop document is not a storyboard shot. Activate a linked shot PSD first.",
+    );
+  }
   if (!app.activeDocument) {
     throw new Error("Open a shot canvas first.");
   }
@@ -2552,6 +2580,14 @@ async function resolveActiveCanvasColor() {
 }
 
 async function applyCanvasBackground() {
+  // Defense in depth: callers guard at the call site for automated paths;
+  // this function-level check protects user-triggered button invocations.
+  const ctx = activeWorkContext();
+  if (ctx && ctx.kind !== "shot") {
+    throw new Error(
+      "The active Photoshop document is not a storyboard shot. Activate a linked shot PSD first.",
+    );
+  }
   await runModal("Apply canvas color", async () => {
     await applyCanvasBackgroundInModal();
   });

@@ -1,6 +1,7 @@
 """Project-level Scene 2D groups and perspectives."""
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -381,6 +382,85 @@ def _cleanup_legacy_roots(project: Project, rel_roots: list[str]) -> bool:
     return ok
 
 
+def _verify_migration_commit(project: Project, journal: dict[str, Any]) -> None:
+    """Verify that both the Scene 2D payload AND settings are fully committed.
+
+    Raises ValueError with a descriptive message on any failure.
+    Called from _recover_uuid_migration() before rolling forward, and from
+    _migrate_scene2d_storage() after committing all files.
+    """
+    # 1. Verify scene payload (UUID scenes, sources, previews exist)
+    scene_map = journal.get("scene_map") if isinstance(journal.get("scene_map"), dict) else {}
+    expected_scene_ids = {str(v) for v in scene_map.values() if is_uuid(str(v))} or None
+    _verify_uuid_payload(project, expected_scene_ids)
+
+    # 2. Verify settings only when migration changed them
+    if not journal.get("settings_changed"):
+        return
+
+    settings_path = project.settings_path
+    if not settings_path.is_file():
+        raise ValueError("Migration commit verification failed: settings.json is missing.")
+    try:
+        disk_settings = _read_json(settings_path)
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ValueError("Migration commit verification failed: settings.json is corrupt.") from exc
+    if not isinstance(disk_settings, dict):
+        raise ValueError("Migration commit verification failed: settings.json is not a dict.")
+
+    # Hash-based check (canonical JSON, sort_keys for determinism)
+    expected_hash = str(journal.get("expected_settings_hash") or "")
+    if expected_hash:
+        canonical = json.dumps(disk_settings, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+        actual_hash = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+        if actual_hash == expected_hash:
+            return  # Settings hash matches — fully committed
+
+    # Per-link fallback verification (handles harmless formatting differences)
+    expected_links = journal.get("expected_reference_links")
+    if not isinstance(expected_links, list):
+        raise ValueError(
+            "Migration commit verification failed: expected_reference_links missing from journal."
+        )
+    disk_links = project_manager.normalize_reference_links(disk_settings.get("reference_links"))
+    disk_by_scene_id: dict[str, dict[str, Any]] = {}
+    for link in disk_links:
+        sid = str(link.get("source_scene2d_id") or "")
+        if sid:
+            disk_by_scene_id[sid] = link
+
+    for exp in expected_links:
+        exp_scene = str(exp.get("source_scene2d_id") or "")
+        exp_persp = str(exp.get("source_scene2d_perspective_id") or "")
+        exp_path = str(exp.get("path") or "")
+        disk_link = disk_by_scene_id.get(exp_scene)
+        if disk_link is None:
+            raise ValueError(
+                f"Migration commit verification failed: reference link for scene {exp_scene!r} missing."
+            )
+        actual_persp = str(disk_link.get("source_scene2d_perspective_id") or "")
+        actual_path = str(disk_link.get("path") or "")
+        if actual_persp != exp_persp:
+            raise ValueError(
+                f"Migration commit verification failed: perspective ID mismatch for scene {exp_scene!r}."
+            )
+        if actual_path != exp_path:
+            raise ValueError(
+                f"Migration commit verification failed: path mismatch for scene {exp_scene!r}."
+            )
+
+    # Ensure no legacy scene_### or persp_### IDs remain in the affected reference links
+    affected_scene_ids = {str(exp.get("source_scene2d_id") or "") for exp in expected_links}
+    for link in disk_links:
+        sid = str(link.get("source_scene2d_id") or "")
+        pid = str(link.get("source_scene2d_perspective_id") or "")
+        if sid in affected_scene_ids:
+            if LEGACY_SCENE_ID_RE.match(sid) or (pid and LEGACY_PERSPECTIVE_ID_RE.match(pid)):
+                raise ValueError(
+                    "Migration commit verification failed: legacy ID remains in reference links."
+                )
+
+
 def _verify_uuid_payload(project: Project, expected_scene_ids: set[str] | None = None) -> None:
     data = _read_json(_index_path(project))
     raw_scenes = data.get("scenes") if isinstance(data, dict) else None
@@ -433,13 +513,19 @@ def _recover_uuid_migration(project: Project) -> bool:
         _remove_backup_area(project)
         return True
     if state == "metadata_committing":
-        scene_map = journal.get("scene_map") if isinstance(journal.get("scene_map"), dict) else {}
-        expected = {str(value) for value in scene_map.values() if is_uuid(str(value))}
         try:
-            _verify_uuid_payload(project, expected or None)
+            _verify_migration_commit(project, journal)
         except Exception:
+            # Full commit not verified — roll back to the last known-good state.
             if original_files:
                 _restore_original_files(project, original_files)
+                # Keep disk and memory in sync after restoring settings.json.
+                try:
+                    restored = _read_json(project.settings_path)
+                    if isinstance(restored, dict):
+                        project.settings = restored
+                except Exception:
+                    pass
             _remove_created_paths(project, created_paths)
             _remove_journal(project)
             _remove_backup_area(project)
@@ -450,9 +536,9 @@ def _recover_uuid_migration(project: Project) -> bool:
             _remove_backup_area(project)
         return False
     if state in {"metadata_committed", "cleanup_pending"}:
-        scene_map = journal.get("scene_map") if isinstance(journal.get("scene_map"), dict) else {}
-        expected = {str(value) for value in scene_map.values() if is_uuid(str(value))}
-        _verify_uuid_payload(project, expected or None)
+        # Full verification before deleting any legacy data — conservative path.
+        # If verification fails, raise a clear error rather than silently skipping.
+        _verify_migration_commit(project, journal)
         if _cleanup_legacy_roots(project, legacy_roots or []):
             _remove_journal(project)
             _remove_backup_area(project)
@@ -647,7 +733,31 @@ def _migrate_scene2d_storage(project: Project, scenes: list[dict[str, Any]]) -> 
         root = _root_dir(project)
         root.mkdir(parents=True, exist_ok=True)
         normalized = _sort_scenes([_normalize_scene(scene) for scene in new_scenes])
-        _write_journal(project, {"state": "metadata_committing", **journal_base, "created_paths": sorted(created_rel_paths)})
+
+        # Compute settings verification fields so crash recovery can validate them.
+        if settings_changed:
+            _settings_canon = json.dumps(new_settings, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+            _expected_settings_hash = hashlib.sha256(_settings_canon.encode("utf-8")).hexdigest()
+            _new_scene_uuids = set(scene_map.values())
+            _expected_reference_links = [
+                {
+                    "source_scene2d_id": str(link.get("source_scene2d_id") or ""),
+                    "source_scene2d_perspective_id": str(link.get("source_scene2d_perspective_id") or ""),
+                    "path": str(link.get("path") or ""),
+                }
+                for link in project_manager.normalize_reference_links(new_settings.get("reference_links"))
+                if str(link.get("source_scene2d_id") or "") in _new_scene_uuids
+            ]
+        else:
+            _expected_settings_hash = ""
+            _expected_reference_links = []
+        _journal_settings: dict[str, Any] = {
+            "settings_changed": settings_changed,
+            "expected_settings_hash": _expected_settings_hash,
+            "expected_reference_links": _expected_reference_links,
+        }
+
+        _write_journal(project, {"state": "metadata_committing", **journal_base, **_journal_settings, "created_paths": sorted(created_rel_paths)})
         project_manager._atomic_write_json(_index_path(project), {"scenes": normalized})
         for scene in normalized:
             scene_dir = _scene_dir(project, scene["id"])
@@ -656,15 +766,13 @@ def _migrate_scene2d_storage(project: Project, scenes: list[dict[str, Any]]) -> 
         if settings_changed:
             project_manager._atomic_write_json(project.settings_path, new_settings)
             project.settings = new_settings
-        _verify_uuid_payload(project, {scene["id"] for scene in normalized})
-        if settings_changed:
-            _read_json(project.settings_path)
-        _write_journal(project, {"state": "metadata_committed", **journal_base, "created_paths": sorted(created_rel_paths)})
+        _verify_migration_commit(project, {**journal_base, **_journal_settings, "scene_map": scene_map})
+        _write_journal(project, {"state": "metadata_committed", **journal_base, **_journal_settings, "created_paths": sorted(created_rel_paths)})
         if _cleanup_legacy_roots(project, legacy_root_rels):
             _remove_journal(project)
             _remove_backup_area(project)
         else:
-            _write_journal(project, {"state": "cleanup_pending", **journal_base, "created_paths": sorted(created_rel_paths)})
+            _write_journal(project, {"state": "cleanup_pending", **journal_base, **_journal_settings, "created_paths": sorted(created_rel_paths)})
         return _sort_scenes(new_scenes)
     except BaseException:
         try:
