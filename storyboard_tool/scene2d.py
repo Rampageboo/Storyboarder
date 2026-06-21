@@ -17,6 +17,7 @@ from .models import Project
 
 SCENE2D_ROOT = "scenes2d"
 SCENE2D_INDEX = "scenes2d.json"
+UUID_MIGRATION_JOURNAL = ".uuid_migration.json"
 LEGACY_SCENE_ID_RE = re.compile(r"^scene_(\d{3,})$")
 LEGACY_PERSPECTIVE_ID_RE = re.compile(r"^persp_(\d{3,})$")
 IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp"}
@@ -44,6 +45,10 @@ def _root_dir(project: Project) -> Path:
 
 def _index_path(project: Project) -> Path:
     return _root_dir(project) / SCENE2D_INDEX
+
+
+def _journal_path(project: Project) -> Path:
+    return _root_dir(project) / UUID_MIGRATION_JOURNAL
 
 
 def _validate_scene_id(scene_id: str) -> str:
@@ -236,6 +241,126 @@ def _read_json(path: Path) -> Any:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
+def _read_bytes_if_exists(path: Path) -> bytes | None:
+    return path.read_bytes() if path.is_file() else None
+
+
+def _restore_bytes(path: Path, data: bytes | None) -> None:
+    if data is None:
+        if path.exists():
+            path.unlink()
+        return
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp_name = tempfile.mkstemp(dir=str(path.parent), prefix=f"{path.name}.", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "wb") as file:
+            file.write(data)
+        os.replace(tmp_name, path)
+    except BaseException:
+        try:
+            os.unlink(tmp_name)
+        except OSError:
+            pass
+        raise
+
+
+def _write_journal(project: Project, payload: dict[str, Any]) -> None:
+    journal = {"version": 1, **payload}
+    project_manager._atomic_write_json(_journal_path(project), journal)
+
+
+def _remove_journal(project: Project) -> None:
+    path = _journal_path(project)
+    if path.exists():
+        path.unlink()
+
+
+def _safe_project_rel(project: Project, rel_path: str) -> Path:
+    rel = project_manager._normalize_rel_path(rel_path)
+    if not rel:
+        raise ValueError("Scene 2D migration path is empty.")
+    path = (project.root_path / rel).resolve()
+    root = project.root_path.resolve()
+    if path != root and root not in path.parents:
+        raise ValueError("Scene 2D migration path escapes the project.")
+    return path
+
+
+def _remove_created_paths(project: Project, rel_paths: list[str]) -> None:
+    for rel_path in sorted({str(item or "") for item in rel_paths if item}, key=lambda item: len(Path(item).parts), reverse=True):
+        try:
+            path = _safe_project_rel(project, rel_path)
+            if path.is_dir():
+                shutil.rmtree(path, ignore_errors=True)
+            elif path.exists():
+                path.unlink()
+        except OSError:
+            continue
+
+
+def _cleanup_legacy_roots(project: Project, rel_roots: list[str]) -> bool:
+    ok = True
+    for rel_root in rel_roots:
+        try:
+            path = _safe_project_rel(project, rel_root)
+            if path.is_dir():
+                shutil.rmtree(path)
+        except OSError:
+            ok = False
+    return ok
+
+
+def _verify_uuid_payload(project: Project, expected_scene_ids: set[str] | None = None) -> None:
+    data = _read_json(_index_path(project))
+    raw_scenes = data.get("scenes") if isinstance(data, dict) else None
+    if not isinstance(raw_scenes, list):
+        raise ValueError("Scene 2D UUID migration verification failed: invalid scenes2d.json.")
+    found = {str(item.get("id") or "") for item in raw_scenes if isinstance(item, dict)}
+    if expected_scene_ids is not None and not expected_scene_ids.issubset(found):
+        raise ValueError("Scene 2D UUID migration verification failed: missing migrated scenes.")
+    for item in raw_scenes:
+        if not isinstance(item, dict):
+            raise ValueError("Scene 2D UUID migration verification failed: invalid scene record.")
+        scene = _normalize_scene(item)
+        for perspective in scene.get("perspectives") or []:
+            if not _safe_rel_path(project, perspective["source_file_path"]).is_file():
+                raise ValueError("Scene 2D UUID migration verification failed: missing source file.")
+            preview_path = _safe_rel_path(project, perspective["preview_image_path"])
+            if perspective["type"] == "image" and not preview_path.is_file():
+                raise ValueError("Scene 2D UUID migration verification failed: missing image preview.")
+
+
+def _recover_uuid_migration(project: Project) -> bool:
+    path = _journal_path(project)
+    if not path.is_file():
+        return False
+    try:
+        journal = _read_json(path)
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ValueError("Scene 2D UUID migration journal is corrupt.") from exc
+    if not isinstance(journal, dict) or journal.get("version") != 1:
+        raise ValueError("Scene 2D UUID migration journal is invalid.")
+    state = journal.get("state")
+    created_paths = journal.get("created_paths")
+    legacy_roots = journal.get("legacy_roots")
+    if not isinstance(created_paths, list) or not all(isinstance(item, str) for item in created_paths):
+        raise ValueError("Scene 2D UUID migration journal has invalid created paths.")
+    if legacy_roots is not None and (not isinstance(legacy_roots, list) or not all(isinstance(item, str) for item in legacy_roots)):
+        raise ValueError("Scene 2D UUID migration journal has invalid legacy roots.")
+    if state in {"prepared", "files_staged"}:
+        _remove_created_paths(project, created_paths)
+        _remove_journal(project)
+        return True
+    if state == "metadata_committed":
+        scene_map = journal.get("scene_map") if isinstance(journal.get("scene_map"), dict) else {}
+        expected = {str(value) for value in scene_map.values() if is_uuid(str(value))}
+        _verify_uuid_payload(project, expected or None)
+        if _cleanup_legacy_roots(project, legacy_roots or []):
+            _remove_journal(project)
+        return False
+    raise ValueError("Scene 2D UUID migration journal has unknown state.")
+
+
 def _stable_source_rel(scene_id: str, perspective_id: str, perspective: dict[str, Any]) -> str:
     suffix = Path(str(perspective.get("source_file_path") or "")).suffix.lower()
     if perspective.get("type") == "image":
@@ -311,13 +436,14 @@ def _legacy_scene_roots(project: Project, scenes: list[dict[str, Any]]) -> list[
     return roots
 
 
-def _migrate_reference_links(
-    project: Project,
+def _migrated_settings_payload(
+    settings: dict[str, Any],
     scene_map: dict[str, str],
     perspective_map: dict[tuple[str, str], str],
     perspective_preview_map: dict[tuple[str, str], str],
-) -> None:
-    links = project_manager.normalize_reference_links(project.settings.get("reference_links"))
+) -> tuple[dict[str, Any], bool]:
+    migrated = dict(settings)
+    links = project_manager.normalize_reference_links(migrated.get("reference_links"))
     changed = False
     for link in links:
         old_scene_id = str(link.get("source_scene2d_id") or "")
@@ -334,8 +460,8 @@ def _migrate_reference_links(
                     link["path"] = preview_path
                 changed = True
     if changed:
-        project.settings["reference_links"] = project_manager.normalize_reference_links(links)
-        project_manager.save_settings(project)
+        migrated["reference_links"] = project_manager.normalize_reference_links(links)
+    return migrated, changed
 
 
 def _migrate_scene2d_storage(project: Project, scenes: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -355,11 +481,32 @@ def _migrate_scene2d_storage(project: Project, scenes: list[dict[str, Any]]) -> 
     new_scenes: list[dict[str, Any]] = []
     planned_destinations: set[str] = set()
     created_scene_dirs: set[Path] = set()
+    created_rel_paths: set[str] = set()
     legacy_roots = _legacy_scene_roots(project, scenes)
+    legacy_root_rels = [path.relative_to(project.root_path).as_posix() for path in legacy_roots]
+    original_index = _read_bytes_if_exists(_index_path(project))
+    original_settings = _read_bytes_if_exists(project.settings_path)
+    original_settings_memory = dict(project.settings)
+    original_meta: dict[Path, bytes | None] = {}
+    for scene in scenes:
+        if is_uuid(scene["id"]):
+            path = _meta_path(project, scene["id"])
+        else:
+            path = _root_dir(project) / scene["id"] / f"{scene['id']}_meta.json"
+        original_meta[path] = _read_bytes_if_exists(path)
+    journal_base = {
+        "scene_map": scene_map,
+        "perspective_map": {f"{scene_id}/{perspective_id}": mapped for (scene_id, perspective_id), mapped in perspective_map.items()},
+        "created_paths": [],
+        "legacy_roots": legacy_root_rels,
+        "started_at": _now_iso(),
+    }
     try:
+        _write_journal(project, {"state": "prepared", **journal_base})
         for scene in scenes:
             old_scene_id = scene["id"]
             new_scene_id = scene_map[old_scene_id]
+            new_scene_dir_rel = f"{SCENE2D_ROOT}/{new_scene_id}"
             new_perspectives: list[dict[str, Any]] = []
             for perspective in scene.get("perspectives") or []:
                 old_perspective_id = perspective["id"]
@@ -371,8 +518,12 @@ def _migrate_scene2d_storage(project: Project, scenes: list[dict[str, Any]]) -> 
                         raise ValueError(f"Scene 2D migration path collision: {destination}")
                     planned_destinations.add(destination)
                 _copy_if_present(project, perspective["source_file_path"], source_rel, created_scene_dirs, required=True)
+                if (project.root_path / new_scene_dir_rel).is_dir():
+                    created_rel_paths.add(new_scene_dir_rel)
                 if preview_rel != source_rel:
                     _copy_if_present(project, perspective.get("preview_image_path", ""), preview_rel, created_scene_dirs, required=False)
+                    if (project.root_path / new_scene_dir_rel).is_dir():
+                        created_rel_paths.add(new_scene_dir_rel)
                 perspective_preview_map[(old_scene_id, old_perspective_id)] = preview_rel
                 new_perspective = dict(perspective)
                 new_perspective.update({"id": new_perspective_id, "source_file_path": source_rel, "preview_image_path": preview_rel})
@@ -385,19 +536,45 @@ def _migrate_scene2d_storage(project: Project, scenes: list[dict[str, Any]]) -> 
             new_scene.update({"id": new_scene_id, "primary_perspective_id": new_primary_id or "", "perspectives": new_perspectives})
             new_scenes.append(_normalize_scene(new_scene))
 
-        _save_scenes(project, new_scenes)
-        _migrate_reference_links(project, scene_map, perspective_map, perspective_preview_map)
-        for legacy_root in legacy_roots:
-            if legacy_root.exists():
-                shutil.rmtree(legacy_root)
+        created_rel_paths.update(path.relative_to(project.root_path).as_posix() for path in created_scene_dirs if path.exists())
+        _write_journal(project, {"state": "files_staged", **journal_base, "created_paths": sorted(created_rel_paths)})
+
+        new_settings, settings_changed = _migrated_settings_payload(project.settings, scene_map, perspective_map, perspective_preview_map)
+        root = _root_dir(project)
+        root.mkdir(parents=True, exist_ok=True)
+        normalized = _sort_scenes([_normalize_scene(scene) for scene in new_scenes])
+        project_manager._atomic_write_json(_index_path(project), {"scenes": normalized})
+        for scene in normalized:
+            scene_dir = _scene_dir(project, scene["id"])
+            scene_dir.mkdir(parents=True, exist_ok=True)
+            project_manager._atomic_write_json(_meta_path(project, scene["id"]), scene)
+        if settings_changed:
+            project_manager._atomic_write_json(project.settings_path, new_settings)
+            project.settings = new_settings
+        _verify_uuid_payload(project, {scene["id"] for scene in normalized})
+        if settings_changed:
+            _read_json(project.settings_path)
+        _write_journal(project, {"state": "metadata_committed", **journal_base, "created_paths": sorted(created_rel_paths)})
+        if _cleanup_legacy_roots(project, legacy_root_rels):
+            _remove_journal(project)
         return _sort_scenes(new_scenes)
     except BaseException:
-        for directory in sorted(created_scene_dirs, key=lambda path: len(path.parts), reverse=True):
+        try:
+            _restore_bytes(_index_path(project), original_index)
+            _restore_bytes(project.settings_path, original_settings)
+            for path, data in original_meta.items():
+                _restore_bytes(path, data)
+            project.settings = original_settings_memory
+        except OSError:
+            pass
+        for rel_path in sorted(created_rel_paths, key=lambda item: len(Path(item).parts), reverse=True):
             try:
-                if directory.is_dir():
-                    shutil.rmtree(directory, ignore_errors=True)
+                path = _safe_project_rel(project, rel_path)
+                if path.is_dir():
+                    shutil.rmtree(path, ignore_errors=True)
             except OSError:
                 pass
+        _remove_journal(project)
         raise
 
 
@@ -421,16 +598,20 @@ def _sort_scenes(scenes: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 
 def list_scenes(project: Project) -> list[dict[str, Any]]:
+    recovered_staged = _recover_uuid_migration(project)
     index = _index_path(project)
     if not index.is_file():
-        return _migrate_scene2d_storage(project, _load_from_meta(project))
+        scenes = _load_from_meta(project)
+        return _sort_scenes(scenes) if recovered_staged else _migrate_scene2d_storage(project, scenes)
     try:
         data = _read_json(index)
     except (OSError, json.JSONDecodeError):
-        return _migrate_scene2d_storage(project, _load_from_meta(project))
+        scenes = _load_from_meta(project)
+        return _sort_scenes(scenes) if recovered_staged else _migrate_scene2d_storage(project, scenes)
     raw_scenes = data.get("scenes") if isinstance(data, dict) else data
     if not isinstance(raw_scenes, list):
-        return _migrate_scene2d_storage(project, _load_from_meta(project))
+        scenes = _load_from_meta(project)
+        return _sort_scenes(scenes) if recovered_staged else _migrate_scene2d_storage(project, scenes)
     scenes: list[dict[str, Any]] = []
     seen: set[str] = set()
     for item in raw_scenes:
@@ -441,7 +622,8 @@ def list_scenes(project: Project) -> list[dict[str, Any]]:
             continue
         seen.add(scene["id"])
         scenes.append(scene)
-    return _migrate_scene2d_storage(project, _sort_scenes(scenes))
+    scenes = _sort_scenes(scenes)
+    return scenes if recovered_staged else _migrate_scene2d_storage(project, scenes)
 
 
 def _save_scenes(project: Project, scenes: list[dict[str, Any]]) -> None:

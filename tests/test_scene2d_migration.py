@@ -49,18 +49,46 @@ class Scene2DMigrationTests(unittest.TestCase):
     def tearDown(self) -> None:
         self._tmp.cleanup()
 
-    def _write_legacy_scene(self, *, include_source: bool = True, image: bool = False) -> None:
+    def _write_legacy_scene(self, *, include_source: bool = True, image: bool = False, perspectives: int = 1) -> None:
         scenes_root = self.project_root / "scenes2d"
         scene_root = scenes_root / "scene_001"
         scene_root.mkdir(parents=True, exist_ok=True)
-        source_rel = "scenes2d/scene_001/perspectives/persp_001/source.png" if image else "scenes2d/scene_001/scene_001.psd"
-        preview_rel = source_rel if image else "scenes2d/scene_001/scene_001_preview.png"
-        if include_source:
-            source = self.project_root / source_rel
-            source.parent.mkdir(parents=True, exist_ok=True)
-            source.write_bytes(MINI_PNG if image else b"legacy psd")
-        if not image:
-            (scene_root / "scene_001_preview.png").write_bytes(MINI_PNG)
+        perspective_records = []
+        source_rel = ""
+        preview_rel = ""
+        for index in range(1, perspectives + 1):
+            persp_id = f"persp_{index:03d}"
+            source_rel = f"scenes2d/scene_001/perspectives/{persp_id}/source.png" if image else f"scenes2d/scene_001/scene_001_{index}.psd"
+            preview_rel = source_rel if image else f"scenes2d/scene_001/scene_001_{index}_preview.png"
+            if include_source:
+                source = self.project_root / source_rel
+                source.parent.mkdir(parents=True, exist_ok=True)
+                source.write_bytes(MINI_PNG if image else f"legacy psd {index}".encode("utf-8"))
+            if not image:
+                (scene_root / f"scene_001_{index}_preview.png").write_bytes(MINI_PNG)
+            perspective_records.append(
+                {
+                    "id": persp_id,
+                    "title": f"Legacy perspective {index}",
+                    "type": "image" if image else "psd",
+                    "source_file_path": source_rel,
+                    "preview_image_path": preview_rel,
+                    "linked_scene3d_id": "scene3d_002",
+                    "linked_scene3d_view": None,
+                    "created_at": f"2025-01-01T00:00:0{index}Z",
+                    "updated_at": f"2025-01-01T00:00:0{index}Z",
+                }
+            )
+        if perspectives == 1 and not image:
+            old_source = scene_root / "scene_001.psd"
+            old_preview = scene_root / "scene_001_preview.png"
+            if include_source:
+                old_source.write_bytes(b"legacy psd")
+                perspective_records[0]["source_file_path"] = "scenes2d/scene_001/scene_001.psd"
+            old_preview.write_bytes(MINI_PNG)
+            perspective_records[0]["preview_image_path"] = "scenes2d/scene_001/scene_001_preview.png"
+            source_rel = perspective_records[0]["source_file_path"]
+            preview_rel = perspective_records[0]["preview_image_path"]
         legacy = {
             "scenes": [
                 {
@@ -74,19 +102,7 @@ class Scene2DMigrationTests(unittest.TestCase):
                     "created_at": "2025-01-01T00:00:00Z",
                     "updated_at": "2025-01-01T00:00:00Z",
                     "can_be_reference": True,
-                    "perspectives": [
-                        {
-                            "id": "persp_001",
-                            "title": "Legacy perspective",
-                            "type": "image" if image else "psd",
-                            "source_file_path": source_rel,
-                            "preview_image_path": preview_rel,
-                            "linked_scene3d_id": "scene3d_002",
-                            "linked_scene3d_view": None,
-                            "created_at": "2025-01-01T00:00:00Z",
-                            "updated_at": "2025-01-01T00:00:00Z",
-                        }
-                    ],
+                    "perspectives": perspective_records,
                 }
             ]
         }
@@ -110,6 +126,15 @@ class Scene2DMigrationTests(unittest.TestCase):
             )
         )
         self.assertEqual(opened.status_code, 200, opened.text)
+
+    def _settings_bytes(self) -> bytes:
+        return (self.project_root / "settings.json").read_bytes()
+
+    def _index_bytes(self) -> bytes:
+        return (self.project_root / "scenes2d" / "scenes2d.json").read_bytes()
+
+    def _uuid_scene_dirs(self) -> list[Path]:
+        return [path for path in (self.project_root / "scenes2d").iterdir() if path.is_dir() and _is_uuid(path.name)]
 
     def test_legacy_ids_paths_and_references_migrate_to_uuid_once(self) -> None:
         self._write_legacy_scene()
@@ -218,6 +243,173 @@ class Scene2DMigrationTests(unittest.TestCase):
         project = _quiet(lambda: self.client.get("/api/project")).json()
         self.assertEqual(project["settings"]["reference_links"], [])
         self.assertEqual(project["shots"], before_shots)
+
+    def test_failure_saving_settings_restores_legacy_metadata_files_and_memory(self) -> None:
+        self._write_legacy_scene()
+        original_index = self._index_bytes()
+        original_settings = self._settings_bytes()
+        original_memory = dict(self.app.state.project.settings)
+        before_shots = _quiet(lambda: self.client.get("/api/project")).json()["shots"]
+
+        from storyboard_tool import scene2d
+
+        real_write = scene2d.project_manager._atomic_write_json
+
+        def fail_settings(path, payload):
+            if Path(path).name == "settings.json":
+                raise OSError("settings write failed")
+            return real_write(path, payload)
+
+        with mock.patch("storyboard_tool.scene2d.project_manager._atomic_write_json", side_effect=fail_settings):
+            response = _quiet(lambda: self.client.get("/api/project/scenes2d"))
+
+        self.assertNotEqual(response.status_code, 200)
+        self.assertEqual(self._index_bytes(), original_index)
+        self.assertEqual(self._settings_bytes(), original_settings)
+        self.assertEqual(self.app.state.project.settings, original_memory)
+        self.assertTrue((self.project_root / "scenes2d" / "scene_001" / "scene_001.psd").is_file())
+        self.assertTrue((self.project_root / "scenes2d" / "scene_001" / "scene_001_preview.png").is_file())
+        self.assertEqual(self._uuid_scene_dirs(), [])
+        self.assertEqual(_quiet(lambda: self.client.get("/api/project")).json()["shots"], before_shots)
+
+        retry = _quiet(lambda: self.client.get("/api/project/scenes2d"))
+        self.assertEqual(retry.status_code, 200, retry.text)
+        self.assertTrue(_is_uuid(retry.json()["scenes"][0]["id"]))
+
+    def test_failure_writing_scene_index_leaves_settings_and_legacy_files(self) -> None:
+        self._write_legacy_scene()
+        original_index = self._index_bytes()
+        original_settings = self._settings_bytes()
+
+        from storyboard_tool import scene2d
+
+        real_write = scene2d.project_manager._atomic_write_json
+
+        def fail_index(path, payload):
+            if Path(path).name == "scenes2d.json":
+                raise OSError("index write failed")
+            return real_write(path, payload)
+
+        with mock.patch("storyboard_tool.scene2d.project_manager._atomic_write_json", side_effect=fail_index):
+            response = _quiet(lambda: self.client.get("/api/project/scenes2d"))
+
+        self.assertNotEqual(response.status_code, 200)
+        self.assertEqual(self._index_bytes(), original_index)
+        self.assertEqual(self._settings_bytes(), original_settings)
+        self.assertTrue((self.project_root / "scenes2d" / "scene_001" / "scene_001.psd").is_file())
+        self.assertEqual(self._uuid_scene_dirs(), [])
+
+    def test_failure_copying_second_perspective_cleans_staged_uuid_files(self) -> None:
+        self._write_legacy_scene(perspectives=2)
+        original_index = self._index_bytes()
+        original_settings = self._settings_bytes()
+
+        from storyboard_tool import scene2d
+
+        real_copy = scene2d.shutil.copy2
+        calls = {"count": 0}
+
+        def fail_second_copy(src, dst):
+            calls["count"] += 1
+            if calls["count"] == 2:
+                raise OSError("copy failed")
+            return real_copy(src, dst)
+
+        with mock.patch("storyboard_tool.scene2d.shutil.copy2", side_effect=fail_second_copy):
+            response = _quiet(lambda: self.client.get("/api/project/scenes2d"))
+
+        self.assertNotEqual(response.status_code, 200)
+        self.assertEqual(self._index_bytes(), original_index)
+        self.assertEqual(self._settings_bytes(), original_settings)
+        self.assertEqual(self._uuid_scene_dirs(), [])
+        self.assertTrue((self.project_root / "scenes2d" / "scene_001").is_dir())
+
+    def test_cleanup_failure_after_metadata_commit_leaves_uuid_project_usable_and_retry_cleans(self) -> None:
+        self._write_legacy_scene()
+
+        from storyboard_tool import scene2d
+
+        real_rmtree = scene2d.shutil.rmtree
+
+        def fail_legacy_cleanup(path, *args, **kwargs):
+            if Path(path).name == "scene_001":
+                raise OSError("cleanup failed")
+            return real_rmtree(path, *args, **kwargs)
+
+        with mock.patch("storyboard_tool.scene2d.shutil.rmtree", side_effect=fail_legacy_cleanup):
+            response = _quiet(lambda: self.client.get("/api/project/scenes2d"))
+
+        self.assertEqual(response.status_code, 200, response.text)
+        scene = response.json()["scenes"][0]
+        self.assertTrue(_is_uuid(scene["id"]))
+        self.assertTrue((self.project_root / "scenes2d" / "scene_001").exists())
+        self.assertTrue((self.project_root / "scenes2d" / ".uuid_migration.json").is_file())
+        project = _quiet(lambda: self.client.get("/api/project")).json()
+        self.assertEqual(project["settings"]["reference_links"][0]["source_scene2d_id"], scene["id"])
+
+        retry = _quiet(lambda: self.client.get("/api/project/scenes2d"))
+        self.assertEqual(retry.status_code, 200, retry.text)
+        self.assertFalse((self.project_root / "scenes2d" / "scene_001").exists())
+        self.assertFalse((self.project_root / "scenes2d" / ".uuid_migration.json").exists())
+
+    def test_files_staged_journal_recovery_removes_staged_uuid_dir_only(self) -> None:
+        self._write_legacy_scene()
+        staged_uuid = str(uuid.uuid4())
+        staged_dir = self.project_root / "scenes2d" / staged_uuid
+        staged_dir.mkdir(parents=True)
+        (staged_dir / "temporary.txt").write_text("staged", encoding="utf-8")
+        journal = {
+            "version": 1,
+            "state": "files_staged",
+            "scene_map": {"scene_001": staged_uuid},
+            "perspective_map": {"scene_001/persp_001": str(uuid.uuid4())},
+            "created_paths": [f"scenes2d/{staged_uuid}"],
+            "legacy_roots": ["scenes2d/scene_001"],
+            "started_at": "2025-01-01T00:00:00Z",
+        }
+        (self.project_root / "scenes2d" / ".uuid_migration.json").write_text(json.dumps(journal), encoding="utf-8")
+
+        response = _quiet(lambda: self.client.get("/api/project/scenes2d"))
+
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertFalse(staged_dir.exists())
+        self.assertFalse((self.project_root / "scenes2d" / ".uuid_migration.json").exists())
+        self.assertTrue((self.project_root / "scenes2d" / "scene_001").exists())
+
+    def test_metadata_committed_journal_recovery_finishes_legacy_cleanup(self) -> None:
+        self._write_legacy_scene()
+        migrated = _quiet(lambda: self.client.get("/api/project/scenes2d")).json()["scenes"][0]
+        legacy_root = self.project_root / "scenes2d" / "scene_001"
+        legacy_root.mkdir(parents=True, exist_ok=True)
+        (legacy_root / "leftover.psd").write_bytes(b"leftover")
+        journal = {
+            "version": 1,
+            "state": "metadata_committed",
+            "scene_map": {"scene_001": migrated["id"]},
+            "perspective_map": {"scene_001/persp_001": migrated["perspectives"][0]["id"]},
+            "created_paths": [f"scenes2d/{migrated['id']}"],
+            "legacy_roots": ["scenes2d/scene_001"],
+            "started_at": "2025-01-01T00:00:00Z",
+        }
+        (self.project_root / "scenes2d" / ".uuid_migration.json").write_text(json.dumps(journal), encoding="utf-8")
+
+        response = _quiet(lambda: self.client.get("/api/project/scenes2d"))
+
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.json()["scenes"][0]["id"], migrated["id"])
+        self.assertFalse(legacy_root.exists())
+        self.assertFalse((self.project_root / "scenes2d" / ".uuid_migration.json").exists())
+
+    def test_corrupt_journal_does_not_delete_project_data(self) -> None:
+        self._write_legacy_scene()
+        legacy_root = self.project_root / "scenes2d" / "scene_001"
+        (self.project_root / "scenes2d" / ".uuid_migration.json").write_text("{broken", encoding="utf-8")
+
+        response = _quiet(lambda: self.client.get("/api/project/scenes2d"))
+
+        self.assertNotEqual(response.status_code, 200)
+        self.assertTrue(legacy_root.exists())
+        self.assertTrue((self.project_root / "scenes2d" / ".uuid_migration.json").exists())
 
 
 if __name__ == "__main__":
