@@ -221,6 +221,8 @@ def _plugin_open_shot_ids(app: FastAPI, plugin_linked: bool, file_seen: float, h
 
     file_open_ids = normalize_ids(file_ids)
     http_open_ids = normalize_ids(http_ids)
+    if file_seen >= http_seen and isinstance(heartbeat, dict) and "open_shot_ids" in heartbeat:
+        return file_open_ids
     primary, fallback = (file_open_ids, http_open_ids) if file_seen >= http_seen else (http_open_ids, file_open_ids)
     return primary or fallback
 
@@ -254,8 +256,68 @@ def _plugin_selected_shot_id(
     http_selected = runtime_state.plugin_selected_shot_id(app)
     heartbeat = live_bridge.read_plugin_heartbeat()
     file_selected = str(heartbeat.get("selected_shot_id") or "") if isinstance(heartbeat, dict) else ""
+    if file_seen_value >= http_seen_value and isinstance(heartbeat, dict) and "selected_shot_id" in heartbeat:
+        return file_selected
     primary, fallback = (file_selected, http_selected) if file_seen_value >= http_seen_value else (http_selected, file_selected)
     return primary or fallback
+
+
+def _valid_plugin_work_keys(app: FastAPI) -> set[str]:
+    project = app.state.project
+    if project is None:
+        return set()
+    try:
+        from .plugin_service import PluginBridgeService
+
+        return {str(item.get("key") or "") for item in PluginBridgeService(app).work_items(project) if item.get("key")}
+    except Exception:
+        logger.debug("Could not build plugin work-key validation set.", exc_info=True)
+        return set()
+
+
+def _plugin_work_key_state(
+    app: FastAPI,
+    plugin_linked: bool,
+    file_seen: float,
+    http_seen: float,
+) -> tuple[str, list[str]]:
+    """Generic Photoshop work keys reported by the newest heartbeat source."""
+    if not plugin_linked:
+        return "", []
+
+    valid_keys = _valid_plugin_work_keys(app)
+    if not valid_keys:
+        return "", []
+
+    def normalize_active(value: Any) -> str:
+        key = str(value or "").strip()
+        return key if key in valid_keys else ""
+
+    def normalize_open(value: Any) -> list[str]:
+        if not isinstance(value, list):
+            return []
+        seen: set[str] = set()
+        accepted: list[str] = []
+        for raw in value:
+            key = str(raw or "").strip()
+            if key in valid_keys and key not in seen:
+                accepted.append(key)
+                seen.add(key)
+        return accepted
+
+    heartbeat = live_bridge.read_plugin_heartbeat()
+    file_has_active = isinstance(heartbeat, dict) and "active_work_key" in heartbeat
+    file_has_open = isinstance(heartbeat, dict) and "open_work_keys" in heartbeat
+    file_active = normalize_active(heartbeat.get("active_work_key") if isinstance(heartbeat, dict) else "")
+    file_open = normalize_open(heartbeat.get("open_work_keys") if isinstance(heartbeat, dict) else None)
+    http_active = normalize_active(runtime_state.plugin_active_work_key(app))
+    http_open = normalize_open(runtime_state.plugin_open_work_keys(app))
+
+    if file_seen >= http_seen:
+        active = file_active if file_has_active else http_active
+        open_keys = file_open if file_has_open else http_open
+        return active, open_keys
+    return http_active or file_active, http_open or file_open
 
 
 def _bridge_status_payload(app: FastAPI) -> dict[str, Any]:
@@ -264,6 +326,7 @@ def _bridge_status_payload(app: FastAPI) -> dict[str, Any]:
     http_seen = runtime_state.plugin_last_seen(app)
     file_seen = live_bridge.read_plugin_heartbeat_mtime()
     plugin_linked, age, open_shot_ids = _plugin_link_state(app)
+    active_work_key, open_work_keys = _plugin_work_key_state(app, plugin_linked, file_seen, http_seen)
     last_exported = runtime_state.plugin_last_exported_preview(app)
     result: dict[str, Any] = {
         "app_running": True,
@@ -276,8 +339,8 @@ def _bridge_status_payload(app: FastAPI) -> dict[str, Any]:
         "plugin_project_revision": runtime_state.plugin_project_revision(app),
         # Generic work context fields
         "work_context": runtime_state.active_work_context(app),
-        "plugin_active_work_key": runtime_state.plugin_active_work_key(app),
-        "plugin_open_work_keys": runtime_state.plugin_open_work_keys(app),
+        "plugin_active_work_key": active_work_key,
+        "plugin_open_work_keys": open_work_keys,
         "plugin_change": runtime_state.plugin_change_payload(app),
         "bridge_url": live.get("bridge_url", f"http://127.0.0.1:{app.state.bridge_port}/api/bridge/live"),
         "global_bridge_path": live.get("global_bridge_path", str(live_bridge.global_bridge_file_path())),

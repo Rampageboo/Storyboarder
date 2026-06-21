@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import contextlib
 import io
+import json
 import tempfile
 import unittest
 import warnings
@@ -83,6 +84,34 @@ class PhotoshopBridgeContractTests(unittest.TestCase):
         self.assertTrue(status.plugin_linked)
         self.assertEqual(status.plugin_selected_shot_id, shot_id)
         self.assertEqual(status.plugin_open_shot_ids, [shot_id])
+
+    def test_file_heartbeat_updates_validated_work_key_status(self) -> None:
+        _project_root, shot_id = self._open_project_with_shot()
+        stale = self.client.post(
+            "/api/plugin/heartbeat",
+            json={"selected_shot_id": shot_id, "open_shot_ids": [shot_id]},
+        )
+        self.assertEqual(stale.status_code, 200)
+
+        active_key = f"shot:{shot_id}"
+        live_bridge.plugin_heartbeat_file_path().write_text(
+            json.dumps(
+                {
+                    "selected_shot_id": "",
+                    "open_shot_ids": [],
+                    "active_work_key": active_key,
+                    "open_work_keys": [active_key, "shot:missing"],
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        status = self.client.get("/api/bridge/status").json()
+        self.assertTrue(status["plugin_linked"])
+        self.assertEqual(status["plugin_selected_shot_id"], "")
+        self.assertEqual(status["plugin_open_shot_ids"], [])
+        self.assertEqual(status["plugin_active_work_key"], active_key)
+        self.assertEqual(status["plugin_open_work_keys"], [active_key])
 
     def test_plugin_context_includes_project_shot_and_bridge_contract(self) -> None:
         _project_root, shot_id = self._open_project_with_shot()
