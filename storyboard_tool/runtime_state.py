@@ -60,6 +60,7 @@ def request_live_focus(app: FastAPI, shot_id: str) -> None:
         "key": f"shot:{shot_id}",
         "shot_id": shot_id,
         "source_file_path": source_path,
+        "source_native_path": str(ctx.get("source_native_path") or ""),
     }
 
 
@@ -84,9 +85,15 @@ def set_plugin_and_live_selected_shot_id(app: FastAPI, shot_id: str) -> None:
     app.state.live_selected_shot_id = selected
 
 
-def record_plugin_heartbeat(app: FastAPI, payload: dict[str, Any] | None = None) -> None:
+def record_plugin_heartbeat(
+    app: FastAPI,
+    payload: dict[str, Any] | None = None,
+    *,
+    valid_work_keys: set[str] | None = None,
+) -> None:
     data = payload if isinstance(payload, dict) else {}
     app.state.plugin_last_seen = time.time()
+    known_keys = set(valid_work_keys or set())
 
     # Legacy shot fields
     selected = str(data.get("selected_shot_id") or "").strip()
@@ -96,17 +103,21 @@ def record_plugin_heartbeat(app: FastAPI, payload: dict[str, Any] | None = None)
     if isinstance(open_ids, list):
         app.state.plugin_open_shot_ids = [str(item) for item in open_ids if item]
 
-    # Generic work-context fields (Part 5)
+    # Generic work-context fields. Accept only backend-generated keys for the
+    # current project; stale, malformed, or cross-project keys are ignored.
     active_key = str(data.get("active_work_key") or "").strip()
-    if active_key and (active_key.startswith("shot:") or active_key.count(":") == 2):
-        app.state.plugin_active_work_key = active_key
+    app.state.plugin_active_work_key = active_key if active_key in known_keys else ""
 
     open_keys = data.get("open_work_keys")
     if isinstance(open_keys, list):
-        app.state.plugin_open_work_keys = [
-            str(k) for k in open_keys
-            if str(k or "").startswith("shot:") or str(k or "").count(":") == 2
-        ]
+        seen: set[str] = set()
+        accepted: list[str] = []
+        for raw in open_keys:
+            key = str(raw or "").strip()
+            if key in known_keys and key not in seen:
+                accepted.append(key)
+                seen.add(key)
+        app.state.plugin_open_work_keys = accepted
 
 
 def plugin_last_exported_preview(app: FastAPI) -> dict[str, float]:
@@ -167,6 +178,7 @@ def set_active_shot_context(
     shot_id: str,
     source_file_path: str = "",
     preview_image_path: str = "",
+    source_native_path: str = "",
 ) -> None:
     shot_id = str(shot_id or "").strip()
     app.state.active_work_context = {
@@ -174,6 +186,7 @@ def set_active_shot_context(
         "key": f"shot:{shot_id}",
         "shot_id": shot_id,
         "source_file_path": source_file_path,
+        "source_native_path": source_native_path,
         "preview_image_path": preview_image_path,
     }
     set_live_selected_shot_id(app, shot_id)
@@ -185,6 +198,7 @@ def set_active_scene2d_context(
     perspective_id: str,
     scene: dict[str, Any] | None = None,
     perspective: dict[str, Any] | None = None,
+    source_native_path: str = "",
 ) -> None:
     scene_id = str(scene_id or "").strip()
     perspective_id = str(perspective_id or "").strip()
@@ -208,7 +222,10 @@ def set_active_scene2d_context(
         "perspective_title": str((perspective or {}).get("title") or ""),
         "perspective_type": str((perspective or {}).get("type") or "psd"),
         "source_file_path": source_file_path,
+        "source_native_path": source_native_path,
         "preview_image_path": preview_image_path,
+        # One-based convention: index is display-ready and must render as 1 / N
+        # for the first editable PSD Perspective.
         "index": index + 1 if index >= 0 else 1,
         "count": count,
         "previous_key": prev_key,

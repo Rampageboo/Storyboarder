@@ -91,16 +91,11 @@ class PluginScene2DTests(unittest.TestCase):
         ))
         self.assertEqual(r2.status_code, 200)
         perspective_id = r2.json()["perspective"]["id"]
-        # Create stub source file in the project root (not self.root which is the parent)
+        # Create/verify the canonical source file in the project root (not self.root which is the parent).
         project_root = Path(self.client.get("/api/project").json()["project_path"])
         persp_dir = project_root / "scenes2d" / scene_id / "perspectives" / perspective_id
         persp_dir.mkdir(parents=True, exist_ok=True)
-        (persp_dir / f"{perspective_id}.psd").write_bytes(b"8BPS" + b"\0" * 32)
-        # Update the scenes index with the source path
-        _quiet(lambda: self.client.patch(
-            f"/api/project/scenes2d/{scene_id}/perspectives/{perspective_id}",
-            json={"source_file_path": f"scenes2d/{scene_id}/perspectives/{perspective_id}/{perspective_id}.psd"},
-        ))
+        (persp_dir / "source.psd").write_bytes(b"8BPS" + b"\0" * 32)
         return scene_id, perspective_id
 
     def _add_image_perspective(self, project_root: Path, scene_id: str) -> str:
@@ -176,6 +171,14 @@ class PluginScene2DTests(unittest.TestCase):
         work_items = r.json()["work_items"]
         scene2d_items = [it for it in work_items if it["kind"] == "scene2d"]
         self.assertTrue(any(it["perspective_id"] == perspective_id for it in scene2d_items))
+        item = next(it for it in scene2d_items if it["perspective_id"] == perspective_id)
+        expected_rel = f"scenes2d/{scene_id}/perspectives/{perspective_id}/source.psd"
+        self.assertEqual(item["source_file_path"], expected_rel)
+        self.assertTrue(item["source_native_path"].replace("\\", "/").endswith(expected_rel))
+        self.assertEqual(item["scene_title"], "Scene A")
+        self.assertEqual(item["perspective_title"], "Perspective 1")
+        self.assertEqual(item["index"], 2)
+        self.assertEqual(item["count"], 2)
 
     def test_5_open_psd_perspective_sets_active_work_context(self) -> None:
         project_root = self._new_project()
@@ -288,8 +291,6 @@ class PluginScene2DTests(unittest.TestCase):
     def test_11_psd_saved_accepts_scene2d_and_updates_mtime(self) -> None:
         project_root = self._new_project()
         scene_id, perspective_id = self._add_scene_with_psd_perspective()
-        psd_path = f"scenes2d/{scene_id}/perspectives/{perspective_id}/{perspective_id}.psd"
-
         r = self.client.post(
             f"/api/plugin/scenes2d/{scene_id}/perspectives/{perspective_id}/psd-saved"
         )
@@ -351,6 +352,16 @@ class PluginScene2DTests(unittest.TestCase):
         # Without a project, work_context should be empty or absent
         ctx = status.get("work_context") or {}
         self.assertFalse(ctx.get("kind"), "work_context.kind should be absent without a project")
+
+    def test_unknown_scene2d_heartbeat_key_is_ignored(self) -> None:
+        self._new_project()
+        self._add_scene_with_psd_perspective()
+        bogus = "scene2d:anything:anything"
+        self._heartbeat(active_work_key=bogus, open_work_keys=[bogus])
+
+        status = self.client.get("/api/bridge/status").json()
+        self.assertEqual(status["plugin_active_work_key"], "")
+        self.assertNotIn(bogus, status["plugin_open_work_keys"])
 
 
 if __name__ == "__main__":

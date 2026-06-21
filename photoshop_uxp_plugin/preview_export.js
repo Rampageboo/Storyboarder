@@ -36,6 +36,10 @@ async function exportDrawingPreview() {
   // Export drawing preview for Storyboard Tool only. PSD is saved by the artist
   // with Photoshop's native Ctrl+S — UXP saveAs.psd overwrite often corrupts files.
   const shotId = activeShotId();
+  const ctx = typeof activeWorkContext === "function" ? activeWorkContext() : null;
+  if (linkedFromStoryboard && ctx?.kind === "shot" && ctx.shot_id && ctx.shot_id !== shotId) {
+    throw new Error("The active Photoshop document does not match the selected shot.");
+  }
   setSelectedShotId(shotId);
   const folder = await ensureShotStructure(shotId);
   await runModal("Export drawing", async () => {
@@ -175,6 +179,15 @@ async function exportScene2DPerspectivePreview() {
   if (ctx.perspective_type === "image") {
     throw new Error("Image perspectives are read-only. Convert to PSD in Storyboarder to edit.");
   }
+  if (!app.activeDocument) {
+    throw new Error("No active Photoshop document.");
+  }
+  const activePath = await documentNativePath(app.activeDocument);
+  if (!activePath || !sameNativePath(activePath, ctx.source_native_path)) {
+    throw new Error(
+      "The active Photoshop document does not match this Scene 2D Perspective. Activate the correct source.psd tab before exporting.",
+    );
+  }
   const { scene_id, perspective_id } = ctx;
 
   // Resolve the perspective folder via UXP filesystem
@@ -278,10 +291,13 @@ async function exportAndGoNextScene2D() {
 
   const next = payload.next_perspective;
   // Step 3: open or focus the next PSD perspective
-  await requestStoryboardApi(
+  const opened = await requestStoryboardApi(
     `/api/project/scenes2d/${encodeURIComponent(scene_id)}/perspectives/${encodeURIComponent(next.id)}/open`,
     { method: "POST" }
   );
+  if (opened?.work_context) {
+    applyWorkContext(opened.work_context);
+  }
   setStatus(`Moved to next perspective: ${next.title || next.id}`);
 }
 

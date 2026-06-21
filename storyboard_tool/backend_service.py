@@ -803,6 +803,14 @@ class StoryboardBackendService(ExportServiceMixin):
         # of launching Photoshop again (which creates a confusing duplicate).
         plugin_linked, _age, open_shot_ids = app_state._plugin_link_state(self.app)
         if plugin_linked and shot_id in open_shot_ids:
+            source_native_path = str((project.root_path / shot.source_file_path).resolve()).replace("\\", "/")
+            runtime_state.set_active_shot_context(
+                self.app,
+                shot_id,
+                source_file_path=shot.source_file_path,
+                preview_image_path=shot.preview_image_path,
+                source_native_path=source_native_path,
+            )
             self._request_plugin_focus(shot_id)
             return {"path": shot.source_file_path, "switched": "true"}
         try:
@@ -1091,37 +1099,46 @@ class StoryboardBackendService(ExportServiceMixin):
         if perspective.get("type") != "psd":
             raise HTTPException(status_code=400, detail="Only PSD Perspectives can be opened for editing.")
 
-        source_rel = perspective.get("source_file_path", "")
+        source_rel = str(perspective.get("source_file_path") or "")
+        expected_source_rel = scene2d._source_rel(scene_id, perspective_id)
+        if source_rel != expected_source_rel:
+            raise HTTPException(status_code=400, detail="Perspective source path is not canonical.")
         source_path = project.root_path / source_rel if source_rel else None
 
         if not source_path or not source_path.is_file():
-            # source.psd doesn't exist yet — call open_perspective to recreate it
-            try:
-                sc, opened, relative_path = scene2d.open_perspective(project, scene_id, perspective_id)
-            except (FileNotFoundError, ValueError) as exc:
-                raise HTTPException(status_code=400, detail=str(exc)) from exc
-        else:
-            opened = str(source_path)
-            relative_path = source_rel
+            raise HTTPException(status_code=400, detail=f"Source PSD not found: {source_rel}")
+        opened = str(source_path)
+        relative_path = source_rel
 
         # Set active work context before publishing bridge
-        runtime_state.set_active_scene2d_context(self.app, scene_id, perspective_id, sc, perspective)
+        runtime_state.set_active_scene2d_context(
+            self.app,
+            scene_id,
+            perspective_id,
+            sc,
+            perspective,
+            source_native_path=str(source_path.resolve()).replace("\\", "/") if source_path else "",
+        )
 
         # If plugin already has this PSD open, request focus; otherwise OS-open
         work_key = f"scene2d:{scene_id}:{perspective_id}"
         if work_key in runtime_state.plugin_open_work_keys(self.app):
             runtime_state.request_work_context_focus(self.app, runtime_state.active_work_context(self.app))
         else:
-            import subprocess, sys
             try:
-                if sys.platform == "win32":
-                    subprocess.Popen(["explorer", opened])
-                elif sys.platform == "darwin":
-                    subprocess.Popen(["open", opened])
-                else:
-                    subprocess.Popen(["xdg-open", opened])
-            except OSError:
-                pass
+                sc, opened, relative_path = scene2d.open_perspective(project, scene_id, perspective_id)
+            except (FileNotFoundError, ValueError) as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+            perspective = scene2d._find_perspective(sc, perspective_id)
+            source_path = project.root_path / relative_path
+            runtime_state.set_active_scene2d_context(
+                self.app,
+                scene_id,
+                perspective_id,
+                sc,
+                perspective,
+                source_native_path=str(source_path.resolve()).replace("\\", "/"),
+            )
 
         app_state._touch_live_bridge(self.app)
         return {

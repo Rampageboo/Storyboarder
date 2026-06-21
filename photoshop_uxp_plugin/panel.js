@@ -57,6 +57,9 @@ let lastActiveDocKey = "";
 let lastFocusToken = 0;
 let focusBaselineSet = false;
 let focusSwitchInFlight = false;
+let lastPluginContext = null;
+let workContextSyncInFlight = false;
+let workContextSyncPending = false;
 let focusStoryboardAfterPreviewExport = false;
 let autoAddAtEnd = true;
 const boardBackgroundSigByShot = new Map();
@@ -133,6 +136,7 @@ function init() {
   startStoryboardBridgePolling();
   registerDocumentBackgroundListeners();
   startActiveDocumentWatch();
+  syncWorkContextFromActiveDocument().catch(() => {});
   scheduleBackgroundSyncForActiveDocument();
   updateCurrentShotIndicator();
   renderCurrentShotCard();
@@ -250,6 +254,129 @@ function pathToFileUrl(nativePath) {
   if (path.startsWith("file:")) return path;
   if (/^[A-Za-z]:\//.test(path)) return `file:///${path}`;
   return `file://${path.startsWith("/") ? "" : "/"}${path}`;
+}
+
+function normalizeNativePath(value) {
+  let path = String(value || "").trim();
+  if (!path) return "";
+  if (/^file:\/\//i.test(path)) {
+    try {
+      path = decodeURIComponent(new URL(path).pathname || "");
+      if (/^\/[A-Za-z]:\//.test(path)) path = path.slice(1);
+    } catch {
+      path = path.replace(/^file:\/+/i, "");
+    }
+  }
+  path = path.replace(/\\/g, "/").replace(/\/+/g, "/");
+  path = path.replace(/\/$/, "");
+  if (/^[A-Za-z]:\//.test(path)) {
+    path = `${path[0].toLowerCase()}${path.slice(1)}`;
+  }
+  return path;
+}
+
+function sameNativePath(left, right) {
+  const a = normalizeNativePath(left);
+  const b = normalizeNativePath(right);
+  return Boolean(a && b && a === b);
+}
+
+function nativePathFromEntryLike(value) {
+  if (!value) return "";
+  if (typeof value === "string") return value;
+  return String(value.nativePath || value.fsName || value.path || "");
+}
+
+async function documentNativePath(doc) {
+  if (!doc) return "";
+  for (const key of ["path", "fullName", "_path"]) {
+    const candidate = nativePathFromEntryLike(doc[key]);
+    if (candidate) return candidate;
+  }
+  try {
+    if (typeof doc.savePath === "function") {
+      const candidate = nativePathFromEntryLike(await doc.savePath());
+      if (candidate) return candidate;
+    }
+  } catch {
+    // Unsaved/cloud documents may not expose a local path.
+  }
+  return "";
+}
+
+function projectRelativeNativePath(context, relPath) {
+  const root = String(context?.project_root || linkedProjectRootPath || "").trim();
+  const rel = String(relPath || "").trim();
+  if (!root || !rel) return "";
+  return `${root.replace(/[\\/]+$/, "")}/${rel.replace(/^[\\/]+/, "")}`;
+}
+
+function workContextFromItem(item) {
+  if (!item) return null;
+  return {
+    kind: item.kind,
+    key: item.key || (item.kind === "shot" ? `shot:${item.shot_id}` : `scene2d:${item.scene_id}:${item.perspective_id}`),
+    shot_id: item.shot_id || "",
+    scene_id: item.scene_id || "",
+    perspective_id: item.perspective_id || "",
+    scene_title: item.scene_title || "",
+    perspective_title: item.perspective_title || "",
+    perspective_type: item.perspective_type || "psd",
+    label: item.label || "",
+    source_file_path: item.source_file_path || "",
+    source_native_path: item.source_native_path || "",
+    preview_image_path: item.preview_image_path || "",
+    index: item.index,
+    count: item.count,
+    previous_key: item.previous_key || "",
+    next_key: item.next_key || "",
+  };
+}
+
+function findWorkItemByNativePath(nativePath, context = lastPluginContext) {
+  if (!nativePath) return null;
+  const items = Array.isArray(context?.work_items) ? context.work_items : [];
+  for (const item of items) {
+    if (sameNativePath(nativePath, item.source_native_path)) return item;
+    if (sameNativePath(nativePath, projectRelativeNativePath(context, item.source_file_path))) return item;
+  }
+  return null;
+}
+
+async function detectWorkItemFromDocument(docOrContext = app.activeDocument, maybeContext = lastPluginContext) {
+  let doc = docOrContext;
+  let context = maybeContext;
+  if (docOrContext && Array.isArray(docOrContext.work_items)) {
+    doc = app.activeDocument;
+    context = docOrContext;
+  }
+  if (!doc) return null;
+  const nativePath = await documentNativePath(doc);
+  const item = nativePath ? findWorkItemByNativePath(nativePath, context) : null;
+  if (item) return workContextFromItem(item);
+
+  const shotId = shotIdFromDocumentName(doc.name);
+  if (shotId) {
+    const items = Array.isArray(context?.work_items) ? context.work_items : [];
+    const shotItem = items.find((candidate) => candidate.kind === "shot" && candidate.shot_id === shotId);
+    return workContextFromItem(shotItem) || { kind: "shot", key: `shot:${shotId}`, shot_id: shotId };
+  }
+  return null;
+}
+
+async function findOpenDocumentForWorkItem(workItemOrContext) {
+  const item = workItemOrContext || {};
+  for (const doc of Array.from(app.documents || [])) {
+    const nativePath = await documentNativePath(doc);
+    if (!nativePath) continue;
+    if (
+      sameNativePath(nativePath, item.source_native_path) ||
+      sameNativePath(nativePath, projectRelativeNativePath(lastPluginContext, item.source_file_path))
+    ) {
+      return doc;
+    }
+  }
+  return null;
 }
 
 async function resolveFolderEntry(nativePath) {
@@ -443,39 +570,28 @@ async function ensureSharedBridgeDir() {
   }
 }
 
-function getOpenWorkKeys() {
+async function getOpenWorkKeys() {
   // Enumerate all open documents and map each to a work key.
   const keys = new Set();
-  const ctx = (typeof activeWorkContext === "function") ? activeWorkContext() : null;
   try {
     for (const doc of app.documents) {
-      const name = String(doc.name || "");
-      const shotId = shotIdFromDocumentName(name);
-      if (shotId) {
-        keys.add(`shot:${shotId}`);
+      const item = await detectWorkItemFromDocument(doc, lastPluginContext);
+      if (item?.key) {
+        keys.add(item.key);
       }
     }
   } catch {
     // Document enumeration is best-effort.
-  }
-  if (ctx?.kind === "scene2d" && ctx.scene_id && ctx.perspective_id) {
-    keys.add(`scene2d:${ctx.scene_id}:${ctx.perspective_id}`);
   }
   return [...keys];
 }
 
 async function sendPluginHeartbeat(live) {
   const openShotIds = getOpenShotIds();
-  const openWorkKeys = getOpenWorkKeys();
-  const ctx = (typeof activeWorkContext === "function") ? activeWorkContext() : null;
-  let activeWorkKey = "";
-  if (ctx?.kind === "scene2d" && ctx.scene_id && ctx.perspective_id) {
-    activeWorkKey = `scene2d:${ctx.scene_id}:${ctx.perspective_id}`;
-  } else {
-    const shotId = detectShotFromDocument() || live?.selected_shot_id || "";
-    if (shotId) activeWorkKey = `shot:${shotId}`;
-  }
-  const selectedShotId = detectShotFromDocument() || live?.selected_shot_id || "";
+  const openWorkKeys = await getOpenWorkKeys();
+  const activeItem = await detectWorkItemFromDocument(app.activeDocument, lastPluginContext);
+  const activeWorkKey = activeItem?.key || "";
+  const selectedShotId = activeItem?.kind === "shot" ? activeItem.shot_id : "";
   const payload = JSON.stringify({
     at: new Date().toISOString(),
     plugin: "storyboard-bridge",
@@ -678,13 +794,10 @@ async function maybeHandleFocusRequest(live) {
     if (!sceneId || !perspectiveId) return;
     focusSwitchInFlight = true;
     try {
-      // Try to focus an already-open document for this perspective
-      const docName = `${perspectiveId}.psd`;
-      const doc = Array.from(app.documents).find(
-        (d) => String(d.name || "").toLowerCase() === docName.toLowerCase()
-      );
+      const doc = await findOpenDocumentForWorkItem(request);
       if (doc) {
         await app.setActiveDocument(doc);
+        await syncWorkContextFromActiveDocument(lastPluginContext);
         setStatus(`Switched to perspective ${perspectiveId} (already open).`);
       } else {
         setStatus(`Perspective ${perspectiveId} not open in Photoshop.`);
@@ -704,7 +817,13 @@ async function maybeHandleFocusRequest(live) {
   }
   focusSwitchInFlight = true;
   try {
-    await switchToShot(shotId);
+    const doc = await findOpenDocumentForWorkItem(request);
+    if (doc) {
+      await app.setActiveDocument(doc);
+      await syncWorkContextFromActiveDocument(lastPluginContext);
+    } else {
+      await switchToShot(shotId);
+    }
     setStatus(`Switched to ${shotId} (already open).`);
   } catch (error) {
     setStatus(error.message || String(error));
@@ -1196,7 +1315,7 @@ function renderCurrentShotCard() {
 // Switches Bridge and Work panels between shot mode and Scene 2D mode.
 // Called from backend_client.js:applyWorkContext() whenever mode changes.
 function renderWorkModeUI(ctx) {
-  const mode = ctx?.kind === "scene2d" ? "scene2d" : "shot";
+  const mode = ctx?.kind === "scene2d" ? "scene2d" : (ctx?.kind === "unmatched" ? "unmatched" : "shot");
 
   // Bridge panel
   const linkedPanel = $("linkedPanel");
@@ -1211,6 +1330,11 @@ function renderWorkModeUI(ctx) {
   if (shotNav) shotNav.hidden = mode !== "shot";
   if (scene2dNav) scene2dNav.hidden = mode !== "scene2d";
   if (onionSkin) onionSkin.hidden = mode !== "shot";
+
+  for (const id of ["saveAndStay", "saveAndNext", "scene2dSaveAndStay", "scene2dSaveAndNext"]) {
+    const button = $(id);
+    if (button) button.disabled = mode === "unmatched";
+  }
 
   if (mode === "scene2d") {
     renderScene2DCard(ctx);
@@ -1237,7 +1361,7 @@ function renderScene2DCard(ctx) {
     card.hidden = false;
     const indexEl = $("scene2dPerspectiveIndex");
     if (indexEl) {
-      const idx = ctx.index != null ? ctx.index + 1 : "?";
+      const idx = ctx.index != null ? ctx.index : "?";
       const total = ctx.count != null ? ctx.count : "?";
       indexEl.textContent = `${idx} / ${total}`;
     }
@@ -1299,14 +1423,12 @@ async function openSelectedPerspective() {
 async function focusCurrentPerspectiveTab() {
   const ctx = activeScene2DContext();
   if (!ctx?.perspective_id) throw new Error("No active perspective.");
-  const docName = `${ctx.perspective_id}.psd`;
-  const doc = Array.from(app.documents).find(
-    (d) => String(d.name || "").toLowerCase() === docName.toLowerCase()
-  );
+  const doc = await findOpenDocumentForWorkItem(ctx);
   if (!doc) {
-    throw new Error(`${docName} is not open. Use 'Open perspective' to open it first.`);
+    throw new Error("This perspective source.psd is not open. Use 'Open perspective' to open it first.");
   }
   await app.setActiveDocument(doc);
+  await syncWorkContextFromActiveDocument(lastPluginContext);
 }
 
 function shotUpdatePayload(shot, status) {
@@ -1389,7 +1511,7 @@ function detectShotFromDocument() {
 // ── Generic work-item detection (Part 6) ─────────────────────────────────────
 // Checks the active document path against all work_items from the plugin context
 // (both shots and PSD perspectives). Returns a minimal work context object or null.
-function detectWorkItemFromDocument(context) {
+function detectWorkItemFromDocumentByNameOnlyDeprecated(context) {
   const docName = String(app.activeDocument?.name || "");
   if (!docName) return null;
   const docBase = docName.replace(/\.[^.]+$/, "").toLowerCase();
@@ -1592,6 +1714,44 @@ function activateDocument(doc) {
   return doc;
 }
 
+async function syncWorkContextFromActiveDocument(context = lastPluginContext) {
+  lastPluginContext = context || lastPluginContext;
+  if (workContextSyncInFlight) {
+    workContextSyncPending = true;
+    return;
+  }
+  workContextSyncInFlight = true;
+  try {
+    let doc = null;
+    try {
+      doc = app.activeDocument;
+    } catch {
+      doc = null;
+    }
+    if (!doc) {
+      applyWorkContext(lastPluginContext?.work_context || null);
+      updateCurrentShotIndicator();
+      return;
+    }
+    const detected = await detectWorkItemFromDocument(doc, lastPluginContext);
+    if (detected) {
+      applyWorkContext(detected);
+      if (detected.kind === "shot" && detected.shot_id) {
+        setSelectedShotId(detected.shot_id);
+      }
+    } else {
+      applyWorkContext({ kind: "unmatched", document_name: String(doc.name || "") });
+    }
+    updateCurrentShotIndicator();
+  } finally {
+    workContextSyncInFlight = false;
+    if (workContextSyncPending) {
+      workContextSyncPending = false;
+      syncWorkContextFromActiveDocument(lastPluginContext).catch(() => {});
+    }
+  }
+}
+
 async function resolveShotImageEntry(shot) {
   const folder = await getShotFolderEntry(shot.shot_id);
   const candidates = [`${shot.shot_id}_preview.png`, `${shot.shot_id}.psd`];
@@ -1615,7 +1775,7 @@ function registerDocumentBackgroundListeners() {
   const events = ["open", "select", "close"];
   try {
     photoshop.action.addNotificationListener(events, (eventName) => {
-      updateCurrentShotIndicator();
+      syncWorkContextFromActiveDocument().catch(() => updateCurrentShotIndicator());
       if (eventName === "open" || eventName === "select") {
         scheduleBackgroundSyncForActiveDocument();
       }
@@ -1648,7 +1808,7 @@ function startActiveDocumentWatch() {
     const key = activeDocumentKey();
     if (key !== lastActiveDocKey) {
       lastActiveDocKey = key;
-      updateCurrentShotIndicator();
+      syncWorkContextFromActiveDocument().catch(() => updateCurrentShotIndicator());
     }
   }, 700);
 }
@@ -1669,9 +1829,26 @@ function updateCurrentShotIndicator() {
     return;
   }
 
+  const ctx = (typeof activeWorkContext === "function") ? activeWorkContext() : null;
+  if (ctx?.kind === "scene2d") {
+    node.classList.remove("muted");
+    const label = ctx.label || [ctx.scene_title, ctx.perspective_title].filter(Boolean).join(" / ");
+    const count = ctx.count ? ` · ${ctx.index || "?"} of ${ctx.count}` : "";
+    node.textContent = `Editing Scene 2D · ${label || ctx.perspective_id}${count}`;
+    node.hidden = false;
+    renderCurrentShotCard();
+    return;
+  }
+  if (ctx?.kind === "unmatched") {
+    node.textContent = `Editing: ${ctx.document_name || doc.name} · Not linked to this project`;
+    node.classList.add("muted");
+    node.hidden = false;
+    return;
+  }
+
   const shotId = detectShotFromDocument();
   if (!shotId) {
-    node.textContent = `Editing: ${doc.name} (not a storyboard shot)`;
+    node.textContent = `Editing: ${doc.name} · Not linked to this project`;
     node.classList.add("muted");
     node.hidden = false;
     return;

@@ -133,22 +133,13 @@ class Scene2DTests(unittest.TestCase):
         self.assertEqual(listed["perspectives"][0]["updated_at"], perspective["updated_at"])
 
         source.unlink()
-        recreated_time = "2099-01-01T00:00:00Z"
-        with (
-            mock.patch("storyboard_tool.scene2d._now_iso", return_value=recreated_time),
-            mock.patch("storyboard_tool.scene2d.project_manager.open_project_file", return_value=source),
-        ):
-            reopened = _quiet(
-                lambda: self.client.post(
-                    f"/api/project/scenes2d/{scene['id']}/perspectives/{perspective['id']}/open"
-                )
+        reopened = _quiet(
+            lambda: self.client.post(
+                f"/api/project/scenes2d/{scene['id']}/perspectives/{perspective['id']}/open"
             )
-        self.assertEqual(reopened.status_code, 200, reopened.text)
-        self.assertTrue(source.is_file())
-
-        relisted = _quiet(lambda: self.client.get("/api/project/scenes2d")).json()["scenes"][0]
-        self.assertEqual(relisted["updated_at"], recreated_time)
-        self.assertEqual(relisted["perspectives"][0]["updated_at"], recreated_time)
+        )
+        self.assertEqual(reopened.status_code, 400, reopened.text)
+        self.assertIn("Source PSD not found", reopened.text)
         self.assertEqual(_quiet(lambda: self.client.get("/api/project")).json()["shots"], before_shots)
 
     def test_refresh_missing_preview_returns_clean_payload(self) -> None:
@@ -280,15 +271,13 @@ class Scene2DTests(unittest.TestCase):
         source = self.project_root / perspective["source_file_path"]
         source.unlink()
         before = _quiet(lambda: self.client.get("/api/project")).json()["shots"]
-        with mock.patch("storyboard_tool.scene2d.project_manager.open_project_file", return_value=source) as opened:
-            opened_response = _quiet(
-                lambda: self.client.post(
-                    f"/api/project/scenes2d/{scene['id']}/perspectives/{perspective['id']}/open"
-                )
+        opened_response = _quiet(
+            lambda: self.client.post(
+                f"/api/project/scenes2d/{scene['id']}/perspectives/{perspective['id']}/open"
             )
-        self.assertEqual(opened_response.status_code, 200, opened_response.text)
-        opened.assert_called_once()
-        self.assertEqual(opened.call_args.args[1], perspective["source_file_path"])
+        )
+        self.assertEqual(opened_response.status_code, 400, opened_response.text)
+        self.assertIn("Source PSD not found", opened_response.text)
         self.assertEqual(_quiet(lambda: self.client.get("/api/project")).json()["shots"], before)
 
         primary = _quiet(

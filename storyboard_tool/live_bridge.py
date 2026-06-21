@@ -114,6 +114,9 @@ def build_payload(
         "kind": str(fwc.get("kind") or "shot"),
         "key": str(fwc.get("key") or ""),
         "source_file_path": str(fwc.get("source_file_path") or ""),
+        "source_native_path": str(fwc.get("source_native_path") or ""),
+        "scene_id": str(fwc.get("scene_id") or ""),
+        "perspective_id": str(fwc.get("perspective_id") or ""),
         # Legacy field: non-empty only for shot focus so old plugins keep working
         "shot_id": str(fwc.get("shot_id") or focus_shot_id or "") if project else "",
         "token": int(focus_token),

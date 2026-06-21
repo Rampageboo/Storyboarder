@@ -11,7 +11,7 @@
 //   linkedFromStoryboard, projectData, canvasColor, canvasWidth, canvasHeight,
 //   currentWorkContext, setWorkContext.
 
-// ── Work context state (Part 6) ──────────────────────────────────────────────
+// â”€â”€ Work context state (Part 6) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 // A single mutable slot holding the current active work context.
 // Kind is "shot" | "scene2d". panel.js reads this for UI routing.
 let _activeWorkContext = null;
@@ -142,6 +142,9 @@ function applyPluginContext(context) {
   if (!context) {
     return;
   }
+  if (typeof lastPluginContext !== "undefined") {
+    lastPluginContext = context;
+  }
   projectData = projectDataFromPluginContext(context);
   populateShotSelect();
   if (context.canvas) {
@@ -152,21 +155,21 @@ function applyPluginContext(context) {
     updateColorSwatch();
   }
 
-  // Apply work context (Part 6) — routes UI to shot vs. scene2d mode.
-  if (context.work_context) {
+  let hasActiveDocument = false;
+  try {
+    hasActiveDocument = Boolean(app.activeDocument);
+  } catch {
+    hasActiveDocument = false;
+  }
+
+  if (hasActiveDocument && typeof syncWorkContextFromActiveDocument === "function") {
+    syncWorkContextFromActiveDocument(context).catch(() => {});
+    renderCurrentShotCard();
+    return;
+  } else if (context.work_context?.kind) {
     applyWorkContext(context.work_context);
   } else {
-    // Detect from active document if backend hasn't told us the mode yet.
-    const detected = (typeof detectWorkItemFromDocument === "function")
-      ? detectWorkItemFromDocument(context)
-      : null;
-    if (detected) {
-      applyWorkContext(detected);
-    } else {
-      // Default to shot mode so existing UI behaviour is unchanged.
-      const fallback = { kind: "shot", shot_id: context.selected_shot_id || "" };
-      applyWorkContext(fallback);
-    }
+    applyWorkContext({ kind: "shot", shot_id: context.selected_shot_id || "" });
   }
 
   const workCtx = activeWorkContext();
@@ -176,9 +179,7 @@ function applyPluginContext(context) {
     return;
   }
 
-  const shotId = (typeof detectWorkItemFromDocument === "function"
-    ? detectWorkItemFromDocument(context)?.shot_id
-    : null) || context.selected_shot_id || "";
+  const shotId = context.selected_shot_id || "";
   if (shotId) {
     setSelectedShotId(shotId);
   }
@@ -250,7 +251,7 @@ async function requestShotSync(shotId, force = true) {
   return null;
 }
 
-// ── Scene 2D API helpers (Part 9 / 10) ───────────────────────────────────────
+// â”€â”€ Scene 2D API helpers (Part 9 / 10) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 async function requestScene2DPsdSaved(sceneId, perspectiveId) {
   return requestStoryboardApi(

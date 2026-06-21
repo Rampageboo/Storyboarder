@@ -19,7 +19,13 @@ class PluginBridgeService:
         runtime_state.mark_plugin_project_changed(self.app)
 
     def heartbeat(self, payload: dict[str, Any] | None = None) -> dict[str, str]:
-        runtime_state.record_plugin_heartbeat(self.app, payload)
+        project = getattr(self.app.state, "project", None)
+        valid_work_keys = {item["key"] for item in self.work_items(project) if item.get("key")} if project else set()
+        runtime_state.record_plugin_heartbeat(
+            self.app,
+            payload,
+            valid_work_keys=valid_work_keys,
+        )
         return {"ok": "true"}
 
     def context(self) -> dict[str, Any]:
@@ -69,13 +75,16 @@ class PluginBridgeService:
         """Return all editable PSD work items: shots + Scene 2D PSD Perspectives."""
         items: list[dict[str, Any]] = []
         for shot in project.shots:
+            source_rel = shot.source_file_path or f"shots/{shot.shot_id}/{shot.shot_id}.psd"
+            preview_rel = shot.preview_image_path or f"shots/{shot.shot_id}/{shot.shot_id}_preview.png"
             items.append({
                 "kind": "shot",
                 "key": f"shot:{shot.shot_id}",
-                "label": shot.title or shot.shot_id,
-                "source_file_path": shot.source_file_path or f"shots/{shot.shot_id}/{shot.shot_id}.psd",
-                "preview_image_path": shot.preview_image_path or f"shots/{shot.shot_id}/{shot.shot_id}_preview.png",
                 "shot_id": shot.shot_id,
+                "label": shot.title or shot.shot_id,
+                "source_file_path": source_rel,
+                "source_native_path": self._native_project_path(project, source_rel),
+                "preview_image_path": preview_rel,
             })
         try:
             scenes = scene2d.list_scenes(project)
@@ -83,21 +92,48 @@ class PluginBridgeService:
             scenes = []
         for sc in scenes:
             scene_id = sc.get("id", "")
-            scene_title = sc.get("title", "")
-            for persp in sc.get("perspectives") or []:
+            scene_title = str(sc.get("title") or "")
+            psd_perspectives = [p for p in (sc.get("perspectives") or []) if p.get("type") == "psd"]
+            count = len(psd_perspectives)
+            for index, persp in enumerate(psd_perspectives):
                 if persp.get("type") != "psd":
                     continue
                 persp_id = persp.get("id", "")
+                source_rel = str(persp.get("source_file_path") or "")
+                preview_rel = str(persp.get("preview_image_path") or "")
                 items.append({
                     "kind": "scene2d",
                     "key": f"scene2d:{scene_id}:{persp_id}",
-                    "label": f"{scene_title} / {persp.get('title', 'Untitled')}",
-                    "source_file_path": persp.get("source_file_path", ""),
-                    "preview_image_path": persp.get("preview_image_path", ""),
                     "scene_id": scene_id,
                     "perspective_id": persp_id,
+                    "scene_title": scene_title,
+                    "perspective_title": str(persp.get("title") or "Untitled Perspective"),
+                    "perspective_type": "psd",
+                    "label": f"{scene_title} / {persp.get('title') or 'Untitled Perspective'}",
+                    "source_file_path": source_rel,
+                    "source_native_path": self._native_project_path(project, source_rel),
+                    "preview_image_path": preview_rel,
+                    "index": index + 1,
+                    "count": count,
+                    "previous_key": f"scene2d:{scene_id}:{psd_perspectives[index - 1]['id']}" if index > 0 else "",
+                    "next_key": f"scene2d:{scene_id}:{psd_perspectives[index + 1]['id']}" if index + 1 < count else "",
                 })
         return items
+
+    def _native_project_path(self, project, relative_path: str) -> str:
+        rel = str(relative_path or "").strip()
+        if not rel:
+            return ""
+        try:
+            return str((project.root_path / rel).resolve()).replace("\\", "/")
+        except OSError:
+            return str(project.root_path / rel).replace("\\", "/")
+
+    def work_item_by_key(self, project, key: str) -> dict[str, Any] | None:
+        key = str(key or "").strip()
+        if not key:
+            return None
+        return next((item for item in self.work_items(project) if item.get("key") == key), None)
 
     def export_preview(self, shot_id: str, payload: dict[str, Any] | None = None) -> dict[str, Any]:
         project = app_state._refresh_project_from_disk(self.app)
@@ -226,13 +262,20 @@ class PluginBridgeService:
         if perspective.get("type") != "psd":
             raise HTTPException(status_code=400, detail="Perspective is not a PSD — export not allowed.")
 
-        source_path = project.root_path / perspective["source_file_path"]
+        source_rel = str(perspective.get("source_file_path") or "")
+        canonical_source_rel = scene2d._source_rel(scene_id, perspective_id)
+        if source_rel != canonical_source_rel:
+            raise HTTPException(status_code=400, detail="Perspective source path is not canonical.")
+        source_path = project.root_path / source_rel
         if not source_path.is_file():
-            raise HTTPException(status_code=400, detail=f"Source PSD not found: {perspective['source_file_path']}")
+            raise HTTPException(status_code=400, detail=f"Source PSD not found: {source_rel}")
 
         preview_rel = perspective.get("preview_image_path", "")
         if not preview_rel:
             raise HTTPException(status_code=400, detail="Perspective has no preview_image_path.")
+        canonical_preview_rel = scene2d._preview_rel(scene_id, perspective_id)
+        if preview_rel != canonical_preview_rel:
+            raise HTTPException(status_code=400, detail="Perspective preview path is not canonical.")
 
         preview_path = project.root_path / preview_rel
         # Safety: preview must stay inside project root
