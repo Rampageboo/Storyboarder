@@ -11,7 +11,12 @@
 /* ── Reset & base ───────────────────────────────────────────────────── */
 *, *::before, *::after { box-sizing: border-box; }
 
-button, select, input, textarea { width: 100%; min-width: 0; }
+/* Fill width via the flex/grid container's stretch, NOT `width: 100%`.
+   UXP's WebKit does not reliably honor `box-sizing: border-box` on form
+   controls, so `width: 100%` + horizontal padding overflows the container
+   on the right. `width: auto` + `min-width: 0` lets the parent stretch the
+   control's border-box to the exact content width regardless of box-sizing. */
+button, select, input, textarea { box-sizing: border-box; width: auto; min-width: 0; }
 
 [hidden] { display: none !important; }
 
@@ -42,7 +47,7 @@ html, body {
 .conn-row {
   display: flex;
   align-items: center;
-  gap: 7px;
+  gap: 0;
   min-height: 26px;
   padding: 2px 0 4px;
   border-bottom: 1px solid #2e2e2e;
@@ -54,6 +59,7 @@ html, body {
   height: 7px;
   border-radius: 50%;
   background: #555;
+  margin-right: 8px;
 }
 .conn-dot[data-state="connected"] { background: #3a8f50; }
 .conn-dot[data-state="waiting"]   { background: #a07828; }
@@ -128,26 +134,28 @@ html, body {
 
 .ctx-pill {
   flex: 0 0 auto;
-  padding: 2px 7px;
-  border-radius: 999px;
+  padding: 2px 6px;
+  border-radius: 3px;
   background: #2a3a56;
-  color: #b8d0ff;
+  color: #9ab8e0;
   font-size: 10px;
-  font-weight: 700;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
   white-space: nowrap;
 }
 
 .ctx-pill-group {
   display: flex;
   align-items: center;
-  gap: 5px;
+  gap: 8px;
   flex-shrink: 0;
 }
 
 .ctx-pill-subtle {
-  background: #2a2a2a;
-  color: #8a8a8a;
-  border: 1px solid #404040;
+  background: #242424;
+  color: #808080;
+  border: 1px solid #3a3a3a;
 }
 
 .ctx-index {
@@ -186,7 +194,7 @@ html, body {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 5px;
-  margin-top: 8px;
+  margin-top: 6px;
 }
 
 .status-buttons button {
@@ -204,29 +212,6 @@ html, body {
 .status-buttons button.is-active { border-color: #5a90e0; background: #1e3060; color: #c0d8ff; }
 .status-buttons button:disabled, .quick-note-input:disabled { opacity: 0.4; cursor: default; }
 
-/* ── Quick note ─────────────────────────────────────────────────────── */
-.quick-note-row {
-  display: flex;
-  flex-direction: column;
-  gap: 5px;
-  margin-top: 7px;
-}
-
-.quick-note-input {
-  width: 100%;
-  resize: vertical;
-  min-height: 38px;
-  border: 1px solid #3c3c3c;
-  border-radius: 5px;
-  background: #151515;
-  color: #e8e8e8;
-  padding: 6px 7px;
-  font: inherit;
-  font-size: 11px;
-}
-
-.quick-note-input::placeholder { color: #505050; }
-.quick-note-input:focus { outline: none; border-color: #4a78d0; }
 
 /* ── Export section ─────────────────────────────────────────────────── */
 .export-section {
@@ -252,9 +237,9 @@ html, body {
 .btn-minor,
 .btn-sm {
   display: block;
-  width: 100%;
+  width: auto;
   min-height: var(--uxp-control-height);
-  padding: 5px 10px;
+  padding: 6px 14px;
   border-radius: 6px;
   border: 1px solid transparent;
   font: inherit;
@@ -262,7 +247,11 @@ html, body {
   font-weight: 500;
   cursor: pointer;
   text-align: center;
-  line-height: 1.2;
+  line-height: 1.3;
+  letter-spacing: 0.01em;
+  white-space: normal;
+  overflow: hidden;
+  word-break: normal;
 }
 
 .btn-primary {
@@ -469,7 +458,7 @@ details[open] > .advanced-summary::before { content: "▼"; }
 }
 
 .nav-select {
-  width: 100%;
+  width: auto;
   min-height: var(--uxp-control-height);
   padding: 4px 8px;
   border: 1px solid #3c3c3c;
@@ -515,7 +504,7 @@ details[open] > .advanced-summary::before { content: "▼"; }
 }
 
 .onion-input {
-  width: 100%;
+  width: auto;
   min-height: var(--uxp-control-height);
   padding: 4px 8px;
   border: 1px solid #3c3c3c;
