@@ -49,54 +49,66 @@ logger = logging.getLogger(__name__)
 _TOKEN_RE = re.compile(r'^[a-zA-Z0-9_-]{1,64}$')
 
 
-def _focus_desktop_window(window) -> dict[str, Any]:
+_VALID_WINDOW_STATES = frozenset({"normal", "maximized", "minimized"})
+
+
+def _set_main_window_state(app: Any, state: str) -> None:
+    """Set the application-owned runtime window state."""
+    if state in _VALID_WINDOW_STATES:
+        app.state.main_window_state = state
+
+
+def _get_main_window_state(app: Any) -> str:
+    """Return the application-owned runtime window state, defaulting to 'normal'."""
+    return getattr(app.state, "main_window_state", "normal")
+
+
+def _focus_desktop_window(window, *, window_state: str = "normal") -> dict[str, Any]:
     """Focus a pywebview window without changing its geometry.
 
-    Only calls restore() when the window is positively detected as minimized.
-    Never restores a normal or maximized window — doing so would change size/position.
+    Uses the application-maintained window_state rather than querying pywebview's
+    .minimized property (which reflects initial config, not live OS state).
+
+    Only restores when window_state == 'minimized'. Never restores a normal or
+    maximized window. Uses show() as the activation request — on Windows,
+    show() performs Show + Activate. Does not call window.focus() (pywebview
+    uses 'focus' as a configuration value, not a reliably callable method).
     """
     restored = False
     shown = False
-    focused = False
+    activation_requested = False
+    errors: list[str] = []
 
-    # pywebview exposes a .minimized property on its Window class.
-    is_minimized = False
-    try:
-        is_minimized = bool(getattr(window, "minimized", False))
-    except Exception:
-        pass
-
-    if is_minimized:
+    if window_state == "minimized":
         restore_fn = getattr(window, "restore", None)
         if callable(restore_fn):
             try:
                 restore_fn()
                 restored = True
             except Exception:
+                errors.append("restore_failed")
                 logger.debug("pywebview window.restore() failed during focus request", exc_info=True)
 
-    # show() is safe — it un-hides a hidden window but does not resize/move it.
     show_fn = getattr(window, "show", None)
     if callable(show_fn):
         try:
             show_fn()
             shown = True
+            activation_requested = True
         except Exception:
+            errors.append("show_failed")
             logger.debug("pywebview window.show() failed during focus request", exc_info=True)
 
-    focus_fn = getattr(window, "focus", None)
-    if callable(focus_fn):
-        try:
-            focus_fn()
-            focused = True
-        except Exception:
-            logger.debug("pywebview window.focus() failed during focus request", exc_info=True)
+    window_state_after = "normal" if restored else window_state
 
     return {
         "ok": True,
-        "focused": focused,
         "shown": shown,
+        "activation_requested": activation_requested,
+        "focused": activation_requested,
         "restored_from_minimized": restored,
+        "window_state_before": window_state,
+        "window_state_after": window_state_after,
     }
 
 
@@ -316,9 +328,22 @@ class StoryboardBackendService(ExportServiceMixin):
     def method_app_focus(self) -> dict[str, Any]:
         """Best-effort desktop focus. Browser/dev mode is a clean no-op."""
         window = getattr(self.app.state, "main_window", None)
+        window_state = _get_main_window_state(self.app)
         if window is None:
-            return {"ok": True, "focused": False, "shown": False, "restored_from_minimized": False}
-        return _focus_desktop_window(window)
+            return {
+                "ok": True,
+                "shown": False,
+                "activation_requested": False,
+                "focused": False,
+                "restored_from_minimized": False,
+                "window_state_before": window_state,
+                "window_state_after": window_state,
+            }
+        result = _focus_desktop_window(window, window_state=window_state)
+        if result.get("restored_from_minimized"):
+            _set_main_window_state(self.app, "normal")
+            result["window_state_after"] = "normal"
+        return result
 
     def method_preheat_photoshop(self) -> dict[str, Any]:
         project = self.app.state.project

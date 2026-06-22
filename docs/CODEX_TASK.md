@@ -1,4 +1,4 @@
-# CODEX_TASK.md — Strengthen the startup splash and preserve window geometry on plugin focus
+# CODEX_TASK.md — Harden desktop focus state and remove remaining UUID/dead Quick Note UI
 
 Repository:
 
@@ -9,443 +9,765 @@ Rampageboo/Storyboarder
 Base commit:
 
 ```text
-450c1a433e9af6438d21454aabfaed45f5827cbb
+444776d6184eb2815ffbb5d8fae8b51f1b09ae8a
 ```
 
 ## Goal
 
-Fix two desktop-shell issues:
+Complete a focused reliability and cleanup pass after the startup-splash and Photoshop UXP UI changes.
 
-1. The native Storyboarder startup splash is now too brief to have a visible branded presence.
-2. Focusing Storyboarder after a Photoshop preview export changes the Storyboarder window from its current size/maximized state back to its normal/default size.
+The current implementation already fixes the primary window-geometry regression:
 
-This is a focused desktop-shell task.
+```text
+normal Storyboarder window
+→ Photoshop Export preview
+→ Storyboarder keeps its custom size and position
 
-Do not change Photoshop export behavior, Scene 2D data, Shot data, or plugin context logic.
+maximized Storyboarder window
+→ Photoshop Export preview
+→ Storyboarder remains maximized
+```
+
+Preserve that behavior.
+
+Fix the remaining issues:
+
+```text
+1. Track the actual current minimized/maximized/restored state of the pywebview window.
+
+2. Restore the window only when it is genuinely minimized.
+
+3. Remove the incorrect assumption that pywebview Window exposes a callable focus() method.
+
+4. Make /api/app/focus diagnostics reflect the real operations performed.
+
+5. Remove Shot UUIDs from normal connection and sync status text.
+
+6. Keep Quick Note intentionally removed and delete its remaining dead frontend/plugin code.
+```
+
+This is not a UI redesign.
 
 ---
 
-# Part 1 — Give the startup splash a visible but fast presence
+# Product decisions to preserve
 
-## Current behavior
+Do not change:
 
-The PowerShell splash closes immediately when the per-launch `.ready` marker appears.
+```text
+Starter minimum-visible timing
+Starter Ready state
+Starter fade behavior
+Starter appearance
 
-On a fast startup, the splash may only flash for a fraction of a second.
+current Storyboard Work layout
+current Storyboard Bridge layout
+Shot and Scene 2D shared panel structure
+Shot dropdown labels
+Scene 2D navigation
+export sections
+status buttons
+onion skin
+Advanced section
 
-Do not slow down Python startup or backend initialization.
+Shot export behavior
+Scene 2D export behavior
+Focus Storyboarder after export checkbox
+heartbeat logic
+work-context logic
+filesystem paths
+UUID identity
+```
 
-Only adjust the splash presentation lifecycle.
+Quick Note has intentionally been removed because it caused Shot and Scene 2D layouts to have inconsistent heights.
+
+Do not reintroduce Quick Note in this task.
 
 ---
 
-## Required timing model
+# Part 1 — Track the live desktop window state
 
-Add explicit constants near the top of:
+## Current issue
 
-```text
-scripts/launch-storyboarder-splash.ps1
-```
-
-Suggested values:
-
-```powershell
-$MinimumVisibleMs = 1000
-$ReadyHoldMs = 180
-$FadeDurationMs = 160
-```
-
-Required behavior:
-
-```text
-Splash appears immediately
-→ launcher and application continue starting normally
-→ ready marker arrives
-→ splash remains visible until MinimumVisibleMs has elapsed
-→ display a short Ready state
-→ fade out and close
-```
-
-If startup already took longer than the minimum:
-
-```text
-ready marker
-→ Ready state for approximately 150–200ms
-→ fade out
-→ close
-```
-
-Do not add a fixed `Start-Sleep` to:
-
-```text
-launch_storyboarder.bat
-Python startup
-desktop.py
-```
-
-The application must continue loading concurrently.
-
----
-
-## Ready state
-
-When the `.ready` marker appears:
-
-```text
-title remains Storyboarder
-status changes to Ready
-progress indicator stops or becomes complete
-status color changes to a restrained success tone
-```
-
-Optional text:
-
-```text
-Ready
-Opening workspace…
-```
-
-Do not instantly close before the ready state is rendered.
-
----
-
-## Fade-out
-
-Use the WinForms form opacity for a short fade:
-
-```powershell
-$form.Opacity
-```
-
-Implement it through a timer rather than a blocking sleep.
-
-Requirements:
-
-```text
-fade only after ready
-fatal error state must not fade automatically
-Escape must still close immediately
-120-second timeout must still work
-```
-
-Do not create overlapping timers that can close or dispose the form twice.
-
----
-
-# Part 2 — Improve the splash visual identity
-
-Keep the current dark native WinForms approach, but make the splash look intentional rather than like a temporary diagnostic window.
-
-Use the existing:
-
-```text
-storyboard_tool/assets/icon.ico
-```
-
-Display a visible application mark near the title.
-
-Suggested composition:
-
-```text
-[ 56–64px icon ]  Storyboarder
-                  Local storyboard workspace
-
-                  Preparing workspace…
-                  ━━━━━━━━━━━━━━━━━━━━━
-```
-
-Requirements:
-
-```text
-icon and title align vertically
-consistent left and right padding
-status remains readable
-progress bar remains subtle
-no large white Windows controls
-no excessive gradients or glow
-```
-
-Retain:
-
-```text
-borderless window
-dragging
-TopMost while starting
-error state
-Close button
-Escape support
-status-file messages
-token isolation
-```
-
-Do not turn the starter into a large marketing screen.
-
----
-
-# Part 3 — Do not change window geometry when focusing Storyboarder
-
-## Current problem
-
-`StoryboardBackendService.method_app_focus()` currently invokes:
+The focus helper currently reads:
 
 ```python
-restore()
-show()
-focus()
+window.minimized
 ```
 
-for every focus request.
+as though it represents the current operating-system window state.
 
-A normal or maximized window must not be restored merely because Photoshop requested focus.
+In pywebview 6.2.1 this is primarily an initial window configuration value and is not a reliable live minimized-state query.
+
+pywebview does expose window events:
+
+```text
+window.events.minimized
+window.events.maximized
+window.events.restored
+window.events.shown
+```
+
+Use these events to maintain application-owned runtime state.
 
 ---
 
-## Required focus contract
+## Add explicit runtime state
 
-Calling:
+In the desktop startup path, initialize:
 
-```text
-POST /api/app/focus
+```python
+app.state.main_window_state = "normal"
 ```
 
-must preserve:
+Allowed values:
 
 ```text
-current width
-current height
-current position
-maximized state
-normal state
+normal
+maximized
+minimized
 ```
 
-It may change only:
+A small dataclass or enum is acceptable, but a validated string is sufficient.
 
-```text
-visibility
-foreground focus
-minimized state when positively detected
+Attach handlers after creating the main pywebview window:
+
+```python
+def _mark_minimized(*_args):
+    app.state.main_window_state = "minimized"
+
+def _mark_maximized(*_args):
+    app.state.main_window_state = "maximized"
+
+def _mark_restored(*_args):
+    app.state.main_window_state = "normal"
+
+def _mark_shown(*_args):
+    if app.state.main_window_state not in {"maximized", "minimized"}:
+        app.state.main_window_state = "normal"
 ```
+
+Register:
+
+```python
+window.events.minimized += _mark_minimized
+window.events.maximized += _mark_maximized
+window.events.restored += _mark_restored
+window.events.shown += _mark_shown
+```
+
+Use the event-registration style already supported by this project and pywebview version.
+
+Do not resize or move the window inside these handlers.
 
 ---
 
-## Replace unconditional restore
+## Keep state consistent after programmatic restore
 
-Do not loop unconditionally through:
+When the focus helper successfully restores a minimized window:
 
 ```python
-("restore", "show", "focus")
+app.state.main_window_state = "normal"
 ```
 
-Implement a dedicated helper, for example:
+Do not wait indefinitely for a later event before updating state.
+
+If restore fails, keep the state as `minimized`.
+
+---
+
+# Part 2 — Refactor desktop focus helper around real pywebview behavior
+
+## Current incorrect assumption
+
+The current helper tries:
 
 ```python
-def _focus_desktop_window(window) -> dict[str, Any]:
+window.focus()
+```
+
+Real pywebview `Window` uses `focus` as a configuration value; it is not reliably a callable public focus method.
+
+On the Windows backend, `window.show()` already performs the equivalent of:
+
+```text
+Show
+Activate
+```
+
+Do not model tests around a fake callable `window.focus()` API.
+
+---
+
+## Required helper contract
+
+Refactor to something equivalent to:
+
+```python
+def _focus_desktop_window(
+    window,
+    *,
+    window_state: str = "normal",
+) -> dict[str, Any]:
     ...
 ```
 
-Preferred behavior:
+The helper must:
 
 ```text
-1. If the window is known to be minimized:
-     restore it once.
-
-2. Otherwise:
-     do not call restore.
-
-3. Call show only when needed or as a non-geometry-changing best effort.
-
-4. Call focus.
-
-5. Never call resize, move, maximize, or restore for a normal/maximized window.
+1. Restore only when window_state == "minimized".
+2. Never restore a normal window.
+3. Never restore a maximized window.
+4. Call show() as the best-effort visibility/activation request.
+5. Never call resize(), move(), maximize(), or an assumed focus() method.
+6. Never fail the completed Photoshop export merely because activation failed.
 ```
 
-When the current pywebview backend does not expose a reliable minimized-state query:
+Suggested implementation behavior:
 
-```text
-prefer show + focus
-do not call restore speculatively
+```python
+restored = False
+shown = False
+activation_requested = False
+errors = []
+
+if window_state == "minimized":
+    try:
+        window.restore()
+        restored = True
+    except Exception as exc:
+        errors.append("restore_failed")
+
+try:
+    window.show()
+    shown = True
+    activation_requested = True
+except Exception:
+    errors.append("show_failed")
 ```
 
-Preserving geometry is more important than guessing.
+Do not call `window.restore()` when `window_state` is `normal` or `maximized`.
 
 ---
 
-## Do not modify the Plugin focus request
+# Part 3 — Update method_app_focus
 
-Keep:
+Use the application-maintained state:
 
-```text
-Focus Storyboarder after export
-POST /api/app/focus
+```python
+window_state = getattr(
+    self.app.state,
+    "main_window_state",
+    "normal",
+)
 ```
 
-The bug belongs in the desktop focus implementation, not the export workflow.
+Then call the focus helper.
 
-The same focus endpoint should work for:
+After a successful minimized restore:
 
-```text
-Shot preview export
-Scene 2D preview export
-other future bring-to-front requests
+```python
+self.app.state.main_window_state = "normal"
 ```
 
----
-
-# Part 4 — Focus response diagnostics
-
-Return useful non-sensitive information:
+Return structured diagnostics such as:
 
 ```json
 {
   "ok": true,
-  "focused": true,
   "shown": true,
-  "restored_from_minimized": false
+  "activation_requested": true,
+  "restored_from_minimized": false,
+  "window_state_before": "maximized",
+  "window_state_after": "maximized"
 }
 ```
 
-Do not return native window handles.
+For a minimized window successfully restored:
 
-Log failed focus methods at debug level.
-
-A focus failure must not make the completed export fail.
-
----
-
-# Part 5 — Automated tests
-
-## Splash lifecycle
-
-Keep existing UI-ready marker tests.
-
-Add testable timing logic where practical, or isolate the close-decision calculation into a small PowerShell helper.
-
-Test these decisions:
-
-```text
-ready at 200ms:
-  close no earlier than MinimumVisibleMs + ReadyHoldMs
-
-ready after 2 seconds:
-  only ReadyHoldMs plus fade remains
-
-fatal error:
-  no automatic ready fade
-
-timeout:
-  still closes safely
+```json
+{
+  "ok": true,
+  "shown": true,
+  "activation_requested": true,
+  "restored_from_minimized": true,
+  "window_state_before": "minimized",
+  "window_state_after": "normal"
+}
 ```
 
-Do not require a visible WinForms desktop in normal backend pytest.
+Do not claim:
 
----
+```json
+"focused": true
+```
 
-## Desktop focus tests
+unless there is a real API result proving focus.
 
-Add tests using a fake window object.
-
-### Normal window
-
-Fake exposes:
+For backward compatibility, `focused` may remain in the response, but define it conservatively:
 
 ```python
-restore
-show
-focus
+focused = activation_requested
 ```
 
-Expected:
+and document that it means an activation request was issued, not that the OS guaranteed foreground focus.
+
+Alternatively deprecate it while keeping the field.
+
+Do not expose native handles.
+
+---
+
+# Part 4 — Preserve geometry explicitly
+
+Before performing the activation request, optionally read the current geometry for diagnostics only:
+
+```python
+width
+height
+x
+y
+```
+
+Do not write it back during the ordinary focus path.
+
+The focus implementation must never call:
 
 ```text
-show/focus may be called
-restore must not be called
+resize
+set_window_size
+move
+maximize
+restore for normal/maximized windows
+```
+
+Acceptance behavior:
+
+```text
+custom normal size:
+  unchanged
+
+custom normal position:
+  unchanged
+
+maximized:
+  remains maximized
+
+minimized:
+  restored to its previous normal geometry when supported
+```
+
+Do not reset a restored window to the application’s initial 1440 × 900 dimensions.
+
+---
+
+# Part 5 — Correct desktop-focus tests
+
+Replace fake tests that expose a callable:
+
+```python
+window.focus
+```
+
+with a fake matching the real pywebview surface:
+
+```python
+window.restore = MagicMock()
+window.show = MagicMock()
+window.resize = MagicMock()
+window.move = MagicMock()
+window.maximize = MagicMock()
+```
+
+There should be no fake callable `focus()`.
+
+---
+
+## Required test cases
+
+### Normal state
+
+```python
+result = _focus_desktop_window(window, window_state="normal")
+```
+
+Assert:
+
+```text
+restore not called
+show called once
+resize not called
+move not called
+maximize not called
+restored_from_minimized == false
+```
+
+### Maximized state
+
+```python
+result = _focus_desktop_window(window, window_state="maximized")
+```
+
+Assert:
+
+```text
+restore not called
+show called once
+window_state_after remains maximized
+```
+
+### Minimized state
+
+```python
+result = _focus_desktop_window(window, window_state="minimized")
+```
+
+Assert:
+
+```text
+restore called once
+show called once
+restored_from_minimized == true
+window_state_after == normal
+```
+
+### Restore failure
+
+Assert:
+
+```text
+show is still attempted
+restored_from_minimized == false
+window state does not falsely become normal
+structured result returned
+```
+
+### Show failure
+
+Assert:
+
+```text
+no exception escapes
+activation_requested == false
+geometry methods remain untouched
+```
+
+---
+
+# Part 6 — Test desktop event tracking
+
+Add a focused helper for registering or updating state so the logic can be tested without launching an actual WinForms desktop.
+
+Suggested pure functions:
+
+```python
+def _set_main_window_state(app, state: str) -> None:
+    ...
+
+def _get_main_window_state(app) -> str:
+    ...
+```
+
+Test:
+
+```text
+shown from unknown → normal
+minimized → minimized
+restored → normal
+maximized → maximized
+shown must not incorrectly replace maximized with normal
+```
+
+Where practical, use fake event objects to confirm the handlers are attached.
+
+Do not require a visible GUI during pytest.
+
+---
+
+# Part 7 — Remove UUID from normal Plugin connection text
+
+## Current issue
+
+The Bridge connection row still uses the active Shot ID:
+
+```js
+const label = shotId || live.project_name || "project";
+setLinkStatus(`Linked · ${label}`);
+```
+
+For UUID-based shots this displays unreadable values.
+
+Normal UI must never show raw Shot UUIDs.
+
+---
+
+## Required connection text
+
+The compact connection row should always describe the project connection:
+
+```text
+Linked · Storyboard_Project
+```
+
+Use:
+
+```js
+const projectLabel =
+  context?.project_name ||
+  live.project_name ||
+  "Storyboarder";
+
+setLinkStatus(`Linked · ${projectLabel}`);
+```
+
+Do not substitute the active Shot ID.
+
+Scene 2D and Shot mode should use the same project-level connection text.
+
+---
+
+# Part 8 — Human-readable sync status
+
+Replace:
+
+```text
+Synced: <shot UUID>
+```
+
+with:
+
+```text
+Synced · 16. Untitled shot
+```
+
+or:
+
+```text
+Synced · 4. Look at the moon
+```
+
+Use existing helpers:
+
+```js
+shotWorkItemById()
+formatShotDisplayLabel()
+shotDisplayLabel()
+```
+
+Suggested:
+
+```js
+const workItem = shotWorkItemById(shotId);
+const displayLabel = workItem
+  ? formatShotDisplayLabel(workItem)
+  : shotDisplayLabel(shotId, currentShotIndex(), currentShotFromProjectData()?.title);
+
+setStatus(`Synced · ${displayLabel}`);
+```
+
+Do not expose the UUID as a fallback.
+
+When no semantic label is available:
+
+```text
+Synced · Shot
+```
+
+is preferable to a UUID.
+
+Raw IDs may appear only inside Advanced diagnostics or console logs.
+
+---
+
+# Part 9 — Remove remaining normal-UI UUID fallbacks
+
+Audit visible text paths including:
+
+```text
+connection row
+sync status
+focused-tab status
+open-tab errors
+current work indicator
+Shot selector
+Shot card
+```
+
+User-facing success text should use:
+
+```text
+Shot number
+Shot title
+Perspective title
+Scene title
+```
+
+not UUID.
+
+Internal logs may retain canonical IDs.
+
+Error messages may include a technical ID only when necessary for diagnosing a missing file, preferably after a human-readable label.
+
+---
+
+# Part 10 — Keep Quick Note intentionally removed
+
+Quick Note has been deliberately removed to keep Shot and Scene 2D Bridge layouts consistent.
+
+Do not restore:
+
+```text
+quickNoteText
+addQuickNote
+shotCardHint
+quick-note-row
+quick-note-input
+Add note button
+```
+
+Remove remaining dead references from JavaScript:
+
+```js
+$("addQuickNote")?.addEventListener(...)
+$("quickNoteText")
+$("shotCardHint")
+addQuickNoteViaBackend()
+```
+
+Remove unused constants, helper functions, CSS selectors, and comments that exist only for Quick Note.
+
+Do not remove backend comment/note APIs because they may still be used by Storyboarder itself or future UI.
+
+Only remove dead Photoshop UXP entry points.
+
+---
+
+# Part 11 — Preserve equal Shot and Scene 2D panel heights
+
+Do not add mode-specific permanent form rows that make one mode substantially taller.
+
+Shot and Scene 2D must continue using:
+
+```text
+connection row
+context card
+export section
+status footer
+Advanced
+```
+
+Shot-only metadata sections may remain conditional.
+
+No permanent Quick Note textarea should return.
+
+If Quick Note is reconsidered in a future task, it should be placed below the export section as a collapsed optional tool, not inside the primary context card. Do not implement that now.
+
+---
+
+# Part 12 — Starter
+
+Do not modify the current Starter implementation unless a test exposes a real defect.
+
+Preserve:
+
+```text
+MinimumVisibleMs = 1000
+ReadyHoldMs = 180
+FadeDurationMs = 160
+Ready status
+application icon
+error state
+Escape support
+120-second timeout
+```
+
+This task does not need another Starter visual redesign.
+
+---
+
+# Likely files
+
+```text
+storyboard_tool/desktop.py
+storyboard_tool/backend_service.py
+
+photoshop_uxp_plugin/panel.js
+photoshop_uxp_plugin/backend_client.js
+photoshop_uxp_plugin/work_item_paths.js
+photoshop_uxp_plugin/style.css
+photoshop_uxp_plugin/index.html
+
+tests/test_desktop_focus.py
+tests/test_photoshop_bridge.py
+tests/test_plugin_work_item_paths.mjs
+```
+
+Change additional files only when required for event-state tracking.
+
+---
+
+# Required commands
+
+Run focused tests:
+
+```powershell
+.venv\Scripts\python.exe -m pytest tests/test_desktop_focus.py -q
+.venv\Scripts\python.exe -m pytest tests/test_photoshop_bridge.py -q
+.venv\Scripts\python.exe -m pytest tests/test_plugin_work_items.py -q
+
+node --test tests/test_plugin_work_item_paths.mjs
+```
+
+Run all backend tests:
+
+```powershell
+.venv\Scripts\python.exe -m pytest tests/ -q
+```
+
+Build frontend:
+
+```powershell
+cd frontend
+npm.cmd run build
+```
+
+Do not claim tests passed unless they were actually run.
+
+---
+
+# Manual validation
+
+## Window geometry
+
+With `Focus Storyboarder after export` enabled:
+
+### Custom normal window
+
+```text
+resize Storyboarder to an obvious custom size
+move it to a distinct position
+switch to Photoshop
+Export preview
+confirm size and position remain unchanged
 ```
 
 ### Maximized window
-
-Expected:
-
-```text
-focus succeeds
-restore is not called
-maximized state remains unchanged
-```
-
-### Positively detected minimized window
-
-Expected:
-
-```text
-restore is called exactly once
-focus is called
-```
-
-### Failure behavior
-
-If focus raises:
-
-```text
-endpoint still returns a structured best-effort result
-no geometry method is attempted afterward
-```
-
----
-
-# Part 6 — Manual validation
-
-## Starter
-
-Launch using:
-
-```powershell
-.\launch_storyboarder.bat
-```
-
-Verify:
-
-```text
-splash is clearly visible
-icon/title/status feel intentional
-fast startup still completes quickly
-Ready state appears briefly
-fade is smooth
-main React window is ready when splash disappears
-fatal launcher state still remains visible
-Escape still closes the splash
-```
-
-## Plugin focus geometry
-
-Test with `Focus Storyboarder after export` enabled.
-
-### Maximized Storyboarder
 
 ```text
 maximize Storyboarder
 switch to Photoshop
 Export preview
-Storyboarder receives focus
-Storyboarder remains maximized
+confirm it remains maximized
 ```
 
-### Custom normal size
-
-```text
-resize Storyboarder to a distinct non-default size
-move it to a distinct screen position
-switch to Photoshop
-Export preview
-Storyboarder receives focus
-size and position remain unchanged
-```
-
-### Minimized Storyboarder
+### Minimized window
 
 ```text
 minimize Storyboarder
 Export preview
-Storyboarder is restored and focused when supported
-it does not reset to 1440 × 900 unnecessarily
+confirm it restores and activates when supported
+confirm it returns to its previous normal geometry
+confirm it does not reset to 1440 × 900
 ```
 
 Test both:
@@ -457,45 +779,38 @@ Scene 2D Export preview
 
 ---
 
-# Likely files
+## Plugin text
+
+In Shot mode confirm:
 
 ```text
-scripts/launch-storyboarder-splash.ps1
-storyboard_tool/backend_service.py
-tests/test_ui_ready.py
-new or existing desktop-focus test file
+connection row shows project name
+sync footer shows Shot number and title
+dropdown shows Shot number and title
+no raw UUID appears in normal UI
 ```
 
-Modify `storyboard_tool/desktop.py` only if a reliable minimized-state helper requires desktop-window state tracking.
-
-Do not modify:
+In Scene 2D mode confirm:
 
 ```text
-photoshop_uxp_plugin/preview_export.js
-photoshop_uxp_plugin/backend_client.js
-Shot export semantics
-Scene 2D export semantics
-window default startup size
-saved window-state format
+connection row still shows project name
+Scene and Perspective titles remain readable
+no Shot UUID remains visible
 ```
 
 ---
 
-# Commands
+## Quick Note
 
-Run:
+Confirm:
 
-```powershell
-.venv\Scripts\python.exe -m pytest tests/test_ui_ready.py -q
-.venv\Scripts\python.exe -m pytest tests/ -q
-
-cd frontend
-npm.cmd run build
+```text
+no Quick Note textarea
+no Add note button
+no empty spacing where Quick Note used to be
+no console error caused by missing Quick Note elements
+Shot and Scene 2D layouts remain consistent
 ```
-
-Run the actual launcher and Photoshop tests manually.
-
-Do not claim splash or focus behavior passed without running the desktop application.
 
 ---
 
@@ -504,14 +819,26 @@ Do not claim splash or focus behavior passed without running the desktop applica
 Complete only when:
 
 ```text
-- the starter is visibly present during fast startup
-- it does not impose a long artificial delay
-- ready state is shown before close
-- splash closes only after the minimum visible duration
-- app focus no longer changes a maximized window to normal size
-- app focus preserves custom normal size and position
-- minimized recovery is best-effort and does not affect normal windows
-- Shot and Scene 2D exports still complete normally
+- normal and maximized focus requests never call restore
+- minimized state is tracked from real pywebview events
+- minimized focus restores exactly once
+- no resize or move operation occurs during focus
+- tests model the real pywebview API
+- normal Plugin UI displays no Shot UUID
+- connection row displays project name
+- sync status displays Shot number and title
+- Quick Note remains removed
+- dead Quick Note plugin code is removed
+- Shot and Scene 2D panel layout consistency is preserved
+- existing Starter behavior remains unchanged
+```
+
+---
+
+# Suggested commit
+
+```text
+fix: track desktop window state and clean plugin labels
 ```
 
 ---
@@ -522,16 +849,33 @@ Report:
 
 ```text
 Changed files
-Starter minimum-visible timing
-Ready-state and fade behavior
-Visual identity changes
-Focus method call order
-How minimized state is detected
-Geometry-preservation behavior
-Automated test results
-Manual launcher validation
-Manual Shot export focus validation
-Manual Scene 2D export focus validation
+
+Desktop focus:
+  tracked window states
+  event handlers
+  restore decision
+  show/activation behavior
+  response diagnostics
+  geometry preservation
+
+Plugin text:
+  connection label rule
+  sync label rule
+  UUID visibility audit
+
+Quick Note:
+  removed dead listeners
+  removed dead functions
+  removed dead CSS/markup references
+
+Focused test results
+Full pytest result
+Node test result
+Frontend build result
+Manual normal-window validation
+Manual maximized-window validation
+Manual minimized-window validation
+Manual Shot and Scene 2D text validation
 Known limitations
 Final commit SHA
 ```

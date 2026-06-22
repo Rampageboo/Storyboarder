@@ -210,7 +210,7 @@ html, body {
 
 .status-buttons button:hover { background: #2e2e2e; border-color: #505050; }
 .status-buttons button.is-active { border-color: #5a90e0; background: #1e3060; color: #c0d8ff; }
-.status-buttons button:disabled, .quick-note-input:disabled { opacity: 0.4; cursor: default; }
+.status-buttons button:disabled { opacity: 0.4; cursor: default; }
 
 
 /* ── Export section ─────────────────────────────────────────────────── */

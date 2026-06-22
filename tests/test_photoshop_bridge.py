@@ -169,35 +169,34 @@ class PhotoshopBridgeContractTests(unittest.TestCase):
         body = response.json()
         self.assertTrue(body["ok"])
         self.assertFalse(body["focused"])
-        # Diagnostic fields returned even with no window.
-        self.assertIn("shown", body)
-        self.assertIn("restored_from_minimized", body)
+        # Full diagnostic fields returned even with no window.
+        for key in ("shown", "activation_requested", "restored_from_minimized",
+                    "window_state_before", "window_state_after"):
+            self.assertIn(key, body, f"Missing key: {key}")
 
     def test_app_focus_uses_desktop_window_when_available(self) -> None:
         calls: list[str] = []
 
         class Window:
-            # No .minimized attribute → window is not minimized; restore must not be called.
+            # Real pywebview surface: restore() and show() only; focus is not callable.
             def restore(self) -> None:
                 calls.append("restore")
 
             def show(self) -> None:
                 calls.append("show")
 
-            def focus(self) -> None:
-                calls.append("focus")
-
         self.app.state.main_window = Window()
+        # Default window_state is "normal" — restore must NOT be called.
         response = self.client.post("/api/app/focus")
         self.assertEqual(response.status_code, 200)
         body = response.json()
         self.assertTrue(body["ok"])
-        self.assertTrue(body["focused"])
-        # restore must NOT be called for a non-minimized window.
+        self.assertTrue(body["activation_requested"])
+        # restore must NOT be called for a normal window.
         self.assertNotIn("restore", calls)
         self.assertIn("show", calls)
-        self.assertIn("focus", calls)
         self.assertFalse(body["restored_from_minimized"])
+        self.assertEqual(body["window_state_after"], "normal")
 
     def test_preheat_photoshop_missing_path_is_clean_noop(self) -> None:
         with mock.patch.object(backend_service_module, "preheat_photoshop") as preheat:

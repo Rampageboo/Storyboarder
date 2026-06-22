@@ -256,9 +256,25 @@ def open_desktop_window(app, title: str = "Storyboard Tool") -> int:
         text_select=False,
     )
     app.state.main_window = window
+    app.state.main_window_state = "maximized" if restore_maximized else "normal"
 
     # Track whether the window is currently maximized so we can save it on close.
     _maximized = [restore_maximized]
+
+    def _mark_minimized(*_args):
+        app.state.main_window_state = "minimized"
+
+    def _mark_maximized(*_args):
+        app.state.main_window_state = "maximized"
+        _maximized[0] = True
+
+    def _mark_restored(*_args):
+        app.state.main_window_state = "normal"
+        _maximized[0] = False
+
+    def _mark_shown(*_args):
+        if app.state.main_window_state not in {"maximized", "minimized"}:
+            app.state.main_window_state = "normal"
 
     def _on_shown():
         if restore_maximized:
@@ -275,6 +291,13 @@ def open_desktop_window(app, title: str = "Storyboard Tool") -> int:
         _write_launch_ready_marker("pywebview loaded fallback")
 
     window.events.shown += _on_shown
+    window.events.shown += _mark_shown
+    try:
+        window.events.minimized += _mark_minimized
+        window.events.maximized += _mark_maximized
+        window.events.restored += _mark_restored
+    except Exception:
+        pass  # older pywebview versions may not expose these events
     try:
         window.events.loaded += _on_loaded
     except Exception:

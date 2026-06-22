@@ -86,7 +86,6 @@ function init() {
       runPanelAction(() => updateShotStatusViaBackend(button.getAttribute("data-status"))).catch(() => {});
     }
   });
-  $("addQuickNote")?.addEventListener("click", () => runPanelAction(addQuickNoteViaBackend));
   $("previousShot")?.addEventListener("click", () => runPanelAction(goToPreviousShot));
   $("nextShot")?.addEventListener("click", () => runPanelAction(goToNextShot));
   $("overlayPrevious")?.addEventListener("click", () => runPanelAction(overlayPreviousShots));
@@ -208,11 +207,6 @@ function renderDisconnectedState(message = "Not connected") {
   }
   const shotSelect = $("shotSelect");
   if (shotSelect) shotSelect.innerHTML = "";
-  const quickNote = $("quickNoteText");
-  if (quickNote) {
-    quickNote.value = "";
-    quickNote.disabled = true;
-  }
   renderQuickStatusButtons(null, false);
   for (const id of [
     "saveAndStay",
@@ -223,7 +217,6 @@ function renderDisconnectedState(message = "Not connected") {
     "nextShot",
     "openShot",
     "focusCurrentTab",
-    "addQuickNote",
   ]) {
     const button = $(id);
     if (button) button.disabled = true;
@@ -809,10 +802,14 @@ async function applyLiveBridge(live) {
     await applyCanvasBackground();
   }
 
-  const label = shotId || live.project_name || "project";
-  setLinkStatus(`Linked · ${label}`);
+  const projectLabel = context?.project_name || live.project_name || "Storyboarder";
+  setLinkStatus(`Linked · ${projectLabel}`);
   if (!isSame && shotId) {
-    setStatus(`Synced: ${shotId}`);
+    const workItem = shotWorkItemById(shotId);
+    const displayLabel = workItem
+      ? formatShotDisplayLabel(workItem)
+      : shotDisplayLabel(shotId, currentShotIndex(), currentShotFromProjectData()?.title);
+    setStatus(`Synced · ${displayLabel || "Shot"}`);
   }
 
   if (shotId && app.activeDocument && activeCtx?.kind === "shot" && detectShotFromDocument() === shotId) {
@@ -880,7 +877,8 @@ async function maybeHandleFocusRequest(live) {
     } else {
       await switchToShot(shotId);
     }
-    setStatus(`Switched to ${shotId} (already open).`);
+    const switchLabel = shotDisplayLabel(shotId, currentShotIndex(), currentShotFromProjectData()?.title);
+    setStatus(`Switched to ${switchLabel || "Shot"}.`);
   } catch (error) {
     setStatus(error.message || String(error));
   } finally {
@@ -1233,7 +1231,8 @@ async function focusCurrentShotTab() {
   activateDocument(doc);
   setSelectedShotId(shotId);
   await notifyBackendShotFocus(shotId);
-  setStatus(`Focused open tab for ${shotId}.`);
+  const focusLabel = shotDisplayLabel(shotId, currentShotIndex(), currentShotFromProjectData()?.title);
+  setStatus(`Focused tab for ${focusLabel || "Shot"}.`);
 }
 
 function isValidShotId(value) {
@@ -1367,16 +1366,6 @@ function renderCurrentShotCard() {
   setCardSection("shotCardCamera", "Camera", shot?.camera_note);
   setCardSection("shotCardNotes", "Notes", latestCommentSummary(shot));
   renderQuickStatusButtons(shot, Boolean(linkedFromStoryboard && shot));
-  const note = $("quickNoteText");
-  if (note) note.disabled = !linkedFromStoryboard || !shot;
-  const add = $("addQuickNote");
-  if (add) add.disabled = !linkedFromStoryboard || !shot;
-  const hint = $("shotCardHint");
-  if (hint) {
-    hint.textContent = linkedFromStoryboard
-      ? "Status and notes are saved through Storyboard Tool."
-      : "Status and quick notes need Storyboard Tool linked.";
-  }
 }
 
 // ── Work mode UI routing (Parts 4–6) ────────────────────────────────────────
@@ -1599,32 +1588,9 @@ async function updateShotStatusViaBackend(status) {
     throw new Error("Could not update shot status. Is Storyboard Tool running?");
   }
   await refreshProjectDataFromBackend();
-  setStatus(`Marked ${shot.shot_id} as ${status}.`);
-}
-
-async function addQuickNoteViaBackend() {
-  if (!linkedFromStoryboard) {
-    throw new Error("Quick notes require Storyboard Tool linked.");
-  }
-  const shot = currentShotFromProjectData();
-  if (!shot) {
-    throw new Error("Pick a shot first.");
-  }
-  const input = $("quickNoteText");
-  const text = String(input?.value || "").trim();
-  if (!text) {
-    throw new Error("Type a note first.");
-  }
-  const payload = await requestStoryboardApi(`/api/shots/${encodeURIComponent(shot.shot_id)}/comments`, {
-    method: "POST",
-    body: JSON.stringify({ text }),
-  });
-  if (!payload) {
-    throw new Error("Could not add note. Is Storyboard Tool running?");
-  }
-  if (input) input.value = "";
-  await refreshProjectDataFromBackend();
-  setStatus(`Added note to ${shot.shot_id}.`);
+  const workItemForStatus = shotWorkItemById(shot.shot_id);
+  const statusLabel = workItemForStatus ? formatShotDisplayLabel(workItemForStatus) : (shot.title || "Shot");
+  setStatus(`Marked ${statusLabel} as ${status}.`);
 }
 
 function shotIdFromDocumentName(name) {
