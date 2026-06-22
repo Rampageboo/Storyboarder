@@ -1,6 +1,7 @@
 """Project-level Scene 2D groups and perspectives."""
 from __future__ import annotations
 
+import copy
 import hashlib
 import json
 import logging
@@ -1536,6 +1537,188 @@ def delete_perspective(project: Project, scene_id: str, perspective_id: str) -> 
     scenes = _replace_scene(scenes, _with_legacy_aliases(scene))
     _save_scenes(project, scenes)
     return _with_legacy_aliases(scene), scenes
+
+
+def _duplicate_perspective_title(scene: dict[str, Any], source_title: str) -> str:
+    source_stripped = str(source_title or "").strip()
+    base = (source_stripped + " Copy") if source_stripped else "Untitled Perspective Copy"
+    existing = {str(p.get("title") or "").strip() for p in (scene.get("perspectives") or [])}
+    if base not in existing:
+        return base
+    for suffix in range(2, 10000):
+        candidate = f"{base} {suffix}"
+        if candidate not in existing:
+            return candidate
+    return f"{base} {uuid.uuid4().hex[:6]}"
+
+
+def _verify_perspective_duplicate(
+    project: Project,
+    scene_id: str,
+    source_perspective_id: str,
+    duplicate_perspective_id: str,
+) -> None:
+    scenes = list_scenes(project)
+    scene = next((s for s in scenes if s["id"] == scene_id), None)
+    if scene is None:
+        raise ValueError(f"Duplicate verify: scene {scene_id!r} not found after save.")
+    perspectives = scene.get("perspectives") or []
+    ids = [p["id"] for p in perspectives]
+
+    source_count = ids.count(source_perspective_id)
+    dup_count = ids.count(duplicate_perspective_id)
+    if source_count != 1:
+        raise ValueError(f"Duplicate verify: source {source_perspective_id!r} count={source_count}.")
+    if dup_count != 1:
+        raise ValueError(f"Duplicate verify: duplicate {duplicate_perspective_id!r} count={dup_count}.")
+    if source_perspective_id == duplicate_perspective_id:
+        raise ValueError("Duplicate verify: source and duplicate IDs are the same.")
+
+    source_idx = ids.index(source_perspective_id)
+    dup_idx = ids.index(duplicate_perspective_id)
+    if dup_idx != source_idx + 1:
+        raise ValueError(f"Duplicate verify: duplicate at index {dup_idx}, expected {source_idx + 1}.")
+
+    dup = perspectives[dup_idx]
+    dup_source = _safe_rel_path(project, dup["source_file_path"])
+    if not dup_source.is_file():
+        raise ValueError(f"Duplicate verify: duplicate source file missing: {dup['source_file_path']!r}")
+
+    expected_dir_fragment = f"{scene_id}/perspectives/{duplicate_perspective_id}/"
+    if expected_dir_fragment not in str(dup.get("source_file_path") or "").replace("\\", "/"):
+        raise ValueError("Duplicate verify: duplicate source path does not use the new UUID folder.")
+
+    source_perspective = perspectives[source_idx]
+    dup_type = dup.get("type") or "psd"
+    if dup_type == "psd":
+        source_preview = _safe_rel_path(project, source_perspective.get("preview_image_path") or "")
+        if source_preview.is_file():
+            dup_preview = _safe_rel_path(project, dup.get("preview_image_path") or "")
+            if not dup_preview.is_file():
+                raise ValueError("Duplicate verify: duplicate preview missing when source preview existed.")
+        expected_preview_rel = _preview_rel(scene_id, duplicate_perspective_id)
+        if str(dup.get("preview_image_path") or "") != expected_preview_rel:
+            raise ValueError("Duplicate verify: PSD duplicate preview_image_path is not canonical.")
+    elif dup_type == "image":
+        if str(dup.get("source_file_path") or "") != str(dup.get("preview_image_path") or ""):
+            raise ValueError("Duplicate verify: image duplicate preview path differs from source path.")
+
+    if scene.get("primary_perspective_id") == duplicate_perspective_id:
+        raise ValueError("Duplicate verify: primary was incorrectly changed to the duplicate.")
+
+    source_file = _safe_rel_path(project, source_perspective["source_file_path"])
+    if not source_file.is_file():
+        raise ValueError("Duplicate verify: source perspective file is missing after duplication.")
+
+    links = project_manager.normalize_reference_links(project.settings.get("reference_links"))
+    if any(str(link.get("source_scene2d_perspective_id") or "") == duplicate_perspective_id for link in links):
+        raise ValueError("Duplicate verify: duplicate perspective unexpectedly appears in reference links.")
+
+    meta_path = _meta_path(project, scene_id)
+    if meta_path.is_file():
+        try:
+            meta = _read_json(meta_path)
+            meta_ids = [p["id"] for p in (meta.get("perspectives") or []) if isinstance(p, dict)]
+            if sorted(meta_ids) != sorted(ids):
+                raise ValueError("Duplicate verify: scene meta file disagrees with scenes2d.json perspectives.")
+        except (OSError, json.JSONDecodeError, KeyError, AttributeError):
+            pass
+
+
+def duplicate_perspective(
+    project: Project,
+    scene_id: str,
+    perspective_id: str,
+) -> tuple[dict[str, Any], dict[str, Any], list[dict[str, Any]]]:
+    scene, scenes = _find_scene(project, scene_id)
+    source = _find_perspective(scene, perspective_id)
+
+    source_file = _safe_rel_path(project, source["source_file_path"])
+    if not source_file.is_file():
+        raise FileNotFoundError(f"Source perspective file not found: {source['source_file_path']}")
+
+    source_type = source.get("type") or "psd"
+    source_preview_str = str(source.get("preview_image_path") or "")
+    source_src_str = str(source.get("source_file_path") or "")
+    preview_is_separate = source_preview_str != source_src_str
+    source_preview_path = _safe_rel_path(project, source_preview_str) if preview_is_separate else source_file
+    copy_preview = source_type == "psd" and preview_is_separate and source_preview_path.is_file()
+
+    new_id = new_uuid()
+    timestamp = _now_iso()
+
+    if source_type == "image":
+        suffix = Path(source_src_str).suffix.lower()
+        new_source_rel = _image_source_rel(scene_id, new_id, suffix)
+        new_preview_rel = new_source_rel
+    else:
+        new_source_rel = _source_rel(scene_id, new_id)
+        new_preview_rel = _preview_rel(scene_id, new_id)
+
+    new_title = _duplicate_perspective_title(scene, source.get("title") or "")
+
+    perspectives_parent = _scene_dir(project, scene_id) / "perspectives"
+    operation_id = uuid.uuid4().hex
+    staging_dir = perspectives_parent / f".duplicate-{operation_id}"
+    new_dir = perspectives_parent / new_id
+
+    index_path = _index_path(project)
+    meta_path = _meta_path(project, scene_id)
+    index_bytes = index_path.read_bytes() if index_path.is_file() else None
+    meta_bytes = meta_path.read_bytes() if meta_path.is_file() else None
+
+    try:
+        staging_dir.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source_file, staging_dir / Path(new_source_rel).name)
+        if copy_preview:
+            shutil.copy2(source_preview_path, staging_dir / "preview.png")
+
+        staging_dir.rename(new_dir)
+
+        duplicate = _normalize_perspective(
+            {
+                "id": new_id,
+                "title": new_title,
+                "type": source_type,
+                "source_file_path": new_source_rel,
+                "preview_image_path": new_preview_rel,
+                "linked_scene3d_id": str(source.get("linked_scene3d_id") or "").strip(),
+                "linked_scene3d_view": copy.deepcopy(source.get("linked_scene3d_view")),
+                "created_at": timestamp,
+                "updated_at": timestamp,
+            },
+            scene_id=scene_id,
+        )
+
+        source_index = next(i for i, p in enumerate(scene["perspectives"]) if p["id"] == perspective_id)
+        scene["perspectives"].insert(source_index + 1, duplicate)
+        scene["updated_at"] = timestamp
+        scenes = _replace_scene(scenes, _with_legacy_aliases(scene))
+        _save_scenes(project, scenes)
+        _verify_perspective_duplicate(project, scene_id, perspective_id, new_id)
+
+    except BaseException:
+        try:
+            _restore_bytes(index_path, index_bytes)
+        except Exception:
+            pass
+        try:
+            _restore_bytes(meta_path, meta_bytes)
+        except Exception:
+            pass
+        if new_dir.is_dir():
+            try:
+                shutil.rmtree(new_dir)
+            except Exception:
+                pass
+        if staging_dir.is_dir():
+            try:
+                shutil.rmtree(staging_dir)
+            except Exception:
+                pass
+        raise
+
+    return _with_legacy_aliases(scene), duplicate, scenes
 
 
 def move_perspective(

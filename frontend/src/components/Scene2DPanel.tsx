@@ -5,6 +5,7 @@ import {
   createScene2DPerspective,
   deleteScene2D,
   deleteScene2DPerspective,
+  duplicateScene2DPerspective,
   importScene2DPerspective,
   listScene2D,
   listScene3D,
@@ -401,6 +402,29 @@ export function Scene2DPanel({ active = false }: { active?: boolean }) {
     }
   }, [flushDirtyShots, reportError, selectedPerspective, selectedScene, setProject])
 
+  const duplicatePerspective = useCallback(
+    async (perspectiveId: string) => {
+      if (!selectedScene) return
+      const sourcePerspective = selectedScene.perspectives.find((p) => p.id === perspectiveId) ?? null
+      setContextMenu(null)
+      setBusy(true)
+      try {
+        await flushDirtyShots()
+        const payload = await duplicateScene2DPerspective(selectedScene.id, perspectiveId)
+        setScenes(payload.scenes)
+        setSelectedPerspectiveId(payload.perspective.id)
+        setNote(
+          `Duplicated "${perspectiveLabel(sourcePerspective)}" as "${payload.perspective.title}".`,
+        )
+      } catch (error) {
+        reportError(error)
+      } finally {
+        setBusy(false)
+      }
+    },
+    [flushDirtyShots, reportError, selectedScene],
+  )
+
   const movePerspectiveToScene = useCallback(
     async (perspectiveId: string, targetSceneId: string) => {
       if (!selectedScene || targetSceneId === selectedScene.id) return
@@ -538,10 +562,16 @@ export function Scene2DPanel({ active = false }: { active?: boolean }) {
     return [
       { kind: 'label', label: perspectiveLabel(perspective) },
       { kind: 'separator' },
+      {
+        label: 'Duplicate perspective',
+        disabled,
+        onSelect: () => void duplicatePerspective(contextMenu.perspectiveId),
+      },
+      { kind: 'separator' },
       { kind: 'label', label: 'Move to scene' },
       ...moveItems,
     ]
-  }, [contextMenu, disabled, movePerspectiveToScene, scenes, selectedScene])
+  }, [contextMenu, disabled, duplicatePerspective, movePerspectiveToScene, scenes, selectedScene])
 
   if (!project) return null
 

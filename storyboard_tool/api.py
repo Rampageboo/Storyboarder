@@ -515,6 +515,10 @@ def create_app(base_dir: Path, bridge_port: int = 8000) -> FastAPI:
     def set_primary_scene2d_perspective(scene_id: str, perspective_id: str) -> dict[str, Any]:
         return _svc().method_set_primary_scene2d_perspective(scene_id, perspective_id)
 
+    @app.post("/api/project/scenes2d/{scene_id}/perspectives/{perspective_id}/duplicate")
+    def duplicate_scene2d_perspective(scene_id: str, perspective_id: str) -> dict[str, Any]:
+        return _svc().method_duplicate_scene2d_perspective(scene_id, perspective_id)
+
     @app.post("/api/project/scenes2d/{scene_id}/perspectives/{perspective_id}/move-to-scene")
     def move_scene2d_perspective(scene_id: str, perspective_id: str, request: Scene2DPerspectiveMoveRequest) -> dict[str, Any]:
         return _svc().method_move_scene2d_perspective(

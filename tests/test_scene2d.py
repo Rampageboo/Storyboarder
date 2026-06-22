@@ -533,5 +533,360 @@ class Scene2DTests(unittest.TestCase):
         self.assertEqual([item["id"] for item in reloaded["perspectives"]], reordered_ids)
 
 
+class Scene2DDuplicatePerspectiveTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self._tmp.name)
+        self.app = api_module.create_app(self.root)
+        self.client = TestClient(self.app, raise_server_exceptions=False)
+        created = _quiet(lambda: self.client.post("/api/project/new", json={"path": self._tmp.name}))
+        self.assertEqual(created.status_code, 200)
+        self.project_root = Path(created.json()["project_path"])
+
+    def tearDown(self) -> None:
+        self._tmp.cleanup()
+
+    def _create_scene(self, title: str = "Layout") -> dict:
+        response = _quiet(lambda: self.client.post("/api/project/scenes2d", json={"title": title}))
+        self.assertEqual(response.status_code, 200, response.text)
+        return response.json()["scene"]
+
+    def _create_perspective(self, scene_id: str, title: str = "Main") -> dict:
+        response = _quiet(
+            lambda: self.client.post(
+                f"/api/project/scenes2d/{scene_id}/perspectives",
+                json={"title": title},
+            )
+        )
+        self.assertEqual(response.status_code, 200, response.text)
+        return response.json()["perspective"]
+
+    def _duplicate(self, scene_id: str, perspective_id: str) -> tuple[int, dict]:
+        response = _quiet(
+            lambda: self.client.post(
+                f"/api/project/scenes2d/{scene_id}/perspectives/{perspective_id}/duplicate"
+            )
+        )
+        return response.status_code, response.json()
+
+    # ── PSD with preview ─────────────────────────────────────────────────────
+
+    def test_duplicate_psd_with_preview_creates_independent_files(self) -> None:
+        scene = self._create_scene()
+        original_persp = scene["perspectives"][0]
+        source_path = self.project_root / original_persp["source_file_path"]
+        preview_path = self.project_root / original_persp["preview_image_path"]
+        preview_path.write_bytes(MINI_PNG)
+        original_source_bytes = source_path.read_bytes()
+
+        status, body = self._duplicate(scene["id"], original_persp["id"])
+        self.assertEqual(status, 200, body)
+        dup = body["perspective"]
+
+        self.assertNotEqual(dup["id"], original_persp["id"])
+        self.assertTrue(_is_uuid(dup["id"]))
+        new_source = self.project_root / dup["source_file_path"]
+        new_preview = self.project_root / dup["preview_image_path"]
+        self.assertTrue(new_source.is_file())
+        self.assertTrue(new_preview.is_file())
+        self.assertEqual(new_source.read_bytes(), original_source_bytes)
+        self.assertEqual(new_preview.read_bytes(), MINI_PNG)
+
+        # Source directory untouched
+        self.assertTrue(source_path.is_file())
+        self.assertEqual(source_path.read_bytes(), original_source_bytes)
+
+        # Paths use new UUID folder
+        self.assertIn(dup["id"], dup["source_file_path"])
+        self.assertIn(dup["id"], dup["preview_image_path"])
+        self.assertNotIn(original_persp["id"], dup["source_file_path"])
+
+    # ── PSD without preview ──────────────────────────────────────────────────
+
+    def test_duplicate_psd_without_preview_succeeds_and_no_fake_preview(self) -> None:
+        scene = self._create_scene()
+        original_persp = scene["perspectives"][0]
+        # Don't write preview — it intentionally does not exist
+
+        status, body = self._duplicate(scene["id"], original_persp["id"])
+        self.assertEqual(status, 200, body)
+        dup = body["perspective"]
+
+        new_source = self.project_root / dup["source_file_path"]
+        canonical_preview = (
+            f"scenes2d/{scene['id']}/perspectives/{dup['id']}/preview.png"
+        )
+        self.assertTrue(new_source.is_file())
+        self.assertFalse((self.project_root / canonical_preview).is_file())
+        self.assertEqual(dup["preview_image_path"], canonical_preview)
+
+    # ── Image perspective ────────────────────────────────────────────────────
+
+    def test_duplicate_image_perspective_preserves_extension_and_preview_eq_source(self) -> None:
+        scene = self._create_scene()
+        # Import a JPG image perspective via multipart upload
+        imported = _quiet(
+            lambda: self.client.post(
+                f"/api/project/scenes2d/{scene['id']}/perspectives/import",
+                files={"file": ("cover.jpg", MINI_PNG, "image/jpeg")},
+                data={"title": "Cover"},
+            )
+        )
+        self.assertEqual(imported.status_code, 200, imported.text)
+        img_persp = imported.json()["perspective"]
+        self.assertEqual(img_persp["type"], "image")
+        self.assertTrue(img_persp["source_file_path"].endswith(".jpg"))
+
+        src_bytes = (self.project_root / img_persp["source_file_path"]).read_bytes()
+
+        status, body = self._duplicate(scene["id"], img_persp["id"])
+        self.assertEqual(status, 200, body)
+        dup = body["perspective"]
+
+        self.assertTrue(dup["source_file_path"].endswith(".jpg"))
+        self.assertEqual(dup["source_file_path"], dup["preview_image_path"])
+        new_file = self.project_root / dup["source_file_path"]
+        self.assertTrue(new_file.is_file())
+        self.assertEqual(new_file.read_bytes(), src_bytes)
+        self.assertEqual(dup["type"], "image")
+
+    # ── Metadata ─────────────────────────────────────────────────────────────
+
+    def test_duplicate_title_receives_copy_suffix(self) -> None:
+        scene = self._create_scene()
+        original_persp = scene["perspectives"][0]
+        _, body = self._duplicate(scene["id"], original_persp["id"])
+        dup = body["perspective"]
+        self.assertEqual(dup["title"], f"{original_persp['title']} Copy")
+
+    def test_duplicate_title_collision_uses_incrementing_number(self) -> None:
+        scene = self._create_scene()
+        original_persp = scene["perspectives"][0]
+        expected_base = f"{original_persp['title']} Copy"
+
+        # First duplicate → "{title} Copy"
+        _, b1 = self._duplicate(scene["id"], original_persp["id"])
+        self.assertEqual(b1["perspective"]["title"], expected_base)
+
+        # Second duplicate → "{title} Copy 2"
+        _, b2 = self._duplicate(scene["id"], original_persp["id"])
+        self.assertEqual(b2["perspective"]["title"], f"{expected_base} 2")
+
+        # Third duplicate → "{title} Copy 3"
+        _, b3 = self._duplicate(scene["id"], original_persp["id"])
+        self.assertEqual(b3["perspective"]["title"], f"{expected_base} 3")
+
+    def test_duplicate_copies_linked_scene3d_view_deeply(self) -> None:
+        scene = self._create_scene()
+        original_persp = scene["perspectives"][0]
+        # Patch a linked_scene3d_view via update
+        view = {"camera": {"x": 1, "y": 2, "z": 3}, "fov": 45}
+        updated = _quiet(
+            lambda: self.client.patch(
+                f"/api/project/scenes2d/{scene['id']}/perspectives/{original_persp['id']}",
+                json={"linked_scene3d_view": view},
+            )
+        )
+        self.assertEqual(updated.status_code, 200, updated.text)
+
+        _, body = self._duplicate(scene["id"], original_persp["id"])
+        dup = body["perspective"]
+        self.assertEqual(dup["linked_scene3d_view"], view)
+        # Modify original view — should not affect duplicate
+        view["camera"]["x"] = 99
+        listed = _quiet(
+            lambda: self.client.get(f"/api/project/scenes2d/{scene['id']}/perspectives")
+        ).json()
+        dup_fresh = next(p for p in listed["perspectives"] if p["id"] == dup["id"])
+        self.assertEqual(dup_fresh["linked_scene3d_view"]["camera"]["x"], 1)
+
+    def test_duplicate_timestamps_are_present_and_self_consistent(self) -> None:
+        scene = self._create_scene()
+        original_persp = scene["perspectives"][0]
+        _, body = self._duplicate(scene["id"], original_persp["id"])
+        dup = body["perspective"]
+        # Fresh duplicate must have non-empty timestamps (not inherited empty strings)
+        self.assertTrue(dup["created_at"], "created_at should be non-empty")
+        self.assertTrue(dup["updated_at"], "updated_at should be non-empty")
+        # For a brand-new duplicate, created_at and updated_at are set to the same instant
+        self.assertEqual(dup["created_at"], dup["updated_at"])
+
+    # ── References ──────────────────────────────────────────────────────────
+
+    def test_duplicate_does_not_affect_existing_references(self) -> None:
+        scene = self._create_scene()
+        original_persp = scene["perspectives"][0]
+        (self.project_root / original_persp["preview_image_path"]).write_bytes(MINI_PNG)
+        added = _quiet(
+            lambda: self.client.post(
+                f"/api/project/scenes2d/{scene['id']}/perspectives/{original_persp['id']}/add-to-references"
+            )
+        )
+        self.assertEqual(added.status_code, 200, added.text)
+        before_settings = (self.project_root / "settings.json").read_bytes()
+
+        _, body = self._duplicate(scene["id"], original_persp["id"])
+        dup = body["perspective"]
+
+        after_settings = (self.project_root / "settings.json").read_bytes()
+        self.assertEqual(before_settings, after_settings)
+
+        project = _quiet(lambda: self.client.get("/api/project")).json()
+        links = project["settings"]["reference_links"]
+        dup_links = [l for l in links if l.get("source_scene2d_perspective_id") == dup["id"]]
+        self.assertEqual(dup_links, [])
+        orig_links = [l for l in links if l.get("source_scene2d_perspective_id") == original_persp["id"]]
+        self.assertEqual(len(orig_links), 1)
+
+    # ── Ordering ─────────────────────────────────────────────────────────────
+
+    def test_duplicate_inserts_immediately_after_source_in_middle(self) -> None:
+        scene = self._create_scene()
+        p_a = scene["perspectives"][0]
+        p_b = self._create_perspective(scene["id"], "B")
+        p_c = self._create_perspective(scene["id"], "C")
+
+        _, body = self._duplicate(scene["id"], p_b["id"])
+        dup = body["perspective"]
+
+        ids = [p["id"] for p in body["scene"]["perspectives"]]
+        self.assertEqual(ids, [p_a["id"], p_b["id"], dup["id"], p_c["id"]])
+
+    def test_duplicate_inserts_after_first_perspective(self) -> None:
+        scene = self._create_scene()
+        p_a = scene["perspectives"][0]
+        p_b = self._create_perspective(scene["id"], "B")
+
+        _, body = self._duplicate(scene["id"], p_a["id"])
+        dup = body["perspective"]
+
+        ids = [p["id"] for p in body["scene"]["perspectives"]]
+        self.assertEqual(ids, [p_a["id"], dup["id"], p_b["id"]])
+
+    def test_duplicate_inserts_after_last_perspective(self) -> None:
+        scene = self._create_scene()
+        p_a = scene["perspectives"][0]
+        p_b = self._create_perspective(scene["id"], "B")
+
+        _, body = self._duplicate(scene["id"], p_b["id"])
+        dup = body["perspective"]
+
+        ids = [p["id"] for p in body["scene"]["perspectives"]]
+        self.assertEqual(ids, [p_a["id"], p_b["id"], dup["id"]])
+
+    def test_primary_perspective_unchanged_after_duplicate(self) -> None:
+        scene = self._create_scene()
+        original_primary = scene["primary_perspective_id"]
+        original_persp = scene["perspectives"][0]
+
+        _, body = self._duplicate(scene["id"], original_persp["id"])
+        self.assertEqual(body["scene"]["primary_perspective_id"], original_primary)
+        self.assertNotEqual(body["perspective"]["id"], original_primary)
+
+    # ── Failure rollback ─────────────────────────────────────────────────────
+
+    def test_rollback_on_save_failure_leaves_source_intact(self) -> None:
+        scene = self._create_scene()
+        original_persp = scene["perspectives"][0]
+        (self.project_root / original_persp["preview_image_path"]).write_bytes(MINI_PNG)
+        source_bytes_before = (self.project_root / original_persp["source_file_path"]).read_bytes()
+        index_before = (self.project_root / "scenes2d" / "scenes2d.json").read_bytes()
+        meta_before = (self.project_root / "scenes2d" / scene["id"] / f"{scene['id']}_meta.json").read_bytes()
+
+        with mock.patch("storyboard_tool.scene2d._save_scenes", side_effect=RuntimeError("forced failure")):
+            status, body = self._duplicate(scene["id"], original_persp["id"])
+
+        self.assertEqual(status, 500, body)
+
+        # Source untouched
+        self.assertEqual(
+            (self.project_root / original_persp["source_file_path"]).read_bytes(), source_bytes_before
+        )
+
+        # Metadata restored
+        self.assertEqual(
+            (self.project_root / "scenes2d" / "scenes2d.json").read_bytes(), index_before
+        )
+        self.assertEqual(
+            (self.project_root / "scenes2d" / scene["id"] / f"{scene['id']}_meta.json").read_bytes(),
+            meta_before,
+        )
+
+        # No leftover perspective dirs that aren't the original
+        persp_dir = self.project_root / "scenes2d" / scene["id"] / "perspectives"
+        known_ids = {original_persp["id"]}
+        for child in persp_dir.iterdir():
+            if child.name.startswith(".duplicate-"):
+                self.fail(f"Orphan staging dir left after rollback: {child.name}")
+            if _is_uuid(child.name):
+                self.assertIn(child.name, known_ids, f"Unknown perspective dir left: {child.name}")
+
+        # Scene still has exactly original perspectives
+        listed = _quiet(lambda: self.client.get("/api/project/scenes2d")).json()["scenes"]
+        scene_after = next(s for s in listed if s["id"] == scene["id"])
+        self.assertEqual([p["id"] for p in scene_after["perspectives"]], [original_persp["id"]])
+
+    def test_rollback_on_copy_failure_leaves_source_intact(self) -> None:
+        scene = self._create_scene()
+        original_persp = scene["perspectives"][0]
+        source_bytes_before = (self.project_root / original_persp["source_file_path"]).read_bytes()
+
+        with mock.patch("storyboard_tool.scene2d.shutil.copy2", side_effect=OSError("forced copy failure")):
+            status, body = self._duplicate(scene["id"], original_persp["id"])
+
+        self.assertEqual(status, 500, body)
+        self.assertEqual(
+            (self.project_root / original_persp["source_file_path"]).read_bytes(), source_bytes_before
+        )
+        listed = _quiet(lambda: self.client.get("/api/project/scenes2d")).json()["scenes"]
+        scene_after = next(s for s in listed if s["id"] == scene["id"])
+        self.assertEqual(len(scene_after["perspectives"]), 1)
+        self.assertEqual(scene_after["perspectives"][0]["id"], original_persp["id"])
+
+    # ── API contract ─────────────────────────────────────────────────────────
+
+    def test_duplicate_returns_scene_perspective_scenes_keys(self) -> None:
+        scene = self._create_scene()
+        original_persp = scene["perspectives"][0]
+        status, body = self._duplicate(scene["id"], original_persp["id"])
+        self.assertEqual(status, 200, body)
+        self.assertIn("scene", body)
+        self.assertIn("perspective", body)
+        self.assertIn("scenes", body)
+        self.assertIsInstance(body["scenes"], list)
+
+    def test_duplicate_returns_404_for_missing_scene(self) -> None:
+        import uuid as _uuid
+        fake_scene_id = str(_uuid.uuid4())
+        fake_persp_id = str(_uuid.uuid4())
+        status, body = self._duplicate(fake_scene_id, fake_persp_id)
+        self.assertEqual(status, 404, body)
+
+    def test_duplicate_returns_404_for_missing_perspective(self) -> None:
+        scene = self._create_scene()
+        import uuid as _uuid
+        fake_persp_id = str(_uuid.uuid4())
+        status, body = self._duplicate(scene["id"], fake_persp_id)
+        self.assertEqual(status, 404, body)
+
+    def test_duplicate_new_perspective_appears_in_scenes_payload(self) -> None:
+        scene = self._create_scene()
+        original_persp = scene["perspectives"][0]
+        status, body = self._duplicate(scene["id"], original_persp["id"])
+        self.assertEqual(status, 200, body)
+        dup_id = body["perspective"]["id"]
+        scene_in_payload = next(s for s in body["scenes"] if s["id"] == scene["id"])
+        ids_in_payload = [p["id"] for p in scene_in_payload["perspectives"]]
+        self.assertIn(dup_id, ids_in_payload)
+
+    def test_duplicate_missing_source_file_returns_404(self) -> None:
+        scene = self._create_scene()
+        original_persp = scene["perspectives"][0]
+        # Delete the source file
+        (self.project_root / original_persp["source_file_path"]).unlink()
+        status, body = self._duplicate(scene["id"], original_persp["id"])
+        self.assertEqual(status, 404, body)
+
+
 if __name__ == "__main__":
     unittest.main()

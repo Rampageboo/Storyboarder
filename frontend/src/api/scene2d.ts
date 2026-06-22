@@ -193,6 +193,16 @@ export function moveScene2DPerspective(
   )
 }
 
+export function duplicateScene2DPerspective(
+  sceneId: string,
+  perspectiveId: string,
+): Promise<Scene2DPerspectiveResponse> {
+  return requestJson<Scene2DPerspectiveResponse>(
+    `/api/project/scenes2d/${encodeURIComponent(sceneId)}/perspectives/${encodeURIComponent(perspectiveId)}/duplicate`,
+    { method: 'POST' },
+  )
+}
+
 export function addScene2DPerspectiveToReferences(sceneId: string, perspectiveId: string): Promise<Scene2DReferenceResponse> {
   return requestJson<Scene2DReferenceResponse>(
     `/api/project/scenes2d/${encodeURIComponent(sceneId)}/perspectives/${encodeURIComponent(perspectiveId)}/add-to-references`,

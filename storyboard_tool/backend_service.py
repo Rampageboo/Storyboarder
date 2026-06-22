@@ -1154,6 +1154,16 @@ class StoryboardBackendService(ExportServiceMixin):
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return {"scene": scene, "perspective": perspective, "scenes": scenes}
 
+    def method_duplicate_scene2d_perspective(self, scene_id: str, perspective_id: str) -> dict[str, Any]:
+        project = app_state._require_project(self.app)
+        try:
+            scene, perspective, scenes = scene2d.duplicate_perspective(project, scene_id, perspective_id)
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {"scene": scene, "perspective": perspective, "scenes": scenes}
+
     def method_reorder_scene2d_perspectives(self, scene_id: str, perspective_ids: list[str]) -> dict[str, Any]:
         project = app_state._require_project(self.app)
         try:
