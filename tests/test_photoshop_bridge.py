@@ -166,12 +166,18 @@ class PhotoshopBridgeContractTests(unittest.TestCase):
     def test_app_focus_no_window_is_clean_noop(self) -> None:
         response = self.client.post("/api/app/focus")
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.json(), {"ok": True, "focused": False})
+        body = response.json()
+        self.assertTrue(body["ok"])
+        self.assertFalse(body["focused"])
+        # Diagnostic fields returned even with no window.
+        self.assertIn("shown", body)
+        self.assertIn("restored_from_minimized", body)
 
     def test_app_focus_uses_desktop_window_when_available(self) -> None:
         calls: list[str] = []
 
         class Window:
+            # No .minimized attribute → window is not minimized; restore must not be called.
             def restore(self) -> None:
                 calls.append("restore")
 
@@ -184,8 +190,14 @@ class PhotoshopBridgeContractTests(unittest.TestCase):
         self.app.state.main_window = Window()
         response = self.client.post("/api/app/focus")
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.json(), {"ok": True, "focused": True})
-        self.assertEqual(calls, ["restore", "show", "focus"])
+        body = response.json()
+        self.assertTrue(body["ok"])
+        self.assertTrue(body["focused"])
+        # restore must NOT be called for a non-minimized window.
+        self.assertNotIn("restore", calls)
+        self.assertIn("show", calls)
+        self.assertIn("focus", calls)
+        self.assertFalse(body["restored_from_minimized"])
 
     def test_preheat_photoshop_missing_path_is_clean_noop(self) -> None:
         with mock.patch.object(backend_service_module, "preheat_photoshop") as preheat:

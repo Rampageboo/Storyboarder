@@ -49,6 +49,57 @@ logger = logging.getLogger(__name__)
 _TOKEN_RE = re.compile(r'^[a-zA-Z0-9_-]{1,64}$')
 
 
+def _focus_desktop_window(window) -> dict[str, Any]:
+    """Focus a pywebview window without changing its geometry.
+
+    Only calls restore() when the window is positively detected as minimized.
+    Never restores a normal or maximized window — doing so would change size/position.
+    """
+    restored = False
+    shown = False
+    focused = False
+
+    # pywebview exposes a .minimized property on its Window class.
+    is_minimized = False
+    try:
+        is_minimized = bool(getattr(window, "minimized", False))
+    except Exception:
+        pass
+
+    if is_minimized:
+        restore_fn = getattr(window, "restore", None)
+        if callable(restore_fn):
+            try:
+                restore_fn()
+                restored = True
+            except Exception:
+                logger.debug("pywebview window.restore() failed during focus request", exc_info=True)
+
+    # show() is safe — it un-hides a hidden window but does not resize/move it.
+    show_fn = getattr(window, "show", None)
+    if callable(show_fn):
+        try:
+            show_fn()
+            shown = True
+        except Exception:
+            logger.debug("pywebview window.show() failed during focus request", exc_info=True)
+
+    focus_fn = getattr(window, "focus", None)
+    if callable(focus_fn):
+        try:
+            focus_fn()
+            focused = True
+        except Exception:
+            logger.debug("pywebview window.focus() failed during focus request", exc_info=True)
+
+    return {
+        "ok": True,
+        "focused": focused,
+        "shown": shown,
+        "restored_from_minimized": restored,
+    }
+
+
 def _normalize_upload_bytes(data: list[int] | bytes | bytearray) -> bytes:
     if isinstance(data, (bytes, bytearray)):
         return bytes(data)
@@ -266,18 +317,8 @@ class StoryboardBackendService(ExportServiceMixin):
         """Best-effort desktop focus. Browser/dev mode is a clean no-op."""
         window = getattr(self.app.state, "main_window", None)
         if window is None:
-            return {"ok": True, "focused": False}
-        focused = False
-        for method_name in ("restore", "show", "focus"):
-            method = getattr(window, method_name, None)
-            if not callable(method):
-                continue
-            try:
-                method()
-                focused = True
-            except Exception:
-                logger.debug("pywebview window %s failed during focus request", method_name, exc_info=True)
-        return {"ok": True, "focused": focused}
+            return {"ok": True, "focused": False, "shown": False, "restored_from_minimized": False}
+        return _focus_desktop_window(window)
 
     def method_preheat_photoshop(self) -> dict[str, Any]:
         project = self.app.state.project
