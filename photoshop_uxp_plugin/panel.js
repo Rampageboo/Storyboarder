@@ -1226,7 +1226,8 @@ async function focusCurrentShotTab() {
   }
   const doc = findOpenDocumentForShot(shotId);
   if (!doc) {
-    throw new Error(`No open Photoshop tab for ${shotId}.`);
+    const noTabLabel = shotDisplayLabel(shotId, currentShotIndex(), currentShotFromProjectData()?.title);
+    throw new Error(`No open Photoshop tab for ${noTabLabel || "this shot"}.`);
   }
   activateDocument(doc);
   setSelectedShotId(shotId);
@@ -2019,7 +2020,8 @@ async function syncActiveDocumentBackground() {
     backgroundSyncInFlight = false;
   }
   if (synced) {
-    setStatus(`Background synced for ${shotId}.`);
+    const syncedLabel = shotDisplayLabel(shotId, currentShotIndex(), currentShotFromProjectData()?.title);
+    setStatus(`Background synced for ${syncedLabel || "Shot"}.`);
   }
 }
 
@@ -2470,10 +2472,11 @@ async function saveAndGoNext() {
 
   await updateProjectAfterSave(shotId, currentFolder);
 
+  const exportedLabel = shotDisplayLabel(shotId, null, null);
   if (!nextShot) {
     focusStoryboardAfterPreviewExportIfEnabled();
     setStatus(
-      `Preview exported for ${shotId}. No more shots in the project. Press Ctrl+S to save the PSD.`,
+      `Preview exported for ${exportedLabel || "Shot"}. No more shots in the project. Press Ctrl+S to save the PSD.`,
     );
     return;
   }
@@ -2488,8 +2491,9 @@ async function saveAndGoNext() {
     await updateProjectAfterSave(nextShot.shot_id, nextFolder);
   }
 
+  const nextLabel = shotDisplayLabel(nextShot.shot_id, null, nextShot.title);
   setStatus(
-    `Exported drawing for ${shotId}. Now on ${nextShot.shot_id}. ${shotId}'s tab stays open — switch to it and Ctrl+S to save its PSD.`,
+    `Exported ${exportedLabel || "Shot"}. Now on ${nextLabel || "next shot"}. Tab stays open — Ctrl+S to save its PSD.`,
   );
   focusStoryboardAfterPreviewExportIfEnabled();
 }
@@ -2545,7 +2549,8 @@ async function switchToShot(shotId) {
       await ensureBoardBackgroundStackOrderInModal(app.activeDocument);
       await ensureDrawingLayerInModal(app.activeDocument);
     });
-    setStatus(synced ? `Background synced for ${shotId}.` : `Already working on ${shotId}.`);
+    const shotSwitchLabel = shotDisplayLabel(shotId, currentShotIndex(), currentShotFromProjectData()?.title);
+    setStatus(synced ? `Background synced for ${shotSwitchLabel || "Shot"}.` : `Already working on ${shotSwitchLabel || "Shot"}.`);
     await notifyBackendShotFocus(shotId);
     return;
   }

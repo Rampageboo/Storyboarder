@@ -266,11 +266,9 @@ def open_desktop_window(app, title: str = "Storyboard Tool") -> int:
 
     def _mark_maximized(*_args):
         app.state.main_window_state = "maximized"
-        _maximized[0] = True
 
     def _mark_restored(*_args):
         app.state.main_window_state = "normal"
-        _maximized[0] = False
 
     def _mark_shown(*_args):
         if app.state.main_window_state not in {"maximized", "minimized"}:
