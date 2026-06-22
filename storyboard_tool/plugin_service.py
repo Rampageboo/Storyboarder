@@ -74,14 +74,23 @@ class PluginBridgeService:
     def work_items(self, project) -> list[dict[str, Any]]:
         """Return all editable PSD work items: shots + Scene 2D PSD Perspectives."""
         items: list[dict[str, Any]] = []
-        for shot in project.shots:
+        shots = list(project.shots)
+        total_shots = len(shots)
+        for index, shot in enumerate(shots):
             source_rel = shot.source_file_path or f"shots/{shot.shot_id}/{shot.shot_id}.psd"
             preview_rel = shot.preview_image_path or f"shots/{shot.shot_id}/{shot.shot_id}_preview.png"
+            previous_key = f"shot:{shots[index - 1].shot_id}" if index > 0 else ""
+            next_key = f"shot:{shots[index + 1].shot_id}" if index + 1 < total_shots else ""
             items.append({
                 "kind": "shot",
                 "key": f"shot:{shot.shot_id}",
                 "shot_id": shot.shot_id,
+                "shot_title": str(shot.title or "").strip(),
                 "label": shot.title or shot.shot_id,
+                "index": index + 1,
+                "count": total_shots,
+                "previous_key": previous_key,
+                "next_key": next_key,
                 "source_file_path": source_rel,
                 "source_native_path": self._native_project_path(project, source_rel),
                 "preview_image_path": preview_rel,

@@ -1077,9 +1077,13 @@ function escapeCsvCell(value) {
 }
 
 function shotOptionLabel(shot, index) {
+  // Use work-item metadata when available (provides backend-authoritative index + shot_title).
+  if (typeof shotDisplayLabel === "function") {
+    return shotDisplayLabel(shot.shot_id, index, shot?.title);
+  }
   const order = index + 1;
   const title = String(shot?.title || "").trim();
-  return title ? `${order}. ${title}` : `${order}. ${formatShotIdLabel(shot.shot_id)}`;
+  return title ? `${order}. ${title}` : `${order}. Untitled shot`;
 }
 
 function populateShotSelect() {
@@ -1276,10 +1280,13 @@ function currentShotFromProjectData() {
 function currentShotIndexLabel(shot) {
   const shots = projectData?.shots || [];
   const index = shots.findIndex((item) => item.shot_id === shot?.shot_id);
-  if (index < 0) {
-    return shot?.shot_id || selectedShotIdValue() || "No shot";
-  }
-  return `${shot.shot_id} / ${String(index + 1).padStart(3, "0")} of ${String(shots.length).padStart(3, "0")}`;
+  if (index < 0) return "No shot selected";
+  // Use work-item index/count when available; fall back to array position.
+  const workItem = (typeof shotWorkItemById === "function") ? shotWorkItemById(shot.shot_id) : null;
+  const pos = workItem?.index ?? (index + 1);
+  const total = workItem?.count ?? shots.length;
+  const dur = shot?.duration_seconds ? ` · ${Number(shot.duration_seconds).toFixed(1)}s` : "";
+  return `${pos} / ${total}${dur}`;
 }
 
 function compactText(value, fallback = "") {
@@ -1348,15 +1355,14 @@ function renderCurrentShotCard() {
   }
 
   card.hidden = false;
-  $("shotCardMode").textContent = linkedFromStoryboard ? "Linked to Storyboard Tool" : "Standalone folder mode";
-  $("shotCardIndex").textContent = shot ? currentShotIndexLabel(shot) : selectedId;
+  $("shotCardMode").textContent = "SHOT";
+  $("shotCardIndex").textContent = shot ? currentShotIndexLabel(shot) : "";
   $("shotCardTitle").textContent = compactText(shot?.title, "Untitled shot");
-  $("shotCardStatus").textContent = compactText(shot?.status, linkedFromStoryboard ? "Draft" : "Standalone");
+  $("shotCardStatus").textContent = compactText(shot?.status, linkedFromStoryboard ? "Draft" : "—");
   const meta = [];
-  if (shot?.duration_seconds) meta.push(`${Number(shot.duration_seconds).toFixed(1)}s`);
   if (compactText(shot?.scene)) meta.push(`Scene: ${shot.scene}`);
   if (compactText(shot?.sequence)) meta.push(`Seq: ${shot.sequence}`);
-  $("shotCardMeta").textContent = meta.join(" | ");
+  $("shotCardMeta").textContent = meta.join(" · ");
   setCardSection("shotCardAction", "Action", shot?.action_note || shot?.description);
   setCardSection("shotCardCamera", "Camera", shot?.camera_note);
   setCardSection("shotCardNotes", "Notes", latestCommentSummary(shot));
@@ -1373,13 +1379,36 @@ function renderCurrentShotCard() {
   }
 }
 
-// ── Work mode UI routing (Part 6 / 7) ────────────────────────────────────────
-// Switches Bridge and Work panels between shot / scene2d / unmatched modes.
+// ── Work mode UI routing (Parts 4–6) ────────────────────────────────────────
+// Switches both panels between shot / scene2d / unmatched modes and updates
+// the Work-panel context eyebrow to show the current mode label.
 // CRITICAL: only one context card may be visible at a time.
 function renderWorkModeUI(ctx) {
   const mode = ctx?.kind === "scene2d" ? "scene2d" : (ctx?.kind === "unmatched" ? "unmatched" : "shot");
 
-  // Bridge panel — exactly one context section visible
+  // ── Work-panel eyebrow (Part 5) ──────────────────────────────────────────
+  const modeEl  = $("workContextMode");
+  const sceneEl = $("workScene2dGroup");
+  if (modeEl) {
+    if (mode === "scene2d") {
+      modeEl.textContent = "SCENE 2D";
+    } else if (mode === "unmatched") {
+      modeEl.textContent = "UNLINKED DOCUMENT";
+    } else {
+      modeEl.textContent = "SHOT";
+    }
+  }
+  if (sceneEl) {
+    if (mode === "scene2d" && ctx?.scene_title) {
+      sceneEl.textContent = `· ${ctx.scene_title}`;
+      sceneEl.hidden = false;
+    } else {
+      sceneEl.textContent = "";
+      sceneEl.hidden = true;
+    }
+  }
+
+  // ── Bridge panel — exactly one context section visible ───────────────────
   const currentShotCard = $("currentShotCard");
   const linkedPanel     = $("linkedPanel");
   const scene2dPanel    = $("scene2dPanel");
@@ -1395,11 +1424,11 @@ function renderWorkModeUI(ctx) {
     }
   }
 
-  // Work panel
-  const shotNav      = $("workShotNav");
-  const scene2dNav   = $("workScene2dNav");
-  const onionSkin    = $("workOnionSkin");
-  const workNoCtx    = $("workNoContext");
+  // ── Work panel ────────────────────────────────────────────────────────────
+  const shotNav   = $("workShotNav");
+  const scene2dNav = $("workScene2dNav");
+  const onionSkin = $("workOnionSkin");
+  const workNoCtx = $("workNoContext");
   if (shotNav)    shotNav.hidden    = mode !== "shot";
   if (scene2dNav) scene2dNav.hidden = mode !== "scene2d";
   if (onionSkin)  onionSkin.hidden  = mode !== "shot";
@@ -1964,31 +1993,18 @@ function updateCurrentShotIndicator() {
   if (index >= 0 && String($("shotId")?.value || "").trim().toLowerCase() !== shotId) {
     setSelectedShotId(shotId);
   }
-  const idLabel = formatShotIdLabel(shotId);
-  let text;
+  // Use human-readable label (no UUID) — prefer work item, fall back to array.
+  const displayLabel = (typeof shotDisplayLabel === "function")
+    ? shotDisplayLabel(shotId, index, shots[index]?.title)
+    : `Shot ${index + 1}`;
+  let text = `Editing ${displayLabel}`;
   if (index >= 0) {
     const shot = shots[index];
-    const title = String(shot.title || "").trim();
-    text = `Editing shot ${index + 1}/${shots.length}`;
-    text += title ? ` · ${title} (${idLabel})` : ` · ${idLabel}`;
-  } else {
-    text = `Editing · ${idLabel}`;
-  }
-  if (index >= 0) {
-    const shot = shots[index];
-    const status = String(shot.status || "").trim();
-    const duration = Number.parseFloat(shot.duration_seconds || "0") || 0;
     const warnings = [];
     if (shot.broken_or_zero_byte_psd) warnings.push("PSD broken");
     else if (shot.source_path_missing || shot.psd_exists === false) warnings.push("PSD missing");
     if (shot.preview_out_of_date) warnings.push("preview stale");
-    else if (shot.preview_exists === false) warnings.push("preview missing");
-    if (status || duration) {
-      text += ` · ${status || "No status"}${duration ? ` · ${duration}s` : ""}`;
-    }
-    if (warnings.length) {
-      text += ` · ${warnings.join(", ")}`;
-    }
+    if (warnings.length) text += ` · ${warnings.join(", ")}`;
   }
   node.textContent = text;
   node.hidden = false;

@@ -157,6 +157,10 @@ function applyPluginContext(context) {
   if (typeof lastPluginContext !== "undefined") {
     lastPluginContext = context;
   }
+  // Cache work_items for human-readable shot label formatting (Part 2).
+  if (typeof setWorkItems === "function") {
+    setWorkItems(context.work_items);
+  }
   projectData = projectDataFromPluginContext(context);
   populateShotSelect();
   if (context.canvas) {
@@ -290,18 +294,12 @@ async function requestScene2DNextPerspective(sceneId, perspectiveId) {
 // from work_items (provided in the plugin context payload).
 function populatePerspectiveSelect(workItems, activeSceneId) {
   const sel = document.getElementById("perspectiveSelect");
-  const groupLabel = document.getElementById("workScene2dGroup");
   if (!sel) return;
   sel.innerHTML = "";
 
   const sceneItems = typeof scene2DPerspectiveOptions === "function"
     ? scene2DPerspectiveOptions(workItems, activeSceneId)
     : (workItems || []).filter((item) => item.kind === "scene2d" && item.scene_id === activeSceneId);
-
-  if (groupLabel) {
-    const sceneName = sceneItems[0]?.scene_title || activeSceneId || "Scene 2D";
-    groupLabel.textContent = sceneName;
-  }
 
   for (const item of sceneItems) {
     const opt = document.createElement("option");

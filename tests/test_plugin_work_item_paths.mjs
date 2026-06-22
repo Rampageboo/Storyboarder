@@ -16,6 +16,11 @@ const {
   displayPerspectiveIndex,
   scene2DPerspectiveOptions,
   shouldPreserveManualMode,
+  formatShotDisplayLabel,
+  setWorkItems,
+  getWorkItems,
+  shotWorkItemById,
+  shotDisplayLabel,
 } = context;
 
 const pluginContext = {
@@ -152,4 +157,101 @@ test("preserves only explicit manual connection modes during bridge failures", (
   assert.equal(shouldPreserveManualMode("linked"), false);
   assert.equal(shouldPreserveManualMode("disconnected"), false);
   assert.equal(shouldPreserveManualMode("folder-error"), false);
+});
+
+// ── formatShotDisplayLabel (Part 2) ─────────────────────────────────────────
+
+test("formatShotDisplayLabel — title present returns index. title", () => {
+  assert.equal(formatShotDisplayLabel({ index: 1, shot_title: "Copy" }), "1. Copy");
+});
+
+test("formatShotDisplayLabel — empty title returns index. Untitled shot", () => {
+  assert.equal(formatShotDisplayLabel({ index: 16, shot_title: "" }), "16. Untitled shot");
+});
+
+test("formatShotDisplayLabel — whitespace title treated as empty", () => {
+  assert.equal(formatShotDisplayLabel({ index: 3, shot_title: "   " }), "3. Untitled shot");
+});
+
+test("formatShotDisplayLabel — null title treated as empty", () => {
+  assert.equal(formatShotDisplayLabel({ index: 5, shot_title: null }), "5. Untitled shot");
+});
+
+test("formatShotDisplayLabel — no shot_title key treated as empty", () => {
+  assert.equal(formatShotDisplayLabel({ index: 7 }), "7. Untitled shot");
+});
+
+test("formatShotDisplayLabel — multi-word title", () => {
+  assert.equal(
+    formatShotDisplayLabel({ index: 16, shot_title: "Look at the moon" }),
+    "16. Look at the moon",
+  );
+});
+
+// ── setWorkItems / getWorkItems / shotWorkItemById ───────────────────────────
+
+test("getWorkItems returns empty array initially after reset", () => {
+  setWorkItems([]);
+  assert.equal(getWorkItems().length, 0);
+});
+
+test("setWorkItems stores items and getWorkItems retrieves them", () => {
+  setWorkItems([
+    { kind: "shot", shot_id: "abc", index: 1, shot_title: "A", count: 2, previous_key: "", next_key: "shot:def" },
+    { kind: "shot", shot_id: "def", index: 2, shot_title: "B", count: 2, previous_key: "shot:abc", next_key: "" },
+  ]);
+  assert.equal(getWorkItems().length, 2);
+  setWorkItems([]);
+});
+
+test("setWorkItems ignores non-array input and resets to empty", () => {
+  setWorkItems("not an array");
+  assert.equal(getWorkItems().length, 0);
+});
+
+test("shotWorkItemById finds item by shot_id", () => {
+  setWorkItems([{ kind: "shot", shot_id: "abc123", index: 1, shot_title: "A" }]);
+  const item = shotWorkItemById("abc123");
+  assert.ok(item, "item should be found");
+  assert.equal(item.shot_id, "abc123");
+  setWorkItems([]);
+});
+
+test("shotWorkItemById returns null for unknown id", () => {
+  setWorkItems([{ kind: "shot", shot_id: "abc123", index: 1, shot_title: "A" }]);
+  assert.equal(shotWorkItemById("zzz"), null);
+  setWorkItems([]);
+});
+
+// ── shotDisplayLabel ─────────────────────────────────────────────────────────
+
+test("shotDisplayLabel uses work item when available", () => {
+  setWorkItems([{ kind: "shot", shot_id: "aaa", index: 5, shot_title: "Action", count: 10,
+    previous_key: "", next_key: "" }]);
+  assert.equal(shotDisplayLabel("aaa", 4, "Action"), "5. Action");
+  setWorkItems([]);
+});
+
+test("shotDisplayLabel falls back to array index when shot_id not in work items", () => {
+  setWorkItems([]);
+  assert.equal(shotDisplayLabel("unknown", 0, "Backup"), "1. Backup");
+});
+
+test("shotDisplayLabel fallback with empty title shows Untitled shot", () => {
+  setWorkItems([]);
+  assert.equal(shotDisplayLabel("x", 2, ""), "3. Untitled shot");
+});
+
+// ── option value must be canonical key, not the label ───────────────────────
+
+test("option value stays as shot_id while label is human-readable", () => {
+  const shotId = "71cca9b8deadbeef";
+  setWorkItems([{ kind: "shot", shot_id: shotId, index: 16, shot_title: "", count: 58,
+    previous_key: "", next_key: "" }]);
+  const optionValue = shotId;
+  const optionText = shotDisplayLabel(shotId, 15, "");
+  assert.equal(optionValue, shotId);
+  assert.equal(optionText, "16. Untitled shot");
+  assert.notEqual(optionValue, optionText);
+  setWorkItems([]);
 });

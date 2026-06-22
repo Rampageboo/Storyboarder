@@ -109,6 +109,44 @@
     return mode === "manual-project" || mode === "manual-folder";
   }
 
+  // ── Work-item list cache & shot label formatting (Part 2) ────────────────────
+
+  let _workItems = [];
+
+  function getWorkItems() {
+    return _workItems;
+  }
+
+  function setWorkItems(items) {
+    _workItems = Array.isArray(items) ? items : [];
+  }
+
+  /**
+   * Format a shot work item into a human-readable label. Never exposes a UUID.
+   * Examples: { index: 1, shot_title: "Copy" } → "1. Copy"
+   *           { index: 16, shot_title: "" }     → "16. Untitled shot"
+   */
+  function formatShotDisplayLabel(item) {
+    const index = Number(item?.index || 0);
+    const title = String(item?.shot_title || "").trim();
+    return title ? `${index}. ${title}` : `${index}. Untitled shot`;
+  }
+
+  /** Return the shot work item for a given shot_id, or null. */
+  function shotWorkItemById(shotId) {
+    const id = String(shotId || "").toLowerCase();
+    return _workItems.find((item) => item.kind === "shot" && item.shot_id === id) || null;
+  }
+
+  /** Display label for a shot, using work items when available. */
+  function shotDisplayLabel(shotId, arrayIndexFallback, titleFallback) {
+    const item = shotWorkItemById(shotId);
+    if (item) return formatShotDisplayLabel(item);
+    const index = (Number(arrayIndexFallback) || 0) + 1;
+    const title = String(titleFallback || "").trim();
+    return title ? `${index}. ${title}` : `${index}. Untitled shot`;
+  }
+
   Object.assign(global, {
     normalizeNativePath,
     sameNativePath,
@@ -121,5 +159,10 @@
     displayPerspectiveIndex,
     scene2DPerspectiveOptions,
     shouldPreserveManualMode,
+    getWorkItems,
+    setWorkItems,
+    formatShotDisplayLabel,
+    shotWorkItemById,
+    shotDisplayLabel,
   });
 })(typeof globalThis !== "undefined" ? globalThis : this);

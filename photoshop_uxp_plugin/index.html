@@ -140,20 +140,20 @@
     <!-- ── Work panel ─────────────────────────────────────────────────── -->
     <div id="work-panel">
 
-      <!-- Compact panel header -->
-      <div class="work-header">
-        <span class="work-title">Storyboard Work</span>
+      <!-- Context eyebrow: shows current mode instead of a duplicate panel heading -->
+      <div class="context-eyebrow">
+        <span id="workContextMode" class="eyebrow-mode">SHOT</span>
+        <span id="workScene2dGroup" class="eyebrow-scene" hidden></span>
       </div>
 
       <!-- Shot navigation (mode=shot) -->
       <div id="workShotNav" class="nav-section" hidden>
-        <div class="nav-kicker">SHOT</div>
         <select id="shotSelect" class="nav-select"></select>
-        <div class="btn-pair">
+        <div class="action-grid">
           <button id="previousShot" type="button" class="btn-nav">← Prev</button>
           <button id="nextShot"     type="button" class="btn-nav">Next →</button>
         </div>
-        <div class="btn-pair">
+        <div class="action-grid">
           <button id="openShot"        type="button" class="btn-secondary">Open</button>
           <button id="focusCurrentTab" type="button" class="btn-secondary">Focus tab</button>
         </div>
@@ -161,20 +161,14 @@
 
       <!-- Scene 2D navigation (mode=scene2d) -->
       <div id="workScene2dNav" class="nav-section" hidden>
-        <div class="nav-breadcrumb">
-          <span class="nav-bc-label">Scene 2D</span>
-          <span class="nav-bc-sep"> / </span>
-          <span id="workScene2dGroup" class="nav-bc-scene"></span>
-        </div>
-        <div class="nav-kicker">PERSPECTIVE</div>
         <select id="perspectiveSelect" class="nav-select"></select>
-        <div class="btn-pair">
+        <div class="action-grid">
           <button id="previousPerspective" type="button" class="btn-nav">← Prev</button>
           <button id="nextPerspective"     type="button" class="btn-nav">Next →</button>
         </div>
-        <div class="btn-pair">
-          <button id="openPerspective"          type="button" class="btn-secondary">Open perspective</button>
-          <button id="focusCurrentPerspectiveTab" type="button" class="btn-secondary">Focus tab</button>
+        <div class="action-grid">
+          <button id="openPerspective"             type="button" class="btn-secondary">Open perspective</button>
+          <button id="focusCurrentPerspectiveTab"  type="button" class="btn-secondary">Focus tab</button>
         </div>
       </div>
 
@@ -186,8 +180,8 @@
 
       <!-- Onion skin (mode=shot only) -->
       <div id="workOnionSkin" class="nav-section" hidden>
-        <div class="nav-kicker">ONION SKIN</div>
-        <div class="btn-pair">
+        <div class="onion-section-label">ONION SKIN</div>
+        <div class="action-grid">
           <button id="overlayPrevious" type="button" class="btn-nav">← Previous</button>
           <button id="overlayNext"     type="button" class="btn-nav">Next →</button>
         </div>

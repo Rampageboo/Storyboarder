@@ -1,6 +1,6 @@
-# CODEX_TASK.md — Redesign Scene 2D as a canvas-first floating-island workspace
+# CODEX_TASK.md — Polish Photoshop UXP layout and use human-readable Shot labels
 
-Repo:
+Repository:
 
 ```text
 Rampageboo/Storyboarder
@@ -9,680 +9,675 @@ Rampageboo/Storyboarder
 Base commit:
 
 ```text
-788a78ccbda831d0513decb9d6ee9df696ea7c06
+450c1a433e9af6438d21454aabfaed45f5827cbb
 ```
 
 ## Goal
 
-Redesign the existing Scene 2D workspace from a vertically stacked form page into a canvas-first visual workspace.
-
-The current layout contains:
+Perform a focused visual-polish pass on the two Photoshop UXP panels:
 
 ```text
-top full-width Scene editor
-horizontal Perspective strip
-central preview
-full-width zoom bar
-bottom full-width Perspective editor
+Storyboard Work
+Storyboard Bridge
 ```
 
-This creates excessive vertical chrome and makes the preview feel secondary.
+The broad information architecture is now correct. Do not redesign it again.
 
-The new Scene 2D workspace must prioritize the visual preview.
-
-Target layout:
+Fix:
 
 ```text
-┌────────────────────────────────────────────────────────────┐
-│ Scene 2D                                                   │
-├──────────────┬─────────────────────────────────────────────┤
-│ Scene /      │                                             │
-│ Perspective  │                 CANVAS                      │
-│ rail         │                                             │
-│              │                           ┌──────────────┐   │
-│ [thumb 1]    │                           │ Inspector    │   │
-│ [thumb 2]    │                           │ floating     │   │
-│ [+]          │                           │ island       │   │
-│              │                           └──────────────┘   │
-│              │                                             │
-│              │          ┌─────────────────────┐            │
-│              │          │ Fit  −  slider  +   │            │
-│              │          └─────────────────────┘            │
-└──────────────┴─────────────────────────────────────────────┘
+- inconsistent padding and alignment
+- duplicated panel headings
+- excessive blank space
+- different Shot and Scene 2D layout structures
+- inconsistent button grids
+- nested card borders
+- visible UUIDs in Shot selectors and context labels
+- poor dropdown presentation
 ```
+
+Shot and Scene 2D modes must use the same layout skeleton, spacing system, control sizing, and context-card structure.
+
+Only their content should differ.
 
 ---
 
-# Core principles
+# Do not change functional architecture
+
+Preserve:
 
 ```text
-canvas first
-no full-width editing banners
-progressive disclosure
-one selected Scene
-one selected Perspective
-minimal permanent chrome
-floating controls over the workspace
+two UXP panels
+active-document path matching
+work-context routing
+heartbeat behavior
+disconnected/manual mode behavior
+Scene 2D export checks
+Shot export behavior
+Export & next
+quick notes
+status editing
+onion skin
+SB bg behavior
+Perspective move transaction
 ```
 
-Do not remove existing Scene 2D functionality.
+Do not modify Scene 2D workspace frontend layout.
 
-Only reorganize and restyle it.
+Do not change UUID identity or filesystem paths.
 
 ---
 
-# Part 1 — Remove the top and bottom full-width editors
+# Part 1 — Add semantic Shot navigation fields to backend work items
 
-Remove the current permanent top Scene editing section containing:
-
-```text
-Scene title
-Description
-Linked Scene 3D
-Save scene
-Delete scene
-```
-
-Remove the current permanent bottom Perspective editing section containing:
+Update:
 
 ```text
-Perspective title
-Perspective linked Scene 3D
-Linked state banner
-Save perspective
-Open in Photoshop
-Refresh preview
-Set primary
-Add to References
-Delete perspective
+storyboard_tool/plugin_service.py
+PluginBridgeService.work_items()
 ```
 
-Do not delete these capabilities.
+Shot work items must contain:
 
-Move them into the floating Inspector island.
-
-The canvas must no longer be vertically compressed between two editing forms.
-
----
-
-# Part 2 — Main workspace shell
-
-Use a stable layout such as:
-
-```css
-.scene2d-workspace {
-  display: grid;
-  grid-template-columns: 180px minmax(0, 1fr);
-  height: 100%;
-  min-height: 0;
-  overflow: hidden;
+```json
+{
+  "kind": "shot",
+  "key": "shot:<shot-id>",
+  "shot_id": "<shot-id>",
+  "shot_title": "Close up",
+  "index": 16,
+  "count": 58,
+  "previous_key": "shot:<previous-shot-id>",
+  "next_key": "shot:<next-shot-id>",
+  "source_file_path": "...",
+  "source_native_path": "...",
+  "preview_image_path": "..."
 }
 ```
 
-Suggested dimensions:
+Rules:
 
 ```text
-left rail:
-  168–196 px
-
-canvas workspace:
-  fills all remaining width and height
-
-floating inspector:
-  280–320 px
-  top-right
-  16–24 px inset
-
-floating zoom island:
-  bottom-center
-  16–24 px bottom inset
+index is one-based
+count is the total number of Shots
+index follows current project Shot order
+shot_title may be an empty string
+previous_key is empty for the first Shot
+next_key is empty for the final Shot
 ```
 
-The preview workspace must grow and shrink with the window.
+Keep:
 
-Avoid fixed preview heights.
+```text
+shot_id
+key
+path fields
+```
+
+as canonical internal identity.
+
+Do not expose UUID as the intended visible label.
+
+Do not hard-code the final UI string in the backend.
+
+The plugin should format the semantic data.
 
 ---
 
-# Part 3 — Left navigation rail
-
-The left rail should combine Scene selection and Perspective navigation without becoming another form panel.
-
-## Scene selector
-
-At the top of the rail, add a compact Scene selector.
-
-Preferred structure:
-
-```text
-[ Scene 2D 1          ▾ ] [ + ]
-```
-
-The selector may be:
-
-```text
-compact dropdown
-or
-compact vertical Scene list
-```
-
-Do not use large Scene cards with descriptions.
-
-Each Scene entry should show:
-
-```text
-Scene title
-Perspective count
-selected state
-```
-
-Add Scene should remain accessible through:
-
-```text
-small + button
-```
-
-Additional Scene actions should move to the Inspector or an overflow menu:
-
-```text
-Rename
-Duplicate if currently supported
-Delete
-Link Scene 3D
-```
-
-## Perspective rail
-
-Below the Scene selector, display Perspectives vertically.
-
-Each Perspective item should contain:
-
-```text
-thumbnail
-short title
-primary marker when applicable
-PSD/Image type badge only when useful
-selected state
-```
-
-Target item size:
-
-```text
-thumbnail width: 112–136 px
-thumbnail aspect ratio: match project canvas
-title: one line with ellipsis
-```
-
-Add Perspective should be a visual `+` tile below the items.
-
-Support existing Perspective selection.
-
-Do not expose UUIDs.
-
----
-
-# Part 4 — Perspective ordering
-
-Allow Perspectives to be reordered vertically by drag-and-drop only if backend ordering is already supported or can be added safely without changing identity.
-
-If ordering is not currently persisted:
-
-```text
-do not fake drag-and-drop
-retain the existing order
-leave a clear TODO
-```
-
-Never derive order from UUID.
-
-Never rename files during reordering.
-
----
-
-# Part 5 — Canvas workspace
-
-The central area must be treated as an editor viewport rather than a card.
-
-Requirements:
-
-```text
-fills available area
-dark neutral workspace background
-subtle checkerboard only where transparency needs to be communicated
-preview centered
-preview respects zoom and fit mode
-preview can pan when larger than viewport
-no permanent border-heavy container around the whole workspace
-```
-
-Use a clean viewport structure:
-
-```text
-canvas viewport
-  └─ transform/pan layer
-       └─ preview image
-```
-
-Preserve existing:
-
-```text
-Fit
-25–200% zoom
-zoom percentage
-preview refresh behavior
-```
-
-Do not distort image aspect ratio.
-
----
-
-# Part 6 — Compact canvas title overlay
-
-Add a small non-blocking title overlay in the top-left of the canvas.
-
-Example:
-
-```text
-Living Room
-Door View · 2 of 4
-```
-
-It should not be a full-width banner.
-
-Suggested appearance:
-
-```text
-transparent or lightly surfaced
-no heavy border
-scene title as secondary text
-Perspective title as primary text
-pointer-events none unless it contains an overflow button
-```
-
-Do not duplicate the full Inspector content.
-
----
-
-# Part 7 — Floating Inspector island
-
-Add a floating Inspector island in the top-right of the canvas workspace.
-
-Suggested style:
-
-```css
-position: absolute;
-top: 18px;
-right: 18px;
-width: min(300px, calc(100% - 36px));
-border-radius: 14px;
-background: rgba(...);
-backdrop-filter: blur(...);
-border: 1px solid var(--border);
-box-shadow: 0 12px 36px rgba(...);
-```
-
-Do not use excessive translucency that harms readability.
-
-## Collapsed state
-
-The Inspector must support collapse.
-
-Collapsed appearance:
-
-```text
-[ Scene / Perspective title ] [ expand icon ]
-```
-
-Remember collapse state for the current session.
-
-## Inspector structure
-
-Use two compact sections:
-
-```text
-SCENE
-PERSPECTIVE
-```
-
-Do not show all controls simultaneously as large form fields.
-
-### Scene section
-
-Display:
-
-```text
-Scene title
-Description
-Linked Scene 3D
-Save
-Delete in overflow/destructive area
-```
-
-Recommended interaction:
-
-```text
-title:
-  compact text input
-
-description:
-  collapsed by default
-  expandable textarea
-
-Linked Scene 3D:
-  compact select
-
-Save:
-  only visually emphasized when fields are dirty
-```
-
-Delete should not sit beside Save as an equal primary action.
-
-Place destructive actions inside:
-
-```text
-••• overflow menu
-or
-bottom Danger section
-```
-
-### Perspective section
-
-Display:
-
-```text
-Perspective title
-Perspective type
-Primary state
-Linked Scene 3D override
-```
-
-Actions:
-
-```text
-Open in Photoshop
-Refresh preview
-Set primary
-Add to References
-Delete Perspective
-```
-
-Visual priority:
-
-```text
-Primary:
-  Open in Photoshop
-
-Secondary:
-  Refresh preview
-  Add to References
-
-State action:
-  Set primary
-
-Destructive:
-  Delete Perspective
-```
-
-Do not give all actions equal button weight.
-
----
-
-# Part 8 — Floating zoom island
-
-Replace the current full-width zoom toolbar with a compact floating island at the bottom center.
-
-Suggested contents:
-
-```text
-[ Fit ] [ − ] [ slider ] [ + ] [ 100% ]
-```
-
-Optional:
-
-```text
-Reset
-```
-
-Do not show both a `Fit` button and an additional duplicated `Fit` text label.
-
-Suggested width:
-
-```text
-300–420 px
-```
-
-The island should remain usable at narrow widths.
-
-Responsive compact version:
-
-```text
-[ Fit ] [ − ] [ 100% ] [ + ]
-```
-
-Slider may hide below a breakpoint.
-
----
-
-# Part 9 — Action feedback
-
-Replace permanent green “Linked” banners with compact contextual feedback.
-
-Use:
-
-```text
-small status row inside Inspector
-temporary toast
-small dot/badge
+# Part 2 — Human-readable Shot labels
+
+Add a pure formatting helper:
+
+```js
+function formatShotDisplayLabel(item) {
+  const index = Number(item?.index || 0);
+  const title = String(item?.shot_title || "").trim();
+  return title
+    ? `${index}. ${title}`
+    : `${index}. Untitled shot`;
+}
 ```
 
 Examples:
 
 ```text
-Photoshop linked
-Preview updated
-Preview out of date
-PSD missing
-Image Perspective
+1. Copy
+2. Untitled shot
+16. Look at the moon
 ```
 
-Do not reserve a full-width row for ordinary success state.
+Do not display:
 
-Errors must remain clearly visible.
+```text
+71cca9b8...
+851cb840...
+shot UUID
+```
+
+UUID remains the internal select value:
+
+```html
+<option value="shot:<uuid>">16. Untitled shot</option>
+```
+
+The same visible label should be used consistently in:
+
+```text
+Shot dropdown
+current Shot indicator
+navigation status
+Bridge context header where appropriate
+```
+
+The full UUID may remain in Advanced diagnostics only.
 
 ---
 
-# Part 10 — Empty states
+# Part 3 — Match Shot and Scene 2D work-item schemas
 
-## No Scene
-
-Show centered empty state in the canvas:
+Use a common navigation model:
 
 ```text
-No Scene 2D groups yet
-Create a Scene to begin organizing Perspectives.
-
-[Create Scene]
+kind
+key
+index
+count
+previous_key
+next_key
+primary title
+secondary title
 ```
 
-## Scene without Perspectives
-
-Show:
+Mapping:
 
 ```text
-No Perspectives in this Scene
+Shot:
+  primary title = shot_title or Untitled shot
+  secondary title = Shot {index} of {count}
 
-[Create PSD Perspective]
-[Import image/PSD]
+Scene 2D:
+  primary title = perspective_title
+  secondary title = scene_title
 ```
 
-Do not leave a blank checkerboard canvas with disabled controls.
+Avoid separate ad-hoc navigation rules where one mode uses array indices and the other uses backend keys.
 
 ---
 
-# Part 11 — Responsive behavior
+# Part 4 — Create one shared Work-panel layout skeleton
 
-At narrower widths:
+Both Shot and Scene 2D Work modes must render into the same visual structure:
 
 ```text
-Inspector:
-  may become a right drawer
-  or reduce to a collapsed icon island
-
-left rail:
-  may shrink to icon/thumbnail mode
-
-zoom island:
-  use compact mode
+.context-navigation
+  .context-breadcrumb
+  .context-selector
+  .navigation-grid
+  .open-focus-grid
+  .context-secondary-controls
 ```
 
-Do not revert to top/bottom full-width forms.
+Target structure:
 
-At very narrow desktop widths, a drawer is acceptable.
+```text
+SHOT
+[ 16. Untitled shot                         ▾ ]
+
+[ ← Previous ] [ Next → ]
+
+[ Open ]       [ Focus tab ]
+```
+
+Scene 2D:
+
+```text
+SCENE 2D · Maps
+[ Building A                               ▾ ]
+
+[ ← Previous ] [ Next → ]
+
+[ Open perspective ] [ Focus tab ]
+```
+
+Do not create different margins or button sizes for Shot and Scene 2D.
+
+Mode-specific controls such as Onion Skin appear below the shared shell.
 
 ---
 
-# Part 12 — Accessibility
+# Part 5 — Remove duplicate internal panel headings
+
+Photoshop already displays the docked panel tab title:
+
+```text
+Storyboard Work
+Storyboard Bridge
+```
+
+Do not repeat a large `Storyboard Work` heading inside the panel.
+
+Replace it with a compact context eyebrow where needed:
+
+```text
+SHOT
+SCENE 2D · Maps
+UNLINKED DOCUMENT
+```
+
+Remove the large empty block currently created by the repeated heading and divider.
+
+The first useful control should begin near the top of the panel body.
+
+---
+
+# Part 6 — Establish one spacing system
+
+Define shared CSS tokens:
+
+```css
+:root {
+  --uxp-panel-padding: 12px;
+  --uxp-section-gap: 12px;
+  --uxp-control-gap: 8px;
+  --uxp-control-height: 34px;
+  --uxp-card-padding: 10px;
+  --uxp-card-radius: 7px;
+}
+```
+
+Apply consistently.
+
+Required rules:
+
+```text
+panel left/right padding: 12px
+major section gap: 12px
+controls inside a section: 8px
+button and select height: 34px
+context-card internal padding: 10px
+```
+
+Every primary element must align to the same left and right edges:
+
+```text
+dropdown
+context card
+button rows
+export card
+Advanced section
+Connection section
+```
+
+Avoid arbitrary values such as separate `margin-left: 6px`, `14px`, `18px` on individual mode sections.
+
+---
+
+# Part 7 — Use reliable box sizing
+
+Apply:
+
+```css
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+```
+
+For all panel controls:
+
+```css
+button,
+select,
+input,
+textarea {
+  width: 100%;
+  min-width: 0;
+}
+```
+
+Prevent:
+
+```text
+dropdown wider than its card
+button edges not aligning
+nested panel overflow
+horizontal scrolling caused by padding
+```
+
+---
+
+# Part 8 — Standardize the two-column action grid
+
+Use one reusable class:
+
+```css
+.action-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 8px;
+}
+```
+
+Use it for:
+
+```text
+Previous / Next
+Open / Focus tab
+other paired actions
+```
+
+Do not use manually calculated widths.
+
+At very narrow panel widths:
+
+```css
+@media (max-width: 250px) {
+  .action-grid {
+    grid-template-columns: 1fr;
+  }
+}
+```
+
+Both buttons in one row must have:
+
+```text
+same height
+same width
+same radius
+same text alignment
+```
+
+---
+
+# Part 9 — Unify Bridge context cards
+
+Shot and Scene 2D should use the same card shell:
+
+```text
+.context-card
+  .context-type
+  .context-heading-row
+  .context-primary-title
+  .context-secondary-title
+  .context-meta
+```
+
+Shot example:
+
+```text
+SHOT
+Untitled shot                         Draft
+16 / 58 · 3.0s
+```
+
+Scene 2D example:
+
+```text
+SCENE 2D
+Building A                            PSD
+Maps · 3 / 4
+```
+
+Use identical:
+
+```text
+padding
+border
+radius
+title size
+badge position
+metadata spacing
+```
+
+Do not let Shot use a large multi-row card while Scene 2D uses a separate compact design language.
+
+Optional Shot details such as Action or Notes may appear below the common header inside collapsible or compact rows.
+
+---
+
+# Part 10 — Simplify card borders
+
+Avoid:
+
+```text
+panel border
+inside card border
+inside export card border
+inside button outline
+```
+
+Use hierarchy through surface and spacing.
+
+Recommended:
+
+```text
+one subtle border per context card
+one subtle border per export section
+no border around every text row
+```
+
+Connected status should remain a compact line, not another large bordered card.
+
+---
+
+# Part 11 — Dropdown component
+
+The current native `<select>` popup may use a large white operating-system menu.
+
+First inspect the Photoshop UXP runtime and manifest.
+
+Preferred solution:
+
+```text
+use a supported UXP Spectrum dropdown/menu component
+```
+
+only when the project’s current UXP runtime supports it reliably.
+
+Use the same dropdown implementation for:
+
+```text
+Shot selector
+Perspective selector
+```
 
 Requirements:
 
 ```text
-all icon-only buttons have aria-label
-visible keyboard focus
-minimum practical click target around 30–34 px
-tooltips for ambiguous icons
-Escape closes menus/drawers
-Inspector collapse is keyboard accessible
+dark closed control
+human-readable labels
+keyboard accessible
+selected option visible
+long labels use ellipsis
+no UUID in normal display
 ```
 
-Do not rely on color alone for selected/primary state.
+Do not introduce an unsupported web popover implementation.
+
+When Spectrum dropdown is not safely available, retain native `<select>` behavior but:
+
+```text
+fix its closed-state size and alignment
+use human-readable labels
+avoid custom absolute menus
+```
+
+OS-native popup coloring is less important than reliable selection behavior.
 
 ---
 
-# Part 13 — Visual system
+# Part 12 — Typography hierarchy
 
-Reuse current Storyboarder dark theme tokens where possible.
-
-Target character:
+Use:
 
 ```text
-professional creative tool
-dense but calm
-Photoshop / Blender style workspace
-not a web admin dashboard
+context eyebrow: 10–11px, uppercase/muted
+primary title: 14px semibold
+secondary metadata: 11–12px
+button text: 12px
+status/footer: 10–11px
 ```
 
 Avoid:
 
 ```text
-large dashboard cards
-full-width bordered form sections
-excessive headings
-multiple gold primary buttons
-heavy gradients
-neon glow
-glassmorphism that reduces legibility
+duplicate large headings
+very low-contrast grey labels
+title and metadata using the same weight
 ```
 
-Use gold accent only for:
+Long titles must use:
+
+```css
+overflow: hidden;
+text-overflow: ellipsis;
+white-space: nowrap;
+```
+
+Add the full title through `title` where supported.
+
+---
+
+# Part 13 — Export-section consistency
+
+Shot:
 
 ```text
-current selection
-dirty/save state
-primary action
-active slider
+[ Export & next ]
+[ Export preview ]
+
+□ Auto-add at end
+□ Focus Storyboarder after export
+```
+
+Scene 2D:
+
+```text
+[ Export & next perspective ]
+[ Export preview ]
+
+□ Focus Storyboarder after export
+```
+
+Use the same:
+
+```text
+section padding
+button height
+button width
+vertical gap
+checkbox alignment
+```
+
+Do not use `Export_next` with an underscore in visible UI.
+
+Visible strings must be:
+
+```text
+Export & next
+Export & next perspective
 ```
 
 ---
 
-# Part 14 — Preserve behavior
+# Part 14 — Footer and Advanced sections
 
-The redesign must retain:
+The synced status, Advanced disclosure, Connection section, and Layers section must align with the main panel content.
 
-```text
-Scene selection
-Scene creation
-Scene editing
-Scene deletion
-Scene 3D linking
+Use the same horizontal inset as context and export cards.
 
-Perspective selection
-Perspective creation
-image/PSD import
-Perspective editing
-Perspective deletion
-Set primary
-Add to References
-Open in Photoshop
-Refresh preview
+Do not let the scrollbar overlap text or controls.
 
-preview fit
-zoom
-current selection persistence
-plugin preview auto-refresh
-UUID-based identity
-```
-
-Do not change:
-
-```text
-Scene/Perspective API contracts
-UUID model
-filesystem layout
-Photoshop work-context behavior
-plugin export behavior
-Scene 3D architecture
-```
+Collapsed sections should have a consistent row height and disclosure alignment.
 
 ---
 
-# Files likely affected
+# Part 15 — Responsive validation
+
+Validate both panels at:
 
 ```text
-frontend/src/components/Scene2DPanel.tsx
-frontend/src/styles.css
-or the current component-specific Scene 2D stylesheet
-
-small reusable components if justified:
-  FloatingIsland
-  IconButton
-  OverflowMenu
+220px
+260px
+320px
+380px
 ```
 
-Avoid creating a broad design-system rewrite.
+Required behavior:
+
+```text
+no horizontal overflow
+no clipped buttons
+no floating labels outside sections
+dropdown remains usable
+two-column grid stacks only when necessary
+scrollbar does not cover content
+Shot and Scene 2D retain the same alignment
+```
+
+Test both panels independently; do not assume they are docked side by side.
 
 ---
 
-# Manual validation
+# Part 16 — Tests
+
+Add backend tests confirming Shot work items contain:
+
+```text
+shot_title
+index
+count
+previous_key
+next_key
+```
 
 Test:
 
 ```text
-one Scene / one Perspective
-multiple Scenes
-many Perspectives requiring vertical scroll
-PSD Perspective
-image Perspective
-long Scene title
-long Perspective title
-long Description
-no linked Scene 3D
-linked Scene 3D
-primary Perspective
-plugin preview update
-narrow desktop window
-large desktop window
+first Shot
+middle Shot
+last Shot
+empty title
+non-empty title
 ```
 
-Verify:
+Add Node tests for:
+
+```js
+formatShotDisplayLabel()
+```
+
+Expected:
 
 ```text
-canvas gains substantially more vertical space
-no permanent top editor banner
-no permanent bottom editor banner
-Inspector does not cover essential image content unnecessarily
-zoom island remains reachable
-selection does not reset during edits
+{ index: 1, shot_title: "Copy" }
+→ "1. Copy"
+
+{ index: 16, shot_title: "" }
+→ "16. Untitled shot"
 ```
+
+Verify option values remain canonical keys rather than labels.
+
+---
+
+# Likely files
+
+```text
+storyboard_tool/plugin_service.py
+
+photoshop_uxp_plugin/index.html
+photoshop_uxp_plugin/style.css
+photoshop_uxp_plugin/panel.js
+photoshop_uxp_plugin/backend_client.js
+photoshop_uxp_plugin/work_item_paths.js
+
+tests/test_plugin_scene2d.py
+tests/test_plugin_work_item_paths.mjs
+```
+
+Do not modify Scene 2D move recovery in this task.
 
 ---
 
@@ -691,13 +686,73 @@ selection does not reset during edits
 Run:
 
 ```powershell
+.venv\Scripts\python.exe -m pytest tests/test_plugin_scene2d.py -q
+.venv\Scripts\python.exe -m pytest tests/test_photoshop_bridge.py -q
+.venv\Scripts\python.exe -m pytest tests/ -q
+
+node --test tests/test_plugin_work_item_paths.mjs
+
 cd frontend
 npm.cmd run build
 ```
 
-Run relevant frontend tests where available.
+Reload both UXP panels in Photoshop.
 
-Do not claim visual validation passed without launching the desktop app.
+---
+
+# Manual validation
+
+Validate Shot mode:
+
+```text
+dropdown shows Shot number and title
+no visible UUID
+blank title becomes Untitled shot
+Previous / Next align
+Open / Focus align
+Bridge context card aligns with Scene 2D
+Export section has consistent padding
+```
+
+Validate Scene 2D mode:
+
+```text
+Scene breadcrumb and Perspective dropdown align with Shot mode
+same button dimensions
+same context-card shell
+same export spacing
+no floating or misplaced Scene title
+```
+
+Validate panel widths:
+
+```text
+220px
+260px
+320px
+380px
+```
+
+Do not claim visual validation passed without opening Photoshop.
+
+---
+
+# Acceptance criteria
+
+Complete only when:
+
+```text
+- normal UI shows no Shot UUIDs
+- dropdown shows Shot index plus title
+- blank title has a readable fallback
+- Shot and Scene 2D share the same layout skeleton
+- all major controls align to the same horizontal edges
+- padding and vertical rhythm are consistent
+- action grids have equal columns
+- export sections use consistent spacing
+- no horizontal overflow at supported panel widths
+- existing plugin behavior remains unchanged
+```
 
 ---
 
@@ -707,14 +762,16 @@ Report:
 
 ```text
 Changed files
-New workspace structure
-Left rail behavior
-Floating Inspector behavior
-Floating zoom island behavior
-Responsive breakpoints
-Preserved functionality
-Frontend build result
-Manual visual validation
+Backend Shot work-item schema
+Shot label formatting rule
+Shared Work-panel structure
+Shared Bridge context-card structure
+Spacing tokens
+Dropdown implementation decision
+Responsive behavior
+Backend test results
+Node test results
+Manual Photoshop validation
 Known limitations
 Final commit SHA
 ```
