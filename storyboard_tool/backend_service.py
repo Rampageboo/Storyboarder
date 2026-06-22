@@ -106,6 +106,20 @@ def _focus_desktop_window(
                 errors.append("restore_failed")
                 logger.debug("pywebview window.restore() failed during focus request", exc_info=True)
 
+    # pywebview restore() sets WindowState = FormWindowState.Normal on Windows —
+    # it does NOT return to the previous maximized state. Call maximize() explicitly
+    # so the OS window actually reaches the restore target.
+    remaximized = False
+    if restored and restore_state == "maximized":
+        maximize_fn = getattr(window, "maximize", None)
+        if callable(maximize_fn):
+            try:
+                maximize_fn()
+                remaximized = True
+            except Exception:
+                errors.append("maximize_failed")
+                logger.debug("pywebview window.maximize() failed during focus request", exc_info=True)
+
     show_fn = getattr(window, "show", None)
     if callable(show_fn):
         try:
@@ -116,8 +130,12 @@ def _focus_desktop_window(
             errors.append("show_failed")
             logger.debug("pywebview window.show() failed during focus request", exc_info=True)
 
-    # After a successful restore the logical state returns to what it was before minimizing.
-    window_state_after = restore_state if restored else window_state
+    if restored:
+        # remaximized=True → OS window is maximized; False → OS window is normal
+        # (either restore_state was "normal", or maximize() failed).
+        window_state_after = "maximized" if remaximized else "normal"
+    else:
+        window_state_after = window_state
 
     return {
         "ok": True,
@@ -125,9 +143,11 @@ def _focus_desktop_window(
         "activation_requested": activation_requested,
         "focused": activation_requested,
         "restored_from_minimized": restored,
+        "remaximized": remaximized,
         "window_state_before": window_state,
         "window_restore_state_before": restore_state,
         "window_state_after": window_state_after,
+        "errors": errors,
     }
 
 
@@ -356,16 +376,23 @@ class StoryboardBackendService(ExportServiceMixin):
                 "activation_requested": False,
                 "focused": False,
                 "restored_from_minimized": False,
+                "remaximized": False,
                 "window_state_before": window_state,
                 "window_restore_state_before": restore_state,
                 "window_state_after": window_state,
+                "errors": [],
             }
         result = _focus_desktop_window(
             window, window_state=window_state, restore_state=restore_state
         )
         if result.get("restored_from_minimized"):
-            _set_main_window_state(self.app, restore_state)
-            result["window_state_after"] = restore_state
+            state_after = result["window_state_after"]
+            _set_main_window_state(self.app, state_after)
+            # Keep restore_state in sync. In a real env, _mark_maximized sets it when
+            # remaximized=True; if remaximized=False (restore_state was "normal" or
+            # maximize failed), explicitly align restore_state to the actual window state.
+            if not result.get("remaximized"):
+                _set_main_window_restore_state(self.app, state_after)
         return result
 
     def method_preheat_photoshop(self) -> dict[str, Any]:

@@ -2455,7 +2455,7 @@ async function saveAndGoNext() {
     const result = await openOrCreateShotDocInModal(nextShotId, nextFolder, nextPsdEntry);
     const nextDoc = result.doc;
     if (!nextDoc) {
-      throw new Error(`Could not open ${nextShotId}.`);
+      throw new Error(`Could not open ${humanReadableShotLabel(nextShotId, projectData?.shots)}.`);
     }
 
     if (result.createdFresh) {
@@ -2520,9 +2520,10 @@ async function recoverCurrentShotPsd() {
     throw new Error("Pick a shot from the list first.");
   }
   const folder = await ensureShotStructure(shotId);
-  setStatus(`Reporting PS error for ${shotId} — rebuilding…`);
+  const recoverLabel = humanReadableShotLabel(shotId, projectData?.shots);
+  setStatus(`Reporting PS error for ${recoverLabel} — rebuilding…`);
   let recovered = null;
-  await runModal(`Recover ${shotId}`, async () => {
+  await runModal(`Recover ${recoverLabel}`, async () => {
     const previousDoc = app.activeDocument;
     recovered = await recoverBrokenShotAndOpen(shotId, folder);
     if (recovered) {
@@ -2539,11 +2540,12 @@ async function recoverCurrentShotPsd() {
   shotFolder = folder;
   const layers = recovered.rebuilt?.layers_recovered ?? "?";
   const how = recovered.rebuilt?.method === "flatten" ? "flattened" : "with layers preserved";
-  setStatus(`Recovered ${shotId} ${how}: ${layers} layer(s). Broken original kept in ${SHOT_HISTORY_FOLDER}/.`);
+  setStatus(`Recovered ${recoverLabel} ${how}: ${layers} layer(s). Broken original kept in ${SHOT_HISTORY_FOLDER}/.`);
 }
 
 async function switchToShot(shotId) {
-    if (detectShotFromDocument() === shotId && app.activeDocument) {
+  const shotLabel = humanReadableShotLabel(shotId, projectData?.shots);
+  if (detectShotFromDocument() === shotId && app.activeDocument) {
     setSelectedShotId(shotId);
     shotFolder = await ensureShotStructure(shotId);
     let synced = false;
@@ -2572,12 +2574,12 @@ async function switchToShot(shotId) {
     psdEntry = null;
   }
 
-  await runModal(`Open ${shotId}`, async () => {
+  await runModal(`Open ${shotLabel}`, async () => {
     const previousDoc = app.activeDocument;
     const result = await openOrCreateShotDocInModal(shotId, folder, psdEntry);
     const nextDoc = result.doc;
     if (!nextDoc) {
-      throw new Error(`Could not open ${shotId}.`);
+      throw new Error(`Could not open ${shotLabel}.`);
     }
     recoveredBroken = result.recoveredBroken;
     rebuiltInfo = result.rebuilt || null;
@@ -2613,7 +2615,7 @@ async function switchToShot(shotId) {
     setStatus(
       recoveredBroken
         ? `${psdName} was unreadable — kept a copy in ${SHOT_HISTORY_FOLDER}/ and created a fresh canvas.`
-        : `Created canvas for ${shotId}.`,
+        : `Created canvas for ${shotLabel}.`,
     );
     return;
   }
@@ -2621,17 +2623,18 @@ async function switchToShot(shotId) {
   if (rebuiltInfo) {
     const layers = rebuiltInfo.layers_recovered ?? "?";
     const how = rebuiltInfo.method === "flatten" ? "flattened" : "with layers preserved";
-    setStatus(`Recovered ${shotId} ${how}: ${layers} layer(s). Broken original kept in ${SHOT_HISTORY_FOLDER}/.`);
+    setStatus(`Recovered ${shotLabel} ${how}: ${layers} layer(s). Broken original kept in ${SHOT_HISTORY_FOLDER}/.`);
     return;
   }
 
-  setStatus(`Opened ${shotId}.`);
+  setStatus(`Opened ${shotLabel}.`);
 }
 
 async function createCanvasForShot(shotId) {
   const folder = await ensureShotStructure(shotId);
   let createdNew = false;
-  await runModal(`Create ${shotId}`, async () => {
+  const createLabel = humanReadableShotLabel(shotId, projectData?.shots);
+  await runModal(`Create ${createLabel}`, async () => {
     await createCanvasDocumentInModal(shotId);
     await applyCanvasBackgroundInModal();
     await ensureDrawingLayerInModal(app.activeDocument);

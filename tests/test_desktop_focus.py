@@ -131,7 +131,7 @@ class FocusDesktopWindowMaximizedTests(unittest.TestCase):
 # ---------------------------------------------------------------------------
 
 class FocusDesktopWindowMinimizedFromNormalTests(unittest.TestCase):
-    """Minimized (was normal): restore then show; state_after = normal."""
+    """Minimized (was normal): restore then show; maximize NOT called; state_after = normal."""
 
     def test_restore_called_once(self):
         window = _fake_window()
@@ -143,10 +143,20 @@ class FocusDesktopWindowMinimizedFromNormalTests(unittest.TestCase):
         _focus_desktop_window(window, window_state="minimized", restore_state="normal")
         window.show.assert_called_once()
 
+    def test_maximize_not_called(self):
+        window = _fake_window()
+        _focus_desktop_window(window, window_state="minimized", restore_state="normal")
+        window.maximize.assert_not_called()
+
     def test_restored_from_minimized_true(self):
         window = _fake_window()
         result = _focus_desktop_window(window, window_state="minimized", restore_state="normal")
         self.assertTrue(result["restored_from_minimized"])
+
+    def test_remaximized_false(self):
+        window = _fake_window()
+        result = _focus_desktop_window(window, window_state="minimized", restore_state="normal")
+        self.assertFalse(result["remaximized"])
 
     def test_window_state_after_is_normal(self):
         window = _fake_window()
@@ -164,12 +174,21 @@ class FocusDesktopWindowMinimizedFromNormalTests(unittest.TestCase):
 # ---------------------------------------------------------------------------
 
 class FocusDesktopWindowMinimizedFromMaximizedTests(unittest.TestCase):
-    """Minimized (was maximized): restore then show; state_after = maximized."""
+    """Minimized (was maximized): restore + maximize + show; state_after = maximized.
+
+    pywebview restore() on Windows sets WindowState = Normal, not the previous
+    maximized state. maximize() must be called explicitly to reach the correct state.
+    """
 
     def test_restore_called_once(self):
         window = _fake_window()
         _focus_desktop_window(window, window_state="minimized", restore_state="maximized")
         window.restore.assert_called_once()
+
+    def test_maximize_called_once(self):
+        window = _fake_window()
+        _focus_desktop_window(window, window_state="minimized", restore_state="maximized")
+        window.maximize.assert_called_once()
 
     def test_show_called_once(self):
         window = _fake_window()
@@ -180,6 +199,11 @@ class FocusDesktopWindowMinimizedFromMaximizedTests(unittest.TestCase):
         window = _fake_window()
         result = _focus_desktop_window(window, window_state="minimized", restore_state="maximized")
         self.assertTrue(result["restored_from_minimized"])
+
+    def test_remaximized_true(self):
+        window = _fake_window()
+        result = _focus_desktop_window(window, window_state="minimized", restore_state="maximized")
+        self.assertTrue(result["remaximized"])
 
     def test_window_state_after_is_maximized(self):
         window = _fake_window()
@@ -235,6 +259,46 @@ class FocusDesktopWindowRestoreFailureTests(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
+# _focus_desktop_window — maximize failure (restore succeeded, maximize raised)
+# ---------------------------------------------------------------------------
+
+class FocusDesktopWindowMaximizeFailureTests(unittest.TestCase):
+    """maximize() raises after a successful restore: state_after = normal, remaximized = False."""
+
+    def _window_with_maximize_failure(self):
+        window = _fake_window()
+        window.maximize = MagicMock(side_effect=RuntimeError("maximize unavailable"))
+        return window
+
+    def test_remaximized_false_on_maximize_failure(self):
+        window = self._window_with_maximize_failure()
+        result = _focus_desktop_window(window, window_state="minimized", restore_state="maximized")
+        self.assertFalse(result["remaximized"])
+
+    def test_window_state_after_normal_on_maximize_failure(self):
+        window = self._window_with_maximize_failure()
+        result = _focus_desktop_window(window, window_state="minimized", restore_state="maximized")
+        self.assertEqual(result["window_state_after"], "normal")
+
+    def test_restored_from_minimized_true_on_maximize_failure(self):
+        window = self._window_with_maximize_failure()
+        result = _focus_desktop_window(window, window_state="minimized", restore_state="maximized")
+        self.assertTrue(result["restored_from_minimized"])
+
+    def test_show_still_called_on_maximize_failure(self):
+        window = self._window_with_maximize_failure()
+        _focus_desktop_window(window, window_state="minimized", restore_state="maximized")
+        window.show.assert_called_once()
+
+    def test_no_exception_escapes_on_maximize_failure(self):
+        window = self._window_with_maximize_failure()
+        try:
+            _focus_desktop_window(window, window_state="minimized", restore_state="maximized")
+        except Exception as exc:
+            self.fail(f"_focus_desktop_window raised unexpectedly: {exc}")
+
+
+# ---------------------------------------------------------------------------
 # _focus_desktop_window — show failure
 # ---------------------------------------------------------------------------
 
@@ -278,8 +342,9 @@ class FocusDesktopWindowResultShapeTests(unittest.TestCase):
         result = _focus_desktop_window(window, window_state="normal")
         for key in (
             "ok", "shown", "activation_requested", "focused",
-            "restored_from_minimized", "window_state_before",
-            "window_restore_state_before", "window_state_after",
+            "restored_from_minimized", "remaximized",
+            "window_state_before", "window_restore_state_before", "window_state_after",
+            "errors",
         ):
             self.assertIn(key, result, f"Missing key: {key}")
 
@@ -413,8 +478,13 @@ class EventTransitionModelTests(unittest.TestCase):
             _set_main_window_state(app, "minimized")
             # restore_state intentionally NOT changed
         elif event == "restored":
+            # Mirrors _mark_restored: only clears restore_state when NOT in the
+            # minimized-from-maximized focus-restore path.
+            previous_state = _get_main_window_state(app)
+            restore_target = _get_main_window_restore_state(app)
             _set_main_window_state(app, "normal")
-            _set_main_window_restore_state(app, "normal")
+            if previous_state != "minimized" or restore_target != "maximized":
+                _set_main_window_restore_state(app, "normal")
         elif event == "shown":
             state = _get_main_window_state(app)
             if state not in {"maximized", "minimized"}:
@@ -440,11 +510,34 @@ class EventTransitionModelTests(unittest.TestCase):
         self.assertEqual(_get_main_window_state(app), "minimized")
         self.assertEqual(_get_main_window_restore_state(app), "normal")
 
-    def test_restored_from_minimized_maximized_sets_normal(self):
+    def test_restored_event_from_minimized_maximized_preserves_restore_state(self):
+        """The 'restored' event fires when restore() is called during focus-restore.
+
+        _mark_restored must NOT clear restore_state in this case — maximize()
+        follows immediately and its 'maximized' event will set both fields.
+        """
         app = self._make_app()
         self._simulate(app, "maximized")
         self._simulate(app, "minimized")
-        self._simulate(app, "restored")
+        self._simulate(app, "restored")  # fired by window.restore() inside _focus_desktop_window
+        self.assertEqual(_get_main_window_state(app), "normal")
+        self.assertEqual(_get_main_window_restore_state(app), "maximized")  # NOT cleared
+
+    def test_full_focus_restore_to_maximized_sequence(self):
+        """Full event sequence: maximized → minimized → restored event → maximized event."""
+        app = self._make_app()
+        self._simulate(app, "maximized")
+        self._simulate(app, "minimized")
+        self._simulate(app, "restored")   # window.restore() fires this
+        self._simulate(app, "maximized")  # window.maximize() fires this
+        self.assertEqual(_get_main_window_state(app), "maximized")
+        self.assertEqual(_get_main_window_restore_state(app), "maximized")
+
+    def test_user_unmaximize_clears_restore_state(self):
+        """User manually restores (unmaximizes) from maximized: restore_state → normal."""
+        app = self._make_app()
+        self._simulate(app, "maximized")
+        self._simulate(app, "restored")  # user clicks the restore button
         self.assertEqual(_get_main_window_state(app), "normal")
         self.assertEqual(_get_main_window_restore_state(app), "normal")
 
@@ -548,8 +641,8 @@ class FocusEndpointTests(unittest.TestCase):
         body = resp.json()
         for key in (
             "ok", "shown", "activation_requested", "focused",
-            "restored_from_minimized", "window_state_before",
-            "window_restore_state_before", "window_state_after",
+            "restored_from_minimized", "remaximized",
+            "window_state_before", "window_restore_state_before", "window_state_after",
         ):
             self.assertIn(key, body)
 
@@ -611,9 +704,21 @@ class FocusEndpointTests(unittest.TestCase):
             resp = client.post("/api/app/focus")
         body = resp.json()
         self.assertTrue(body["restored_from_minimized"])
+        self.assertTrue(body["remaximized"])
         self.assertEqual(body["window_restore_state_before"], "maximized")
         self.assertEqual(body["window_state_after"], "maximized")
         window.restore.assert_called_once()
+        window.maximize.assert_called_once()
+
+    def test_minimize_from_normal_maximize_not_called(self):
+        client, app = self._make_client()
+        window = _fake_window()
+        app.state.main_window = window
+        app.state.main_window_state = "minimized"
+        app.state.main_window_restore_state = "normal"
+        with contextlib.redirect_stderr(io.StringIO()):
+            client.post("/api/app/focus")
+        window.maximize.assert_not_called()
 
     def test_minimized_from_maximized_updates_app_state_to_maximized(self):
         client, app = self._make_client()
@@ -634,6 +739,11 @@ class FocusEndpointTests(unittest.TestCase):
         with contextlib.redirect_stderr(io.StringIO()):
             client.post("/api/app/focus")
         self.assertEqual(_get_main_window_state(app), "normal")
+
+    def test_maximize_not_called_after_restore_failure(self):
+        window = _fake_window(raise_on_restore=True)
+        _focus_desktop_window(window, window_state="minimized", restore_state="maximized")
+        window.maximize.assert_not_called()
 
     def test_restore_failure_state_remains_minimized(self):
         client, app = self._make_client()

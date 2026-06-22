@@ -270,8 +270,14 @@ def open_desktop_window(app, title: str = "Storyboard Tool") -> int:
         app.state.main_window_restore_state = "maximized"
 
     def _mark_restored(*_args):
+        previous_state = getattr(app.state, "main_window_state", "normal")
+        restore_target = getattr(app.state, "main_window_restore_state", "normal")
         app.state.main_window_state = "normal"
-        app.state.main_window_restore_state = "normal"
+        # When coming from minimized-to-maximized, _focus_desktop_window follows
+        # restore() with maximize(), whose 'maximized' event sets both fields to
+        # "maximized". Don't clear restore_state here or that event would be a no-op.
+        if previous_state != "minimized" or restore_target != "maximized":
+            app.state.main_window_restore_state = "normal"
 
     def _mark_shown(*_args):
         if app.state.main_window_state not in {"maximized", "minimized"}:

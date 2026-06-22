@@ -171,31 +171,36 @@ class PhotoshopBridgeContractTests(unittest.TestCase):
         self.assertFalse(body["focused"])
         # Full diagnostic fields returned even with no window.
         for key in ("shown", "activation_requested", "restored_from_minimized",
-                    "window_state_before", "window_restore_state_before", "window_state_after"):
+                    "remaximized", "window_state_before", "window_restore_state_before",
+                    "window_state_after"):
             self.assertIn(key, body, f"Missing key: {key}")
 
     def test_app_focus_uses_desktop_window_when_available(self) -> None:
         calls: list[str] = []
 
         class Window:
-            # Real pywebview surface: restore() and show() only; focus is not callable.
+            # Real pywebview surface: restore(), show(), maximize(); focus is not callable.
             def restore(self) -> None:
                 calls.append("restore")
 
             def show(self) -> None:
                 calls.append("show")
 
+            def maximize(self) -> None:
+                calls.append("maximize")
+
         self.app.state.main_window = Window()
-        # Default window_state and restore_state are "normal" — restore must NOT be called.
+        # Default window_state and restore_state are "normal" — restore and maximize must NOT be called.
         response = self.client.post("/api/app/focus")
         self.assertEqual(response.status_code, 200)
         body = response.json()
         self.assertTrue(body["ok"])
         self.assertTrue(body["activation_requested"])
-        # restore must NOT be called for a normal window.
         self.assertNotIn("restore", calls)
+        self.assertNotIn("maximize", calls)
         self.assertIn("show", calls)
         self.assertFalse(body["restored_from_minimized"])
+        self.assertFalse(body["remaximized"])
         self.assertEqual(body["window_state_after"], "normal")
         self.assertIn("window_restore_state_before", body)
 
