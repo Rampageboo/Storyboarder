@@ -877,8 +877,8 @@ async function maybeHandleFocusRequest(live) {
     } else {
       await switchToShot(shotId);
     }
-    const switchLabel = shotDisplayLabel(shotId, currentShotIndex(), currentShotFromProjectData()?.title);
-    setStatus(`Switched to ${switchLabel || "Shot"}.`);
+    const switchLabel = humanReadableShotLabel(shotId, projectData?.shots);
+    setStatus(`Switched to ${switchLabel}.`);
   } catch (error) {
     setStatus(error.message || String(error));
   } finally {
@@ -1226,14 +1226,15 @@ async function focusCurrentShotTab() {
   }
   const doc = findOpenDocumentForShot(shotId);
   if (!doc) {
-    const noTabLabel = shotDisplayLabel(shotId, currentShotIndex(), currentShotFromProjectData()?.title);
-    throw new Error(`No open Photoshop tab for ${noTabLabel || "this shot"}.`);
+    throw new Error(
+      `No open Photoshop tab for ${humanReadableShotLabel(shotId, projectData?.shots)}.`
+    );
   }
   activateDocument(doc);
   setSelectedShotId(shotId);
   await notifyBackendShotFocus(shotId);
-  const focusLabel = shotDisplayLabel(shotId, currentShotIndex(), currentShotFromProjectData()?.title);
-  setStatus(`Focused tab for ${focusLabel || "Shot"}.`);
+  const focusLabel = humanReadableShotLabel(shotId, projectData?.shots);
+  setStatus(`Focused tab for ${focusLabel}.`);
 }
 
 function isValidShotId(value) {
@@ -1260,7 +1261,9 @@ function currentShotRecord() {
   const shotId = currentShotId();
   const shot = (projectData?.shots || []).find((item) => item.shot_id === shotId);
   if (!shot) {
-    throw new Error(`Shot not found in project: ${shotId}`);
+    throw new Error(
+      `${humanReadableShotLabel(shotId, projectData?.shots)} is no longer available in this project.`
+    );
   }
   return shot;
 }

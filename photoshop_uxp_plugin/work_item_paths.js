@@ -122,14 +122,20 @@
   }
 
   /**
-   * Format a shot work item into a human-readable label. Never exposes a UUID.
-   * Examples: { index: 1, shot_title: "Copy" } → "1. Copy"
+   * Format a shot work item into a compact human-readable label. Never exposes a UUID.
+   * Requires index > 0 to use the numeric prefix; otherwise falls back to title or "Shot".
+   * Examples: { index: 1,  shot_title: "Copy" } → "1. Copy"
    *           { index: 16, shot_title: "" }     → "16. Untitled shot"
+   *           { index: 0,  shot_title: "Title"} → "Title"
+   *           { index: 0,  shot_title: "" }     → "Shot"
    */
   function formatShotDisplayLabel(item) {
-    const index = Number(item?.index || 0);
+    const index = Number(item?.index);
     const title = String(item?.shot_title || "").trim();
-    return title ? `${index}. ${title}` : `${index}. Untitled shot`;
+    if (Number.isInteger(index) && index > 0) {
+      return title ? `${index}. ${title}` : `${index}. Untitled shot`;
+    }
+    return title || "Shot";
   }
 
   /** Return the shot work item for a given shot_id, or null. */
@@ -138,13 +144,50 @@
     return _workItems.find((item) => item.kind === "shot" && item.shot_id === id) || null;
   }
 
-  /** Display label for a shot, using work items when available. */
+  /**
+   * Compact display label for a shot, using work items when available.
+   * arrayIndexFallback must be >= 0 to produce a numbered label; -1 or null yields title-only.
+   */
   function shotDisplayLabel(shotId, arrayIndexFallback, titleFallback) {
     const item = shotWorkItemById(shotId);
     if (item) return formatShotDisplayLabel(item);
-    const index = (Number(arrayIndexFallback) || 0) + 1;
+    const rawIndex = Number(arrayIndexFallback);
+    const displayIndex = Number.isInteger(rawIndex) && rawIndex >= 0 ? rawIndex + 1 : null;
     const title = String(titleFallback || "").trim();
-    return title ? `${index}. ${title}` : `${index}. Untitled shot`;
+    if (displayIndex !== null) {
+      return title ? `${displayIndex}. ${title}` : `${displayIndex}. Untitled shot`;
+    }
+    return title || "Shot";
+  }
+
+  /**
+   * Verbose human-readable label for user-facing error and status messages.
+   * Priority: 1) backend work-item data  2) projectShots array  3) generic "Shot".
+   * Never exposes a raw UUID.
+   * Examples: (work item with index=4, title="Look at the moon") → "Shot 4 · Look at the moon"
+   *           (work item with index=16, no title)                → "Shot 16"
+   *           (no work item or project entry)                    → "Shot"
+   */
+  function humanReadableShotLabel(shotId, projectShots) {
+    const item = shotWorkItemById(shotId);
+    if (item) {
+      const index = Number(item.index);
+      const title = String(item.shot_title || "").trim();
+      if (Number.isInteger(index) && index > 0) {
+        return title ? `Shot ${index} · ${title}` : `Shot ${index}`;
+      }
+      return title ? `Shot · ${title}` : "Shot";
+    }
+    const shots = Array.isArray(projectShots) ? projectShots : [];
+    const idx = shots.findIndex(
+      (s) => String(s?.shot_id || "").toLowerCase() === String(shotId || "").toLowerCase()
+    );
+    if (idx >= 0) {
+      const displayIndex = idx + 1;
+      const title = String(shots[idx]?.title || "").trim();
+      return title ? `Shot ${displayIndex} · ${title}` : `Shot ${displayIndex}`;
+    }
+    return "Shot";
   }
 
   Object.assign(global, {
@@ -164,5 +207,6 @@
     formatShotDisplayLabel,
     shotWorkItemById,
     shotDisplayLabel,
+    humanReadableShotLabel,
   });
 })(typeof globalThis !== "undefined" ? globalThis : this);

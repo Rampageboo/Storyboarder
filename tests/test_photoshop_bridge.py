@@ -171,7 +171,7 @@ class PhotoshopBridgeContractTests(unittest.TestCase):
         self.assertFalse(body["focused"])
         # Full diagnostic fields returned even with no window.
         for key in ("shown", "activation_requested", "restored_from_minimized",
-                    "window_state_before", "window_state_after"):
+                    "window_state_before", "window_restore_state_before", "window_state_after"):
             self.assertIn(key, body, f"Missing key: {key}")
 
     def test_app_focus_uses_desktop_window_when_available(self) -> None:
@@ -186,7 +186,7 @@ class PhotoshopBridgeContractTests(unittest.TestCase):
                 calls.append("show")
 
         self.app.state.main_window = Window()
-        # Default window_state is "normal" — restore must NOT be called.
+        # Default window_state and restore_state are "normal" — restore must NOT be called.
         response = self.client.post("/api/app/focus")
         self.assertEqual(response.status_code, 200)
         body = response.json()
@@ -197,6 +197,7 @@ class PhotoshopBridgeContractTests(unittest.TestCase):
         self.assertIn("show", calls)
         self.assertFalse(body["restored_from_minimized"])
         self.assertEqual(body["window_state_after"], "normal")
+        self.assertIn("window_restore_state_before", body)
 
     def test_preheat_photoshop_missing_path_is_clean_noop(self) -> None:
         with mock.patch.object(backend_service_module, "preheat_photoshop") as preheat:

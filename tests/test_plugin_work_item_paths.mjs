@@ -21,6 +21,7 @@ const {
   getWorkItems,
   shotWorkItemById,
   shotDisplayLabel,
+  humanReadableShotLabel,
 } = context;
 
 const pluginContext = {
@@ -159,7 +160,7 @@ test("preserves only explicit manual connection modes during bridge failures", (
   assert.equal(shouldPreserveManualMode("folder-error"), false);
 });
 
-// ── formatShotDisplayLabel (Part 2) ─────────────────────────────────────────
+// ── formatShotDisplayLabel ───────────────────────────────────────────────────
 
 test("formatShotDisplayLabel — title present returns index. title", () => {
   assert.equal(formatShotDisplayLabel({ index: 1, shot_title: "Copy" }), "1. Copy");
@@ -186,6 +187,37 @@ test("formatShotDisplayLabel — multi-word title", () => {
     formatShotDisplayLabel({ index: 16, shot_title: "Look at the moon" }),
     "16. Look at the moon",
   );
+});
+
+test("formatShotDisplayLabel — index 0 with title returns title only (no '0. ')", () => {
+  // Backend may send index=0 for invalid data; must not show "0. Title".
+  assert.equal(formatShotDisplayLabel({ index: 0, shot_title: "Look at the moon" }), "Look at the moon");
+});
+
+test("formatShotDisplayLabel — index 0 with no title returns 'Shot'", () => {
+  assert.equal(formatShotDisplayLabel({ index: 0, shot_title: "" }), "Shot");
+});
+
+test("formatShotDisplayLabel — index 0 with null title returns 'Shot'", () => {
+  assert.equal(formatShotDisplayLabel({ index: 0, shot_title: null }), "Shot");
+});
+
+test("formatShotDisplayLabel — negative index returns title only", () => {
+  assert.equal(formatShotDisplayLabel({ index: -1, shot_title: "Title" }), "Title");
+});
+
+test("formatShotDisplayLabel — negative index with no title returns 'Shot'", () => {
+  assert.equal(formatShotDisplayLabel({ index: -1, shot_title: "" }), "Shot");
+});
+
+test("formatShotDisplayLabel — null item returns 'Shot'", () => {
+  assert.equal(formatShotDisplayLabel(null), "Shot");
+});
+
+test("formatShotDisplayLabel — result never contains a 32-char hex UUID", () => {
+  const uuid = "71cca9b8deadbeef71cca9b8deadbeef";
+  const label = formatShotDisplayLabel({ index: 4, shot_title: "Action" });
+  assert.ok(!label.includes(uuid), `Label should not contain UUID: ${label}`);
 });
 
 // ── setWorkItems / getWorkItems / shotWorkItemById ───────────────────────────
@@ -242,6 +274,37 @@ test("shotDisplayLabel fallback with empty title shows Untitled shot", () => {
   assert.equal(shotDisplayLabel("x", 2, ""), "3. Untitled shot");
 });
 
+// ── shotDisplayLabel — array-index fallback fix ──────────────────────────────
+
+test("shotDisplayLabel — arrayIndexFallback -1 never produces '0. Untitled shot'", () => {
+  setWorkItems([]);
+  const label = shotDisplayLabel("unknown", -1, "");
+  // -1 is not a valid array index; must not render as "0. Untitled shot"
+  assert.notEqual(label, "0. Untitled shot");
+  assert.equal(label, "Shot");
+});
+
+test("shotDisplayLabel — arrayIndexFallback -1 with title returns title only", () => {
+  setWorkItems([]);
+  const label = shotDisplayLabel("unknown", -1, "Action");
+  assert.equal(label, "Action");
+});
+
+test("shotDisplayLabel — arrayIndexFallback 0 (first shot) produces '1. Title'", () => {
+  setWorkItems([]);
+  assert.equal(shotDisplayLabel("x", 0, "First"), "1. First");
+});
+
+test("shotDisplayLabel — result never exposes a 32-char hex UUID", () => {
+  setWorkItems([]);
+  const uuid = "71cca9b8deadbeef71cca9b8deadbeef";
+  const label = shotDisplayLabel(uuid, -1, "");
+  assert.ok(
+    !label.includes(uuid),
+    `shotDisplayLabel must not expose UUID in output, got: ${label}`
+  );
+});
+
 // ── option value must be canonical key, not the label ───────────────────────
 
 test("option value stays as shot_id while label is human-readable", () => {
@@ -254,4 +317,69 @@ test("option value stays as shot_id while label is human-readable", () => {
   assert.equal(optionText, "16. Untitled shot");
   assert.notEqual(optionValue, optionText);
   setWorkItems([]);
+});
+
+// ── humanReadableShotLabel ───────────────────────────────────────────────────
+
+test("humanReadableShotLabel — work item with title returns 'Shot N · Title'", () => {
+  setWorkItems([{ kind: "shot", shot_id: "aaa", index: 4, shot_title: "Look at the moon",
+    count: 10, previous_key: "", next_key: "" }]);
+  assert.equal(humanReadableShotLabel("aaa"), "Shot 4 · Look at the moon");
+  setWorkItems([]);
+});
+
+test("humanReadableShotLabel — work item without title returns 'Shot N'", () => {
+  setWorkItems([{ kind: "shot", shot_id: "bbb", index: 16, shot_title: "",
+    count: 20, previous_key: "", next_key: "" }]);
+  assert.equal(humanReadableShotLabel("bbb"), "Shot 16");
+  setWorkItems([]);
+});
+
+test("humanReadableShotLabel — work item index 0 with title returns 'Shot · Title'", () => {
+  setWorkItems([{ kind: "shot", shot_id: "ccc", index: 0, shot_title: "Action",
+    count: 5, previous_key: "", next_key: "" }]);
+  assert.equal(humanReadableShotLabel("ccc"), "Shot · Action");
+  setWorkItems([]);
+});
+
+test("humanReadableShotLabel — work item index 0 no title returns 'Shot'", () => {
+  setWorkItems([{ kind: "shot", shot_id: "ddd", index: 0, shot_title: "",
+    count: 5, previous_key: "", next_key: "" }]);
+  assert.equal(humanReadableShotLabel("ddd"), "Shot");
+  setWorkItems([]);
+});
+
+test("humanReadableShotLabel — falls back to projectShots array when no work item", () => {
+  setWorkItems([]);
+  const shots = [
+    { shot_id: "abc", title: "Reaction" },
+    { shot_id: "def", title: "Look" },
+  ];
+  assert.equal(humanReadableShotLabel("def", shots), "Shot 2 · Look");
+});
+
+test("humanReadableShotLabel — projectShots fallback without title returns 'Shot N'", () => {
+  setWorkItems([]);
+  const shots = [{ shot_id: "abc", title: "" }, { shot_id: "def", title: "" }];
+  assert.equal(humanReadableShotLabel("def", shots), "Shot 2");
+});
+
+test("humanReadableShotLabel — no work item and not in projectShots returns 'Shot'", () => {
+  setWorkItems([]);
+  assert.equal(humanReadableShotLabel("missing", []), "Shot");
+});
+
+test("humanReadableShotLabel — no arguments returns 'Shot'", () => {
+  setWorkItems([]);
+  assert.equal(humanReadableShotLabel(""), "Shot");
+});
+
+test("humanReadableShotLabel — result never exposes a 32-char hex UUID", () => {
+  setWorkItems([]);
+  const uuid = "71cca9b8deadbeef71cca9b8deadbeef";
+  const label = humanReadableShotLabel(uuid, []);
+  assert.ok(
+    !label.includes(uuid),
+    `humanReadableShotLabel must not expose UUID in output, got: ${label}`
+  );
 });

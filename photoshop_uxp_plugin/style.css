@@ -182,12 +182,6 @@ html, body {
   margin-bottom: 1px;
 }
 
-.ctx-hint {
-  font-size: 10px;
-  color: #5a5a5a;
-  margin-top: 6px;
-  line-height: 1.35;
-}
 
 /* ── Status buttons (shot mode) ─────────────────────────────────────── */
 .status-buttons {

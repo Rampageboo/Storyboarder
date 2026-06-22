@@ -13,6 +13,7 @@ from pathlib import Path
 import uvicorn
 
 from . import project_manager
+from .backend_service import _get_main_window_restore_state
 from .live_bridge import global_bridge_dir, resolve_server_port, server_identity_url
 
 
@@ -256,19 +257,21 @@ def open_desktop_window(app, title: str = "Storyboard Tool") -> int:
         text_select=False,
     )
     app.state.main_window = window
-    app.state.main_window_state = "maximized" if restore_maximized else "normal"
-
-    # Track whether the window is currently maximized so we can save it on close.
-    _maximized = [restore_maximized]
+    initial_state = "maximized" if restore_maximized else "normal"
+    app.state.main_window_state = initial_state
+    app.state.main_window_restore_state = initial_state
 
     def _mark_minimized(*_args):
+        # Preserve restore_state so the window returns to its prior state on un-minimize.
         app.state.main_window_state = "minimized"
 
     def _mark_maximized(*_args):
         app.state.main_window_state = "maximized"
+        app.state.main_window_restore_state = "maximized"
 
     def _mark_restored(*_args):
         app.state.main_window_state = "normal"
+        app.state.main_window_restore_state = "normal"
 
     def _mark_shown(*_args):
         if app.state.main_window_state not in {"maximized", "minimized"}:
@@ -280,10 +283,6 @@ def open_desktop_window(app, title: str = "Storyboard Tool") -> int:
                 window.maximize()
             except Exception:
                 pass
-
-    def _on_resized(width, height):
-        # Any user-driven resize means the window is no longer maximized.
-        _maximized[0] = False
 
     def _on_loaded():
         _write_launch_ready_marker("pywebview loaded fallback")
@@ -302,10 +301,6 @@ def open_desktop_window(app, title: str = "Storyboard Tool") -> int:
         # Older pywebview builds may not expose loaded. Do not close the splash
         # on shown; wait long enough for the local React bundle to render.
         window.events.shown += lambda: _schedule_launch_ready_marker("pywebview shown delayed fallback", 3.0)
-    try:
-        window.events.resized += _on_resized
-    except Exception:
-        pass  # older pywebview versions may not have resized event
 
     start_kwargs: dict = {
         "private_mode": False,
@@ -316,7 +311,9 @@ def open_desktop_window(app, title: str = "Storyboard Tool") -> int:
     webview.start(**start_kwargs)
 
     # webview.start() blocks until the window closes — save state now.
-    _save_window_state(window, maximized=_maximized[0])
+    # Use restore_state (not current_state) so closing while minimized persists the
+    # correct pre-minimized geometry for the next launch.
+    _save_window_state(window, maximized=_get_main_window_restore_state(app) == "maximized")
 
     try:
         project_manager.shutdown_reference_cleanup(
