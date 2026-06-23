@@ -284,6 +284,66 @@ def _restore_bytes(path: Path, data: bytes | None) -> None:
         raise
 
 
+def _bytes_match_original(path: Path, original: bytes | None) -> bool:
+    if original is None:
+        return not path.exists()
+    return path.is_file() and path.read_bytes() == original
+
+
+@dataclass
+class DuplicateRollbackResult:
+    index_restored: bool = False
+    meta_restored: bool = False
+    metadata_verified: bool = False
+    duplicate_files_removed: bool = False
+
+
+def _rollback_perspective_duplicate(
+    *,
+    index_path: Path,
+    index_bytes: bytes | None,
+    meta_path: Path,
+    meta_bytes: bytes | None,
+    new_dir: Path,
+    staging_dir: Path,
+) -> DuplicateRollbackResult:
+    result = DuplicateRollbackResult()
+
+    try:
+        _restore_bytes(index_path, index_bytes)
+        result.index_restored = True
+    except Exception:
+        LOGGER.exception("Scene 2D duplicate rollback: failed to restore scenes2d.json")
+
+    try:
+        _restore_bytes(meta_path, meta_bytes)
+        result.meta_restored = True
+    except Exception:
+        LOGGER.exception("Scene 2D duplicate rollback: failed to restore scene meta JSON")
+
+    result.metadata_verified = (
+        _bytes_match_original(index_path, index_bytes)
+        and _bytes_match_original(meta_path, meta_bytes)
+    )
+
+    if result.metadata_verified:
+        if new_dir.is_dir():
+            try:
+                shutil.rmtree(new_dir)
+                result.duplicate_files_removed = True
+            except Exception:
+                LOGGER.exception("Scene 2D duplicate rollback: failed to remove new perspective dir")
+        else:
+            result.duplicate_files_removed = True
+        if staging_dir.is_dir():
+            try:
+                shutil.rmtree(staging_dir)
+            except Exception:
+                LOGGER.exception("Scene 2D duplicate rollback: failed to remove staging dir")
+
+    return result
+
+
 def _write_journal(project: Project, payload: dict[str, Any]) -> None:
     journal = {"version": 2, **payload}
     project_manager._atomic_write_json(_journal_path(project), journal)
@@ -1557,12 +1617,55 @@ def _verify_perspective_duplicate(
     scene_id: str,
     source_perspective_id: str,
     duplicate_perspective_id: str,
+    *,
+    source_file_hash: bytes,
+    source_preview_hash: bytes | None,
+    original_primary_id: str,
+    references_before: list[dict[str, Any]],
 ) -> None:
-    scenes = list_scenes(project)
-    scene = next((s for s in scenes if s["id"] == scene_id), None)
-    if scene is None:
-        raise ValueError(f"Duplicate verify: scene {scene_id!r} not found after save.")
-    perspectives = scene.get("perspectives") or []
+    # Read scenes2d.json directly — do not call list_scenes() which triggers migrations.
+    index_path = _index_path(project)
+    if not index_path.is_file():
+        raise ValueError("Duplicate verify: scenes2d.json is missing after save.")
+    try:
+        index_data = _read_json(index_path)
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ValueError(f"Duplicate verify: scenes2d.json is malformed: {exc}") from exc
+    if not isinstance(index_data, dict):
+        raise ValueError("Duplicate verify: scenes2d.json is not a JSON object.")
+    raw_scenes = index_data.get("scenes")
+    if not isinstance(raw_scenes, list):
+        raise ValueError("Duplicate verify: scenes2d.json has no valid scenes list.")
+    index_scene_raw = next(
+        (s for s in raw_scenes if isinstance(s, dict) and str(s.get("id") or "") == scene_id),
+        None,
+    )
+    if index_scene_raw is None:
+        raise ValueError(f"Duplicate verify: scene {scene_id!r} missing from scenes2d.json.")
+    try:
+        index_scene = _normalize_scene(index_scene_raw, legacy=True)
+    except (ValueError, KeyError) as exc:
+        raise ValueError(f"Duplicate verify: scenes2d.json scene is invalid: {exc}") from exc
+
+    # Read and compare scene meta — failure is not suppressed.
+    meta_path_v = _meta_path(project, scene_id)
+    if not meta_path_v.is_file():
+        raise ValueError(f"Duplicate verify: scene meta file missing: {meta_path_v}")
+    try:
+        meta_raw = _read_json(meta_path_v)
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ValueError(f"Duplicate verify: scene meta file is malformed: {exc}") from exc
+    if not isinstance(meta_raw, dict):
+        raise ValueError("Duplicate verify: scene meta file is not a JSON object.")
+    try:
+        meta_scene = _normalize_scene(meta_raw, legacy=True)
+    except (ValueError, KeyError) as exc:
+        raise ValueError(f"Duplicate verify: scene meta is invalid: {exc}") from exc
+    if index_scene != meta_scene:
+        raise ValueError("Duplicate verify: Scene meta disagrees with scenes2d.json.")
+
+    # Work with the canonical (index) scene for all further checks.
+    perspectives = index_scene.get("perspectives") or []
     ids = [p["id"] for p in perspectives]
 
     source_count = ids.count(source_perspective_id)
@@ -1591,8 +1694,7 @@ def _verify_perspective_duplicate(
     source_perspective = perspectives[source_idx]
     dup_type = dup.get("type") or "psd"
     if dup_type == "psd":
-        source_preview = _safe_rel_path(project, source_perspective.get("preview_image_path") or "")
-        if source_preview.is_file():
+        if source_preview_hash is not None:
             dup_preview = _safe_rel_path(project, dup.get("preview_image_path") or "")
             if not dup_preview.is_file():
                 raise ValueError("Duplicate verify: duplicate preview missing when source preview existed.")
@@ -1603,26 +1705,27 @@ def _verify_perspective_duplicate(
         if str(dup.get("source_file_path") or "") != str(dup.get("preview_image_path") or ""):
             raise ValueError("Duplicate verify: image duplicate preview path differs from source path.")
 
-    if scene.get("primary_perspective_id") == duplicate_perspective_id:
+    if index_scene.get("primary_perspective_id") != original_primary_id:
+        raise ValueError("Duplicate verify: primary_perspective_id changed during duplication.")
+    if index_scene.get("primary_perspective_id") == duplicate_perspective_id:
         raise ValueError("Duplicate verify: primary was incorrectly changed to the duplicate.")
 
     source_file = _safe_rel_path(project, source_perspective["source_file_path"])
     if not source_file.is_file():
         raise ValueError("Duplicate verify: source perspective file is missing after duplication.")
+    actual_source_hash = hashlib.sha256(source_file.read_bytes()).digest()
+    if actual_source_hash != source_file_hash:
+        raise ValueError("Duplicate verify: source perspective file was modified during duplication.")
+    if source_preview_hash is not None:
+        source_preview_file = _safe_rel_path(project, source_perspective.get("preview_image_path") or "")
+        if source_preview_file.is_file():
+            actual_preview_hash = hashlib.sha256(source_preview_file.read_bytes()).digest()
+            if actual_preview_hash != source_preview_hash:
+                raise ValueError("Duplicate verify: source preview file was modified during duplication.")
 
-    links = project_manager.normalize_reference_links(project.settings.get("reference_links"))
-    if any(str(link.get("source_scene2d_perspective_id") or "") == duplicate_perspective_id for link in links):
-        raise ValueError("Duplicate verify: duplicate perspective unexpectedly appears in reference links.")
-
-    meta_path = _meta_path(project, scene_id)
-    if meta_path.is_file():
-        try:
-            meta = _read_json(meta_path)
-            meta_ids = [p["id"] for p in (meta.get("perspectives") or []) if isinstance(p, dict)]
-            if sorted(meta_ids) != sorted(ids):
-                raise ValueError("Duplicate verify: scene meta file disagrees with scenes2d.json perspectives.")
-        except (OSError, json.JSONDecodeError, KeyError, AttributeError):
-            pass
+    references_after = project_manager.normalize_reference_links(project.settings.get("reference_links"))
+    if references_after != references_before:
+        raise ValueError("Duplicate verify: reference links changed during duplication.")
 
 
 def duplicate_perspective(
@@ -1643,6 +1746,14 @@ def duplicate_perspective(
     preview_is_separate = source_preview_str != source_src_str
     source_preview_path = _safe_rel_path(project, source_preview_str) if preview_is_separate else source_file
     copy_preview = source_type == "psd" and preview_is_separate and source_preview_path.is_file()
+
+    # Capture pre-operation state for verification and rollback.
+    source_file_hash = hashlib.sha256(source_file.read_bytes()).digest()
+    source_preview_hash: bytes | None = (
+        hashlib.sha256(source_preview_path.read_bytes()).digest() if copy_preview else None
+    )
+    original_primary_id = str(scene.get("primary_perspective_id") or "")
+    references_before = project_manager.normalize_reference_links(project.settings.get("reference_links"))
 
     new_id = new_uuid()
     timestamp = _now_iso()
@@ -1695,30 +1806,44 @@ def duplicate_perspective(
         scene["updated_at"] = timestamp
         scenes = _replace_scene(scenes, _with_legacy_aliases(scene))
         _save_scenes(project, scenes)
-        _verify_perspective_duplicate(project, scene_id, perspective_id, new_id)
+        _verify_perspective_duplicate(
+            project,
+            scene_id,
+            perspective_id,
+            new_id,
+            source_file_hash=source_file_hash,
+            source_preview_hash=source_preview_hash,
+            original_primary_id=original_primary_id,
+            references_before=references_before,
+        )
 
-    except BaseException:
-        try:
-            _restore_bytes(index_path, index_bytes)
-        except Exception:
-            pass
-        try:
-            _restore_bytes(meta_path, meta_bytes)
-        except Exception:
-            pass
-        if new_dir.is_dir():
-            try:
-                shutil.rmtree(new_dir)
-            except Exception:
-                pass
-        if staging_dir.is_dir():
-            try:
-                shutil.rmtree(staging_dir)
-            except Exception:
-                pass
+    except BaseException as operation_error:
+        rollback_result = _rollback_perspective_duplicate(
+            index_path=index_path,
+            index_bytes=index_bytes,
+            meta_path=meta_path,
+            meta_bytes=meta_bytes,
+            new_dir=new_dir,
+            staging_dir=staging_dir,
+        )
+        if not rollback_result.metadata_verified:
+            raise RuntimeError(
+                "Scene 2D Perspective duplication failed and automatic rollback "
+                "could not be verified. Duplicate recovery files were preserved. "
+                f"Original error: {operation_error!r}"
+            ) from operation_error
+        # Internal copy/save/verification failures are not user-input errors.
+        if isinstance(operation_error, ValueError):
+            raise RuntimeError(
+                f"Scene 2D Perspective duplication failed: {operation_error}"
+            ) from operation_error
         raise
 
-    return _with_legacy_aliases(scene), duplicate, scenes
+    # Re-read from disk after successful save+verify to return canonical state.
+    verified_scenes = list_scenes(project)
+    verified_scene = next(s for s in verified_scenes if s["id"] == scene_id)
+    verified_duplicate = next(p for p in (verified_scene.get("perspectives") or []) if p["id"] == new_id)
+    return _with_legacy_aliases(verified_scene), verified_duplicate, verified_scenes
 
 
 def move_perspective(

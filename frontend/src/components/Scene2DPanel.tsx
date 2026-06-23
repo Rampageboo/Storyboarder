@@ -102,6 +102,7 @@ export function Scene2DPanel({ active = false }: { active?: boolean }) {
   const canvasAreaRef = useRef<HTMLDivElement | null>(null)
   const lastPluginChangeRevisionRef = useRef<number | null>(null)
   const sceneSavingRef = useRef(false)
+  const duplicateInFlightRef = useRef(false)
   const perspectiveSavingRef = useRef(false)
   // Tracks whether the canvas currently has something to zoom — avoids stale closure in wheel handler
   const canWheelZoomRef = useRef(false)
@@ -405,13 +406,17 @@ export function Scene2DPanel({ active = false }: { active?: boolean }) {
   const duplicatePerspective = useCallback(
     async (perspectiveId: string) => {
       if (!selectedScene) return
+      if (duplicateInFlightRef.current) return
+      duplicateInFlightRef.current = true
+      const sourceSceneId = selectedScene.id
       const sourcePerspective = selectedScene.perspectives.find((p) => p.id === perspectiveId) ?? null
       setContextMenu(null)
       setBusy(true)
       try {
         await flushDirtyShots()
-        const payload = await duplicateScene2DPerspective(selectedScene.id, perspectiveId)
+        const payload = await duplicateScene2DPerspective(sourceSceneId, perspectiveId)
         setScenes(payload.scenes)
+        setSelectedSceneId(payload.scene.id)
         setSelectedPerspectiveId(payload.perspective.id)
         setNote(
           `Duplicated "${perspectiveLabel(sourcePerspective)}" as "${payload.perspective.title}".`,
@@ -419,6 +424,7 @@ export function Scene2DPanel({ active = false }: { active?: boolean }) {
       } catch (error) {
         reportError(error)
       } finally {
+        duplicateInFlightRef.current = false
         setBusy(false)
       }
     },

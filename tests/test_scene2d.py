@@ -887,6 +887,372 @@ class Scene2DDuplicatePerspectiveTests(unittest.TestCase):
         status, body = self._duplicate(scene["id"], original_persp["id"])
         self.assertEqual(status, 404, body)
 
+    # ── Failure-injection: preview copy fails ────────────────────────────────
+
+    def test_preview_copy_failure_rolls_back_and_source_intact(self) -> None:
+        """source copy succeeds, preview copy fails → HTTP 500, full rollback."""
+        scene = self._create_scene()
+        original_persp = scene["perspectives"][0]
+        preview_path = self.project_root / original_persp["preview_image_path"]
+        preview_path.write_bytes(MINI_PNG)
+        source_bytes = (self.project_root / original_persp["source_file_path"]).read_bytes()
+        index_before = (self.project_root / "scenes2d" / "scenes2d.json").read_bytes()
+        meta_before = (self.project_root / "scenes2d" / scene["id"] / f"{scene['id']}_meta.json").read_bytes()
+
+        copy2_calls = []
+        real_copy2 = __import__("shutil").copy2
+
+        def patched_copy2(src, dst, **kw):
+            copy2_calls.append(str(dst))
+            # Fail on preview copy (second call is preview.png)
+            if len(copy2_calls) >= 2:
+                raise OSError("forced preview copy failure")
+            return real_copy2(src, dst, **kw)
+
+        with mock.patch("storyboard_tool.scene2d.shutil.copy2", side_effect=patched_copy2):
+            status, body = self._duplicate(scene["id"], original_persp["id"])
+
+        self.assertEqual(status, 500, body)
+        # Source untouched
+        self.assertEqual(
+            (self.project_root / original_persp["source_file_path"]).read_bytes(), source_bytes
+        )
+        # Index and meta restored
+        self.assertEqual(
+            (self.project_root / "scenes2d" / "scenes2d.json").read_bytes(), index_before
+        )
+        self.assertEqual(
+            (self.project_root / "scenes2d" / scene["id"] / f"{scene['id']}_meta.json").read_bytes(),
+            meta_before,
+        )
+        # No leftover duplicate perspective dirs
+        persp_dir = self.project_root / "scenes2d" / scene["id"] / "perspectives"
+        for child in persp_dir.iterdir():
+            if child.name.startswith(".duplicate-"):
+                self.fail(f"Staging dir left after rollback: {child.name}")
+            if _is_uuid(child.name) and child.name != original_persp["id"]:
+                self.fail(f"Unknown perspective dir after rollback: {child.name}")
+        # Original perspective count unchanged
+        listed = _quiet(lambda: self.client.get("/api/project/scenes2d")).json()["scenes"]
+        scene_after = next(s for s in listed if s["id"] == scene["id"])
+        self.assertEqual([p["id"] for p in scene_after["perspectives"]], [original_persp["id"]])
+
+    # ── Failure-injection: verification fails after successful save ───────────
+
+    def test_verify_failure_after_save_restores_metadata_and_removes_dup_dir(self) -> None:
+        from storyboard_tool import scene2d as scene2d_module
+
+        scene = self._create_scene()
+        original_persp = scene["perspectives"][0]
+        source_bytes = (self.project_root / original_persp["source_file_path"]).read_bytes()
+        index_before = (self.project_root / "scenes2d" / "scenes2d.json").read_bytes()
+        meta_before = (self.project_root / "scenes2d" / scene["id"] / f"{scene['id']}_meta.json").read_bytes()
+        settings_before = (self.project_root / "settings.json").read_bytes()
+
+        with mock.patch.object(
+            scene2d_module,
+            "_verify_perspective_duplicate",
+            side_effect=ValueError("forced verify failure"),
+        ):
+            status, body = self._duplicate(scene["id"], original_persp["id"])
+
+        self.assertEqual(status, 500, body)
+        # Metadata restored byte-for-byte
+        self.assertEqual(
+            (self.project_root / "scenes2d" / "scenes2d.json").read_bytes(), index_before
+        )
+        self.assertEqual(
+            (self.project_root / "scenes2d" / scene["id"] / f"{scene['id']}_meta.json").read_bytes(),
+            meta_before,
+        )
+        # Duplicate directory removed
+        persp_dir = self.project_root / "scenes2d" / scene["id"] / "perspectives"
+        for child in persp_dir.iterdir():
+            if _is_uuid(child.name) and child.name != original_persp["id"]:
+                self.fail(f"Duplicate dir not removed after verify failure: {child.name}")
+        # Source unchanged
+        self.assertEqual(
+            (self.project_root / original_persp["source_file_path"]).read_bytes(), source_bytes
+        )
+        # References unchanged
+        self.assertEqual((self.project_root / "settings.json").read_bytes(), settings_before)
+
+    # ── Failure-injection: partial save (meta write fails) ───────────────────
+
+    def test_partial_save_meta_write_failure_rolls_back_both_files(self) -> None:
+        from storyboard_tool import scene2d as scene2d_module
+
+        scene = self._create_scene()
+        original_persp = scene["perspectives"][0]
+        index_before = (self.project_root / "scenes2d" / "scenes2d.json").read_bytes()
+        meta_before = (self.project_root / "scenes2d" / scene["id"] / f"{scene['id']}_meta.json").read_bytes()
+
+        scene_meta_path = str(
+            self.project_root / "scenes2d" / scene["id"] / f"{scene['id']}_meta.json"
+        )
+        real_atomic = scene2d_module.project_manager._atomic_write_json
+        write_calls: list[str] = []
+
+        def patched_atomic_write(path, data):
+            write_calls.append(str(path))
+            # Allow scenes2d.json to be written; fail the scene meta write
+            if str(path) == scene_meta_path and len(write_calls) >= 2:
+                raise OSError("forced meta write failure")
+            return real_atomic(path, data)
+
+        with mock.patch.object(
+            scene2d_module.project_manager,
+            "_atomic_write_json",
+            side_effect=patched_atomic_write,
+        ):
+            status, body = self._duplicate(scene["id"], original_persp["id"])
+
+        self.assertEqual(status, 500, body)
+        # Both metadata files restored
+        self.assertEqual(
+            (self.project_root / "scenes2d" / "scenes2d.json").read_bytes(), index_before
+        )
+        self.assertEqual(
+            (self.project_root / "scenes2d" / scene["id"] / f"{scene['id']}_meta.json").read_bytes(),
+            meta_before,
+        )
+        # Scene unchanged from caller's perspective
+        listed = _quiet(lambda: self.client.get("/api/project/scenes2d")).json()["scenes"]
+        scene_after = next(s for s in listed if s["id"] == scene["id"])
+        self.assertEqual([p["id"] for p in scene_after["perspectives"]], [original_persp["id"]])
+
+    # ── Failure-injection: index rollback fails ───────────────────────────────
+
+    def test_index_rollback_failure_preserves_dup_dir_and_returns_500(self) -> None:
+        from storyboard_tool import scene2d as scene2d_module
+
+        scene = self._create_scene()
+        original_persp = scene["perspectives"][0]
+        new_dirs_seen: list[str] = []
+
+        real_save = scene2d_module._save_scenes
+        save_call_count = [0]
+
+        def patched_save(project, scenes):
+            save_call_count[0] += 1
+            return real_save(project, scenes)
+
+        def patched_restore(path, data):
+            # Fail restoration of scenes2d.json specifically
+            if "scenes2d.json" in str(path):
+                raise OSError("forced index restore failure")
+            real_restore = scene2d_module._restore_bytes.__wrapped__ if hasattr(scene2d_module._restore_bytes, "__wrapped__") else None
+            # Use original restore for meta
+            import tempfile as _tf
+            import os as _os
+            if data is None:
+                if path.exists():
+                    path.unlink()
+                return
+            path.parent.mkdir(parents=True, exist_ok=True)
+            fd, tmp = _tf.mkstemp(dir=str(path.parent), prefix=str(path.name) + ".", suffix=".tmp")
+            try:
+                with _os.fdopen(fd, "wb") as f:
+                    f.write(data)
+                _os.replace(tmp, path)
+            except BaseException:
+                try:
+                    _os.unlink(tmp)
+                except OSError:
+                    pass
+                raise
+
+        # Track new_dir creation via the staging rename approach
+        real_rename = scene2d_module.Path.rename if hasattr(scene2d_module.Path, "rename") else None
+
+        with mock.patch("storyboard_tool.scene2d._save_scenes", side_effect=patched_save):
+            with mock.patch("storyboard_tool.scene2d._verify_perspective_duplicate",
+                            side_effect=ValueError("forced verify failure")):
+                with mock.patch("storyboard_tool.scene2d._restore_bytes", side_effect=patched_restore):
+                    status, body = self._duplicate(scene["id"], original_persp["id"])
+
+        self.assertEqual(status, 500, body)
+        # The error body should mention rollback failure or be a 500
+        # Duplicate dir must be PRESERVED (not deleted) because index restore failed
+        persp_dir = self.project_root / "scenes2d" / scene["id"] / "perspectives"
+        new_uuid_dirs = [
+            c for c in persp_dir.iterdir()
+            if _is_uuid(c.name) and c.name != original_persp["id"]
+        ]
+        self.assertGreater(len(new_uuid_dirs), 0, "Expected duplicate dir to be preserved after rollback failure")
+
+    # ── Failure-injection: scene meta rollback fails ──────────────────────────
+
+    def test_meta_rollback_failure_preserves_dup_dir_and_returns_500(self) -> None:
+        from storyboard_tool import scene2d as scene2d_module
+
+        scene = self._create_scene()
+        original_persp = scene["perspectives"][0]
+        source_bytes = (self.project_root / original_persp["source_file_path"]).read_bytes()
+        scene_meta_path = str(
+            self.project_root / "scenes2d" / scene["id"] / f"{scene['id']}_meta.json"
+        )
+
+        def patched_restore(path, data):
+            if str(path) == scene_meta_path:
+                raise OSError("forced meta restore failure")
+            import tempfile as _tf
+            import os as _os
+            if data is None:
+                if path.exists():
+                    path.unlink()
+                return
+            path.parent.mkdir(parents=True, exist_ok=True)
+            fd, tmp = _tf.mkstemp(dir=str(path.parent), prefix=str(path.name) + ".", suffix=".tmp")
+            try:
+                with _os.fdopen(fd, "wb") as f:
+                    f.write(data)
+                _os.replace(tmp, path)
+            except BaseException:
+                try:
+                    _os.unlink(tmp)
+                except OSError:
+                    pass
+                raise
+
+        with mock.patch("storyboard_tool.scene2d._verify_perspective_duplicate",
+                        side_effect=ValueError("forced verify failure")):
+            with mock.patch("storyboard_tool.scene2d._restore_bytes", side_effect=patched_restore):
+                status, body = self._duplicate(scene["id"], original_persp["id"])
+
+        self.assertEqual(status, 500, body)
+        # Source must still be intact
+        self.assertEqual(
+            (self.project_root / original_persp["source_file_path"]).read_bytes(), source_bytes
+        )
+        # Duplicate dir preserved because metadata verification failed
+        persp_dir = self.project_root / "scenes2d" / scene["id"] / "perspectives"
+        new_uuid_dirs = [
+            c for c in persp_dir.iterdir()
+            if _is_uuid(c.name) and c.name != original_persp["id"]
+        ]
+        self.assertGreater(len(new_uuid_dirs), 0, "Expected dup dir preserved after meta restore failure")
+
+    # ── Failure-injection: malformed scene meta fails verifier ────────────────
+
+    def test_malformed_scene_meta_fails_verification_and_rolls_back(self) -> None:
+        from storyboard_tool import scene2d as scene2d_module
+
+        scene = self._create_scene()
+        original_persp = scene["perspectives"][0]
+        index_before = (self.project_root / "scenes2d" / "scenes2d.json").read_bytes()
+        meta_before = (self.project_root / "scenes2d" / scene["id"] / f"{scene['id']}_meta.json").read_bytes()
+
+        real_save = scene2d_module._save_scenes
+
+        def save_then_corrupt(project, scenes):
+            result = real_save(project, scenes)
+            # Corrupt the scene meta immediately after saving
+            meta_file = (
+                self.project_root / "scenes2d" / scene["id"] / f"{scene['id']}_meta.json"
+            )
+            meta_file.write_bytes(b"not valid json{{")
+            return result
+
+        with mock.patch("storyboard_tool.scene2d._save_scenes", side_effect=save_then_corrupt):
+            status, body = self._duplicate(scene["id"], original_persp["id"])
+
+        self.assertEqual(status, 500, body)
+        # Meta restored to original bytes
+        self.assertEqual(
+            (self.project_root / "scenes2d" / scene["id"] / f"{scene['id']}_meta.json").read_bytes(),
+            meta_before,
+        )
+        # Index also restored
+        self.assertEqual(
+            (self.project_root / "scenes2d" / "scenes2d.json").read_bytes(), index_before
+        )
+        # Duplicate dir removed after verified rollback
+        persp_dir = self.project_root / "scenes2d" / scene["id"] / "perspectives"
+        for child in persp_dir.iterdir():
+            if _is_uuid(child.name) and child.name != original_persp["id"]:
+                self.fail(f"Duplicate dir should be removed after verified rollback: {child.name}")
+
+    # ── Failure-injection: perspective order mismatch fails verifier ──────────
+
+    def test_order_mismatch_in_scene_meta_fails_verification(self) -> None:
+        """Verifier must reject Perspective order differences (not sorted-ID comparison)."""
+        from storyboard_tool import scene2d as scene2d_module
+
+        scene = self._create_scene()
+        # Add a second perspective so we have 2 to reorder
+        second = self._create_perspective(scene["id"], "Second")
+        original_persp = scene["perspectives"][0]
+        index_before = (self.project_root / "scenes2d" / "scenes2d.json").read_bytes()
+        meta_before = (self.project_root / "scenes2d" / scene["id"] / f"{scene['id']}_meta.json").read_bytes()
+
+        real_save = scene2d_module._save_scenes
+
+        def save_then_swap_meta_order(project, scenes_arg):
+            result = real_save(project, scenes_arg)
+            meta_file = self.project_root / "scenes2d" / scene["id"] / f"{scene['id']}_meta.json"
+            import json as _json
+            meta = _json.loads(meta_file.read_text(encoding="utf-8"))
+            # Swap perspective order in meta only (not in scenes2d.json)
+            if isinstance(meta.get("perspectives"), list) and len(meta["perspectives"]) >= 2:
+                meta["perspectives"] = list(reversed(meta["perspectives"]))
+                meta_file.write_text(_json.dumps(meta), encoding="utf-8")
+            return result
+
+        with mock.patch("storyboard_tool.scene2d._save_scenes", side_effect=save_then_swap_meta_order):
+            status, body = self._duplicate(scene["id"], original_persp["id"])
+
+        self.assertEqual(status, 500, body)
+        # Meta restored
+        self.assertEqual(
+            (self.project_root / "scenes2d" / scene["id"] / f"{scene['id']}_meta.json").read_bytes(),
+            meta_before,
+        )
+        # Duplicate dir removed after verified rollback
+        persp_dir = self.project_root / "scenes2d" / scene["id"] / "perspectives"
+        known = {original_persp["id"], second["id"]}
+        for child in persp_dir.iterdir():
+            if _is_uuid(child.name) and child.name not in known:
+                self.fail(f"Duplicate dir should be removed: {child.name}")
+
+    # ── Failure-injection: path mismatch in scene meta fails verifier ─────────
+
+    def test_path_mismatch_in_scene_meta_fails_verification(self) -> None:
+        """Verifier must reject differing source_file_path in scene meta."""
+        from storyboard_tool import scene2d as scene2d_module
+
+        scene = self._create_scene()
+        original_persp = scene["perspectives"][0]
+        index_before = (self.project_root / "scenes2d" / "scenes2d.json").read_bytes()
+        meta_before = (self.project_root / "scenes2d" / scene["id"] / f"{scene['id']}_meta.json").read_bytes()
+
+        real_save = scene2d_module._save_scenes
+
+        def save_then_corrupt_path(project, scenes_arg):
+            result = real_save(project, scenes_arg)
+            meta_file = self.project_root / "scenes2d" / scene["id"] / f"{scene['id']}_meta.json"
+            import json as _json
+            meta = _json.loads(meta_file.read_text(encoding="utf-8"))
+            # Corrupt source_file_path of the last perspective (the duplicate)
+            perspectives = meta.get("perspectives") or []
+            if perspectives:
+                perspectives[-1]["source_file_path"] = "scenes2d/wrong/path/source.psd"
+                meta_file.write_text(_json.dumps(meta), encoding="utf-8")
+            return result
+
+        with mock.patch("storyboard_tool.scene2d._save_scenes", side_effect=save_then_corrupt_path):
+            status, body = self._duplicate(scene["id"], original_persp["id"])
+
+        self.assertEqual(status, 500, body)
+        # Both files restored
+        self.assertEqual(
+            (self.project_root / "scenes2d" / "scenes2d.json").read_bytes(), index_before
+        )
+        self.assertEqual(
+            (self.project_root / "scenes2d" / scene["id"] / f"{scene['id']}_meta.json").read_bytes(),
+            meta_before,
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
