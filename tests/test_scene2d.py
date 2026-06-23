@@ -1253,6 +1253,109 @@ class Scene2DDuplicatePerspectiveTests(unittest.TestCase):
             meta_before,
         )
 
+    # ── P2: source preview disappears during duplication ──────────────────────
+
+    def test_source_preview_disappears_during_dup_fails_verification(self) -> None:
+        """Verifier must raise if source preview existed before but is gone after save."""
+        from storyboard_tool import scene2d as scene2d_module
+
+        scene = self._create_scene()
+        original_persp = scene["perspectives"][0]
+        preview_path = self.project_root / original_persp["preview_image_path"]
+        preview_path.write_bytes(MINI_PNG)
+        index_before = (self.project_root / "scenes2d" / "scenes2d.json").read_bytes()
+        meta_before = (self.project_root / "scenes2d" / scene["id"] / f"{scene['id']}_meta.json").read_bytes()
+
+        real_save = scene2d_module._save_scenes
+
+        def save_then_delete_preview(project, scenes_arg):
+            result = real_save(project, scenes_arg)
+            preview_path.unlink(missing_ok=True)
+            return result
+
+        with mock.patch("storyboard_tool.scene2d._save_scenes", side_effect=save_then_delete_preview):
+            status, body = self._duplicate(scene["id"], original_persp["id"])
+
+        self.assertEqual(status, 500, body)
+        # Metadata restored
+        self.assertEqual(
+            (self.project_root / "scenes2d" / "scenes2d.json").read_bytes(), index_before
+        )
+        self.assertEqual(
+            (self.project_root / "scenes2d" / scene["id"] / f"{scene['id']}_meta.json").read_bytes(),
+            meta_before,
+        )
+        # Duplicate dir removed after verified rollback
+        persp_dir = self.project_root / "scenes2d" / scene["id"] / "perspectives"
+        for child in persp_dir.iterdir():
+            if _is_uuid(child.name) and child.name != original_persp["id"]:
+                self.fail(f"Duplicate dir should be removed after verified rollback: {child.name}")
+
+    # ── P2: OSError during rollback verification ──────────────────────────────
+
+    def test_oserror_in_bytes_match_sets_metadata_verified_false(self) -> None:
+        """If reading the restored file raises OSError, metadata_verified must be False."""
+        from storyboard_tool import scene2d as scene2d_module
+
+        scene = self._create_scene()
+        original_persp = scene["perspectives"][0]
+        real_bytes_match = scene2d_module._bytes_match_original
+        calls = [0]
+
+        def patched_bytes_match(path, original):
+            calls[0] += 1
+            if calls[0] >= 1:
+                raise OSError("forced read failure during verify")
+            return real_bytes_match(path, original)
+
+        with mock.patch("storyboard_tool.scene2d._verify_perspective_duplicate",
+                        side_effect=ValueError("forced verify failure")):
+            with mock.patch("storyboard_tool.scene2d._bytes_match_original",
+                            side_effect=patched_bytes_match):
+                status, body = self._duplicate(scene["id"], original_persp["id"])
+
+        # OSError from _bytes_match_original must NOT escape — should still return 500
+        self.assertEqual(status, 500, body)
+        # metadata_verified=False → duplicate dir must be preserved (not deleted)
+        persp_dir = self.project_root / "scenes2d" / scene["id"] / "perspectives"
+        new_uuid_dirs = [
+            c for c in persp_dir.iterdir()
+            if _is_uuid(c.name) and c.name != original_persp["id"]
+        ]
+        self.assertGreater(len(new_uuid_dirs), 0, "Expected dup dir preserved when metadata_verified=False")
+
+    # ── P2: cleanup failure after verified rollback ────────────────────────────
+
+    def test_cleanup_failure_after_verified_rollback_reports_orphan_dir(self) -> None:
+        """If shutil.rmtree(new_dir) fails after verified rollback, error must mention cleanup."""
+        from storyboard_tool import scene2d as scene2d_module
+
+        scene = self._create_scene()
+        original_persp = scene["perspectives"][0]
+        real_rmtree = __import__("shutil").rmtree
+        rmtree_calls: list[str] = []
+
+        def patched_rmtree(path, *args, **kwargs):
+            rmtree_calls.append(str(path))
+            # Fail the first rmtree call (new_dir removal)
+            if len(rmtree_calls) == 1:
+                raise OSError("forced rmtree failure")
+            return real_rmtree(path, *args, **kwargs)
+
+        with mock.patch("storyboard_tool.scene2d._verify_perspective_duplicate",
+                        side_effect=ValueError("forced verify failure")):
+            with mock.patch("storyboard_tool.scene2d.shutil.rmtree", side_effect=patched_rmtree):
+                status, body = self._duplicate(scene["id"], original_persp["id"])
+
+        self.assertEqual(status, 500, body)
+        # metadata_verified=True but duplicate_files_removed=False → new dir is preserved
+        persp_dir = self.project_root / "scenes2d" / scene["id"] / "perspectives"
+        new_uuid_dirs = [
+            c for c in persp_dir.iterdir()
+            if _is_uuid(c.name) and c.name != original_persp["id"]
+        ]
+        self.assertGreater(len(new_uuid_dirs), 0, "Expected orphan dup dir to be preserved after cleanup failure")
+
 
 if __name__ == "__main__":
     unittest.main()

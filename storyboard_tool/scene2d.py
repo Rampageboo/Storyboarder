@@ -321,10 +321,14 @@ def _rollback_perspective_duplicate(
     except Exception:
         LOGGER.exception("Scene 2D duplicate rollback: failed to restore scene meta JSON")
 
-    result.metadata_verified = (
-        _bytes_match_original(index_path, index_bytes)
-        and _bytes_match_original(meta_path, meta_bytes)
-    )
+    try:
+        result.metadata_verified = (
+            _bytes_match_original(index_path, index_bytes)
+            and _bytes_match_original(meta_path, meta_bytes)
+        )
+    except OSError:
+        LOGGER.exception("Scene 2D duplicate rollback: failed to verify restored metadata")
+        result.metadata_verified = False
 
     if result.metadata_verified:
         if new_dir.is_dir():
@@ -1718,10 +1722,11 @@ def _verify_perspective_duplicate(
         raise ValueError("Duplicate verify: source perspective file was modified during duplication.")
     if source_preview_hash is not None:
         source_preview_file = _safe_rel_path(project, source_perspective.get("preview_image_path") or "")
-        if source_preview_file.is_file():
-            actual_preview_hash = hashlib.sha256(source_preview_file.read_bytes()).digest()
-            if actual_preview_hash != source_preview_hash:
-                raise ValueError("Duplicate verify: source preview file was modified during duplication.")
+        if not source_preview_file.is_file():
+            raise ValueError("Duplicate verify: source preview disappeared during duplication.")
+        actual_preview_hash = hashlib.sha256(source_preview_file.read_bytes()).digest()
+        if actual_preview_hash != source_preview_hash:
+            raise ValueError("Duplicate verify: source preview was modified during duplication.")
 
     references_after = project_manager.normalize_reference_links(project.settings.get("reference_links"))
     if references_after != references_before:
@@ -1830,6 +1835,12 @@ def duplicate_perspective(
             raise RuntimeError(
                 "Scene 2D Perspective duplication failed and automatic rollback "
                 "could not be verified. Duplicate recovery files were preserved. "
+                f"Original error: {operation_error!r}"
+            ) from operation_error
+        if not rollback_result.duplicate_files_removed:
+            raise RuntimeError(
+                "Scene 2D Perspective duplication failed. Metadata was restored "
+                "but the duplicate directory could not be removed. "
                 f"Original error: {operation_error!r}"
             ) from operation_error
         # Internal copy/save/verification failures are not user-input errors.
