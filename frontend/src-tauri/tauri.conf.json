@@ -1,0 +1,36 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Storyboard Tool",
+  "version": "0.1.0",
+  "identifier": "com.storyboardtool.app",
+  "build": {
+    "beforeDevCommand": "npm run tauri:vite-dev",
+    "devUrl": "http://localhost:1420",
+    "beforeBuildCommand": "npm run tauri:vite-build",
+    "frontendDist": "../dist-tauri"
+  },
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "Storyboard Tool",
+        "width": 1440,
+        "height": 900,
+        "minWidth": 1024,
+        "minHeight": 680,
+        "resizable": true,
+        "decorations": true
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "icon": [
+      "../../storyboard_tool/assets/icon.ico"
+    ]
+  }
+}

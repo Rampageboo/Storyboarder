@@ -1,3 +1,5 @@
+import { apiBase } from './base'
+
 export class ApiError extends Error {
   readonly status: number
   readonly code: string | undefined
@@ -42,7 +44,7 @@ async function readErrorMessage(response: Response): Promise<{ message: string; 
 export async function requestJson<T>(url: string, options: RequestOptions = {}): Promise<T> {
   const { body, headers: customHeaders, ...fetchOptions } = options
   const headers = new Headers(customHeaders)
-  const response = await fetch(url, {
+  const response = await fetch(apiBase() + url, {
     ...fetchOptions,
     headers,
     body: buildBody(body, headers),

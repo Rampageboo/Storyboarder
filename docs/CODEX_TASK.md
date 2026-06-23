@@ -1,4 +1,4 @@
-# CODEX_TASK.md — Harden desktop focus state and remove remaining UUID/dead Quick Note UI
+# CODEX_TASK.md — Harden Scene 2D Perspective duplication rollback and UI state
 
 Repository:
 
@@ -9,808 +9,807 @@ Rampageboo/Storyboarder
 Base commit:
 
 ```text
-444776d6184eb2815ffbb5d8fae8b51f1b09ae8a
+861f60f3b5d4b0a0a9903d504dff2a2f2087cdf3
 ```
 
-## Goal
+## Objective
 
-Complete a focused reliability and cleanup pass after the startup-splash and Photoshop UXP UI changes.
+Finish the reliability pass for the existing Scene 2D **Duplicate perspective** feature.
 
-The current implementation already fixes the primary window-geometry regression:
+The current implementation already correctly provides:
 
 ```text
-normal Storyboarder window
-→ Photoshop Export preview
-→ Storyboarder keeps its custom size and position
-
-maximized Storyboarder window
-→ Photoshop Export preview
-→ Storyboarder remains maximized
+Right-click Perspective
+→ Duplicate perspective
+→ new UUID
+→ independent source/preview files
+→ inserted immediately after source
+→ duplicate selected
+→ Primary unchanged
+→ References unchanged
 ```
 
-Preserve that behavior.
+Preserve all of that.
 
-Fix the remaining issues:
+Fix these remaining issues:
 
 ```text
-1. Track the actual current minimized/maximized/restored state of the pywebview window.
-
-2. Restore the window only when it is genuinely minimized.
-
-3. Remove the incorrect assumption that pywebview Window exposes a callable focus() method.
-
-4. Make /api/app/focus diagnostics reflect the real operations performed.
-
-5. Remove Shot UUIDs from normal connection and sync status text.
-
-6. Keep Quick Note intentionally removed and delete its remaining dead frontend/plugin code.
+1. Rollback restoration failures are currently swallowed.
+2. Duplicate files may be deleted even when metadata rollback was incomplete.
+3. The duplicate verifier does not strictly verify Scene meta against scenes2d.json.
+4. The duplicate verifier ignores malformed/missing Scene meta.
+5. The frontend can end on the wrong Scene if the user switches Scene while duplication is running.
+6. Rapid repeated actions need a hard in-flight guard.
+7. Add failure-injection tests for partial save, verification failure, and rollback failure.
 ```
 
-This is not a UI redesign.
+This is a localized reliability task.
+
+Do not redesign Scene 2D.
 
 ---
 
-# Product decisions to preserve
+# Product behavior to preserve
 
 Do not change:
 
 ```text
-Starter minimum-visible timing
-Starter Ready state
-Starter fade behavior
-Starter appearance
-
-current Storyboard Work layout
-current Storyboard Bridge layout
-Shot and Scene 2D shared panel structure
-Shot dropdown labels
-Scene 2D navigation
-export sections
-status buttons
-onion skin
-Advanced section
-
-Shot export behavior
-Scene 2D export behavior
-Focus Storyboarder after export checkbox
-heartbeat logic
-work-context logic
-filesystem paths
-UUID identity
+left Scene group list
+horizontal Perspective strip
+floating Inspector
+floating zoom controls
+drag-to-reorder
+Move to scene
+Set primary
+Add to References
+Open in Photoshop
+Refresh preview
+existing ContextMenu component
 ```
 
-Quick Note has intentionally been removed because it caused Shot and Scene 2D layouts to have inconsistent heights.
+Do not add whole-Scene duplication.
 
-Do not reintroduce Quick Note in this task.
-
----
-
-# Part 1 — Track the live desktop window state
-
-## Current issue
-
-The focus helper currently reads:
-
-```python
-window.minimized
-```
-
-as though it represents the current operating-system window state.
-
-In pywebview 6.2.1 this is primarily an initial window configuration value and is not a reliable live minimized-state query.
-
-pywebview does expose window events:
+Do not automatically:
 
 ```text
-window.events.minimized
-window.events.maximized
-window.events.restored
-window.events.shown
+open Photoshop
+make the duplicate Primary
+add the duplicate to References
+move it to another Scene
 ```
-
-Use these events to maintain application-owned runtime state.
 
 ---
 
-## Add explicit runtime state
+# Part 1 — Make rollback explicit and verifiable
 
-In the desktop startup path, initialize:
+## Current problem
 
-```python
-app.state.main_window_state = "normal"
-```
-
-Allowed values:
-
-```text
-normal
-maximized
-minimized
-```
-
-A small dataclass or enum is acceptable, but a validated string is sufficient.
-
-Attach handlers after creating the main pywebview window:
+The duplicate operation currently behaves approximately like:
 
 ```python
-def _mark_minimized(*_args):
-    app.state.main_window_state = "minimized"
-
-def _mark_maximized(*_args):
-    app.state.main_window_state = "maximized"
-
-def _mark_restored(*_args):
-    app.state.main_window_state = "normal"
-
-def _mark_shown(*_args):
-    if app.state.main_window_state not in {"maximized", "minimized"}:
-        app.state.main_window_state = "normal"
-```
-
-Register:
-
-```python
-window.events.minimized += _mark_minimized
-window.events.maximized += _mark_maximized
-window.events.restored += _mark_restored
-window.events.shown += _mark_shown
-```
-
-Use the event-registration style already supported by this project and pywebview version.
-
-Do not resize or move the window inside these handlers.
-
----
-
-## Keep state consistent after programmatic restore
-
-When the focus helper successfully restores a minimized window:
-
-```python
-app.state.main_window_state = "normal"
-```
-
-Do not wait indefinitely for a later event before updating state.
-
-If restore fails, keep the state as `minimized`.
-
----
-
-# Part 2 — Refactor desktop focus helper around real pywebview behavior
-
-## Current incorrect assumption
-
-The current helper tries:
-
-```python
-window.focus()
-```
-
-Real pywebview `Window` uses `focus` as a configuration value; it is not reliably a callable public focus method.
-
-On the Windows backend, `window.show()` already performs the equivalent of:
-
-```text
-Show
-Activate
-```
-
-Do not model tests around a fake callable `window.focus()` API.
-
----
-
-## Required helper contract
-
-Refactor to something equivalent to:
-
-```python
-def _focus_desktop_window(
-    window,
-    *,
-    window_state: str = "normal",
-) -> dict[str, Any]:
-    ...
-```
-
-The helper must:
-
-```text
-1. Restore only when window_state == "minimized".
-2. Never restore a normal window.
-3. Never restore a maximized window.
-4. Call show() as the best-effort visibility/activation request.
-5. Never call resize(), move(), maximize(), or an assumed focus() method.
-6. Never fail the completed Photoshop export merely because activation failed.
-```
-
-Suggested implementation behavior:
-
-```python
-restored = False
-shown = False
-activation_requested = False
-errors = []
-
-if window_state == "minimized":
-    try:
-        window.restore()
-        restored = True
-    except Exception as exc:
-        errors.append("restore_failed")
-
 try:
-    window.show()
-    shown = True
-    activation_requested = True
+    copy files
+    save metadata
+    verify
+except BaseException:
+    try:
+        restore index
+    except:
+        pass
+
+    try:
+        restore Scene meta
+    except:
+        pass
+
+    delete duplicate files
+    raise
+```
+
+This is unsafe.
+
+Possible result:
+
+```text
+metadata save succeeds
+→ later verification fails
+→ metadata restore fails
+→ duplicate folder is still deleted
+→ scenes2d.json may reference files that no longer exist
+```
+
+Do not silently swallow rollback failures.
+
+---
+
+## Required rollback result
+
+Add a small result structure, for example:
+
+```python
+@dataclass
+class DuplicateRollbackResult:
+    index_restored: bool = False
+    meta_restored: bool = False
+    metadata_verified: bool = False
+    duplicate_files_removed: bool = False
+```
+
+A dictionary is also acceptable, but fields must be explicit.
+
+Add a helper such as:
+
+```python
+def _rollback_perspective_duplicate(
+    *,
+    index_path: Path,
+    index_bytes: bytes | None,
+    meta_path: Path,
+    meta_bytes: bytes | None,
+    new_dir: Path,
+    staging_dir: Path,
+) -> DuplicateRollbackResult:
+    ...
+```
+
+---
+
+# Part 2 — Restore and verify metadata before deleting files
+
+Rollback sequence must be:
+
+```text
+1. Attempt to restore scenes2d.json.
+2. Attempt to restore the Scene meta JSON.
+3. Verify both restored files exactly match their pre-operation state.
+4. Only after metadata restoration is verified:
+   remove new duplicate directory
+   remove staging directory
+5. If metadata restoration cannot be verified:
+   preserve duplicate/staging files
+   report rollback failure
+```
+
+Use byte-level verification because original bytes are already captured:
+
+```python
+def _bytes_match_original(path: Path, original: bytes | None) -> bool:
+    if original is None:
+        return not path.exists()
+    return path.is_file() and path.read_bytes() == original
+```
+
+Required:
+
+```text
+index_restored = byte-identical or correctly absent
+meta_restored = byte-identical or correctly absent
+metadata_verified = both true
+```
+
+Do not consider rollback complete merely because `_restore_bytes()` returned without throwing.
+
+---
+
+## File cleanup rule
+
+Only remove:
+
+```text
+new UUID Perspective directory
+.duplicate-<operation-id> staging directory
+```
+
+when:
+
+```python
+rollback_result.metadata_verified is True
+```
+
+If restoration is incomplete:
+
+```text
+do not delete new_dir
+do not delete staging_dir unless it is definitely unrelated to persisted metadata
+```
+
+Keeping extra files is safer than leaving metadata pointing to deleted files.
+
+Hidden staging folders are not loaded as Perspectives, so preserving one after rollback failure is acceptable.
+
+---
+
+# Part 3 — Report both operation and rollback errors
+
+Preserve the original operation error.
+
+When rollback also fails, raise a clear combined error.
+
+Suggested pattern:
+
+```python
+except BaseException as operation_error:
+    rollback_result = ...
+    if not rollback_result.metadata_verified:
+        raise RuntimeError(
+            "Scene 2D Perspective duplication failed and automatic rollback "
+            "could not be verified. Duplicate recovery files were preserved. "
+            f"Original error: {operation_error!r}"
+        ) from operation_error
+    raise
+```
+
+Log detailed rollback exceptions with `LOGGER.exception()` or equivalent.
+
+Do not use:
+
+```python
 except Exception:
-    errors.append("show_failed")
+    pass
 ```
 
-Do not call `window.restore()` when `window_state` is `normal` or `maximized`.
+for metadata rollback.
+
+The API may still return HTTP 500 for unexpected copy/save/verification failures.
+
+Do not convert rollback corruption into a misleading HTTP 400.
 
 ---
 
-# Part 3 — Update method_app_focus
+# Part 4 — Strict duplicate verification
 
-Use the application-maintained state:
-
-```python
-window_state = getattr(
-    self.app.state,
-    "main_window_state",
-    "normal",
-)
-```
-
-Then call the focus helper.
-
-After a successful minimized restore:
+Strengthen:
 
 ```python
-self.app.state.main_window_state = "normal"
+_verify_perspective_duplicate(...)
 ```
 
-Return structured diagnostics such as:
+The verifier must treat these as failures:
 
-```json
-{
-  "ok": true,
-  "shown": true,
-  "activation_requested": true,
-  "restored_from_minimized": false,
-  "window_state_before": "maximized",
-  "window_state_after": "maximized"
-}
+```text
+scenes2d.json missing
+scenes2d.json malformed
+Scene missing from index
+Scene meta missing
+Scene meta malformed
+Scene meta is not an object
+Perspective order differs
+Primary differs
+source/preview paths differ
+duplicate metadata differs
 ```
 
-For a minimized window successfully restored:
+Do not suppress Scene meta parsing failures.
 
-```json
-{
-  "ok": true,
-  "shown": true,
-  "activation_requested": true,
-  "restored_from_minimized": true,
-  "window_state_before": "minimized",
-  "window_state_after": "normal"
-}
-```
-
-Do not claim:
-
-```json
-"focused": true
-```
-
-unless there is a real API result proving focus.
-
-For backward compatibility, `focused` may remain in the response, but define it conservatively:
+Remove logic equivalent to:
 
 ```python
-focused = activation_requested
+except (...):
+    pass
 ```
 
-and document that it means an activation request was issued, not that the OS guaranteed foreground focus.
-
-Alternatively deprecate it while keeping the field.
-
-Do not expose native handles.
+from required persistence verification.
 
 ---
 
-# Part 4 — Preserve geometry explicitly
+## Compare canonical Scene metadata
 
-Before performing the activation request, optionally read the current geometry for diagnostics only:
-
-```python
-width
-height
-x
-y
-```
-
-Do not write it back during the ordinary focus path.
-
-The focus implementation must never call:
+Read the target Scene independently from:
 
 ```text
-resize
-set_window_size
-move
-maximize
-restore for normal/maximized windows
+scenes2d/scenes2d.json
+scenes2d/<scene-id>/<scene-id>_meta.json
 ```
 
-Acceptance behavior:
+Normalize both using the existing Scene normalization logic.
+
+Then compare the complete canonical Scene payload, including:
 
 ```text
-custom normal size:
-  unchanged
-
-custom normal position:
-  unchanged
-
-maximized:
-  remains maximized
-
-minimized:
-  restored to its previous normal geometry when supported
+Scene id
+title
+description
+linked_scene3d_id
+primary_perspective_id
+can_be_reference
+Perspective order
+Perspective IDs
+titles
+types
+source_file_path
+preview_image_path
+linked_scene3d_id
+linked_scene3d_view
+created_at
+updated_at
 ```
 
-Do not reset a restored window to the application’s initial 1440 × 900 dimensions.
+Do not sort Perspective IDs before comparison.
 
----
-
-# Part 5 — Correct desktop-focus tests
-
-Replace fake tests that expose a callable:
-
-```python
-window.focus
-```
-
-with a fake matching the real pywebview surface:
-
-```python
-window.restore = MagicMock()
-window.show = MagicMock()
-window.resize = MagicMock()
-window.move = MagicMock()
-window.maximize = MagicMock()
-```
-
-There should be no fake callable `focus()`.
-
----
-
-## Required test cases
-
-### Normal state
-
-```python
-result = _focus_desktop_window(window, window_state="normal")
-```
-
-Assert:
-
-```text
-restore not called
-show called once
-resize not called
-move not called
-maximize not called
-restored_from_minimized == false
-```
-
-### Maximized state
-
-```python
-result = _focus_desktop_window(window, window_state="maximized")
-```
-
-Assert:
-
-```text
-restore not called
-show called once
-window_state_after remains maximized
-```
-
-### Minimized state
-
-```python
-result = _focus_desktop_window(window, window_state="minimized")
-```
-
-Assert:
-
-```text
-restore called once
-show called once
-restored_from_minimized == true
-window_state_after == normal
-```
-
-### Restore failure
-
-Assert:
-
-```text
-show is still attempted
-restored_from_minimized == false
-window state does not falsely become normal
-structured result returned
-```
-
-### Show failure
-
-Assert:
-
-```text
-no exception escapes
-activation_requested == false
-geometry methods remain untouched
-```
-
----
-
-# Part 6 — Test desktop event tracking
-
-Add a focused helper for registering or updating state so the logic can be tested without launching an actual WinForms desktop.
-
-Suggested pure functions:
-
-```python
-def _set_main_window_state(app, state: str) -> None:
-    ...
-
-def _get_main_window_state(app) -> str:
-    ...
-```
-
-Test:
-
-```text
-shown from unknown → normal
-minimized → minimized
-restored → normal
-maximized → maximized
-shown must not incorrectly replace maximized with normal
-```
-
-Where practical, use fake event objects to confirm the handlers are attached.
-
-Do not require a visible GUI during pytest.
-
----
-
-# Part 7 — Remove UUID from normal Plugin connection text
-
-## Current issue
-
-The Bridge connection row still uses the active Shot ID:
-
-```js
-const label = shotId || live.project_name || "project";
-setLinkStatus(`Linked · ${label}`);
-```
-
-For UUID-based shots this displays unreadable values.
-
-Normal UI must never show raw Shot UUIDs.
-
----
-
-## Required connection text
-
-The compact connection row should always describe the project connection:
-
-```text
-Linked · Storyboard_Project
-```
-
-Use:
-
-```js
-const projectLabel =
-  context?.project_name ||
-  live.project_name ||
-  "Storyboarder";
-
-setLinkStatus(`Linked · ${projectLabel}`);
-```
-
-Do not substitute the active Shot ID.
-
-Scene 2D and Shot mode should use the same project-level connection text.
-
----
-
-# Part 8 — Human-readable sync status
-
-Replace:
-
-```text
-Synced: <shot UUID>
-```
-
-with:
-
-```text
-Synced · 16. Untitled shot
-```
-
-or:
-
-```text
-Synced · 4. Look at the moon
-```
-
-Use existing helpers:
-
-```js
-shotWorkItemById()
-formatShotDisplayLabel()
-shotDisplayLabel()
-```
+Ordering is meaningful.
 
 Suggested:
 
-```js
-const workItem = shotWorkItemById(shotId);
-const displayLabel = workItem
-  ? formatShotDisplayLabel(workItem)
-  : shotDisplayLabel(shotId, currentShotIndex(), currentShotFromProjectData()?.title);
+```python
+index_scene = _normalize_scene(index_scene_raw, legacy=True)
+meta_scene = _normalize_scene(meta_raw, legacy=True)
 
-setStatus(`Synced · ${displayLabel}`);
+if index_scene != meta_scene:
+    raise ValueError("Duplicate verify: Scene meta disagrees with scenes2d.json.")
 ```
 
-Do not expose the UUID as a fallback.
-
-When no semantic label is available:
-
-```text
-Synced · Shot
-```
-
-is preferable to a UUID.
-
-Raw IDs may appear only inside Advanced diagnostics or console logs.
+Be careful not to call migration or recovery logic that rewrites files merely to verify them.
 
 ---
 
-# Part 9 — Remove remaining normal-UI UUID fallbacks
+# Part 5 — Verify original data was unchanged
 
-Audit visible text paths including:
-
-```text
-connection row
-sync status
-focused-tab status
-open-tab errors
-current work indicator
-Shot selector
-Shot card
-```
-
-User-facing success text should use:
+Before duplication, capture:
 
 ```text
-Shot number
-Shot title
-Perspective title
-Scene title
+source file bytes or SHA-256
+source preview bytes or SHA-256 when present
+original Primary ID
+canonical Reference links
 ```
 
-not UUID.
+After save, verify:
 
-Internal logs may retain canonical IDs.
+```text
+source file still exists
+source file hash unchanged
+source preview hash unchanged when it existed
+Primary ID unchanged
+Reference links semantically unchanged
+```
 
-Error messages may include a technical ID only when necessary for diagnosing a missing file, preferably after a human-readable label.
+Current verification only checks that no Reference points to the duplicate.
+
+Strengthen it to ensure the complete normalized Reference list is unchanged:
+
+```python
+references_before = project_manager.normalize_reference_links(...)
+references_after = project_manager.normalize_reference_links(...)
+
+if references_after != references_before:
+    raise ValueError("Duplicate verify: reference links changed during duplication.")
+```
+
+Pass the expected values into the verifier explicitly.
+
+Do not mutate `settings.json`.
 
 ---
 
-# Part 10 — Keep Quick Note intentionally removed
+# Part 6 — Keep returned data consistent after verification
 
-Quick Note has been deliberately removed to keep Shot and Scene 2D Bridge layouts consistent.
+After successful save and verification, return data that matches the verified persisted data.
 
-Do not restore:
+Prefer re-reading the verified Scene from canonical storage, or ensure the returned local objects are exactly the same normalized objects written by `_save_scenes()`.
 
-```text
-quickNoteText
-addQuickNote
-shotCardHint
-quick-note-row
-quick-note-input
-Add note button
+Avoid returning a stale pre-normalization object.
+
+Return shape remains:
+
+```json
+{
+  "scene": {},
+  "perspective": {},
+  "scenes": []
+}
 ```
 
-Remove remaining dead references from JavaScript:
-
-```js
-$("addQuickNote")?.addEventListener(...)
-$("quickNoteText")
-$("shotCardHint")
-addQuickNoteViaBackend()
-```
-
-Remove unused constants, helper functions, CSS selectors, and comments that exist only for Quick Note.
-
-Do not remove backend comment/note APIs because they may still be used by Storyboarder itself or future UI.
-
-Only remove dead Photoshop UXP entry points.
+Do not change the REST contract.
 
 ---
 
-# Part 11 — Preserve equal Shot and Scene 2D panel heights
+# Part 7 — Fix frontend Scene-switch race
 
-Do not add mode-specific permanent form rows that make one mode substantially taller.
+## Current problem
 
-Shot and Scene 2D must continue using:
+The duplicate callback captures the correct source Scene ID, but after the asynchronous request succeeds it currently only runs:
 
-```text
-connection row
-context card
-export section
-status footer
-Advanced
+```ts
+setScenes(payload.scenes)
+setSelectedPerspectiveId(payload.perspective.id)
 ```
 
-Shot-only metadata sections may remain conditional.
+During the request, the user can click another Scene in the Scene list.
 
-No permanent Quick Note textarea should return.
-
-If Quick Note is reconsidered in a future task, it should be placed below the export section as a collapsed optional tool, not inside the primary context card. Do not implement that now.
+The duplicate then exists in the original Scene, while the UI may remain on a different Scene.
 
 ---
 
-# Part 12 — Starter
+## Required success update
 
-Do not modify the current Starter implementation unless a test exposes a real defect.
+Capture the source Scene ID before starting:
 
-Preserve:
-
-```text
-MinimumVisibleMs = 1000
-ReadyHoldMs = 180
-FadeDurationMs = 160
-Ready status
-application icon
-error state
-Escape support
-120-second timeout
+```ts
+const sourceSceneId = selectedScene.id
 ```
 
-This task does not need another Starter visual redesign.
+Call the API with that explicit ID.
+
+After success:
+
+```ts
+setScenes(payload.scenes)
+setSelectedSceneId(payload.scene.id)
+setSelectedPerspectiveId(payload.perspective.id)
+```
+
+This guarantees the newly duplicated Perspective is visible and selected.
+
+Do not depend on whatever Scene happens to be selected when the request finishes.
 
 ---
 
-# Likely files
+# Part 8 — Add a hard duplicate in-flight guard
 
-```text
-storyboard_tool/desktop.py
-storyboard_tool/backend_service.py
+React `setBusy(true)` is asynchronous and is not by itself a strict double-action guard.
 
-photoshop_uxp_plugin/panel.js
-photoshop_uxp_plugin/backend_client.js
-photoshop_uxp_plugin/work_item_paths.js
-photoshop_uxp_plugin/style.css
-photoshop_uxp_plugin/index.html
+Add:
 
-tests/test_desktop_focus.py
-tests/test_photoshop_bridge.py
-tests/test_plugin_work_item_paths.mjs
+```ts
+const duplicateInFlightRef = useRef(false)
 ```
 
-Change additional files only when required for event-state tracking.
+Required callback pattern:
+
+```ts
+if (duplicateInFlightRef.current) return
+duplicateInFlightRef.current = true
+setContextMenu(null)
+setBusy(true)
+
+try {
+  ...
+} finally {
+  duplicateInFlightRef.current = false
+  setBusy(false)
+}
+```
+
+One user action must generate one request.
+
+The existing menu item should remain disabled while `busy` is true.
+
+Do not create multiple duplicate-specific UI states unless necessary.
+
+---
+
+# Part 9 — Preserve clicked-Perspective targeting
+
+Continue to pass the explicit Perspective ID stored in:
+
+```ts
+contextMenu.perspectiveId
+```
+
+Do not change duplication to rely solely on:
+
+```ts
+selectedPerspective
+```
+
+The right-clicked Perspective must be the one duplicated, even if selection changes before the callback begins.
+
+Capture:
+
+```ts
+const sourcePerspective =
+  selectedScene.perspectives.find((item) => item.id === perspectiveId)
+```
+
+before awaiting.
+
+The toast should continue to use human-readable titles.
+
+---
+
+# Part 10 — Backend failure-injection tests
+
+Add tests to `tests/test_scene2d.py`.
+
+## Preview-copy failure
+
+Patch `shutil.copy2` so:
+
+```text
+source copy succeeds
+preview copy fails
+```
+
+Assert:
+
+```text
+HTTP 500
+source files unchanged
+index unchanged
+Scene meta unchanged
+no visible duplicate metadata
+no final duplicate directory
+no staging directory when rollback verified
+```
+
+---
+
+## Verification failure after successful save
+
+Patch:
+
+```python
+_verify_perspective_duplicate
+```
+
+to raise after `_save_scenes()` succeeds.
+
+Assert:
+
+```text
+index restored byte-for-byte
+Scene meta restored byte-for-byte
+new duplicate directory removed
+source unchanged
+References unchanged
+```
+
+---
+
+## Partial save failure
+
+Simulate:
+
+```text
+scenes2d.json is written
+Scene meta write then fails
+```
+
+Do not only mock `_save_scenes()` before it writes anything.
+
+Patch the atomic-write layer or provide a side effect based on the target path.
+
+Assert rollback restores both files.
+
+---
+
+## Index rollback failure
+
+Cause the operation to fail after metadata save, then make restoration of `scenes2d.json` fail.
+
+Assert:
+
+```text
+request returns 500
+rollback failure is visible in the error/log
+new duplicate directory is preserved
+it is not deleted
+no silent pass occurs
+```
+
+---
+
+## Scene meta rollback failure
+
+Same as above, but fail restoration of Scene meta.
+
+Assert:
+
+```text
+new duplicate directory is preserved
+rollback is reported as unverified
+source remains intact
+```
+
+---
+
+## Malformed Scene meta verification
+
+After save, corrupt the Scene meta JSON before verification.
+
+Assert:
+
+```text
+verification fails
+rollback runs
+original Scene meta is restored
+duplicate directory is removed only after successful rollback verification
+```
+
+---
+
+## Order mismatch verification
+
+Modify only the Perspective order in Scene meta.
+
+Assert verifier rejects it.
+
+Do not compare sorted IDs.
+
+---
+
+## Path mismatch verification
+
+Change duplicate `source_file_path` or `preview_image_path` only in Scene meta.
+
+Assert verifier rejects it.
+
+---
+
+# Part 11 — Frontend validation
+
+Where React component test infrastructure exists, add tests for:
+
+```text
+right-click menu includes Duplicate perspective
+clicked Perspective ID is sent to duplicate API
+returned source Scene becomes selected
+returned duplicate becomes selected
+two rapid calls result in one API request
+```
+
+If no usable component-test infrastructure exists:
+
+```text
+keep callback logic small
+run TypeScript build
+perform manual validation
+report that component behavior was not automated
+```
+
+Do not add brittle source-text assertions as the only frontend test.
+
+---
+
+# Part 12 — Existing tests to preserve
+
+The following must continue passing:
+
+```text
+PSD with preview duplication
+PSD without preview
+Image duplication
+extension preservation
+Copy / Copy 2 / Copy 3
+deep-copy linked_scene3d_view
+first/middle/last insertion
+Primary unchanged
+References unchanged
+missing source returns 404
+API response shape
+```
+
+Do not weaken existing assertions to make new tests pass.
+
+---
+
+# Part 13 — Manual validation
+
+## Normal duplicate
+
+```text
+1. Right-click a Perspective.
+2. Choose Duplicate perspective.
+3. Confirm the copy appears directly after the source.
+4. Confirm the source Scene remains selected.
+5. Confirm the new duplicate is selected.
+6. Confirm Primary is unchanged.
+```
+
+## Scene-switch race
+
+```text
+1. Start duplicating a large PSD.
+2. Immediately click another Scene.
+3. When duplication finishes, confirm the UI returns to the source Scene.
+4. Confirm the new duplicate is selected and visible.
+```
+
+## Repeat-action protection
+
+```text
+1. Right-click a large Perspective.
+2. Trigger Duplicate repeatedly as quickly as possible.
+3. Confirm exactly one duplicate is created for one accepted action.
+```
+
+## Independent files
+
+```text
+1. Duplicate a PSD Perspective.
+2. Edit and save the duplicate PSD.
+3. Confirm the original PSD remains unchanged.
+```
+
+## References
+
+```text
+1. Add the source Perspective to References.
+2. Duplicate it.
+3. Confirm only the source remains in References.
+```
+
+---
+
+# Part 14 — Task-scoped self-review
+
+Before finishing:
+
+```text
+inspect the full diff
+inspect duplicate_perspective callers and return consumers
+inspect all rollback branches
+inspect verifier failure branches
+inspect ContextMenu callback timing
+inspect duplicate API error mapping
+```
+
+Explicitly check:
+
+```text
+no swallowed rollback exception
+no deletion of recovery files after unverified rollback
+no second source of truth for selected Scene
+no accidental Primary change
+no accidental Reference duplication
+no layout changes
+```
 
 ---
 
 # Required commands
 
-Run focused tests:
+Run:
 
 ```powershell
-.venv\Scripts\python.exe -m pytest tests/test_desktop_focus.py -q
-.venv\Scripts\python.exe -m pytest tests/test_photoshop_bridge.py -q
-.venv\Scripts\python.exe -m pytest tests/test_plugin_work_items.py -q
-
-node --test tests/test_plugin_work_item_paths.mjs
-```
-
-Run all backend tests:
-
-```powershell
+.venv\Scripts\python.exe -m pytest tests/test_scene2d.py -q
 .venv\Scripts\python.exe -m pytest tests/ -q
 ```
 
-Build frontend:
+Build:
 
 ```powershell
 cd frontend
 npm.cmd run build
 ```
 
-Do not claim tests passed unless they were actually run.
+Run any existing frontend component tests relevant to Scene 2D.
+
+Do not claim tests passed unless actually executed.
 
 ---
 
-# Manual validation
+# Acceptance-criteria matrix
 
-## Window geometry
-
-With `Focus Storyboarder after export` enabled:
-
-### Custom normal window
+Before committing, provide a matrix:
 
 ```text
-resize Storyboarder to an obvious custom size
-move it to a distinct position
-switch to Photoshop
-Export preview
-confirm size and position remain unchanged
+Requirement
+Implementation location
+Test location
+Verification result
 ```
 
-### Maximized window
+Required rows:
 
 ```text
-maximize Storyboarder
-switch to Photoshop
-Export preview
-confirm it remains maximized
+rollback restore errors are not swallowed
+metadata restoration is byte-verified
+duplicate files removed only after verified rollback
+duplicate files preserved after rollback failure
+missing/malformed Scene meta fails verification
+Perspective order compared exactly
+full canonical Scene meta compared
+source file remains unchanged
+source preview remains unchanged
+References remain unchanged
+source Scene selected after duplicate
+duplicate selected after success
+double-action guard
+existing duplicate behavior preserved
 ```
 
-### Minimized window
-
-```text
-minimize Storyboarder
-Export preview
-confirm it restores and activates when supported
-confirm it returns to its previous normal geometry
-confirm it does not reset to 1440 × 900
-```
-
-Test both:
-
-```text
-Shot Export preview
-Scene 2D Export preview
-```
-
----
-
-## Plugin text
-
-In Shot mode confirm:
-
-```text
-connection row shows project name
-sync footer shows Shot number and title
-dropdown shows Shot number and title
-no raw UUID appears in normal UI
-```
-
-In Scene 2D mode confirm:
-
-```text
-connection row still shows project name
-Scene and Perspective titles remain readable
-no Shot UUID remains visible
-```
-
----
-
-## Quick Note
-
-Confirm:
-
-```text
-no Quick Note textarea
-no Add note button
-no empty spacing where Quick Note used to be
-no console error caused by missing Quick Note elements
-Shot and Scene 2D layouts remain consistent
-```
+Do not commit while a required row is blank.
 
 ---
 
@@ -819,18 +818,21 @@ Shot and Scene 2D layouts remain consistent
 Complete only when:
 
 ```text
-- normal and maximized focus requests never call restore
-- minimized state is tracked from real pywebview events
-- minimized focus restores exactly once
-- no resize or move operation occurs during focus
-- tests model the real pywebview API
-- normal Plugin UI displays no Shot UUID
-- connection row displays project name
-- sync status displays Shot number and title
-- Quick Note remains removed
-- dead Quick Note plugin code is removed
-- Shot and Scene 2D panel layout consistency is preserved
-- existing Starter behavior remains unchanged
+- ordinary duplication still works
+- rollback restoration failures are reported
+- duplicate files are not deleted after unverified rollback
+- metadata rollback is byte-verified
+- Scene meta verification is strict
+- Perspective ordering differences are detected
+- full canonical Scene metadata agrees
+- source files remain unchanged
+- References remain unchanged
+- the UI returns to the source Scene after duplication
+- the returned duplicate is selected
+- rapid repeat actions cannot create unintended duplicate requests
+- all focused tests pass
+- full backend tests pass
+- frontend build passes
 ```
 
 ---
@@ -838,7 +840,7 @@ Complete only when:
 # Suggested commit
 
 ```text
-fix: track desktop window state and clean plugin labels
+fix: harden Scene 2D duplicate rollback
 ```
 
 ---
@@ -850,32 +852,31 @@ Report:
 ```text
 Changed files
 
-Desktop focus:
-  tracked window states
-  event handlers
-  restore decision
-  show/activation behavior
-  response diagnostics
-  geometry preservation
+Rollback:
+  restoration sequence
+  verification rules
+  cleanup rules
+  rollback-failure behavior
 
-Plugin text:
-  connection label rule
-  sync label rule
-  UUID visibility audit
+Verifier:
+  index checks
+  Scene meta checks
+  order comparison
+  path comparison
+  source integrity
+  Reference integrity
 
-Quick Note:
-  removed dead listeners
-  removed dead functions
-  removed dead CSS/markup references
+Frontend:
+  source Scene selection
+  duplicate selection
+  in-flight guard
 
-Focused test results
+Focused tests
 Full pytest result
-Node test result
 Frontend build result
-Manual normal-window validation
-Manual maximized-window validation
-Manual minimized-window validation
-Manual Shot and Scene 2D text validation
+Manual validation performed
+Manual validation not performed
 Known limitations
+Acceptance-criteria matrix
 Final commit SHA
 ```
