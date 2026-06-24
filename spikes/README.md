@@ -52,3 +52,24 @@ blender --background storyboard_tool/assets/scene_template.blend \
 - **Test B (viewport offscreen)** — the real streaming primitive; if it `[FAIL]`s with
   "no window", a fully-headless `bpy` can't drive `draw_view3d`, so the streaming server
   must run Blender with a hidden window / EGL context (or fall back to Test A's path).
+
+## render_server/ — plan-1 skeleton (progressive frame streaming)
+
+A minimal, runnable skeleton of "route C, plan 1": a standalone bpy worker that
+loads a `.blend` once (stays warm), and serves solid-shaded JPEG frames per camera
+request. It is a SEPARATE process by necessity — bpy's `numpy<2` can never share the
+app's `numpy>=2` env — talking plain HTTP.
+
+```powershell
+./spikes/render_server/run.ps1            # serves http://127.0.0.1:8765
+# open the URL: drag to orbit (low-res, fast), release for a full-res frame
+```
+
+- `GET /`        — drag-to-orbit demo page (`index.html`)
+- `GET /frame?w=&h=&yaw=&pitch=&dist=` — one solid JPEG; `X-Render-ms` header has render time
+- `GET /healthz` — readiness probe
+
+Measured on this machine: ~20ms @640×360 (interactive), ~53ms @1280×720 (full).
+Not production: renders via `render.render` to a temp JPEG and serves one request at
+a time (bpy isn't thread-safe). A real server would render to an in-memory buffer and
+stream over a persistent socket, and the main FastAPI app would proxy/spawn this worker.

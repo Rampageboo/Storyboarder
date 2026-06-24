@@ -1,0 +1,85 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Route C — progressive frame streaming demo</title>
+<style>
+  body { margin: 0; background: #1e1e1e; color: #ddd; font: 13px system-ui, sans-serif; }
+  #stage { position: relative; width: 100vw; height: 100vh; overflow: hidden; cursor: grab; }
+  #stage.dragging { cursor: grabbing; }
+  #view { width: 100%; height: 100%; object-fit: contain; image-rendering: auto; user-select: none; -webkit-user-drag: none; }
+  #hud { position: fixed; top: 10px; left: 10px; padding: 8px 12px; background: #000a;
+         border-radius: 6px; line-height: 1.6; pointer-events: none; }
+  b { color: #6cf; }
+</style>
+
+<div id="stage">
+  <img id="view" draggable="false" alt="solid viewport">
+</div>
+<div id="hud">
+  <div><b>drag</b> to orbit · release for full-res</div>
+  <div>res <span id="res">—</span> · render <span id="ms">—</span> ms · rtt <span id="rtt">—</span> ms</div>
+</div>
+
+<script>
+  // Progressive frame streaming (route C, plan 1):
+  //   - while dragging: small frames, fast cadence (responsive)
+  //   - on release: one full-res frame (quality)
+  // The 3D scene lives entirely in the bpy worker; this page only sends camera
+  // params (yaw/pitch/dist) and displays returned JPEGs.
+  const view = document.getElementById('view');
+  const stage = document.getElementById('stage');
+  const elRes = document.getElementById('res');
+  const elMs = document.getElementById('ms');
+  const elRtt = document.getElementById('rtt');
+
+  let yaw = 0.6, pitch = 0.5, dist = 9.0;
+  let dragging = false, lastX = 0, lastY = 0;
+  let inFlight = false, pending = false;
+
+  const DRAG_RES = [640, 360];
+  const FULL_RES = [1280, 720];
+
+  async function requestFrame(interactive) {
+    if (inFlight) { pending = true; return; }     // coalesce: never queue stale frames
+    inFlight = true;
+    const [w, h] = interactive ? DRAG_RES : FULL_RES;
+    const url = `/frame?w=${w}&h=${h}&yaw=${yaw.toFixed(4)}&pitch=${pitch.toFixed(4)}&dist=${dist.toFixed(3)}`;
+    const t0 = performance.now();
+    try {
+      const res = await fetch(url);
+      const blob = await res.blob();
+      const old = view.src;
+      view.src = URL.createObjectURL(blob);
+      if (old.startsWith('blob:')) URL.revokeObjectURL(old);
+      elRes.textContent = `${w}×${h}`;
+      elMs.textContent = res.headers.get('X-Render-ms') ?? '—';
+      elRtt.textContent = (performance.now() - t0).toFixed(0);
+    } finally {
+      inFlight = false;
+      if (pending) { pending = false; requestFrame(interactive); }   // draw latest
+    }
+  }
+
+  stage.addEventListener('pointerdown', (e) => {
+    dragging = true; lastX = e.clientX; lastY = e.clientY;
+    stage.classList.add('dragging'); stage.setPointerCapture(e.pointerId);
+  });
+  stage.addEventListener('pointermove', (e) => {
+    if (!dragging) return;
+    yaw   += (e.clientX - lastX) * 0.01;
+    pitch += (e.clientY - lastY) * 0.01;
+    pitch = Math.max(-1.4, Math.min(1.4, pitch));
+    lastX = e.clientX; lastY = e.clientY;
+    requestFrame(true);                            // low-res, responsive
+  });
+  stage.addEventListener('pointerup', (e) => {
+    dragging = false; stage.classList.remove('dragging');
+    requestFrame(false);                           // full-res on release
+  });
+  stage.addEventListener('wheel', (e) => {
+    e.preventDefault();
+    dist = Math.max(2, Math.min(40, dist * (1 + Math.sign(e.deltaY) * 0.1)));
+    requestFrame(true);
+  }, { passive: false });
+
+  requestFrame(false);   // initial frame
+</script>
