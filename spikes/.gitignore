@@ -1,2 +1,5 @@
+# Isolated bpy venv (provisioned by run.ps1 / run.sh) -- never commit
+.venv-bpy/
+
 # Generated proof artifacts from spike runs
 *.png

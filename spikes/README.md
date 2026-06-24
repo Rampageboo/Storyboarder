@@ -16,19 +16,34 @@ It measures the only number that decides feasibility:
 …and probes the one historically fragile part — whether a true offscreen *viewport*
 draw (`gpu.GPUOffScreen.draw_view3d`) works without a window.
 
-### Run
+### Run (isolated venv — required)
+
+> ⚠️ **Never `pip install bpy` into the global or project environment.** bpy pins
+> `numpy<2`, but the app's `opencv-python` requires `numpy>=2`. Installing bpy
+> globally silently downgrades numpy and breaks opencv. The runner scripts below
+> provision a dedicated `spikes/.venv-bpy` (gitignored) and keep bpy quarantined.
+
+```powershell
+# PowerShell (creates spikes/.venv-bpy on first run, then reuses it)
+./spikes/run.ps1
+./spikes/run.ps1 path/to/file.blend 1920x1080 60   # args forwarded to the spike
+```
 
 ```bash
-# bpy as a pip module (needs Python 3.11)
-python -m pip install bpy
-python spikes/bpy_solid_viewport_spike.py
+# Git Bash / POSIX
+./spikes/run.sh
+./spikes/run.sh path/to/file.blend 1920x1080 60
+```
 
-# …or against a representative streaming-server setup (real Blender, hidden window)
+Optional args: `[file.blend] [WIDTHxHEIGHT] [frames]`.
+
+Alternatively, run against a real Blender install (representative of a true
+viewport-streaming server with a GL context — see Test B notes below):
+
+```bash
 blender --background storyboard_tool/assets/scene_template.blend \
         --python spikes/bpy_solid_viewport_spike.py
 ```
-
-Optional args: `[file.blend] [WIDTHxHEIGHT] [frames]`, e.g. `... scene.blend 1920x1080 60`.
 
 ### Reading the result
 

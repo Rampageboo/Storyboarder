@@ -1,0 +1,4 @@
+# Pinned deps for the bpy spike's isolated venv ONLY.
+# bpy requires numpy<2, which conflicts with the app's opencv (numpy>=2),
+# so this must NEVER be installed into the global / project environment.
+bpy==5.0.1
