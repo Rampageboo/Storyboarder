@@ -36,7 +36,9 @@ HERE = Path(__file__).resolve().parent
 REPO = HERE.parent.parent
 DEFAULT_BLEND = REPO / "storyboard_tool" / "assets" / "scene_template.blend"
 INDEX_HTML = HERE / "index.html"
-_TEMP_FRAME = Path(tempfile.gettempdir()) / "route_c_frame.jpg"
+# PID-scoped so two workers (different ports) never clobber each other's frame.
+# A production server would render to an in-memory buffer and skip the disk entirely.
+_TEMP_FRAME = Path(tempfile.gettempdir()) / f"route_c_frame_{os.getpid()}.jpg"
 
 # Orbit target the camera looks at. The template's content sits near the origin.
 TARGET = mathutils.Vector((0.0, 0.0, 0.0))

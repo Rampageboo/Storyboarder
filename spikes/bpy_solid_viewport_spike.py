@@ -60,9 +60,10 @@ HERE = Path(__file__).resolve().parent
 REPO = HERE.parent
 DEFAULT_BLEND = REPO / "storyboard_tool" / "assets" / "scene_template.blend"
 PROOF_PNG = HERE / "spike_solid_frame.png"
+TESTB_PROOF_PNG = HERE / "spike_testb_viewport.png"
 
 
-def _parse_args(argv: list[str]) -> tuple[Path, int, int, int]:
+def _parse_args(argv: list[str]) -> tuple[Path, int, int, int, bool]:
     """argv may include Blender's own args; we only read trailing extras after '--'."""
     if "--" in argv:
         argv = argv[argv.index("--") + 1 :]
@@ -70,13 +71,18 @@ def _parse_args(argv: list[str]) -> tuple[Path, int, int, int]:
         # Running under `python script.py ...` -> argv[0] is the script.
         argv = argv[1:] if argv and argv[0].endswith(".py") else argv
 
+    # --inject-demo: force demo geometry even into a non-empty scene. Without it,
+    # a real .blend is measured AS-IS (we never silently mutate a real scene).
+    inject_demo = "--inject-demo" in argv
+    argv = [a for a in argv if a != "--inject-demo"]
+
     blend = Path(argv[0]) if len(argv) >= 1 and argv[0] else DEFAULT_BLEND
     width, height = 1280, 720
     if len(argv) >= 2 and "x" in argv[1].lower():
         w, h = argv[1].lower().split("x", 1)
         width, height = int(w), int(h)
     frames = int(argv[2]) if len(argv) >= 3 else 30
-    return blend, width, height, frames
+    return blend, width, height, frames, inject_demo
 
 
 def _open_blend(blend: Path) -> None:
@@ -178,7 +184,14 @@ def test_a_workbench_render(width: int, height: int, frames: int) -> None:
 
 
 def test_b_viewport_offscreen(width: int, height: int, frames: int) -> None:
+    """Probe the true viewport primitive (draw_view3d). This is INCONCLUSIVE by
+    design in a single environment -- run it across all four to draw conclusions:
+      1. pip bpy, fully headless (this default)   3. real Blender, visible window
+      2. blender --background <file>              4. real Blender, hidden window / EGL
+    Report exactly what THIS environment shows; do not generalize from one run."""
     print("\n=== Test B: True viewport offscreen (gpu.GPUOffScreen + draw_view3d) ===")
+    n_win = len(bpy.context.window_manager.windows)
+    print(f"  env        : background={bpy.app.background}, windows={n_win}")
     try:
         import gpu
     except Exception as exc:  # noqa: BLE001
@@ -186,17 +199,16 @@ def test_b_viewport_offscreen(width: int, height: int, frames: int) -> None:
         return
 
     # draw_view3d needs a real 3D-view region + space, which only exist with a window.
-    win = bpy.context.window_manager.windows[0] if bpy.context.window_manager.windows else None
+    win = bpy.context.window_manager.windows[0] if n_win else None
     if win is None:
-        print("  [FAIL] no window in this process -> no 3D-view region available.")
-        print("         => fully-headless bpy cannot drive draw_view3d directly.")
-        print("         => streaming server must run Blender with a (hidden) window")
-        print("            or an EGL GL context. Test A is the headless fallback.")
+        print("  [N/A ] no window in this process -> no VIEW_3D region to draw.")
+        print("         Valid signal: fully-headless bpy has no 3D view to stream.")
+        print("         Inconclusive about draw_view3d itself -- retry envs 2/3/4.")
         return
 
     area = next((a for a in win.screen.areas if a.type == "VIEW_3D"), None)
     if area is None:
-        print("  [FAIL] window exists but has no VIEW_3D area.")
+        print("  [N/A ] window exists but has no VIEW_3D area.")
         return
     region = next((r for r in area.regions if r.type == "WINDOW"), None)
     space = area.spaces.active
@@ -207,7 +219,7 @@ def test_b_viewport_offscreen(width: int, height: int, frames: int) -> None:
     try:
         offscreen = gpu.types.GPUOffScreen(width, height)
     except Exception as exc:  # noqa: BLE001
-        print(f"  [FAIL] could not create GPUOffScreen (no GL context?): {exc}")
+        print(f"  [FAIL] could not create GPUOffScreen (no GL context): {exc}")
         return
 
     view_matrix = cam.matrix_world.inverted()
@@ -215,7 +227,12 @@ def test_b_viewport_offscreen(width: int, height: int, frames: int) -> None:
         bpy.context.evaluated_depsgraph_get(), x=width, y=height
     )
 
+    import numpy as np
+
     times: list[float] = []
+    spread = -1.0
+    draw_error = ""
+    readback_error = ""
     try:
         for _ in range(frames):
             t0 = time.perf_counter()
@@ -224,53 +241,55 @@ def test_b_viewport_offscreen(width: int, height: int, frames: int) -> None:
                 do_color_management=False,
             )
             times.append((time.perf_counter() - t0) * 1000.0)
-    except Exception as exc:  # noqa: BLE001
-        print(f"  [FAIL] draw_view3d raised: {exc}")
-        offscreen.free()
-        return
-    offscreen.free()
-
-    # Read pixels back and check they actually contain rendered geometry.
-    # A headless no-op leaves a uniform/empty buffer at implausible speed,
-    # or the texture is invalid the moment we touch it.
-    import numpy as np
-
-    spread = -1.0
-    readback_error = ""
-    try:
+        # IMPORTANT: read pixels BEFORE free(). Reading a freed offscreen would
+        # raise a self-inflicted error that says nothing about GL validity.
         buf = offscreen.texture_color.read()
         buf.dimensions = width * height * 4
         pixels = np.array(buf, dtype=np.float32)
         spread = float(pixels.max() - pixels.min())
     except Exception as exc:  # noqa: BLE001
-        readback_error = str(exc)
+        if times and not draw_error:
+            readback_error = str(exc)
+        else:
+            draw_error = str(exc)
     finally:
-        try:
-            offscreen.free()
-        except Exception:  # noqa: BLE001 - already invalidated headless
-            pass
+        offscreen.free()
+
+    if draw_error:
+        print(f"  [FAIL] draw_view3d raised: {draw_error}")
+        return
+    if readback_error:
+        print(f"  [WARN] draw ran ({len(times)} frames) but pixel readback failed:")
+        print(f"         {readback_error}")
+        print("         Can't confirm real pixels -> treat timing as UNVERIFIED.")
+        return
 
     times.sort()
     p50 = times[len(times) // 2]
-    if readback_error:
+    if spread < 1e-4:
         print(f"  warm avg   : {sum(times) / len(times):8.1f} ms, p50 {p50:.2f} ms")
-        print(f"  [FAIL] pixel readback invalid: {readback_error}")
-        print("         => the offscreen has no real GL backend in headless bpy.")
-        print("         => true viewport streaming needs real Blender + hidden")
-        print("            window / EGL context. Use Test A's render path headless.")
-        return
-    if p50 < 2.0 or spread < 1e-4:
-        print(f"  warm avg   : {sum(times) / len(times):8.1f} ms, p50 {p50:.2f} ms")
-        print(f"  pixel spread: {spread:.4f}  (uniform buffer = nothing drawn)")
-        print("  [FAIL] draw_view3d returned a blank/no-op buffer -> NO real GL")
-        print("         viewport context in headless bpy. The 'fast' time is fake.")
-        print("         => true viewport streaming needs real Blender + hidden")
-        print("            window / EGL context. Use Test A's render path headless.")
+        print(f"  pixel spread: {spread:.5f}  (uniform buffer)")
+        print("  [FAIL] draw_view3d ran but produced a BLANK buffer in this env")
+        print("         -> no real solid pixels here. Retry envs 2/3/4.")
         return
     print(f"  warm avg   : {sum(times) / len(times):8.1f} ms")
     print(f"  p50        : {p50:8.1f} ms   (~{1000.0 / p50:.0f} fps)")
-    print(f"  pixel spread: {spread:.3f}  (non-uniform = real pixels)")
-    print("  [OK] true viewport offscreen genuinely rendered in this process.")
+    print(f"  pixel spread: {spread:.3f}  (non-uniform = real pixels drawn)")
+    # Save the readback as a PNG so the "real pixels" claim is visually verifiable,
+    # not just inferred from spread.
+    try:
+        arr = pixels.reshape(height, width, 4).astype(np.float32)
+        if arr.max() > 1.5:
+            arr = arr / 255.0
+        img = bpy.data.images.new("tb_proof", width, height, alpha=True)
+        img.pixels.foreach_set(arr.reshape(-1))
+        img.filepath_raw = str(TESTB_PROOF_PNG)
+        img.file_format = "PNG"
+        img.save()
+        print(f"  proof png  : {TESTB_PROOF_PNG}")
+    except Exception as exc:  # noqa: BLE001
+        print(f"  [warn] could not save Test B proof png: {exc}")
+    print("  [OK] true viewport offscreen genuinely rendered in THIS env.")
     _verdict("Test B", p50)
 
 
@@ -287,20 +306,32 @@ def _verdict(label: str, p50_ms: float) -> None:
 
 
 def main() -> None:
-    blend, width, height, frames = _parse_args(list(sys.argv))
+    blend, width, height, frames, inject_demo = _parse_args(list(sys.argv))
     print("=" * 70)
     print(f"bpy {bpy.app.version_string} | background={bpy.app.background}")
     print(f"target {width}x{height}, {frames} warm frames, blend={blend}")
     print("=" * 70)
 
     _open_blend(blend)
-    _ensure_visible_geometry()
+    # Only inject demo geometry when explicitly asked, or when the scene is truly
+    # empty (no meshes). A real .blend with content is measured untouched, so the
+    # numbers reflect the ACTUAL scene -- not scene + Suzanne + 25 cubes.
+    has_mesh = any(o.type == "MESH" for o in bpy.data.objects)
+    if inject_demo or not has_mesh:
+        reason = "forced via --inject-demo" if inject_demo else "scene has no mesh"
+        print(f"[scene] injecting demo geometry ({reason})")
+        _ensure_visible_geometry()
+    else:
+        print("[scene] real geometry present -> measuring scene AS-IS (no injection)")
     _configure_solid(width, height)
     test_a_workbench_render(width, height, frames)
     test_b_viewport_offscreen(width, height, frames)
 
-    print("\nDone. The two p50 numbers (Test A headless-safe, Test B true-viewport)")
-    print("decide whether the scene3D editor can move server-side or stays client-side.")
+    print("\nDone.")
+    print("  Test A (render.render): render-only time, NOT incl. encode/write/HTTP.")
+    print("  Test B (draw_view3d):   viewport draw time; verify the proof PNG is real")
+    print("    geometry. Results are PER-ENVIRONMENT -- a positive pip-bpy result does")
+    print("    not prove behavior under blender --background or a real/hidden window.")
 
 
 if __name__ == "__main__":

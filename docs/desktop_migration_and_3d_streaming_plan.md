@@ -127,37 +127,61 @@ draw_view3d    (❌ headless)    编码视频流 / H.264·WebRTC → 视口视�
 
 | 方案 | 渲染源 | 传输 | 类型 | 复杂度 |
 |------|--------|------|------|--------|
-| **方案1(选定)** | `render.render`(Workbench/solid) | 离散帧 + 交互降分辨率 | **渐进式帧流** | 低,纯 bpy 模块即可 |
-| 方案2(暂缓) | `draw_view3d` | H.264 / WebRTC 连续编码 | **视口视频流** | 高,需真 Blender + 隐藏窗口/EGL |
+| **方案1(起步选定)** | `render.render`(Workbench/solid) | 离散帧 + 交互降分辨率 | **渐进式帧流** | 低,纯 bpy 模块即可 |
+| 方案2(重新可行) | `draw_view3d` | H.264 / WebRTC 连续编码 | **视口视频流** | 中–高,主要是编码/传输管线 |
+
+> **重要更正(2026-06-24,经 review 修复 spike bug 后):** 两个渲染源在 pip bpy 模块下**都可用**。
+> 早先"`draw_view3d` headless 不可用"的结论是 spike 的 free-before-read bug 造成的假象,**已作废**。
+> 实测 `draw_view3d` 在 pip bpy(background=True 但 windows=1)下真渲出 solid 视口,p50 **0.6ms**
+> (比 `render.render` 的 ~25ms 快约 40 倍),有存证 PNG(网格+坐标轴+实心方块)。
 
 ### 延迟预算(本地回环,非云游戏)
 
-本项目全程在同一台机器(pywebview/Tauri),两段网络 ≈ 0ms。motion-to-photon 预算:
+本项目全程在同一台机器(pywebview/Tauri),两段网络 ≈ 0ms。motion-to-photon 各环节(需分开记账,勿混为一谈):
 
-| 环节 | 估时 |
-|------|------|
-| 输入转发 | ~1ms |
-| bpy solid 渲一帧 | 单/双位数 ms |
-| (帧流)JPEG 编码 + 解码 | ~10ms |
-| **合计** | **~20~55ms** —— 对"摆位/构图"编辑器可用 |
+| 环节 | 估时 | 备注 |
+|------|------|------|
+| 输入转发 | ~1ms | localhost |
+| 渲染源 | `render.render` ~25ms / `draw_view3d` ~0.6ms | GPU 渲染时间,**不含**下面几项 |
+| GPU 读回 + JPEG 编码 | 待测 | 现 worker 走临时文件,生产应走内存 |
+| HTTP / 解码 / present | ~5–10ms | 浏览器侧 |
+| **motion-to-photon 合计** | **待端到端实测** | worker `/frame`(render.render)实测 ~20ms@640×360 / ~53ms@1280×720,已含编码+写盘+HTTP |
 
-**为什么选方案1:** `draw_view3d`(真视口流的前提)在裸 bpy headless 下不工作(见 spike);而 `render.render` solid 足够快、足够简单,且本项目是摆位为主、不需要 60fps 狂拖。视频流方案待帧流确实不够用时再升级。
+**渲染源不再是选型瓶颈。** 方案1 vs 方案2 的真正区别在**传输轴**(离散帧 vs 视频编码),不在渲染源可行性:
+- **方案1(起步):** `render.render` + 离散帧/WebSocket,简单,够"摆位/构图";骨架已实现。
+- **更快的中间档:** 把渲染源换成 `draw_view3d`(0.6ms),传输仍走离散帧——近实时且无需视频 codec。**推荐作为方案1 的下一步优化**。
+- **方案2(若需极致丝滑):** `draw_view3d` + H.264/WebRTC 连续编码;现在渲染源已证实可行,门槛降到编码/传输管线本身。
 
 ---
 
 ## 5. Spike 验证结论
 
 脚本:`spikes/bpy_solid_viewport_spike.py`(隔离 venv 运行,见第 6 节)。
-环境:bpy 5.0.1 / Python 3.11 / 1280×720 / ~29 物体。
+环境:**pip bpy 5.0.1 / Python 3.11 / Windows + GPU / 1280×720**。结果是**单环境**的,见下方"待验证"。
 
 | 测试 | 渲染源 | 结果 | 数字 |
 |------|--------|------|------|
-| **A** | `bpy.ops.render.render`(Workbench=solid) | ✅ **headless 可用** | p50 **22~32ms**(~30–45fps),真出 PNG |
-| **B** | `gpu.GPUOffScreen` + `draw_view3d`(真视口) | ❌ **headless 失败** | 离屏无真实 GL 后端,像素读回无效;"快"是空跑假象 |
+| **A** | `bpy.ops.render.render`(Workbench=solid) | ✅ 可用 | p50 **22~32ms**(~30–45fps),真出 PNG。**仅渲染时间,不含编码/写盘/HTTP** |
+| **B** | `gpu.GPUOffScreen` + `draw_view3d`(真视口) | ✅ 可用(更正后) | p50 **~0.6ms**(~1500fps),存证 PNG 为真几何(网格+轴+方块) |
 
-**结论:**
-- 方案1(渐进式帧流)**核心可行**。
-- 方案2(视口视频流)被卡在渲染源——除非部署带隐藏 GL 窗口的完整 Blender 进程。
+**结论(更正):**
+- 两个渲染源在 pip bpy 下**都可行**;`draw_view3d` 远快于 `render.render`。
+- 方案1 立即可走;方案2 不再被渲染源卡住,门槛降到编码/传输。
+
+**⚠️ 待验证(本结果仅覆盖"pip bpy + 本机 GPU"一档):**
+spike 的 Test B 现在跨环境探测,但只在以下其一跑过。`draw_view3d` 依赖 GL 上下文,
+不同环境可能不同,部署前应分别验证:
+
+| 环境 | 是否已验 | 备注 |
+|------|---------|------|
+| 1. pip bpy 完全 headless | ✅ 本机通过 | background=True 但 windows=1,意外地有 GL 上下文 |
+| 2. `blender --background <file>` | ⬜ 未验 | 传统无头,可能无 window |
+| 3. 正常 Blender 可见窗口 | ⬜ 未验 | 预期可用 |
+| 4. 隐藏窗口 / EGL | ⬜ 未验 | 服务器部署形态 |
+
+> **教训:** 早先"Test B headless 失败"是 spike 自身 bug(先 `offscreen.free()` 再 `texture_color.read()`,
+> 读已释放 buffer 的报错被误当成 GL 无效证据)。修复读取顺序 + 存证 PNG 肉眼核验后结论反转。
+> 任何"不可用"的负面结论,都应先排除测试代码自身错误,并跨多环境复现。
 
 ---
 
@@ -194,7 +218,8 @@ spikes/render_server/
 - `GET /frame?w=&h=&yaw=&pitch=&dist=` — 一张 solid JPEG;`X-Render-ms` 头带渲染耗时
 - `GET /healthz` — 就绪探针
 
-**实测(本地回环):** 交互帧 ~20ms @640×360 · 全质量帧 ~53ms @1280×720,返回真 solid 图。
+**实测(本地回环,`/frame` 端到端含编码+写盘+HTTP):** 交互帧 ~20ms @640×360 · 全质量帧 ~53ms @1280×720,返回真 solid 图。
+(注:此处渲染源是 `render.render`;换成 `draw_view3d` 渲染部分可降到 ~0.6ms,瓶颈转为读回+编码。)
 
 **运行:**
 ```powershell
@@ -212,10 +237,12 @@ spikes/render_server/
 - [x] 方案1 最小骨架(worker + 拖拽 demo),端到端验证
 
 ### 阶段 1 — 把骨架做实
-- [ ] 渲染源去磁盘往返:渲到内存 buffer,不写临时 JPEG
+- [ ] **渲染源升级:worker 从 `render.render` 换成 `draw_view3d`**(~25ms → ~0.6ms,需在 worker 进程内拿到 VIEW_3D region;pip bpy 已证实有窗口)
+- [ ] 渲染源去磁盘往返:GPU 读回内存 buffer,不写临时 JPEG
 - [ ] WebSocket 推帧替代每帧一个 HTTP 请求(拖拽更顺)
 - [ ] 主 FastAPI app 负责拉起 / 管理 / 代理这个 worker 子进程
-- [ ] 拿**真实角色 `.blend`** 压测:确认重场景下交互帧仍 < 30ms
+- [ ] 拿**真实角色 `.blend`** 压测(`--inject-demo` 仅用于空场景):确认重场景下渲染源仍快
+- [ ] **跨 4 环境复验 `draw_view3d`**(见第 5 节表):确认部署形态下 GL 上下文可用
 
 ### 阶段 2 — 把主编辑器搬过来(真正工作量)
 - [ ] 后端重建 gizmo / 拾取语义:translate / rotate / scale + Raycaster 拾取
@@ -228,7 +255,7 @@ spikes/render_server/
 - [ ] 若选 WinUI 3:C# 前端 `HttpClient` 接 FastAPI,UI 用 XAML 重写
 
 ### 可选 / 暂缓
-- [ ] 方案2 视口视频流(`draw_view3d` + 真 Blender + 隐藏窗口 + H.264/WebRTC)——仅当帧流的拖拽手感确实不够时
+- [ ] 方案2 视口视频流(`draw_view3d` + H.264/WebRTC 连续编码)——渲染源已证实可行,仅当离散帧的拖拽手感确实不够时再上编码管线
 
 ---
 
@@ -247,9 +274,10 @@ spikes/render_server/
 | 日期 | 决策 | 理由 |
 |------|------|------|
 | 2026-06-24 | 三维层走**路线 C**(后端 bpy 读 `.blend` 渲染) | 删掉手动 GLB 搬运,解锁前端自由替换 |
-| 2026-06-24 | 传输走**方案1 渐进式帧流**,非视口视频流 | `draw_view3d` headless 不可用;solid + render.render 够快够简单 |
+| 2026-06-24 | 传输**起步走方案1 渐进式帧流** | solid + render.render 够快够简单,骨架已落地 |
 | 2026-06-24 | bpy 永久隔离在独立 venv | 与 opencv 的 numpy 需求硬冲突 |
 | 2026-06-24 | 桌面化(WinUI 等)**排在三维剥离之后** | 桌面化瓶颈是三维层,先剥离才低成本 |
+| 2026-06-24 | ~~方案2 暂缓因 `draw_view3d` headless 不可用~~ **作废** | 经 review 发现是 spike bug;`draw_view3d` 在 pip bpy 下可用且快 40×,方案2 重新可行,渲染源升级提上日程 |
 
 ---
 

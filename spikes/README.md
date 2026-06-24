@@ -49,9 +49,19 @@ blender --background storyboard_tool/assets/scene_template.blend \
 
 - **Test A (Workbench render)** — robust headless path; `p50 < 33ms` means solid frames
   stream smoothly over loopback.
-- **Test B (viewport offscreen)** — the real streaming primitive; if it `[FAIL]`s with
-  "no window", a fully-headless `bpy` can't drive `draw_view3d`, so the streaming server
-  must run Blender with a hidden window / EGL context (or fall back to Test A's path).
+- **Test B (viewport offscreen)** — the real streaming primitive (`draw_view3d`).
+  Reports PER-ENVIRONMENT and saves a proof PNG (`spike_testb_viewport.png`) so the
+  "real pixels" claim is visually verifiable. On pip bpy + a GPU it WORKS (~0.6ms,
+  windows=1). Run it across all four environments before generalizing — it depends on
+  the GL context: (1) pip bpy headless, (2) `blender --background`, (3) real window,
+  (4) hidden window / EGL.
+
+> ⚠️ An earlier version of this spike wrongly concluded "draw_view3d unusable headless"
+> — that was a self-inflicted bug (`offscreen.free()` before `texture_color.read()`).
+> Always rule out test-harness errors before trusting a negative result.
+
+Flags: `--inject-demo` forces demo geometry (Suzanne + cubes) even into a non-empty
+scene. Without it, a real `.blend` is measured AS-IS (never silently mutated).
 
 ## render_server/ — plan-1 skeleton (progressive frame streaming)
 

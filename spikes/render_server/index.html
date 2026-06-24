@@ -33,14 +33,29 @@
 
   let yaw = 0.6, pitch = 0.5, dist = 9.0;
   let dragging = false, lastX = 0, lastY = 0;
-  let inFlight = false, pending = false;
 
   const DRAG_RES = [640, 360];
   const FULL_RES = [1280, 720];
 
-  async function requestFrame(interactive) {
-    if (inFlight) { pending = true; return; }     // coalesce: never queue stale frames
+  // Coalescing that never DOWNGRADES quality. While a frame is in flight, newer
+  // requests collapse into a single pending one, and 'full' always wins over
+  // 'interactive' (so the release/zoom-stop full-res frame can't be lost behind
+  // an in-flight low-res drag frame).
+  let inFlight = false;
+  let pendingMode = null;            // null | 'interactive' | 'full'
+
+  function queueFrame(interactive) {
+    const mode = interactive ? 'interactive' : 'full';
+    if (inFlight) {
+      pendingMode = (pendingMode === 'full' || mode === 'full') ? 'full' : 'interactive';
+      return;
+    }
+    void renderOnce(mode);
+  }
+
+  async function renderOnce(mode) {
     inFlight = true;
+    const interactive = mode === 'interactive';
     const [w, h] = interactive ? DRAG_RES : FULL_RES;
     const url = `/frame?w=${w}&h=${h}&yaw=${yaw.toFixed(4)}&pitch=${pitch.toFixed(4)}&dist=${dist.toFixed(3)}`;
     const t0 = performance.now();
@@ -55,7 +70,7 @@
       elRtt.textContent = (performance.now() - t0).toFixed(0);
     } finally {
       inFlight = false;
-      if (pending) { pending = false; requestFrame(interactive); }   // draw latest
+      if (pendingMode) { const next = pendingMode; pendingMode = null; void renderOnce(next); }
     }
   }
 
@@ -69,17 +84,23 @@
     pitch += (e.clientY - lastY) * 0.01;
     pitch = Math.max(-1.4, Math.min(1.4, pitch));
     lastX = e.clientX; lastY = e.clientY;
-    requestFrame(true);                            // low-res, responsive
+    queueFrame(true);                              // low-res, responsive
   });
-  stage.addEventListener('pointerup', (e) => {
+  stage.addEventListener('pointerup', () => {
     dragging = false; stage.classList.remove('dragging');
-    requestFrame(false);                           // full-res on release
+    queueFrame(false);                             // full-res on release
   });
+
+  // Wheel zoom: low-res during the gesture, then a debounced full-res frame once
+  // scrolling stops (otherwise the view would stay stuck at 640×360 after zoom).
+  let zoomTimer = null;
   stage.addEventListener('wheel', (e) => {
     e.preventDefault();
     dist = Math.max(2, Math.min(40, dist * (1 + Math.sign(e.deltaY) * 0.1)));
-    requestFrame(true);
+    queueFrame(true);
+    clearTimeout(zoomTimer);
+    zoomTimer = setTimeout(() => queueFrame(false), 160);
   }, { passive: false });
 
-  requestFrame(false);   // initial frame
+  queueFrame(false);   // initial frame
 </script>
