@@ -237,7 +237,7 @@ class StoryboardBackendService(ExportServiceMixin):
                     try:
                         session_store.update_session(self.app.state.base_dir, last_project_json_path="")
                     except Exception:
-                        pass
+                        logger.debug("Failed to clear stale last_project_json_path", exc_info=True)
 
         t_project = time.perf_counter()
         timings = {

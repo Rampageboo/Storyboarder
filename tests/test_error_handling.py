@@ -118,8 +118,11 @@ class TestNoRawTracebackInResponse(unittest.TestCase):
         self.assertEqual(response.status_code, 500)
         body = response.json()
         self.assertEqual(body.get("code"), "INTERNAL_ERROR")
-        self.assertEqual(body.get("detail"), f"Internal error. See {logging_config.LOG_FILE}.")
+        self.assertEqual(body.get("detail"), "Internal error. See the application log for details.")
         self.assertNotIn("unexpected blender crash", body.get("detail", ""))
+        # The response must not leak the absolute log-file path to (possibly
+        # cross-origin) clients; the path stays server-side in the log only.
+        self.assertNotIn(str(logging_config.LOG_FILE), body.get("detail", ""))
 
 
 class TestSettingsUpdateEdgeCases(unittest.TestCase):

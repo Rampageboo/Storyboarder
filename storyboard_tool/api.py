@@ -56,6 +56,18 @@ from .schemas import (
 # Photoshop plugin treats bridge files older than ~8s as stale (see BRIDGE_STALE_MS in panel.js).
 _BRIDGE_REFRESH_SECONDS = 1.5
 
+# Uploads are buffered in memory by _read_upload; cap the size so a single large or
+# hostile upload cannot exhaust process memory. Generous enough for reference-video
+# clips while still bounding worst-case allocation.
+_MAX_UPLOAD_BYTES = 1024 * 1024 * 1024  # 1 GiB
+
+# The local server is same-origin for the React app (it serves the bundle) and is
+# reached cross-origin only by localhost clients (the Photoshop UXP plugin, which
+# probes 127.0.0.1/localhost ports). Reflecting arbitrary web origins would let any
+# page the user visits read API responses (project data, board images). Restrict the
+# allowed cross-origin set to localhost / null instead of "*".
+_ALLOWED_ORIGIN_REGEX = r"^(https?://(127\.0\.0\.1|localhost)(:\d+)?|null)$"
+
 
 _REACT_BUILD_HINT = "React build not found. Run: cd frontend && npm run build"
 logger = logging.getLogger(__name__)
@@ -73,11 +85,23 @@ def _model_captures_payload(captures: list[RefSegment3dCapture]) -> list[dict[st
 
 
 async def _read_upload(file: UploadFile, fallback_name: str) -> tuple[str, bytes]:
+    chunks: list[bytes] = []
+    total = 0
     try:
-        data = await file.read()
+        while True:
+            chunk = await file.read(1024 * 1024)
+            if not chunk:
+                break
+            total += len(chunk)
+            if total > _MAX_UPLOAD_BYTES:
+                raise HTTPException(
+                    status_code=413,
+                    detail=f"Upload exceeds the {_MAX_UPLOAD_BYTES // (1024 * 1024)} MiB limit.",
+                )
+            chunks.append(chunk)
     finally:
         await file.close()
-    return file.filename or fallback_name, data
+    return file.filename or fallback_name, b"".join(chunks)
 
 
 def create_app(base_dir: Path, bridge_port: int = 8000) -> FastAPI:
@@ -94,8 +118,9 @@ def create_app(base_dir: Path, bridge_port: int = 8000) -> FastAPI:
                 try:
                     app_state._touch_live_bridge(app)
                 except Exception:
-                    # Keep the loop alive; bridge file writes are best-effort.
-                    pass
+                    # Keep the loop alive; bridge file writes are best-effort, but a
+                    # persistent failure should be visible in the log, not silent.
+                    logger.debug("Live bridge refresh failed", exc_info=True)
 
         refresh_thread = threading.Thread(
             target=bridge_refresh_loop,
@@ -142,17 +167,19 @@ def create_app(base_dir: Path, bridge_port: int = 8000) -> FastAPI:
     @app.exception_handler(Exception)
     async def _unexpected_error_handler(request: Request, exc: Exception) -> JSONResponse:
         logger.exception("Unhandled API exception for %s %s", request.method, request.url.path)
+        # Keep the absolute log-file path server-side only; the client (which may be a
+        # cross-origin browser page) should not learn local filesystem layout.
         return JSONResponse(
             status_code=500,
             content={
-                "detail": f"Internal error. See {logging_config.LOG_FILE}.",
+                "detail": "Internal error. See the application log for details.",
                 "code": AppErrorCode.INTERNAL_ERROR,
             },
         )
 
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=["*"],
+        allow_origin_regex=_ALLOWED_ORIGIN_REGEX,
         allow_methods=["*"],
         allow_headers=["*"],
     )

@@ -34,6 +34,7 @@ import json
 import os
 import shutil
 import tempfile
+import threading
 from pathlib import Path
 from typing import Any, BinaryIO
 
@@ -92,6 +93,16 @@ from .shot_assets import (  # noqa: E402
 )
 from .asset_validation import validate_project_integrity  # noqa: E402
 
+
+# Process-wide reentrant lock serializing project persistence. The FastAPI backend
+# services sync endpoints on a threadpool and also runs background threads (bridge
+# refresh, preview analysis, plugin heartbeats), so more than one thread can reach
+# save_project concurrently. save_project writes several files (project.json,
+# shots.json, shots.csv, settings.json) plus a backup set; without serialization two
+# concurrent saves can interleave and leave shots.json and shots.csv describing
+# different states. Hold this lock around any full persistence pass, and reuse it to
+# guard the reload-on-read swap in app_state so a save can't be torn by a reload.
+PROJECT_LOCK = threading.RLock()
 
 
 def create_project(
@@ -185,14 +196,15 @@ def open_project(project_json_path: Path) -> Project:
 
 
 def save_project(project: Project) -> None:
-    _ensure_project_dirs(project.root_path)
-    if project.settings.get("backup_on_save", True):
-        _write_backup(project)
-    # project.json is a lightweight manifest (version only); shots live in shots.json.
-    _atomic_write_json(project.json_path, {"version": PROJECT_JSON_VERSION})
-    # Canonical shots.json + regenerated readable shots.csv compatibility snapshot.
-    save_shots(project.root_path, project.shots)
-    save_settings(project)
+    with PROJECT_LOCK:
+        _ensure_project_dirs(project.root_path)
+        if project.settings.get("backup_on_save", True):
+            _write_backup(project)
+        # project.json is a lightweight manifest (version only); shots live in shots.json.
+        _atomic_write_json(project.json_path, {"version": PROJECT_JSON_VERSION})
+        # Canonical shots.json + regenerated readable shots.csv compatibility snapshot.
+        save_shots(project.root_path, project.shots)
+        save_settings(project)
 
 
 def add_shot(project: Project, *, after_index: int | None = None) -> Shot:

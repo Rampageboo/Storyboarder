@@ -10,6 +10,12 @@ from typing import BinaryIO
 from PIL import Image, ImageDraw, ImageFont
 
 
+# Bound the pixel count Pillow will decode from an untrusted image so a hostile file
+# raises DecompressionBombError instead of allocating unbounded memory. Pin an explicit
+# ceiling (rather than relying on Pillow's implicit ~178 MP default) that still clears
+# large reference photos from high-megapixel phone cameras. None would disable the guard.
+Image.MAX_IMAGE_PIXELS = 200_000_000  # 200 MP
+
 DEFAULT_CANVAS_COLOR = "#E8E8E8"
 _HEX_COLOR_RE = re.compile(r"^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$")
 

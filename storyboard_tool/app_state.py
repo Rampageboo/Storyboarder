@@ -86,7 +86,11 @@ def _analyse_uncached_previews(project: Project) -> int:
     cache = preview_analysis_cache.load_cache(project.root_path)
     analysed = 0
     dirty = False
-    for shot in project.shots:
+    # Snapshot the shot list: this runs on a background thread while request threads
+    # may reorder/replace project.shots. Iterating a live reference could skip shots or
+    # raise if the list is reassigned mid-pass; a shallow copy of the references is
+    # enough since Shot objects are only read here.
+    for shot in list(project.shots):
         preview_path = project_manager.resolve_shot_preview_path(project, shot)
         if preview_path is None or not preview_path.is_file():
             continue
@@ -134,22 +138,25 @@ def _track_project(app: FastAPI, project: Project) -> None:
 
 
 def _refresh_project_from_disk(app: FastAPI) -> Project:
-    project = _require_project(app)
-    if app.state.dirty:
+    # Hold the persistence lock so a reload cannot swap app.state.project while another
+    # thread is mid-save (which would tear the save) or observe a half-written manifest.
+    with project_manager.PROJECT_LOCK:
+        project = _require_project(app)
+        if app.state.dirty:
+            return project
+        try:
+            refreshed, disk_mtime, changed = project_manager.reload_project_if_changed(
+                project,
+                app.state.project_disk_mtime,
+            )
+        except ValueError as exc:
+            logger.warning("Keeping in-memory project after background refresh failed: %s", exc)
+            return project
+        if changed:
+            app.state.project = refreshed
+            app.state.project_disk_mtime = disk_mtime
+            return refreshed
         return project
-    try:
-        refreshed, disk_mtime, changed = project_manager.reload_project_if_changed(
-            project,
-            app.state.project_disk_mtime,
-        )
-    except ValueError as exc:
-        logger.warning("Keeping in-memory project after background refresh failed: %s", exc)
-        return project
-    if changed:
-        app.state.project = refreshed
-        app.state.project_disk_mtime = disk_mtime
-        return refreshed
-    return project
 
 
 def _autosave(app: FastAPI) -> None:

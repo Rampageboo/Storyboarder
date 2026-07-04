@@ -24,18 +24,45 @@ from .models import Project, Shot
 from .shot_files import get_shot_dir, resolve_project_relative_path
 
 
+def _contained_project_path(project: Project, rel_path: str) -> Path | None:
+    """Resolve a stored metadata path and return it only if it stays inside the project.
+
+    Shot metadata (image_path / preview_image_path / thumbnail_path) can arrive from
+    untrusted callers (e.g. POST /api/shots/restore builds a Shot straight from a
+    client dict).  Because these paths are later handed to FileResponse, a value like
+    an absolute path or ``..\\..\\`` escape would let a caller read arbitrary files.
+    Resolve the path and confirm it is the project root or a descendant; otherwise
+    return None so the caller falls through to the canonical on-disk location.
+    """
+    text = str(rel_path or "").strip()
+    if not text:
+        return None
+    try:
+        resolved = (project.root_path / text).resolve()
+    except (OSError, ValueError):
+        return None
+    root = project.root_path.resolve()
+    if resolved == root or root in resolved.parents:
+        return resolved
+    return None
+
+
 def resolve_shot_preview_path(project: Project, shot: Shot) -> Path | None:
     """Find the best on-disk preview image for a shot.
 
     Checks: preview_image_path, image_path (if different), then the
     canonical on-disk path <shot_id>_preview.png.  Returns the first
-    path that exists, or None.
+    path that exists, or None.  Metadata-supplied paths are containment-checked
+    so a hostile value cannot escape the project folder.
     """
     candidates: list[Path] = []
-    if shot.preview_image_path:
-        candidates.append(project.root_path / shot.preview_image_path)
+    preview_candidate = _contained_project_path(project, shot.preview_image_path)
+    if preview_candidate is not None:
+        candidates.append(preview_candidate)
     if shot.image_path and shot.image_path != shot.preview_image_path:
-        candidates.append(project.root_path / shot.image_path)
+        image_candidate = _contained_project_path(project, shot.image_path)
+        if image_candidate is not None:
+            candidates.append(image_candidate)
     shot_dir = get_shot_dir(project, shot)
     candidates.append(shot_dir / f"{shot.shot_id}_preview.png")
     for path in candidates:
@@ -51,8 +78,9 @@ def resolve_shot_thumbnail_path(project: Project, shot: Shot) -> Path | None:
     preview path, and finally the background plate.
     """
     candidates: list[Path] = []
-    if shot.thumbnail_path:
-        candidates.append(project.root_path / shot.thumbnail_path)
+    thumbnail_candidate = _contained_project_path(project, shot.thumbnail_path)
+    if thumbnail_candidate is not None:
+        candidates.append(thumbnail_candidate)
     shot_dir = get_shot_dir(project, shot)
     candidates.append(shot_dir / f"{shot.shot_id}_thumb.png")
     preview_path = resolve_shot_preview_path(project, shot)
