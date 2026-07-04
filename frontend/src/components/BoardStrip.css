@@ -97,11 +97,19 @@
 }
 
 .board-strip-position {
-  min-width: 100px;
+  min-width: 172px;
   margin-left: 4px;
   color: var(--color-muted);
   font-size: 10px;
   white-space: nowrap;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.board-strip-duration {
+  color: color-mix(in srgb, var(--color-text) 72%, var(--color-muted));
+  font-variant-numeric: tabular-nums;
 }
 
 .board-strip-toolbar {

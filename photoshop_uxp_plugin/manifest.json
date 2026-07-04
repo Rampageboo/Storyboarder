@@ -3,6 +3,22 @@
   "id": "local.storyboard.manager.preview-export",
   "name": "Storyboard Manager Bridge",
   "version": "0.6.7",
+  "icons": [
+    {
+      "width": 256,
+      "height": 256,
+      "path": "icons/icon.png",
+      "scale": [
+        1
+      ],
+      "theme": [
+        "all"
+      ],
+      "species": [
+        "generic"
+      ]
+    }
+  ],
   "main": "index.html",
   "host": {
     "app": "PS",
@@ -15,6 +31,22 @@
       "label": {
         "default": "Storyboard Bridge"
       },
+      "icons": [
+        {
+          "width": 256,
+          "height": 256,
+          "path": "icons/icon.png",
+          "scale": [
+            1
+          ],
+          "theme": [
+            "all"
+          ],
+          "species": [
+            "generic"
+          ]
+        }
+      ],
       "minimumSize": {
         "width": 280,
         "height": 300
@@ -38,6 +70,22 @@
       "label": {
         "default": "Storyboard Work"
       },
+      "icons": [
+        {
+          "width": 256,
+          "height": 256,
+          "path": "icons/icon.png",
+          "scale": [
+            1
+          ],
+          "theme": [
+            "all"
+          ],
+          "species": [
+            "generic"
+          ]
+        }
+      ],
       "minimumSize": {
         "width": 240,
         "height": 220

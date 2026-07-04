@@ -11,23 +11,38 @@ import { shotDisplayVersion, shotHasBoardBackground, shotHasPreview, shotShouldO
 import { ShotThumb } from './ShotThumb'
 import './BoardStrip.css'
 
-function scrollCardIntoViewport(viewport: HTMLElement, card: HTMLElement) {
+function scrollCardIntoViewport(viewport: HTMLElement, card: HTMLElement, options: { center?: boolean } = {}) {
   const pad = 8
-  const cardLeft = card.offsetLeft
-  const cardRight = cardLeft + card.offsetWidth
-  const viewLeft = viewport.scrollLeft
-  const viewRight = viewLeft + viewport.clientWidth
-
-  if (cardLeft < viewLeft + pad) {
-    viewport.scrollTo({ left: Math.max(0, cardLeft - pad), behavior: 'auto' })
-  } else if (cardRight > viewRight - pad) {
-    viewport.scrollTo({ left: cardRight - viewport.clientWidth + pad, behavior: 'auto' })
+  const viewportRect = viewport.getBoundingClientRect()
+  const cardRect = card.getBoundingClientRect()
+  if (cardRect.width <= 0 || viewportRect.width <= 0) return
+  if (options.center) {
+    const delta = cardRect.left + cardRect.width / 2 - (viewportRect.left + viewportRect.width / 2)
+    viewport.scrollTo({ left: Math.max(0, viewport.scrollLeft + delta), behavior: 'auto' })
+    return
+  }
+  if (cardRect.left < viewportRect.left + pad) {
+    viewport.scrollTo({ left: Math.max(0, viewport.scrollLeft - (viewportRect.left + pad - cardRect.left)), behavior: 'auto' })
+  } else if (cardRect.right > viewportRect.right - pad) {
+    viewport.scrollTo({ left: viewport.scrollLeft + (cardRect.right - (viewportRect.right - pad)), behavior: 'auto' })
   }
 }
 
 function dropIsAfter(e: DragEvent<HTMLButtonElement>): boolean {
   const rect = e.currentTarget.getBoundingClientRect()
   return e.clientX > rect.left + rect.width / 2
+}
+
+function shotDurationSeconds(value: unknown): number {
+  const duration = Number(value)
+  return Number.isFinite(duration) && duration > 0 ? duration : 3
+}
+
+function formatClock(seconds: number): string {
+  const safeSeconds = Math.max(0, Math.round(seconds))
+  const minutes = Math.floor(safeSeconds / 60)
+  const remainder = safeSeconds % 60
+  return `${minutes}:${String(remainder).padStart(2, '0')}`
 }
 
 export function BoardStrip() {
@@ -86,17 +101,32 @@ export function BoardStrip() {
       : shots.length > 0
         ? `${shots.length} boards`
         : 'No boards'
+  const totalDurationSeconds = useMemo(
+    () => shots.reduce((total, shot) => total + shotDurationSeconds(shot.duration_seconds), 0),
+    [shots],
+  )
+  const currentDurationSeconds = useMemo(
+    () =>
+      selectedIndex >= 0
+        ? shots.slice(0, selectedIndex + 1).reduce((total, shot) => total + shotDurationSeconds(shot.duration_seconds), 0)
+        : 0,
+    [selectedIndex, shots],
+  )
+  const durationLabel = shots.length > 0 ? `${formatClock(currentDurationSeconds)} / ${formatClock(totalDurationSeconds)}` : '0:00 / 0:00'
+  const transportPositionLabel = shots.length > 0 ? `${progressLabel} · ${durationLabel}` : progressLabel
   const disabled = busy || projectActionBusy || initialLoading
   const canStepBack = selectedIndex > 0
   const canStepForward = selectedIndex >= 0 && selectedIndex < shots.length - 1
   const showTransportControls = showTransport || playing
   const lastScrollLeftRef = useRef(0)
   const preserveScrollOnSelectRef = useRef(false)
+  const forceAlignSelectedRef = useRef(false)
+  const alignRetryRef = useRef<number[]>([])
 
   useEffect(() => {
     if (!playing || disabled || selectedIndex < 0 || shots.length === 0) return
     if (selectedIndex >= shots.length - 1) return
-    const durationMs = Math.max(500, Number(shots[selectedIndex]?.duration_seconds ?? 3) * 1000)
+    const durationMs = Math.max(500, shotDurationSeconds(shots[selectedIndex]?.duration_seconds) * 1000)
     const timer = window.setTimeout(() => {
       const nextIndex = selectedIndex + 1
       const next = shots[nextIndex]
@@ -188,16 +218,52 @@ export function BoardStrip() {
 
   useLayoutEffect(() => {
     if (!selectedShotId || !viewportRef.current) return
-    if (preserveScrollOnSelectRef.current) {
-      viewportRef.current.scrollLeft = lastScrollLeftRef.current
+    const viewport = viewportRef.current
+    if (preserveScrollOnSelectRef.current && !forceAlignSelectedRef.current) {
+      viewport.scrollLeft = lastScrollLeftRef.current
       preserveScrollOnSelectRef.current = false
       return
     }
-    const card = viewportRef.current.querySelector(`[data-shot-id="${CSS.escape(selectedShotId)}"]`)
-    if (card instanceof HTMLElement) {
-      scrollCardIntoViewport(viewportRef.current, card)
+    for (const id of alignRetryRef.current) window.cancelAnimationFrame(id)
+    alignRetryRef.current = []
+    let attempts = 0
+    const alignSelected = () => {
+      const card = viewport.querySelector(`[data-shot-id="${CSS.escape(selectedShotId)}"]`)
+      if (!(card instanceof HTMLElement)) return
+      if (forceAlignSelectedRef.current) {
+        scrollCardIntoViewport(viewport, card, { center: true })
+      } else {
+        scrollCardIntoViewport(viewport, card)
+      }
+      lastScrollLeftRef.current = viewport.scrollLeft
+      attempts += 1
+      if (attempts >= 5) {
+        forceAlignSelectedRef.current = false
+        return
+      }
+      alignRetryRef.current.push(window.requestAnimationFrame(alignSelected))
     }
-  }, [selectedShotId, shots.length])
+    alignSelected()
+    return () => {
+      for (const id of alignRetryRef.current) window.cancelAnimationFrame(id)
+      alignRetryRef.current = []
+    }
+  }, [selectedShotId, shots.length, visualEpoch])
+
+  useLayoutEffect(() => {
+    if (!selectedShotId || selectedIndex < 0 || !viewportRef.current) return
+    const viewport = viewportRef.current
+    const card = viewport.querySelector(`[data-shot-id="${CSS.escape(selectedShotId)}"]`)
+    if (!(card instanceof HTMLElement)) return
+    const timer = window.setTimeout(() => {
+      const nextCard = viewport.querySelector(`[data-shot-id="${CSS.escape(selectedShotId)}"]`)
+      if (nextCard instanceof HTMLElement) {
+        scrollCardIntoViewport(viewport, nextCard)
+        lastScrollLeftRef.current = viewport.scrollLeft
+      }
+    }, 0)
+    return () => window.clearTimeout(timer)
+  }, [project?.project_json_path, selectedShotId, selectedIndex])
 
   // Convert vertical mouse-wheel delta to horizontal scroll. Horizontal trackpad
   // deltas are handled by the browser natively on the overflow-x container.
@@ -225,6 +291,7 @@ export function BoardStrip() {
     setBusy(true)
     try {
       await flushDirtyShots()
+      forceAlignSelectedRef.current = true
       await addShotAfterSelection()
     } catch {
       // flush or structural op failed; state unchanged
@@ -238,6 +305,7 @@ export function BoardStrip() {
     setBusy(true)
     try {
       await flushDirtyShots()
+      forceAlignSelectedRef.current = true
       await insertShotAtIndex(index)
     } catch (error) {
       reportError(error)
@@ -400,9 +468,9 @@ export function BoardStrip() {
       <button
         type="button"
         className="board-strip-progress"
-        aria-label={`${progressLabel}. Show playback controls`}
+        aria-label={`${transportPositionLabel}. Show playback controls`}
         aria-pressed={showTransportControls}
-        title={`${progressLabel}. Click to show playback controls.`}
+        title={`${transportPositionLabel}. Click to show playback controls.`}
         onClick={() => setShowTransport((value) => !value)}
       >
         <div className="board-strip-progress-fill" style={{ width: `${progressPercent}%` }} />
@@ -442,7 +510,10 @@ export function BoardStrip() {
           >
             ⏭
           </button>
-          <span className="board-strip-position">{progressLabel}</span>
+          <span className="board-strip-position">
+            <span>{progressLabel}</span>
+            <span className="board-strip-duration">{durationLabel}</span>
+          </span>
         </div>
         {rangeLabel || segmentDeleting ? (
           <span className="board-strip-segment">
