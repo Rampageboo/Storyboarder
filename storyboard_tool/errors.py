@@ -28,6 +28,8 @@ class AppErrorCode:
     REF_APPLY_FAILED = "REF_APPLY_FAILED"
     EXPORT_FAILED = "EXPORT_FAILED"
     INVALID_REQUEST = "INVALID_REQUEST"
+    UNAUTHORIZED = "UNAUTHORIZED"
+    PAYLOAD_TOO_LARGE = "PAYLOAD_TOO_LARGE"
 
 
 def app_error(code: str, message: str, *, status: int = 400) -> HTTPException:

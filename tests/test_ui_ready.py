@@ -50,7 +50,9 @@ class UiReadyTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             client = _make_client(tmp)
             with contextlib.redirect_stderr(io.StringIO()):
-                resp = client.post("/api/app/ui-ready")
+                # A valid token now also gates state-changing /api calls, so the
+                # (SPA-simulating) request must echo it.
+                resp = client.post("/api/app/ui-ready", headers={"X-Storyboarder-Token": token})
             self.assertEqual(resp.status_code, 200)
             body = resp.json()
             self.assertTrue(body["ok"])
@@ -82,7 +84,11 @@ class UiReadyTests(unittest.TestCase):
             client = _make_client(tmp)
             # Sending a body with a path must be ignored (endpoint takes no body)
             with contextlib.redirect_stderr(io.StringIO()):
-                resp = client.post("/api/app/ui-ready", json={"path": "/tmp/evil"})
+                resp = client.post(
+                    "/api/app/ui-ready",
+                    json={"path": "/tmp/evil"},
+                    headers={"X-Storyboarder-Token": "validtoken123"},
+                )
             self.assertEqual(resp.status_code, 200)
             # Only the env-var-based marker should be written, not /tmp/evil
             evil = Path("/tmp/evil")

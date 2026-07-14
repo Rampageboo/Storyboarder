@@ -107,6 +107,10 @@ def build_payload(
     bridge_url = f"http://127.0.0.1:{port}/api/bridge/live"
     shared_path = str(shared_bridge_file_path())
     canvas_width, canvas_height = get_canvas_size(project) if project else (1920, 1080)
+    # Per-launch API token so the UXP plugin can authenticate its state-changing POSTs.
+    # The plugin reads the bridge JSON over a token-free GET/file channel, so there is no
+    # bootstrap cycle. (The bridge file is local-only; a web attacker cannot read it.)
+    api_token = os.environ.get("STORYBOARDER_LAUNCH_TOKEN", "").strip()
 
     # Generic focus request: carries kind/key/source_file_path + legacy shot_id
     fwc = focus_work_context or {}
@@ -128,6 +132,7 @@ def build_payload(
         "connected": project is not None,
         "updated_at": _now_iso(),
         "port": port,
+        "api_token": api_token,
         "bridge_url": bridge_url,
         "global_bridge_path": str(global_bridge_file_path()),
         "shared_bridge_path": shared_path,

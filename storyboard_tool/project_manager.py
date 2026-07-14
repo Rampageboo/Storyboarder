@@ -203,7 +203,9 @@ def save_project(project: Project) -> None:
         # project.json is a lightweight manifest (version only); shots live in shots.json.
         _atomic_write_json(project.json_path, {"version": PROJECT_JSON_VERSION})
         # Canonical shots.json + regenerated readable shots.csv compatibility snapshot.
-        save_shots(project.root_path, project.shots)
+        # Serialize a snapshot (list copy) so both files describe the same shot ordering
+        # even if another thread mutates project.shots between the two writes.
+        save_shots(project.root_path, list(project.shots))
         save_settings(project)
 
 

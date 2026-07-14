@@ -121,6 +121,11 @@ class ShotUpdateRequest(BaseModel):
     camera_data: dict[str, Any] = Field(default_factory=dict)
     tags: list[str] = Field(default_factory=list)
     status: str = "Draft"
+    # Optional for compatibility with older desktop/plugin clients. Missing
+    # generation-authoring fields must preserve their canonical stored values.
+    shot_design: dict[str, Any] | None = None
+    prompt_config: dict[str, Any] | None = None
+    continuity: dict[str, Any] | None = None
 
 
 class CommentRequest(BaseModel):

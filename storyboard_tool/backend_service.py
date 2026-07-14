@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import functools
 import io
 import json
 import logging
@@ -1552,3 +1553,67 @@ class StoryboardBackendService(ExportServiceMixin):
         except (FileNotFoundError, ValueError) as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return {"path": validated, "cancelled": False}
+
+
+# ── Serialized project mutation ──────────────────────────────────────────────
+# Every method below performs a read-modify-write-save transaction on the single
+# shared app.state.project. FastAPI runs these sync endpoints on a threadpool and
+# the bridge/plugin is a second concurrent client, so two mutations (or a mutation
+# and a save/reload) can otherwise interleave and corrupt project.shots or persist a
+# torn snapshot. Holding project_manager.PROJECT_LOCK for the whole method makes each
+# transaction atomic. The lock is reentrant, so nested save_project /
+# _refresh_project_from_disk calls (which also take it) compose without deadlock.
+
+
+def _serialized_mutation(method):
+    @functools.wraps(method)
+    def wrapper(self, *args, **kwargs):
+        with project_manager.PROJECT_LOCK:
+            return method(self, *args, **kwargs)
+
+    return wrapper
+
+
+# Methods whose whole body must run under PROJECT_LOCK. Read-only endpoints
+# (get_project, list_*, get_*_preview, exports) are intentionally excluded so
+# concurrent reads and media serving are never blocked by a mutation.
+_MUTATING_METHODS = (
+    # Project lifecycle
+    "method_new_project", "method_open_project", "method_save_project",
+    # Shot CRUD / ordering
+    "method_add_shot", "method_duplicate_shot", "method_update_shot", "method_delete_shot",
+    "method_restore_shot", "method_reorder_shots", "method_move_shot_up", "method_move_shot_down",
+    # Shot media / sources
+    "method_import_image_path", "method_import_shot_image", "method_add_shot_reference_image",
+    "method_import_shot_source", "method_remove_shot_image", "method_relink_preview",
+    "method_recover_shot_source", "method_set_shot_reference_image_paths",
+    "method_remove_shot_reference_image", "method_create_shot_canvas", "method_save_shot_drawing",
+    "method_sync_shot", "method_sync_all_shots", "method_save_annotations",
+    "method_add_comment", "method_resolve_comment",
+    # Settings / canvas / references
+    "method_update_settings", "method_set_canvas_color", "method_delete_project_reference",
+    "method_upload_project_reference", "method_upload_reference_video",
+    # Reference-segment bakes (destructive; snapshot + write board images)
+    "method_apply_ref_segment", "method_apply_ref_segment_image", "method_apply_ref_segment_3d",
+    "method_apply_ref_segment_model_captures", "method_restore_ref_apply",
+    "method_delete_ref_segment", "method_snapshot_ref_boards",
+    # Scene 3D
+    "method_import_scene3d", "method_import_scene3d_to_scene", "method_create_scene3d",
+    "method_update_scene3d", "method_delete_scene3d", "method_set_active_scene3d",
+    # Scene 2D
+    "method_create_scene2d", "method_update_scene2d", "method_delete_scene2d",
+    "method_open_scene2d", "method_add_scene2d_to_references",
+    "method_create_scene2d_perspective", "method_update_scene2d_perspective",
+    "method_delete_scene2d_perspective", "method_reorder_scene2d_perspectives",
+    "method_import_scene2d_perspective", "method_duplicate_scene2d_perspective",
+    "method_set_primary_scene2d_perspective", "method_move_scene2d_perspective",
+    "method_open_scene2d_perspective", "method_add_scene2d_perspective_to_references",
+    # Plugin-driven state updates
+    "method_plugin_psd_saved", "method_plugin_next_shot", "method_plugin_scene2d_psd_saved",
+    "method_plugin_scene2d_next_perspective",
+)
+
+for _name in _MUTATING_METHODS:
+    _method = getattr(StoryboardBackendService, _name, None)
+    if _method is not None:
+        setattr(StoryboardBackendService, _name, _serialized_mutation(_method))

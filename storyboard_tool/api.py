@@ -1,15 +1,19 @@
 from __future__ import annotations
 
+import hmac
+import json
 import logging
+import os
+import re
 import sys
 import threading
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, Request, Response, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
 from . import app_state, logging_config, project_manager, runtime_state
@@ -65,19 +69,55 @@ _MAX_UPLOAD_BYTES = 1024 * 1024 * 1024  # 1 GiB
 # reached cross-origin only by localhost clients (the Photoshop UXP plugin, which
 # probes 127.0.0.1/localhost ports). Reflecting arbitrary web origins would let any
 # page the user visits read API responses (project data, board images). Restrict the
-# allowed cross-origin set to localhost / null instead of "*".
-_ALLOWED_ORIGIN_REGEX = r"^(https?://(127\.0\.0\.1|localhost)(:\d+)?|null)$"
+# allowed cross-origin set to localhost only. `null` is deliberately excluded: a
+# sandboxed iframe on a hostile page carries `Origin: null`, so allowing it would
+# re-open cross-origin reads. Non-browser clients (the UXP plugin) send no Origin and
+# are not subject to CORS, so they are unaffected by this restriction.
+_ALLOWED_ORIGIN_REGEX = r"^https?://(127\.0\.0\.1|localhost)(:\d+)?$"
+
+# Per-launch API token. The launcher exports STORYBOARDER_LAUNCH_TOKEN; when present,
+# state-changing /api requests must echo it in this header. This blocks cross-origin
+# CSRF writes (which CORS alone cannot: multipart/simple POSTs are preflight-exempt so
+# the browser still sends them) and stray local processes. Read/GET routes stay open so
+# <img>/<a> media loads, which cannot carry custom headers, keep working; cross-origin
+# reads are already blocked by the CORS restriction above.
+_API_TOKEN_HEADER = "x-storyboarder-token"
+_LAUNCH_TOKEN_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
+_UNSAFE_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
+# Health/identity probe hit by the launcher before the UI (and thus the token) loads.
+_TOKEN_EXEMPT_API_PATHS = frozenset({"/api/bridge/status"})
 
 
 _REACT_BUILD_HINT = "React build not found. Run: cd frontend && npm run build"
 logger = logging.getLogger(__name__)
 
 
-def _react_index_response(react_dist: Path) -> FileResponse:
+def _read_launch_token() -> str:
+    token = os.environ.get("STORYBOARDER_LAUNCH_TOKEN", "").strip()
+    if token and _LAUNCH_TOKEN_RE.match(token):
+        return token
+    return ""
+
+
+def _react_index_response(react_dist: Path, token: str = "") -> FileResponse | HTMLResponse:
     index_file = react_dist / "index.html"
     if not index_file.is_file():
         raise HTTPException(status_code=404, detail=_REACT_BUILD_HINT)
-    return FileResponse(index_file)
+    if not token:
+        return FileResponse(index_file)
+    # Inject the per-launch token into the same-origin document so the SPA can read it
+    # and echo it on API calls. The token is charset-validated (see _read_launch_token)
+    # so it is safe to embed; json.dumps also quotes/escapes it defensively.
+    markup = index_file.read_text(encoding="utf-8")
+    injection = (
+        f'<meta name="storyboarder-token" content="{token}">'
+        f"<script>window.__STORYBOARDER_TOKEN__={json.dumps(token)};</script>"
+    )
+    if "</head>" in markup:
+        markup = markup.replace("</head>", injection + "</head>", 1)
+    else:
+        markup = injection + markup
+    return HTMLResponse(markup)
 
 
 def _model_captures_payload(captures: list[RefSegment3dCapture]) -> list[dict[str, Any]]:
@@ -141,6 +181,7 @@ def create_app(base_dir: Path, bridge_port: int = 8000) -> FastAPI:
     app.state.project_disk_mtime = 0.0
     app.state.dirty = False
     app.state.main_window = None
+    app.state.api_token = _read_launch_token()
     runtime_state.init_bridge_state(app, bridge_port)
 
     def _svc() -> StoryboardBackendService:
@@ -185,6 +226,39 @@ def create_app(base_dir: Path, bridge_port: int = 8000) -> FastAPI:
     )
 
     @app.middleware("http")
+    async def _guard_requests(request, call_next):
+        # 1. Reject oversized bodies up front, before multipart parsing spools them.
+        content_length = request.headers.get("content-length")
+        if content_length:
+            try:
+                declared = int(content_length)
+            except ValueError:
+                declared = -1
+            if declared > _MAX_UPLOAD_BYTES:
+                return JSONResponse(
+                    status_code=413,
+                    content={
+                        "detail": f"Request body exceeds the {_MAX_UPLOAD_BYTES // (1024 * 1024)} MiB limit.",
+                        "code": AppErrorCode.PAYLOAD_TOO_LARGE,
+                    },
+                )
+        # 2. Per-launch token gate for state-changing /api calls (no-op when unset).
+        token = getattr(app.state, "api_token", "")
+        if (
+            token
+            and request.method in _UNSAFE_METHODS
+            and request.url.path.startswith("/api/")
+            and request.url.path not in _TOKEN_EXEMPT_API_PATHS
+        ):
+            provided = request.headers.get(_API_TOKEN_HEADER, "")
+            if not hmac.compare_digest(provided, token):
+                return JSONResponse(
+                    status_code=403,
+                    content={"detail": "Missing or invalid API token.", "code": AppErrorCode.UNAUTHORIZED},
+                )
+        return await call_next(request)
+
+    @app.middleware("http")
     async def _no_store_assets(request, call_next):
         response = await call_next(request)
         path = request.url.path
@@ -205,8 +279,8 @@ def create_app(base_dir: Path, bridge_port: int = 8000) -> FastAPI:
     app.mount("/static", StaticFiles(directory=web_dir / "static"), name="static")
 
     @app.get("/")
-    def index() -> FileResponse:
-        return _react_index_response(react_dist)
+    def index() -> Response:
+        return _react_index_response(react_dist, app.state.api_token)
 
     @app.get("/ref-video")
     def ref_video_redirect() -> RedirectResponse:
@@ -214,11 +288,11 @@ def create_app(base_dir: Path, bridge_port: int = 8000) -> FastAPI:
         return RedirectResponse(url="/", status_code=302)
 
     @app.get("/react")
-    def react_index() -> FileResponse:
-        return _react_index_response(react_dist)
+    def react_index() -> Response:
+        return _react_index_response(react_dist, app.state.api_token)
 
     @app.get("/react/{asset_path:path}")
-    def react_asset(asset_path: str) -> FileResponse:
+    def react_asset(asset_path: str) -> Response:
         index_file = react_dist / "index.html"
         resolved = (react_dist / asset_path).resolve()
         dist_root = react_dist.resolve()
@@ -226,7 +300,7 @@ def create_app(base_dir: Path, bridge_port: int = 8000) -> FastAPI:
             return FileResponse(resolved)
         if not index_file.is_file():
             raise HTTPException(status_code=404, detail=_REACT_BUILD_HINT)
-        return FileResponse(index_file)
+        return _react_index_response(react_dist, app.state.api_token)
 
     @app.get("/api/project")
     def get_project() -> dict[str, Any]:

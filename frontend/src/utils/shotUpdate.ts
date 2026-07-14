@@ -16,5 +16,8 @@ export function shotToUpdate(shot: Shot): ShotUpdate {
     camera_data: shot.camera_data,
     tags: shot.tags,
     status: shot.status,
+    shot_design: shot.shot_design,
+    prompt_config: shot.prompt_config,
+    continuity: shot.continuity,
   }
 }

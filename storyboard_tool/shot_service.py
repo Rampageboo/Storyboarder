@@ -7,10 +7,19 @@ to the appropriate status codes.
 
 from __future__ import annotations
 
+from copy import deepcopy
 from typing import Any
 
 from . import project_manager
-from .models import SHOT_STATUSES, Project, Shot
+from .models import (
+    SHOT_STATUSES,
+    Project,
+    Shot,
+    default_generation_state,
+    normalize_continuity,
+    normalize_prompt_config,
+    normalize_shot_design,
+)
 
 
 def find_shot_index(project: Project, shot_id: str) -> int:
@@ -32,7 +41,13 @@ def create_shot(project: Project, after_shot_id: str | None = None) -> Shot:
 
 
 def duplicate_shot(project: Project, shot_id: str) -> Shot:
-    return project_manager.duplicate_shot(project, find_shot_index(project, shot_id))
+    duplicate = project_manager.duplicate_shot(project, find_shot_index(project, shot_id))
+    # Authored intent is useful on a duplicate, but observed/canonical continuity
+    # and generation identities belong to the source output and must not leak.
+    duplicate.continuity["observed_out"] = ""
+    duplicate.continuity["resolved_out"] = ""
+    duplicate.generation_state = default_generation_state()
+    return duplicate
 
 
 def delete_shot(project: Project, shot_id: str) -> Shot:
@@ -46,6 +61,7 @@ def reorder_shots(project: Project, shot_ids: list[str]) -> None:
 def update_shot(shot: Shot, data: dict[str, Any]) -> None:
     if not isinstance(data, dict):
         return
+    prior_generation_inputs = _generation_input_snapshot(shot)
     shot.title = str(data.get("title", shot.title))
     shot.scene = str(data.get("scene", shot.scene))
     shot.sequence = str(data.get("sequence", shot.sequence))
@@ -70,6 +86,17 @@ def update_shot(shot: Shot, data: dict[str, Any]) -> None:
     )
     status = str(data.get("status", shot.status))
     shot.status = status if status in SHOT_STATUSES else "Draft"
+    if "shot_design" in data and isinstance(data.get("shot_design"), dict):
+        shot.shot_design = normalize_shot_design(data["shot_design"])
+    if "prompt_config" in data and isinstance(data.get("prompt_config"), dict):
+        shot.prompt_config = normalize_prompt_config(data["prompt_config"])
+    if "continuity" in data and isinstance(data.get("continuity"), dict):
+        shot.continuity = normalize_continuity(data["continuity"])
+    if (
+        prior_generation_inputs != _generation_input_snapshot(shot)
+        and _has_generation_activity(shot)
+    ):
+        shot.generation_state["freshness_status"] = "stale"
 
 
 def update_shot_duration(shot: Shot, seconds: float) -> None:
@@ -78,3 +105,38 @@ def update_shot_duration(shot: Shot, seconds: float) -> None:
 
 def normalize_shot_payload(shot: Shot, data: dict[str, Any]) -> None:
     update_shot(shot, data)
+
+
+def _has_generation_activity(shot: Shot) -> bool:
+    state = shot.generation_state
+    return bool(
+        state.get("latest_attempt_id")
+        or state.get("active_output_id")
+        or state.get("approved_output_id")
+        or state.get("execution_status") in {"queued", "running", "succeeded", "failed"}
+    )
+
+
+def _generation_input_snapshot(shot: Shot) -> dict[str, Any]:
+    continuity = shot.continuity
+    return deepcopy({
+        "description": shot.description,
+        "action_note": shot.action_note,
+        "camera_note": shot.camera_note,
+        "character_note": shot.character_note,
+        "dialogue": shot.dialogue,
+        "lighting_note": shot.lighting_note,
+        "transition_note": shot.transition_note,
+        "camera_data": shot.camera_data,
+        "shot_design": shot.shot_design,
+        "prompt_config": shot.prompt_config,
+        "continuity": {
+            "mode": continuity.get("mode"),
+            "depends_on_shot_ids": continuity.get("depends_on_shot_ids"),
+            "primary_continuity_source_shot_id": continuity.get("primary_continuity_source_shot_id"),
+            "expected_in": continuity.get("expected_in"),
+            "expected_out": continuity.get("expected_out"),
+            "preserve": continuity.get("preserve"),
+            "intentional_changes": continuity.get("intentional_changes"),
+        },
+    })

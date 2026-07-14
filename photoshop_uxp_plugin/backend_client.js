@@ -50,6 +50,27 @@ function applyWorkContext(ctx) {
   }
 }
 
+// Per-launch API token published by the backend in the live-bridge JSON
+// (see build_payload in live_bridge.py). Sent as X-Storyboarder-Token on
+// state-changing API calls so the backend accepts them. Read from the same
+// bridge cache the plugin already loads to discover the port.
+async function storyboardApiToken() {
+  try {
+    const cache = await loadBridgeCache();
+    return String(cache?.api_token || "");
+  } catch {
+    return "";
+  }
+}
+
+function withStoryboardToken(headers, token) {
+  const merged = { ...(headers || {}) };
+  if (token) {
+    merged["X-Storyboarder-Token"] = token;
+  }
+  return merged;
+}
+
 async function storyboardApiOrigins() {
   const cache = await loadBridgeCache();
   const origins = [];
@@ -72,15 +93,19 @@ async function storyboardApiOrigins() {
 }
 
 async function requestStoryboardApi(path, options = {}) {
+  const token = await storyboardApiToken();
   for (const origin of await storyboardApiOrigins()) {
     try {
       const response = await fetch(`${origin}${path}`, {
         cache: "no-store",
         ...options,
-        headers: {
-          ...(options.body ? { "Content-Type": "application/json" } : {}),
-          ...(options.headers || {}),
-        },
+        headers: withStoryboardToken(
+          {
+            ...(options.body ? { "Content-Type": "application/json" } : {}),
+            ...(options.headers || {}),
+          },
+          token,
+        ),
       });
       if (!response.ok) {
         continue;
@@ -232,11 +257,13 @@ async function requestStoryboardAppFocus() {
 // false forces a flattened rebuild. Returns the recovery result (or null).
 async function requestPsdRecovery(shotId, preserveLayers = true) {
   const query = preserveLayers ? "" : "?preserve_layers=false";
+  const token = await storyboardApiToken();
   for (const origin of await storyboardApiOrigins()) {
     try {
       const response = await fetch(`${origin}/api/shots/${shotId}/recover-source${query}`, {
         method: "POST",
         cache: "no-store",
+        headers: withStoryboardToken({}, token),
       });
       if (response.ok) {
         const payload = await response.json();
@@ -251,11 +278,13 @@ async function requestPsdRecovery(shotId, preserveLayers = true) {
 
 async function requestShotSync(shotId, force = true) {
   const query = force ? "?force=true" : "";
+  const token = await storyboardApiToken();
   for (const origin of await storyboardApiOrigins()) {
     try {
       const response = await fetch(`${origin}/api/shots/${encodeURIComponent(shotId)}/sync${query}`, {
         method: "POST",
         cache: "no-store",
+        headers: withStoryboardToken({}, token),
       });
       if (response.ok) {
         return await response.json();

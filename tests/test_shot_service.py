@@ -113,6 +113,33 @@ class TestDuplicateShot(unittest.TestCase):
             self.assertEqual(duplicate.scene, "INT. LAB")
             self.assertAlmostEqual(duplicate.duration_seconds, 5.0)
 
+    def test_duplicate_shot_preserves_authored_generation_inputs_but_resets_output_state(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            project = project_manager.create_project(Path(tmp))
+            original = shot_service.create_shot(project)
+            original.shot_design["story_beat"] = "Hero spots the key"
+            original.prompt_config["prompt_extra"] = "Keep the doorway visible"
+            original.continuity.update({
+                "expected_out": "Hero holds the key",
+                "observed_out": "The key is missing",
+                "resolved_out": "Hero holds the key",
+            })
+            original.generation_state.update({
+                "execution_status": "succeeded",
+                "review_status": "accepted",
+                "active_output_id": "output_1",
+            })
+
+            duplicate = shot_service.duplicate_shot(project, original.shot_id)
+
+            self.assertEqual(duplicate.shot_design["story_beat"], "Hero spots the key")
+            self.assertEqual(duplicate.prompt_config["prompt_extra"], "Keep the doorway visible")
+            self.assertEqual(duplicate.continuity["expected_out"], "Hero holds the key")
+            self.assertEqual(duplicate.continuity["observed_out"], "")
+            self.assertEqual(duplicate.continuity["resolved_out"], "")
+            self.assertEqual(duplicate.generation_state["execution_status"], "idle")
+            self.assertEqual(duplicate.generation_state["active_output_id"], "")
+
     def test_duplicate_shot_does_not_inherit_original_media_paths(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             project = project_manager.create_project(Path(tmp))
@@ -273,6 +300,56 @@ class TestUpdateShot(unittest.TestCase):
         shot.camera_data = {"fov": 50}
         shot_service.update_shot(shot, {"camera_data": "not-a-dict"})
         self.assertEqual(shot.camera_data, {"fov": 50})
+
+    def test_update_shot_normalizes_generation_authoring_records(self) -> None:
+        shot = self._shot()
+        shot_service.update_shot(shot, {
+            "shot_design": {"story_beat": "Reveal", "intentional_axis_crossing": 1},
+            "prompt_config": {"mode": "manual", "manual_prompt": "A rough wide shot", "variant_count": 99},
+            "continuity": {
+                "mode": "time-jump",
+                "depends_on_shot_ids": ["shot_a", "shot_a", ""],
+                "expected_out": "Night has fallen",
+                "preserve": ["red coat", "red coat"],
+            },
+        })
+        self.assertEqual(shot.shot_design["story_beat"], "Reveal")
+        self.assertTrue(shot.shot_design["intentional_axis_crossing"])
+        self.assertEqual(shot.prompt_config["mode"], "manual")
+        self.assertEqual(shot.prompt_config["variant_count"], 8)
+        self.assertEqual(shot.continuity["mode"], "time-jump")
+        self.assertEqual(shot.continuity["depends_on_shot_ids"], ["shot_a"])
+        self.assertEqual(shot.continuity["preserve"], ["red coat"])
+
+    def test_update_shot_malformed_nested_record_preserves_existing(self) -> None:
+        shot = self._shot()
+        shot.prompt_config["prompt_extra"] = "keep me"
+        shot_service.update_shot(shot, {"prompt_config": "not-a-dict"})
+        self.assertEqual(shot.prompt_config["prompt_extra"], "keep me")
+
+    def test_update_generation_input_marks_existing_output_stale_without_changing_workflow_status(self) -> None:
+        shot = self._shot()
+        shot.status = "Approved"
+        shot.generation_state.update({
+            "execution_status": "succeeded",
+            "review_status": "accepted",
+            "freshness_status": "current",
+            "active_output_id": "output_1",
+        })
+        shot_service.update_shot(shot, {"prompt_config": {"prompt_extra": "new constraint"}})
+        self.assertEqual(shot.status, "Approved")
+        self.assertEqual(shot.generation_state["review_status"], "accepted")
+        self.assertEqual(shot.generation_state["freshness_status"], "stale")
+
+    def test_update_workflow_only_does_not_mark_generation_stale(self) -> None:
+        shot = self._shot()
+        shot.generation_state.update({
+            "execution_status": "succeeded",
+            "freshness_status": "current",
+            "active_output_id": "output_1",
+        })
+        shot_service.update_shot(shot, {"status": "Review", "tags": ["urgent"]})
+        self.assertEqual(shot.generation_state["freshness_status"], "current")
 
     def test_update_shot_all_text_note_fields(self) -> None:
         shot = self._shot()

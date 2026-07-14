@@ -583,6 +583,7 @@ async function cacheBridgeEndpoints(live, sourceUrl) {
     const payload = {
       bridge_url: live.bridge_url || sourceUrl,
       port: live.port || 0,
+      api_token: live.api_token || "",
       shared_bridge_path: live.shared_bridge_path || SHARED_BRIDGE_PATH,
       global_bridge_path: live.global_bridge_path || "",
       project_bridge_path: live.project_root
@@ -658,12 +659,18 @@ async function sendPluginHeartbeat(live) {
     active_work_key: activeWorkKey,
     open_work_keys: openWorkKeys,
   });
+  const token =
+    typeof storyboardApiToken === "function" ? await storyboardApiToken() : "";
+  const heartbeatHeaders = { "Content-Type": "application/json" };
+  if (token) {
+    heartbeatHeaders["X-Storyboarder-Token"] = token;
+  }
   for (const url of urls) {
     try {
       await fetch(url, {
         method: "POST",
         cache: "no-store",
-        headers: { "Content-Type": "application/json" },
+        headers: heartbeatHeaders,
         body,
       });
       return;

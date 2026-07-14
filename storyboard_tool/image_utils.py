@@ -16,6 +16,24 @@ from PIL import Image, ImageDraw, ImageFont
 # large reference photos from high-megapixel phone cameras. None would disable the guard.
 Image.MAX_IMAGE_PIXELS = 200_000_000  # 200 MP
 
+# psd_tools builds composites via Image.new/frombytes, which bypass Pillow's
+# MAX_IMAGE_PIXELS decode guard. Apply the same budget explicitly from the PSD's
+# declared canvas dimensions before compositing so an oversized PSD can't allocate
+# unbounded memory during preview/recovery.
+MAX_PSD_PIXELS = 200_000_000  # 200 MP
+
+
+def _ensure_psd_pixel_budget(width: int, height: int) -> None:
+    try:
+        pixels = int(width) * int(height)
+    except (TypeError, ValueError):
+        return
+    if pixels > MAX_PSD_PIXELS:
+        raise ValueError(
+            f"PSD canvas is too large to process safely: {width}x{height} "
+            f"exceeds the {MAX_PSD_PIXELS}-pixel limit."
+        )
+
 DEFAULT_CANVAS_COLOR = "#E8E8E8"
 _HEX_COLOR_RE = re.compile(r"^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$")
 
@@ -146,6 +164,7 @@ def export_psd_composite_to_png(psd_path: Path, destination_path: Path) -> Path:
     destination_path = destination_path.with_suffix(".png")
     tmp = destination_path.with_suffix(".tmp.png")
     psd = PSDImage.open(psd_path)
+    _ensure_psd_pixel_budget(psd.width, psd.height)
     image = psd.composite(layer_filter=preview_export_layer_filter)
     if image.mode not in ("RGB", "RGBA"):
         image = image.convert("RGBA")
@@ -166,6 +185,7 @@ def ensure_psd_board_background_layer(psd_path: Path, background_path: Path) -> 
         return False
 
     psd = PSDImage.open(psd_path)
+    _ensure_psd_pixel_budget(psd.width, psd.height)
     for layer in list(psd.descendants()):
         if str(getattr(layer, "name", "") or "") == SB_BG_LAYER_NAME:
             psd.remove(layer)

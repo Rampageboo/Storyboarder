@@ -1,5 +1,20 @@
 import { apiBase } from './base'
 
+// Per-launch API token injected into the served document by the backend
+// (see _react_index_response in api.py). Sent on every API request so the
+// backend can reject cross-origin / unauthenticated state-changing calls.
+function readApiToken(): string {
+  if (typeof document !== 'undefined') {
+    const meta = document.querySelector('meta[name="storyboarder-token"]')
+    const content = meta?.getAttribute('content')
+    if (content) return content
+  }
+  const injected = (window as Window & { __STORYBOARDER_TOKEN__?: string }).__STORYBOARDER_TOKEN__
+  return typeof injected === 'string' ? injected : ''
+}
+
+const API_TOKEN = readApiToken()
+
 export class ApiError extends Error {
   readonly status: number
   readonly code: string | undefined
@@ -44,6 +59,9 @@ async function readErrorMessage(response: Response): Promise<{ message: string; 
 export async function requestJson<T>(url: string, options: RequestOptions = {}): Promise<T> {
   const { body, headers: customHeaders, ...fetchOptions } = options
   const headers = new Headers(customHeaders)
+  if (API_TOKEN && !headers.has('X-Storyboarder-Token')) {
+    headers.set('X-Storyboarder-Token', API_TOKEN)
+  }
   const response = await fetch(apiBase() + url, {
     ...fetchOptions,
     headers,

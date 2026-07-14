@@ -7,6 +7,134 @@ from typing import Any
 
 SHOT_STATUSES = ("Draft", "In Progress", "Review", "Approved", "Final")
 
+SHOT_DESIGN_TEXT_FIELDS = (
+    "story_beat",
+    "shot_size",
+    "camera_position",
+    "camera_height",
+    "camera_angle",
+    "camera_direction",
+    "camera_movement",
+    "lens_intent",
+    "subject_movement",
+    "composition",
+    "focal_point",
+    "foreground",
+    "midground",
+    "background",
+    "axis_of_action",
+)
+PROMPT_MODES = ("auto", "manual")
+CONTINUITY_MODES = ("continuous", "insert", "montage", "parallel", "time-jump", "reset")
+GENERATION_EXECUTION_STATUSES = ("idle", "queued", "running", "succeeded", "failed", "cancelled")
+GENERATION_REVIEW_STATUSES = ("unreviewed", "needs-review", "accepted", "rejected")
+GENERATION_FRESHNESS_STATUSES = ("current", "stale")
+
+
+def default_shot_design() -> dict[str, Any]:
+    return {
+        **{field_name: "" for field_name in SHOT_DESIGN_TEXT_FIELDS},
+        "intentional_axis_crossing": False,
+    }
+
+
+def normalize_shot_design(value: Any) -> dict[str, Any]:
+    raw = value if isinstance(value, dict) else {}
+    normalized = default_shot_design()
+    for field_name in SHOT_DESIGN_TEXT_FIELDS:
+        normalized[field_name] = str(raw.get(field_name, ""))
+    normalized["intentional_axis_crossing"] = bool(raw.get("intentional_axis_crossing", False))
+    return normalized
+
+
+def default_prompt_config() -> dict[str, Any]:
+    return {
+        "mode": "auto",
+        "manual_prompt": "",
+        "prompt_extra": "",
+        "negative_prompt": "",
+        "style_profile_id": "",
+        "aspect_ratio_override": "",
+        "variant_count": 1,
+        "reference_bindings": [],
+    }
+
+
+def normalize_prompt_config(value: Any) -> dict[str, Any]:
+    raw = value if isinstance(value, dict) else {}
+    normalized = default_prompt_config()
+    mode = str(raw.get("mode", "auto"))
+    normalized["mode"] = mode if mode in PROMPT_MODES else "auto"
+    for field_name in (
+        "manual_prompt",
+        "prompt_extra",
+        "negative_prompt",
+        "style_profile_id",
+        "aspect_ratio_override",
+    ):
+        normalized[field_name] = str(raw.get(field_name, ""))
+    try:
+        variant_count = int(raw.get("variant_count", 1))
+    except (TypeError, ValueError):
+        variant_count = 1
+    normalized["variant_count"] = max(1, min(8, variant_count))
+    bindings = raw.get("reference_bindings", [])
+    normalized["reference_bindings"] = [dict(item) for item in bindings if isinstance(item, dict)] if isinstance(bindings, list) else []
+    return normalized
+
+
+def default_continuity() -> dict[str, Any]:
+    return {
+        "mode": "continuous",
+        "depends_on_shot_ids": [],
+        "primary_continuity_source_shot_id": "",
+        "expected_in": "",
+        "expected_out": "",
+        "observed_out": "",
+        "resolved_out": "",
+        "preserve": [],
+        "intentional_changes": [],
+    }
+
+
+def normalize_continuity(value: Any) -> dict[str, Any]:
+    raw = value if isinstance(value, dict) else {}
+    normalized = default_continuity()
+    mode = str(raw.get("mode", "continuous"))
+    normalized["mode"] = mode if mode in CONTINUITY_MODES else "continuous"
+    normalized["depends_on_shot_ids"] = _unique_string_list(raw.get("depends_on_shot_ids", []))
+    normalized["primary_continuity_source_shot_id"] = str(raw.get("primary_continuity_source_shot_id", ""))
+    for field_name in ("expected_in", "expected_out", "observed_out", "resolved_out"):
+        normalized[field_name] = str(raw.get(field_name, ""))
+    normalized["preserve"] = _unique_string_list(raw.get("preserve", []))
+    normalized["intentional_changes"] = _unique_string_list(raw.get("intentional_changes", []))
+    return normalized
+
+
+def default_generation_state() -> dict[str, Any]:
+    return {
+        "execution_status": "idle",
+        "review_status": "unreviewed",
+        "freshness_status": "current",
+        "active_output_id": "",
+        "approved_output_id": "",
+        "latest_attempt_id": "",
+    }
+
+
+def normalize_generation_state(value: Any) -> dict[str, Any]:
+    raw = value if isinstance(value, dict) else {}
+    normalized = default_generation_state()
+    execution = str(raw.get("execution_status", "idle"))
+    review = str(raw.get("review_status", "unreviewed"))
+    freshness = str(raw.get("freshness_status", "current"))
+    normalized["execution_status"] = execution if execution in GENERATION_EXECUTION_STATUSES else "idle"
+    normalized["review_status"] = review if review in GENERATION_REVIEW_STATUSES else "unreviewed"
+    normalized["freshness_status"] = freshness if freshness in GENERATION_FRESHNESS_STATUSES else "current"
+    for field_name in ("active_output_id", "approved_output_id", "latest_attempt_id"):
+        normalized[field_name] = str(raw.get(field_name, ""))
+    return normalized
+
 
 @dataclass
 class Shot:
@@ -36,6 +164,10 @@ class Shot:
     ref_video_path: str = ""
     ref_video_time: float = 0.0
     ref_segment_time: float = 0.0
+    shot_design: dict[str, Any] = field(default_factory=default_shot_design)
+    prompt_config: dict[str, Any] = field(default_factory=default_prompt_config)
+    continuity: dict[str, Any] = field(default_factory=default_continuity)
+    generation_state: dict[str, Any] = field(default_factory=default_generation_state)
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "Shot":
@@ -71,6 +203,10 @@ class Shot:
             ref_video_path=str(data.get("ref_video_path", "")),
             ref_video_time=float(data.get("ref_video_time", 0.0) or 0.0),
             ref_segment_time=float(data.get("ref_segment_time", 0.0) or 0.0),
+            shot_design=normalize_shot_design(data.get("shot_design")),
+            prompt_config=normalize_prompt_config(data.get("prompt_config")),
+            continuity=normalize_continuity(data.get("continuity")),
+            generation_state=normalize_generation_state(data.get("generation_state")),
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -142,3 +278,14 @@ def _string_list(value: Any) -> list[str]:
     if isinstance(value, list):
         return [str(item) for item in value]
     return []
+
+
+def _unique_string_list(value: Any) -> list[str]:
+    result: list[str] = []
+    seen: set[str] = set()
+    for item in _string_list(value):
+        cleaned = item.strip()
+        if cleaned and cleaned not in seen:
+            seen.add(cleaned)
+            result.append(cleaned)
+    return result

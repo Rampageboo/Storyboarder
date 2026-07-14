@@ -12,6 +12,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Iterator
 
+from .image_utils import _ensure_psd_pixel_budget
+
 # Storyboarder / Photoshop plugin manage these layers from disk — recovering them
 # from a broken PSD often duplicates or mis-orders the stack.
 _PLUGIN_MANAGED_LAYER_NAMES = frozenset({"Background", "SB bg"})
@@ -158,6 +160,7 @@ def _rebuild_preserving_layers(broken_psd: Path, output_psd: Path) -> dict[str, 
 
     source = PSDImage.open(broken_psd)
     width, height = source.size
+    _ensure_psd_pixel_budget(width, height)
     rebuilt = PSDImage.new("RGBA", (width, height))
 
     recovered = 0
@@ -200,6 +203,7 @@ def _rebuild_flattened(broken_psd: Path, output_psd: Path) -> dict[str, Any]:
 
     source = PSDImage.open(broken_psd)
     width, height = source.size
+    _ensure_psd_pixel_budget(width, height)
     rebuilt = PSDImage.new("RGBA", (width, height))
 
     recovered = 0
