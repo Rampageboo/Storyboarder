@@ -2,12 +2,12 @@ from __future__ import annotations
 
 import csv
 import json
-import shutil
 from pathlib import Path
 
 from PIL import Image, ImageDraw, ImageFont
 
 from .models import Project, Shot
+from .shot_assets import render_shot_composite_image
 
 
 def export_shot_list_csv(project: Project, output_path: Path) -> Path:
@@ -88,10 +88,10 @@ def export_timing_json(project: Project, output_path: Path) -> Path:
 def export_image_sequence(project: Project, output_dir: Path) -> Path:
     output_dir.mkdir(parents=True, exist_ok=True)
     for index, shot in enumerate(project.shots, start=1):
-        source = _shot_image_path(project, shot)
         target = output_dir / f"{index:04d}_{shot.shot_id}.png"
-        if source and source.exists():
-            shutil.copy2(source, target)
+        composite = render_shot_composite_image(project, shot)
+        if composite is not None:
+            composite.save(target, "PNG")
         else:
             _placeholder_image(target, shot.shot_id)
     return output_dir
@@ -113,16 +113,12 @@ def export_contact_sheet(project: Project, output_path: Path, columns: int = 3) 
         x = col * tile_w
         y = row * (tile_h + label_h)
         draw.rectangle((x, y, x + tile_w - 1, y + tile_h + label_h - 1), outline="#999999")
-        source = _shot_image_path(project, shot)
-        if source and source.exists():
-            with Image.open(source) as image:
-                image.thumbnail((tile_w - 20, tile_h - 20))
-                paste_x = x + (tile_w - image.width) // 2
-                paste_y = y + 10 + (tile_h - 20 - image.height) // 2
-                if image.mode in ("RGBA", "LA"):
-                    sheet.paste(image, (paste_x, paste_y), image)
-                else:
-                    sheet.paste(image.convert("RGB"), (paste_x, paste_y))
+        image = render_shot_composite_image(project, shot)
+        if image is not None:
+            image.thumbnail((tile_w - 20, tile_h - 20))
+            paste_x = x + (tile_w - image.width) // 2
+            paste_y = y + 10 + (tile_h - 20 - image.height) // 2
+            sheet.paste(image, (paste_x, paste_y), image)
         else:
             draw.rectangle((x + 20, y + 20, x + tile_w - 20, y + tile_h - 20), outline="#bbbbbb")
             draw.text((x + 130, y + 120), "No Image", fill="#777777", font=font)

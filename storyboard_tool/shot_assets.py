@@ -1,25 +1,36 @@
-"""Shot preview, thumbnail, and board background asset management.
+"""Fixed shot-layer and thumbnail asset management.
 
-Manages the three distinct asset roles for a shot:
+Manages the four distinct asset roles for a shot:
 
   _preview.png     -- artist artwork (the drawing); tracked in image_path /
                       preview_image_path metadata.
   _background.png  -- reference plate (source for the SB bg linked smart object
                       in Photoshop); owned by the plugin; NEVER becomes the
                       artwork preview.
+  _codex.png       -- accepted generated image; independent from artist artwork.
   _thumb.png       -- display cache regenerated on demand; derived from artwork
-                      or background (in that priority order).
+                      and the fixed background -> Codex -> artwork composite.
 
 Key invariant enforced by this module:
-  _background.png must NEVER appear in image_path or preview_image_path.
-  relink_preview_image raises ValueError if the candidate is the background file.
+  _background.png and _codex.png must NEVER appear in image_path or
+  preview_image_path. relink_preview_image rejects both managed layers.
 """
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
+from PIL import Image
+
 from .file_transactions import atomic_copy_file
-from .image_utils import board_background_filename, create_thumbnail, is_solid_color_image
+from .image_utils import (
+    THUMBNAIL_SIZE,
+    board_background_filename,
+    codex_layer_filename,
+    create_thumbnail,
+    fit_image_to_canvas,
+    is_solid_color_image,
+)
 from .models import Project, Shot
 from .shot_files import get_shot_dir, resolve_project_relative_path
 
@@ -111,6 +122,45 @@ def get_shot_board_background_path(project: Project, shot: Shot) -> Path | None:
     return None
 
 
+def get_shot_codex_layer_path(project: Project, shot: Shot) -> Path | None:
+    """Return the accepted Codex image layer, or ``None`` when absent."""
+    path = get_shot_dir(project, shot) / codex_layer_filename(shot.shot_id)
+    return path if path.is_file() else None
+
+
+def save_codex_layer_from_path(project: Project, shot: Shot, source_path: Path) -> Path:
+    """Atomically replace the fixed Codex layer without touching artist artwork."""
+    width = max(1, int(project.settings.get("canvas_width") or 1920))
+    height = max(1, int(project.settings.get("canvas_height") or 1080))
+    destination = get_shot_dir(project, shot) / codex_layer_filename(shot.shot_id)
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    tmp = destination.with_suffix(".tmp.png")
+    try:
+        with Image.open(source_path) as source:
+            fit_image_to_canvas(source, width, height).save(tmp, "PNG")
+        with Image.open(tmp) as staged:
+            staged.verify()
+        os.replace(tmp, destination)
+    except BaseException:
+        tmp.unlink(missing_ok=True)
+        raise
+    try:
+        _refresh_thumbnail_for_shot(project, shot)
+    except Exception:  # noqa: BLE001
+        pass  # thumbnail is a recoverable display cache
+    return destination
+
+
+def remove_codex_layer_for_shot(project: Project, shot: Shot) -> None:
+    """Remove only the accepted Codex layer and refresh the display cache."""
+    path = get_shot_dir(project, shot) / codex_layer_filename(shot.shot_id)
+    path.unlink(missing_ok=True)
+    try:
+        _refresh_thumbnail_for_shot(project, shot)
+    except Exception:  # noqa: BLE001
+        pass
+
+
 def remove_board_background_for_shot(project: Project, shot: Shot) -> None:
     """Drop only the reference background, preserving the artist's drawing.
 
@@ -120,6 +170,10 @@ def remove_board_background_for_shot(project: Project, shot: Shot) -> None:
     """
     shot_dir = get_shot_dir(project, shot)
     (shot_dir / board_background_filename(shot.shot_id)).unlink(missing_ok=True)
+    try:
+        _refresh_thumbnail_for_shot(project, shot)
+    except Exception:  # noqa: BLE001
+        pass
 
 
 def _save_board_background_copy(source_path: Path, destination_path: Path) -> Path:
@@ -161,33 +215,51 @@ def _refresh_thumbnail_for_shot(project: Project, shot: Shot) -> Path | None:
     (computed in app_state) to decide when to render the background plate
     as a display fallback.
 
-    Priority:
-    1. Non-solid artist artwork (_preview.png or current image_path).
-    2. Reference background plate (_background.png).
-    3. Nothing available -- returns None.
+    The three fixed layers are rendered in product order: reference background,
+    accepted Codex image, then non-solid artist artwork.
     """
     shot_dir = get_shot_dir(project, shot)
     thumb_path = shot_dir / f"{shot.shot_id}_thumb.png"
 
-    preview_path = resolve_shot_preview_path(project, shot)
-    has_artwork = (
-        preview_path is not None
-        and preview_path.is_file()
-        and not is_solid_color_image(preview_path)
-    )
-
-    if has_artwork:
-        thumbnail = create_thumbnail(preview_path, thumb_path)
-        shot.thumbnail_path = thumbnail.relative_to(project.root_path).as_posix()
-        return thumbnail
-
-    bg_path = get_shot_board_background_path(project, shot)
-    if bg_path is None:
+    composite = render_shot_composite_image(project, shot)
+    if composite is None:
+        thumb_path.unlink(missing_ok=True)
+        shot.thumbnail_path = ""
         return None
+    tmp = thumb_path.with_suffix(".tmp.png")
+    try:
+        composite.thumbnail(THUMBNAIL_SIZE)
+        composite.save(tmp, "PNG")
+        os.replace(tmp, thumb_path)
+    except BaseException:
+        tmp.unlink(missing_ok=True)
+        raise
+    shot.thumbnail_path = thumb_path.relative_to(project.root_path).as_posix()
+    return thumb_path
 
-    thumbnail = create_thumbnail(bg_path, thumb_path)
-    shot.thumbnail_path = thumbnail.relative_to(project.root_path).as_posix()
-    return thumbnail
+
+def render_shot_composite_image(project: Project, shot: Shot) -> Image.Image | None:
+    """Render the fixed three-layer board composite without mutating any layer."""
+    width = max(1, int(project.settings.get("canvas_width") or 1920))
+    height = max(1, int(project.settings.get("canvas_height") or 1080))
+    preview_path = resolve_shot_preview_path(project, shot)
+    if preview_path is not None and is_solid_color_image(preview_path):
+        preview_path = None
+    paths = (
+        get_shot_board_background_path(project, shot),
+        get_shot_codex_layer_path(project, shot),
+        preview_path,
+    )
+    if not any(path is not None and path.is_file() for path in paths):
+        return None
+    composite = Image.new("RGBA", (width, height), (0, 0, 0, 0))
+    for path in paths:
+        if path is None or not path.is_file():
+            continue
+        with Image.open(path) as source:
+            layer = fit_image_to_canvas(source, width, height)
+        composite.alpha_composite(layer)
+    return composite
 
 
 def relink_preview_image(project: Project, shot: Shot, preview_rel: str) -> Path:
@@ -199,9 +271,13 @@ def relink_preview_image(project: Project, shot: Shot, preview_rel: str) -> Path
     is exactly the corruption the asset ownership model is designed to prevent.
     """
     candidate = resolve_project_relative_path(project, preview_rel)
-    if candidate.name == board_background_filename(shot.shot_id):
+    protected_filenames = {
+        board_background_filename(shot.shot_id),
+        codex_layer_filename(shot.shot_id),
+    }
+    if candidate.name in protected_filenames:
         raise ValueError(
-            f"Background plate cannot be used as preview metadata: {preview_rel}"
+            f"Managed layer cannot be used as preview metadata: {preview_rel}"
         )
     if not candidate.is_file():
         raise FileNotFoundError(f"Preview not found: {preview_rel}")

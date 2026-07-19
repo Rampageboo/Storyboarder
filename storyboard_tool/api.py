@@ -30,6 +30,8 @@ from .schemas import (
     CommentRequest,
     CommentResolveRequest,
     DrawingSaveRequest,
+    GenerationCandidateAcceptRequest,
+    GenerationRequestCreateRequest,
     ImportImagePathRequest,
     LiveBridgeUpdateRequest,
     OpenProjectRequest,
@@ -656,6 +658,35 @@ def create_app(base_dir: Path, bridge_port: int = 8000) -> FastAPI:
     def update_shot(shot_id: str, request: ShotUpdateRequest) -> dict[str, Any]:
         return _svc().method_update_shot(shot_id, request.model_dump())
 
+    @app.post("/api/shots/{shot_id}/generation-requests")
+    def create_generation_request(shot_id: str, request: GenerationRequestCreateRequest) -> dict[str, Any]:
+        return _svc().method_create_generation_request(shot_id, request.destination)
+
+    @app.get("/api/generation/requests")
+    def list_generation_requests(
+        shot_id: str = "",
+        destination: str = "",
+        status: str = "",
+    ) -> dict[str, Any]:
+        return _svc().method_list_generation_requests(
+            shot_id=shot_id,
+            destination=destination,
+            status=status,
+        )
+
+    @app.post("/api/generation/reconcile")
+    def reconcile_generation_results() -> dict[str, Any]:
+        return _svc().method_reconcile_generation_results()
+
+    @app.post("/api/shots/{shot_id}/codex-layer/accept")
+    def accept_generation_candidate(shot_id: str, request: GenerationCandidateAcceptRequest) -> dict[str, Any]:
+        return _svc().method_accept_generation_candidate(
+            shot_id,
+            request.request_id,
+            request.result_id,
+            request.artifact_path,
+        )
+
     @app.delete("/api/shots/{shot_id}")
     def delete_shot(shot_id: str) -> dict[str, Any]:
         return _svc().method_delete_shot(shot_id)
@@ -739,6 +770,10 @@ def create_app(base_dir: Path, bridge_port: int = 8000) -> FastAPI:
     def remove_image(shot_id: str) -> dict[str, Any]:
         return _svc().method_remove_shot_image(shot_id)
 
+    @app.delete("/api/shots/{shot_id}/layers/{layer_id}")
+    def remove_fixed_layer(shot_id: str, layer_id: str) -> dict[str, Any]:
+        return _svc().method_remove_fixed_layer(shot_id, layer_id)
+
     @app.get("/api/shots/{shot_id}/image")
     def get_image(shot_id: str) -> FileResponse:
         return _file_response_from_meta(_svc().method_get_shot_image(shot_id))
@@ -750,6 +785,10 @@ def create_app(base_dir: Path, bridge_port: int = 8000) -> FastAPI:
     @app.get("/api/shots/{shot_id}/board-background")
     def get_board_background(shot_id: str) -> FileResponse:
         return _file_response_from_meta(_svc().method_get_shot_board_background(shot_id))
+
+    @app.get("/api/shots/{shot_id}/codex-layer")
+    def get_codex_layer(shot_id: str) -> FileResponse:
+        return _file_response_from_meta(_svc().method_get_shot_codex_layer(shot_id))
 
     @app.get("/api/files")
     def get_project_file(path: str) -> FileResponse:

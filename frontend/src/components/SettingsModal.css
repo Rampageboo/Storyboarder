@@ -60,6 +60,27 @@
   font-weight: 600;
 }
 
+.settings-field textarea {
+  width: 100%;
+  min-height: 118px;
+  padding: 8px 9px;
+  resize: vertical;
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  color: var(--color-text);
+  background: var(--bg-input);
+  font: inherit;
+  font-weight: 400;
+  line-height: 1.45;
+}
+
+.settings-field small {
+  color: var(--color-muted);
+  font-size: 10px;
+  font-weight: 400;
+  line-height: 1.4;
+}
+
 .settings-color-row {
   display: grid;
   grid-template-columns: 48px 1fr;

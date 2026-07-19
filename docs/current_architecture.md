@@ -28,6 +28,8 @@
 17. [Deleted Legacy Artifacts](#17-deleted-legacy-artifacts)
 18. [Non-Goals](#18-non-goals)
 19. [Asset Lifecycle Boundaries](#19-asset-lifecycle-boundaries)
+20. [Generation Queue and Codex MCP Handoffs](#20-generation-queue-and-codex-mcp-handoffs)
+21. [Scene and Character Prompt Bibles](#21-scene-and-character-prompt-bibles)
 
 ---
 
@@ -748,6 +750,7 @@ This section maps each asset type to its on-disk location, the module that owns 
     <shot_id>/
       <shot_id>_preview.png    ← artist artwork export (from Photoshop, drawing tool, or image import)
       <shot_id>_background.png ← reference / background plate (owned by reference apply flows)
+      <shot_id>_codex.png      ← accepted generated image (never artist artwork)
       <shot_id>_thumb.png      ← thumbnail for filmstrip / timeline display
       <shot_id>.psd            ← Photoshop canvas (optional)
       <shot_id>_annotations.json
@@ -764,15 +767,16 @@ This section maps each asset type to its on-disk location, the module that owns 
 
 ### 19.2 Board asset model
 
-Three per-shot files serve distinct roles and must not be conflated:
+Four per-shot files serve distinct roles and must not be conflated:
 
 | File | Owner | Written by | Must NOT be written by |
 |---|---|---|---|
 | `<id>_preview.png` | Artist / Photoshop | PSD export, drawing save, image import | Reference apply (video / image / model) |
 | `<id>_background.png` | Reference system | `_apply_reference_frame_to_shot`, `_apply_model_capture_to_shot`, `import_image_for_shot` | Never by Photoshop sync |
+| `<id>_codex.png` | Generation review | Explicit candidate acceptance | Never by Photoshop sync or drawing save |
 | `<id>_thumb.png` | Display system | `_refresh_thumbnail_for_shot` (called by apply / import flows) | Never written as a primary operation |
 
-**Display composite rule**: when the UI, filmstrip, contact sheet, or export needs to show a board, it may composite `_background.png` (bottom) + `_preview.png` (top, on transparency). The thumbnail `_thumb.png` reflects the best available source — artwork preview when present and non-solid, otherwise the background plate. Neither composite generation nor thumbnail refresh may destroy the originals.
+**Display composite rule**: the fixed order is `_background.png` (bottom) + `_codex.png` + `_preview.png` (top, on transparency). The UI can temporarily hide individual layers; thumbnails and exports render the complete fixed-order composite. Neither composite generation nor thumbnail refresh may destroy the originals.
 
 **Legacy boards**: projects created before this separation may have a `_preview.png` that IS a baked reference (the old model wrote the reference directly into the preview). Such shots are identified as "legacy-baked" — they have reference provenance (`camera_data["ref_segment_id"]` set) and no linked PSD or `source_file_path`. On `delete_ref_segment` their preview is cleared along with the background (since both represent the same baked reference). Shots that have a PSD or a `source_file_path` are never treated as legacy-baked.
 
@@ -790,6 +794,7 @@ Three per-shot files serve distinct roles and must not be conflated:
 | `import_scene3d_stream` | writes `scene3d/<name>.glb`, updates `settings["scene3d"]` | `external_tools` | `mutate_project` in `backend_service` |
 | `apply_ref_segment_to_boards` | writes **only** `<id>_background.png` + `<id>_thumb.png`; stamps provenance metadata; does NOT touch `<id>_preview.png` or `source_file_path` | `reference_segments` | `mutate_project` in `backend_service`; undo snapshot taken first |
 | `apply_model_captures_to_boards` | writes **only** `<id>_background.png` + `<id>_thumb.png`; stamps provenance metadata; does NOT touch `<id>_preview.png` or `source_file_path` | `reference_segments` | `mutate_project` in `backend_service`; undo snapshot taken first |
+| Accept generation candidate | writes `<id>_codex.png` + `<id>_thumb.png`; updates approval state; does NOT touch preview/background/PSD | `generation_service` → `shot_assets` | `mutate_project` in `backend_service` |
 | `delete_ref_segment` | deletes `<id>_background.png` + `<id>_thumb.png`; for legacy-baked shots (no PSD, has provenance) also deletes `<id>_preview.png`; clears shot metadata; removes segment from settings | `reference_segments` | `mutate_project` in `backend_service` |
 | `snapshot_boards_for_undo` | copies preview/bg/thumb to `backups/ref_undo/<token>/` | `reference_segments` | snapshot is write-only; original files untouched |
 | `restore_boards_from_undo` | copies snapshot PNGs back over current board files, restores shot metadata | `reference_segments` | `mutate_project` in `backend_service` |
@@ -824,3 +829,42 @@ Three per-shot files serve distinct roles and must not be conflated:
 ### 19.6 Missing-file reporting
 
 `export_utils.missing_files(project)` iterates all shots and checks whether the files referenced by `preview_image_path`, `thumbnail_path`, `source_file_path`, `annotation_path`, and each entry in `reference_image_paths` actually exist on disk. It returns a list of `{shot_id, field, path}` dicts — one entry per broken reference. Used by `method_get_missing_files` in the backend service.
+
+---
+
+## 20. Generation Queue and Codex MCP Handoffs
+
+`storyboard_tool/generation_service.py` owns generation request snapshots, queue listing, Codex result deposits, and explicit result reconciliation. A request captures authored shot details, the backend-compiled prompt, continuity context, reference paths, canvas dimensions, and an input revision hash. Request JSON is immutable after creation; mutable request status is stored separately.
+
+```
+<project>/generation/
+  requests/<gen_id>.json              — immutable request snapshot
+  state/<gen_id>.json                 — Storyboarder-owned mutable status
+  results/<gen_id>/<out_id>.json      — result manifest deposited by MCP
+  candidates/<gen_id>/<out_id>/*      — copied candidate image files
+```
+
+The desktop API exposes:
+
+| Endpoint | Purpose |
+|---|---|
+| `POST /api/shots/{shot_id}/generation-requests` | Create a queue request or Codex handoff and update the shot's generation state. |
+| `GET /api/generation/requests` | List requests, optionally filtered by shot, destination, or status. |
+| `POST /api/generation/reconcile` | Import deposited result state into canonical shot generation metadata and mark candidates `needs-review`. |
+| `POST /api/shots/{shot_id}/codex-layer/accept` | Copy one reviewed candidate into the independent fixed Codex layer and mark it accepted. |
+
+`storyboard_tool/mcp_server.py` is a local STDIO MCP server configured by `.codex/config.toml`. It exposes read-only list/get tools plus `storyboard_submit_generation_result`, which validates and copies image artifacts into the project. The MCP server never edits `shots.json`, approves outputs, or mutates queue state. Storyboarder remains the owner of retries, stale propagation, review, and approval.
+
+---
+
+## 21. Scene and Character Prompt Bibles
+
+Generation prompts have a fixed ownership hierarchy:
+
+1. **Scene Bible** (`scenes2d/scenes2d.json`) owns stable environment, spatial layout, permanent props, baseline time/weather/light, and explicit locked anchors. The Scene 2D primary perspective is attached to generation requests as a `scene-environment` visual reference.
+2. **Character Bible** (`settings.json.character_bible_prompt`) owns project-wide recurring identity and wardrobe. It does not decide who appears in a shot.
+3. **Shot Override** (`shots.json`) owns framing, camera, composition, action, expression, dialogue, and angle-specific visibility. It cannot replace the two consistency layers, including in manual prompt mode.
+
+Shots store both a backward-compatible free-text `scene` label and a stable `scene_id` link. Existing projects with no `scene_id` resolve a Scene Bible by an exact case-insensitive title match. Generation requests freeze the resolved Scene Bible, Character Bible, their visual reference, an overall `input_revision`, and a separate `consistency_revision`.
+
+Changing a linked Scene Bible marks generated shots in that scene stale. Changing the Character Bible marks every shot with generation activity stale. No existing request snapshot is rewritten.

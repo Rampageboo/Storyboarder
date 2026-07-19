@@ -25,6 +25,9 @@ Non-goals (do not add): browser mode, hosted server, cloud sync, audio, multi-wi
 | `storyboard_tool/shot_service.py` | Shot domain logic. No FastAPI/HTTP imports; raises `ValueError` |
 | `storyboard_tool/project_manager.py` | Project lifecycle, canonical file paths, atomic JSON writes |
 | `storyboard_tool/reference_segments.py` | Reference library + segment apply/undo/delete flows |
+| `storyboard_tool/scene2d.py` | Scene 2D library plus Scene Bible environment prompts, locked anchors, and primary visual references |
+| `storyboard_tool/generation_service.py` | Immutable generation requests, queue status, Codex result deposits/reconciliation |
+| `storyboard_tool/mcp_server.py` | Local STDIO MCP tools for Codex generation handoffs |
 | `storyboard_tool/project_transaction.py` | `mutate_project()` — in-memory snapshot/rollback for mutating operations |
 | `storyboard_tool/app_state.py` | Transport-agnostic project/app-state helpers (`_require_project`, `_autosave`, bridge payloads) |
 | `storyboard_tool/live_bridge.py`, `psd_recovery.py`, `image_utils.py`, `export_service.py` | Photoshop bridge, PSD rebuild, media, exports |
@@ -68,7 +71,7 @@ There is no CI; all validation is local. Python 3.11+, deps in `requirements.txt
 
 2. **Layering**: routes (`api.py`) → service (`backend_service.py`) → domain (`shot_service.py`, `reference_segments.py`, `project_manager.py`). Domain modules must not import FastAPI. New business logic goes in the service/domain layer, never in routes.
 
-3. **Board asset ownership** (details: `docs/stability_contract.md`): per shot, `_preview.png` is artist artwork, `_background.png` is the reference plate, `_thumb.png` is display cache. Reference-apply flows must never write `_preview.png`; Photoshop sync must never write `_background.png`; `image_path`/`preview_image_path` must never point at `_background.png`.
+3. **Board asset ownership** (details: `docs/stability_contract.md`): per shot, `_preview.png` is artist artwork, `_background.png` is the reference plate, `_codex.png` is the accepted generated layer, and `_thumb.png` is display cache. Reference/Codex flows must never write `_preview.png`; Photoshop sync must never write `_background.png` or `_codex.png`; `image_path`/`preview_image_path` must never point at background/Codex assets.
 
 4. **Atomic writes**: all critical JSON/PNG/PSD writes use temp file + `os.replace()`. Keep this pattern for any new persistence code. Wrap new mutating service methods in `project_transaction.mutate_project()`.
 

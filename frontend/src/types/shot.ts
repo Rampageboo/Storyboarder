@@ -71,6 +71,7 @@ export interface Shot {
   shot_id: string
   title: string
   scene: string
+  scene_id: string
   sequence: string
   description: string
   action_note: string
@@ -101,7 +102,9 @@ export interface Shot {
   preview_disk_mtime?: number
   thumbnail_disk_mtime?: number
   board_background_disk_mtime?: number
+  codex_layer_disk_mtime?: number
   has_board_background?: boolean
+  has_codex_layer?: boolean
   has_artwork_preview?: boolean
   preview_has_transparency?: boolean
   preview_analysis_state?: 'missing' | 'provisional' | 'cached'
@@ -110,6 +113,7 @@ export interface Shot {
 export interface ShotUpdate {
   title?: string
   scene?: string
+  scene_id?: string
   sequence?: string
   description?: string
   action_note?: string

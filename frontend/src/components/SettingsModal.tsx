@@ -12,6 +12,7 @@ export function SettingsModal({ open, onClose }: SettingsModalProps) {
   const { project, setProject, flushDirtyShots, projectActionBusy, reportError } = useProject()
   const [canvasColor, setCanvasColor] = useState('#E8E8E8')
   const [preheatPhotoshop, setPreheatPhotoshop] = useState(false)
+  const [characterBiblePrompt, setCharacterBiblePrompt] = useState('')
   const [saving, setSaving] = useState(false)
   const [note, setNote] = useState('')
 
@@ -19,8 +20,13 @@ export function SettingsModal({ open, onClose }: SettingsModalProps) {
     if (!project || !open) return
     setCanvasColor(String(project.settings?.canvas_background_color ?? '#E8E8E8'))
     setPreheatPhotoshop(Boolean(project.settings?.preheat_photoshop_on_open))
-    setNote('')
+    setCharacterBiblePrompt(String(project.settings?.character_bible_prompt ?? ''))
   }, [project, open])
+
+  const closeModal = useCallback(() => {
+    setNote('')
+    onClose()
+  }, [onClose])
 
   const saveSettings = useCallback(async () => {
     if (!project) return
@@ -36,6 +42,7 @@ export function SettingsModal({ open, onClose }: SettingsModalProps) {
         await updateSettings({
           canvas_background_color: color,
           preheat_photoshop_on_open: preheatPhotoshop,
+          character_bible_prompt: characterBiblePrompt,
         }),
       )
       setNote('Settings saved.')
@@ -44,14 +51,14 @@ export function SettingsModal({ open, onClose }: SettingsModalProps) {
     } finally {
       setSaving(false)
     }
-  }, [project, canvasColor, preheatPhotoshop, flushDirtyShots, setProject, reportError])
+  }, [project, canvasColor, preheatPhotoshop, characterBiblePrompt, flushDirtyShots, setProject, reportError])
 
   if (!open || !project) return null
 
   const disabled = saving || projectActionBusy
 
   return (
-    <div className="settings-modal-backdrop" role="presentation" onMouseDown={onClose}>
+    <div className="settings-modal-backdrop" role="presentation" onMouseDown={closeModal}>
       <section
         className="settings-modal"
         role="dialog"
@@ -62,9 +69,9 @@ export function SettingsModal({ open, onClose }: SettingsModalProps) {
         <div className="settings-modal-header">
           <div>
             <h2 id="settings-modal-title">Settings</h2>
-            <p>Project settings for canvas defaults and app startup behavior.</p>
+            <p>Project defaults, startup behavior, and global character identity.</p>
           </div>
-          <button type="button" className="settings-modal-close" onClick={onClose} aria-label="Close settings">
+          <button type="button" className="settings-modal-close" onClick={closeModal} aria-label="Close settings">
             x
           </button>
         </div>
@@ -97,11 +104,23 @@ export function SettingsModal({ open, onClose }: SettingsModalProps) {
             />
             <span>Preheat Photoshop when Storyboarder opens</span>
           </label>
+
+          <label className="settings-field">
+            <span>Character Bible</span>
+            <textarea
+              value={characterBiblePrompt}
+              onChange={(event) => setCharacterBiblePrompt(event.target.value)}
+              rows={7}
+              disabled={disabled}
+              placeholder="Define stable identity and wardrobe for recurring characters. Example: MAYA — short black bob, amber coat, silver watch."
+            />
+            <small>Project-wide identity only. A shot still decides which characters appear, their action, and expression.</small>
+          </label>
         </div>
 
         <div className="settings-modal-footer">
           {note ? <span className="settings-note">{note}</span> : null}
-          <button type="button" onClick={onClose} disabled={disabled}>
+          <button type="button" onClick={closeModal} disabled={disabled}>
             Cancel
           </button>
           <button type="button" className="primary" onClick={() => void saveSettings()} disabled={disabled}>

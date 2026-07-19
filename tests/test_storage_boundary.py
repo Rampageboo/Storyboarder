@@ -39,7 +39,7 @@ with warnings.catch_warnings():
     from fastapi.testclient import TestClient
 
 from storyboard_tool import api as api_module, project_manager
-from storyboard_tool.image_utils import board_background_filename
+from storyboard_tool.image_utils import board_background_filename, codex_layer_filename
 from storyboard_tool.models import Shot
 from storyboard_tool.shot_store import (
     load_shots_csv,
@@ -517,6 +517,17 @@ class TestBackgroundAssetGuardrail(unittest.TestCase):
 
         with self.assertRaises(ValueError, msg="Background file must be rejected as preview"):
             project_manager.relink_preview_image(project, shot, bg_rel)
+
+    def test_relink_preview_rejects_codex_layer_filename(self):
+        project = _make_project(self._tmp)
+        shot = project_manager.add_shot(project)
+        shot_dir = project_manager.get_shot_dir(project, shot)
+        codex_file = shot_dir / codex_layer_filename(shot.shot_id)
+        codex_file.write_bytes(b"\x89PNG\r\n\x1a\n" + b"\x00" * 8)
+        codex_rel = codex_file.relative_to(project.root_path).as_posix()
+
+        with self.assertRaises(ValueError, msg="Codex layer must be rejected as artist preview"):
+            project_manager.relink_preview_image(project, shot, codex_rel)
 
     def test_relink_preview_rejects_background_does_not_mutate_metadata(self):
         """After rejecting a background path, shot metadata must be unchanged."""

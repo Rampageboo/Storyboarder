@@ -109,6 +109,7 @@ class OpenProjectRequest(BaseModel):
 class ShotUpdateRequest(BaseModel):
     title: str = ""
     scene: str = ""
+    scene_id: str | None = None
     sequence: str = ""
     description: str = ""
     action_note: str = ""
@@ -126,6 +127,16 @@ class ShotUpdateRequest(BaseModel):
     shot_design: dict[str, Any] | None = None
     prompt_config: dict[str, Any] | None = None
     continuity: dict[str, Any] | None = None
+
+
+class GenerationRequestCreateRequest(BaseModel):
+    destination: str = "queue"
+
+
+class GenerationCandidateAcceptRequest(BaseModel):
+    request_id: str
+    result_id: str
+    artifact_path: str
 
 
 class CommentRequest(BaseModel):
@@ -174,6 +185,7 @@ class SettingsUpdateRequest(BaseModel):
     canvas_height: int | None = None
     apply_canvas_size_to_blank_shots: bool | None = None
     preheat_photoshop_on_open: bool | None = None
+    character_bible_prompt: str | None = None
     scene3d: dict[str, Any] | None = None
     reference_video_path: str | None = None
     reference_model_path: str | None = None
@@ -189,11 +201,15 @@ class SettingsUpdateRequest(BaseModel):
 class Scene2DCreateRequest(BaseModel):
     title: str | None = None
     description: str | None = None
+    environment_prompt: str | None = None
+    consistency_anchors: list[str] | None = None
 
 
 class Scene2DUpdateRequest(BaseModel):
     title: str | None = None
     description: str | None = None
+    environment_prompt: str | None = None
+    consistency_anchors: list[str] | None = None
     linked_scene3d_id: str | None = None
     can_be_reference: bool | None = None
 

@@ -14,6 +14,8 @@ export interface Scene2D {
   id: string
   title: string
   description: string
+  environment_prompt: string
+  consistency_anchors: string[]
   linked_scene3d_id: string
   primary_perspective_id: string
   source_file_path: string
@@ -28,11 +30,15 @@ export interface Scene2D {
 export interface Scene2DCreateRequest {
   title?: string
   description?: string
+  environment_prompt?: string
+  consistency_anchors?: string[]
 }
 
 export interface Scene2DUpdateRequest {
   title?: string
   description?: string
+  environment_prompt?: string
+  consistency_anchors?: string[]
   linked_scene3d_id?: string
   can_be_reference?: boolean
 }

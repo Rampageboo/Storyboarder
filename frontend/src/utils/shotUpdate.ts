@@ -4,6 +4,7 @@ export function shotToUpdate(shot: Shot): ShotUpdate {
   return {
     title: shot.title,
     scene: shot.scene,
+    scene_id: shot.scene_id,
     sequence: shot.sequence,
     description: shot.description,
     action_note: shot.action_note,

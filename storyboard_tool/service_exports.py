@@ -118,6 +118,14 @@ class ExportServiceMixin:
             raise app_error(AppErrorCode.MEDIA_NOT_FOUND, "No board background for this shot.", status=404)
         return {"path": str(background_path), "media_type": "", "filename": background_path.name}
 
+    def method_get_shot_codex_layer(self, shot_id: str) -> dict[str, str]:
+        project = app_state._require_project(self.app)
+        shot = app_state._find_shot(project, shot_id)
+        layer_path = project_manager.get_shot_codex_layer_path(project, shot)
+        if layer_path is None or not layer_path.is_file():
+            raise app_error(AppErrorCode.MEDIA_NOT_FOUND, "No Codex layer for this shot.", status=404)
+        return {"path": str(layer_path), "media_type": "", "filename": layer_path.name}
+
     def method_get_project_file(self, path: str) -> dict[str, str]:
         project = app_state._require_project(self.app)
         file_path = (project.root_path / path).resolve()

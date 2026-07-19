@@ -176,6 +176,13 @@ export function removeShotImage(shotId: string): Promise<ProjectPayload> {
   })
 }
 
+export function removeShotLayer(shotId: string, layerId: 'background' | 'codex'): Promise<ProjectPayload> {
+  return requestJson<ProjectPayload>(
+    `/api/shots/${encodeURIComponent(shotId)}/layers/${encodeURIComponent(layerId)}`,
+    { method: 'DELETE' },
+  )
+}
+
 export function shotImageUrl(shotId: string): string {
   return `/api/shots/${encodeURIComponent(shotId)}/image`
 }
@@ -186,6 +193,10 @@ export function shotThumbnailUrl(shotId: string): string {
 
 export function shotBoardBackgroundUrl(shotId: string): string {
   return `/api/shots/${encodeURIComponent(shotId)}/board-background`
+}
+
+export function shotCodexLayerUrl(shotId: string): string {
+  return `/api/shots/${encodeURIComponent(shotId)}/codex-layer`
 }
 
 /** URL that serves any project-relative file (e.g. a shot reference image) via GET /api/files. */

@@ -82,11 +82,15 @@ from .shot_files import (  # noqa: E402
 )
 from .shot_assets import (  # noqa: E402
     get_shot_board_background_path,
+    get_shot_codex_layer_path,
     remove_board_background_for_shot,
+    remove_codex_layer_for_shot,
     relink_preview_image,
     relink_shot_preview_from_disk,
+    render_shot_composite_image,
     resolve_shot_preview_path,
     resolve_shot_thumbnail_path,
+    save_codex_layer_from_path,
     _set_shot_preview_paths,
     _save_board_background_copy,
     _refresh_thumbnail_for_shot,

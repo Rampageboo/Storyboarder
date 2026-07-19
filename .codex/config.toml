@@ -1,0 +1,9 @@
+[mcp_servers.storyboarder]
+command = "cmd"
+args = ["/c", "scripts\\storyboarder-mcp.cmd"]
+cwd = "."
+startup_timeout_sec = 10
+tool_timeout_sec = 120
+default_tools_approval_mode = "writes"
+enabled = true
+required = false

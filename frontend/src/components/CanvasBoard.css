@@ -152,6 +152,72 @@
   background: color-mix(in srgb, var(--color-danger) 8%, transparent);
 }
 
+.canvas-layer-menu {
+  width: 320px;
+  gap: 4px;
+}
+
+.canvas-layer-heading {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  padding: 3px 4px 7px;
+  border-bottom: 1px solid color-mix(in srgb, var(--color-border) 65%, transparent);
+}
+
+.canvas-layer-heading strong {
+  font-size: 11px;
+}
+
+.canvas-layer-heading span,
+.canvas-layer-empty,
+.canvas-layer-protected {
+  color: var(--color-muted);
+  font-size: 9px;
+}
+
+.canvas-layer-row {
+  display: grid;
+  grid-template-columns: 46px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  min-height: 36px;
+  padding: 4px;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--bg-elevated) 54%, transparent);
+}
+
+.canvas-toolbar .canvas-layer-row button {
+  min-height: 24px;
+  padding: 3px 7px;
+  font-size: 9px;
+}
+
+.canvas-toolbar .canvas-layer-toggle[aria-pressed='true'] {
+  color: var(--color-success);
+  border-color: color-mix(in srgb, var(--color-success) 36%, var(--color-border));
+}
+
+.canvas-layer-name {
+  overflow: hidden;
+  font-size: 10px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.canvas-toolbar .canvas-layer-delete {
+  color: var(--color-danger);
+  border-color: transparent;
+  background: transparent;
+}
+
+.canvas-layer-note {
+  margin: 4px 4px 1px;
+  color: var(--color-muted);
+  font-size: 9px;
+}
+
 .canvas-file-details {
   padding-top: 5px;
   border-top: 1px solid color-mix(in srgb, var(--color-border) 65%, transparent);
@@ -354,6 +420,7 @@
   display: block;
 }
 
+.canvas-image-codex,
 .canvas-image-artwork {
   position: absolute;
   inset: 0;

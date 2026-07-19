@@ -12,6 +12,7 @@ generated files are recovered, and what the manual smoke-test checklist covers.
 | `<id>_preview.png` | Artist artwork preview | Drawing save, image import, PSD sync, PSD recovery |
 | `<id>.psd` | Artist source canvas | Canvas create, source import, PSD recovery |
 | `<id>_background.png` | Reference background plate | Reference-apply flows (`_apply_reference_frame_to_shot`, `_apply_model_capture_to_shot`) only |
+| `<id>_codex.png` | Accepted Codex image layer | Explicit generation-candidate acceptance only |
 | `<id>_thumb.png` | Display cache | `_refresh_thumbnail_for_shot`, `_set_shot_preview_paths` |
 | `<id>_annotations.json` | Annotations | Annotation API |
 | `<id>_notes.json` | Notes snapshot | `_ensure_shot_files` (init only) |
@@ -19,10 +20,16 @@ generated files are recovered, and what the manual smoke-test checklist covers.
 | `settings.json` | Project settings | `save_settings` (atomic) |
 | `project.json` | Project manifest | `save_project` (atomic) |
 | `storyboard_session.json` | UI session state | `write_session` (atomic) |
+| `generation/requests/*.json` | Immutable generation input snapshots | `generation_service.create_request` (atomic, create once) |
+| `generation/state/*.json` | Generation request status | Storyboarder reconciliation only (atomic) |
+| `generation/results/**/*.json` | External result manifests | Storyboarder MCP result submission (atomic) |
+| `generation/candidates/**/*` | Unapproved generated candidates | Storyboarder MCP result submission; never treated as board artwork until approval |
+| `scenes2d/scenes2d.json` + scene meta | Scene Bible environment prompt, anchors, primary perspective | Scene 2D service only (atomic) |
+| `settings.json.character_bible_prompt` | Project-wide character identity bible | Project settings API only (atomic) |
 
 **Hard invariant:** `image_path` and `preview_image_path` on a `Shot` must NEVER
-point to `<id>_background.png`.  The background plate is a reference plate; the
-metadata fields are artwork-only.  `validate_project_integrity()` checks this.
+point to `<id>_background.png` or `<id>_codex.png`. Those files are managed layers;
+the metadata fields are artwork-only. `validate_project_integrity()` checks this.
 
 ---
 
@@ -38,6 +45,8 @@ metadata fields are artwork-only.  `validate_project_integrity()` checks this.
 | Delete segment | `_background.png` removed, `_thumb.png` removed | `_preview.png` for PSD-backed shots |
 | Delete segment (legacy bake) | `_background.png`, `_thumb.png`, `_preview.png` removed | `source_file_path` |
 | Delete image | `_background.png` removed, artwork paths cleared | `source_file_path`, `_preview.png` if owned by PSD |
+| Accept Codex candidate | `_codex.png`, generation review state, `_thumb.png` | `_preview.png`, `_background.png`, PSD/source metadata |
+| Delete Codex layer | `_codex.png` removed, approval cleared, `_thumb.png` | `_preview.png`, `_background.png`, PSD/source metadata |
 
 ---
 
@@ -48,6 +57,8 @@ crash or disk-full condition never leaves a corrupt file at the final path:
 
 - `_atomic_write_json()` — `project.json`, `shots.json`, `settings.json`
 - `write_session()` — `storyboard_session.json`
+- `generation_service` request/state/result manifests — sibling temp file → `os.replace()`
+- `generation_service` candidate images — validated temp copy → `os.replace()`
 - `create_thumbnail()` — `_thumb.tmp.png` → `_thumb.png`
 - `copy_and_convert_image()` / `copy_and_convert_image_stream()` — `*.tmp.png` → `*.png`
 - `save_png_data_url()` — `*.tmp.png` → `*.png`
@@ -82,6 +93,8 @@ are returned as a list for the caller to decide how to surface them.
 reloading from disk.  If the user has unsaved changes, the reload is skipped.
 All API endpoints that mutate project state must set `app.state.dirty = True` or
 call `_autosave()` before returning.
+
+Scene and character consistency edits never mutate immutable generation requests. They mark affected canonical shots `freshness_status = "stale"`; a new request captures the new consistency revision.
 
 ---
 

@@ -141,6 +141,7 @@ class Shot:
     shot_id: str
     title: str = ""
     scene: str = ""
+    scene_id: str = ""
     sequence: str = ""
     description: str = ""
     action_note: str = ""
@@ -180,6 +181,7 @@ class Shot:
             shot_id=str(data.get("shot_id", "")),
             title=str(data.get("title", "")),
             scene=str(data.get("scene", "")),
+            scene_id=str(data.get("scene_id", "")),
             sequence=str(data.get("sequence", "")),
             description=str(data.get("description", "")),
             action_note=str(data.get("action_note", "")),

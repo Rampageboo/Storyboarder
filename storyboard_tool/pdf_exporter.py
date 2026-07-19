@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from io import BytesIO
 from pathlib import Path
 
 from reportlab.lib import colors
@@ -17,6 +18,7 @@ from reportlab.platypus import (
 )
 
 from .models import Project, Shot
+from .shot_assets import render_shot_composite_image
 
 
 def export_storyboard_pdf(project: Project, output_path: Path, layout: str = "two_per_page") -> None:
@@ -124,10 +126,12 @@ def _thumbnail_page(project: Project, shots: list[Shot], styles) -> Table:
 
 
 def _image_flowable(project: Project, shot: Shot, max_width=3.05 * inch, max_height=4.25 * inch):
-    image_rel_path = shot.preview_image_path or shot.image_path
-    image_path = project.root_path / image_rel_path if image_rel_path else None
-    if image_path and image_path.exists():
-        image = ReportLabImage(str(image_path))
+    composite = render_shot_composite_image(project, shot)
+    if composite is not None:
+        stream = BytesIO()
+        composite.save(stream, "PNG")
+        stream.seek(0)
+        image = ReportLabImage(stream)
         image._restrictSize(max_width, max_height)
         return image
 

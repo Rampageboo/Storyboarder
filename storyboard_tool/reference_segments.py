@@ -196,6 +196,14 @@ def _strip_ref_segment_provenance(shot: Shot) -> None:
     shot.camera_data = camera_data
 
 
+def clear_shot_reference_layer_state(shot: Shot) -> None:
+    """Mark a manually removed background layer as no longer applied."""
+    _strip_ref_segment_provenance(shot)
+    shot.ref_video_path = ""
+    shot.ref_video_time = 0.0
+    shot.ref_segment_time = 0.0
+
+
 def _shot_needs_legacy_range_bake_cleanup(
     project: Project,
     shot: Shot,

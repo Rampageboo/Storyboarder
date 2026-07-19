@@ -16,6 +16,7 @@ from fastapi import FastAPI, HTTPException
 
 from . import (
     app_state,
+    generation_service,
     project_manager,
     project_transaction,
     reference_segments,
@@ -530,6 +531,97 @@ class StoryboardBackendService(ExportServiceMixin):
         app_state._autosave(self.app)
         return app_state._project_payload(project, self.app.state.dirty)
 
+    def method_create_generation_request(self, shot_id: str, destination: str) -> dict[str, Any]:
+        project = app_state._require_project(self.app)
+        shot = app_state._find_shot(project, shot_id)
+        request: dict[str, Any] | None = None
+        try:
+            with project_transaction.mutate_project(project):
+                request = generation_service.create_request(project, shot, destination)
+                shot.generation_state.update({
+                    "execution_status": "queued",
+                    "review_status": "unreviewed",
+                    "freshness_status": "current",
+                    "active_output_id": "",
+                    "latest_attempt_id": request["request_id"],
+                })
+                try:
+                    app_state._autosave(self.app)
+                except Exception:
+                    generation_service.delete_request(project, request["request_id"])
+                    raise
+        except (OSError, ValueError) as exc:
+            raise app_error(AppErrorCode.GENERATION_REQUEST_FAILED, str(exc)) from exc
+        assert request is not None
+        response = {
+            "request": request,
+            "requests": generation_service.list_requests(project, shot_id=shot_id),
+            "project": app_state._project_payload(project, self.app.state.dirty),
+        }
+        if request["destination"] == "codex":
+            response["codex_prompt"] = generation_service.codex_handoff_prompt(request["request_id"])
+        return response
+
+    def method_list_generation_requests(
+        self,
+        *,
+        shot_id: str = "",
+        destination: str = "",
+        status: str = "",
+    ) -> dict[str, Any]:
+        project = app_state._require_project(self.app)
+        try:
+            requests = generation_service.list_requests(
+                project,
+                shot_id=str(shot_id or ""),
+                destination=str(destination or ""),
+                status=str(status or ""),
+            )
+        except ValueError as exc:
+            raise app_error(AppErrorCode.INVALID_REQUEST, str(exc)) from exc
+        return {"requests": requests}
+
+    def method_reconcile_generation_results(self) -> dict[str, Any]:
+        project = app_state._require_project(self.app)
+        try:
+            with project_transaction.mutate_project(project):
+                result = generation_service.reconcile_results(project)
+                if result["updated_shot_ids"]:
+                    app_state._autosave(self.app)
+        except (OSError, ValueError) as exc:
+            raise app_error(AppErrorCode.GENERATION_REQUEST_FAILED, str(exc)) from exc
+        return {
+            **result,
+            "requests": generation_service.list_requests(project),
+            "project": app_state._project_payload(project, self.app.state.dirty),
+        }
+
+    def method_accept_generation_candidate(
+        self,
+        shot_id: str,
+        request_id: str,
+        result_id: str,
+        artifact_path: str,
+    ) -> dict[str, Any]:
+        project = app_state._require_project(self.app)
+        shot = app_state._find_shot(project, shot_id)
+        try:
+            with project_transaction.mutate_project(project):
+                generation_service.accept_candidate_as_codex_layer(
+                    project,
+                    shot,
+                    request_id,
+                    result_id,
+                    artifact_path,
+                )
+                app_state._autosave(self.app)
+        except (OSError, ValueError) as exc:
+            raise app_error(AppErrorCode.GENERATION_REQUEST_FAILED, str(exc)) from exc
+        return {
+            "requests": generation_service.list_requests(project, shot_id=shot_id),
+            "project": app_state._project_payload(project, self.app.state.dirty),
+        }
+
     def method_delete_shot(self, shot_id: str) -> dict[str, Any]:
         project = app_state._require_project(self.app)
         try:
@@ -764,6 +856,7 @@ class StoryboardBackendService(ExportServiceMixin):
     def method_update_settings(self, payload: dict[str, Any]) -> dict[str, Any]:
         project = app_state._require_project(self.app)
         data = payload if isinstance(payload, dict) else {}
+        previous_character_bible = str(project.settings.get("character_bible_prompt") or "").strip()
         if "photoshop_path" in data:
             value = str(data.get("photoshop_path") or "").strip()
             if value:
@@ -841,9 +934,19 @@ class StoryboardBackendService(ExportServiceMixin):
             # TODO(preheat-photoshop): wire this stored startup preference to a lightweight
             # Photoshop warmup hook if one is added; do not launch Photoshop from settings writes.
             project.settings["preheat_photoshop_on_open"] = bool(data.get("preheat_photoshop_on_open"))
+        if "character_bible_prompt" in data:
+            project.settings["character_bible_prompt"] = str(data.get("character_bible_prompt") or "").strip()
         if "scene3d" in data:
             project.settings["scene3d"] = data["scene3d"]
-        project_manager.save_settings(project)
+        character_bible_changed = (
+            "character_bible_prompt" in data
+            and str(project.settings.get("character_bible_prompt") or "").strip() != previous_character_bible
+        )
+        if character_bible_changed:
+            generation_service.mark_all_generated_shots_stale(project)
+            app_state._autosave(self.app)
+        else:
+            project_manager.save_settings(project)
         project_manager.write_bridge_file(project)
         app_state._touch_live_bridge(self.app)
         return app_state._project_payload(project, self.app.state.dirty)
@@ -880,6 +983,25 @@ class StoryboardBackendService(ExportServiceMixin):
         shot = app_state._find_shot(project, shot_id)
         project_manager.remove_image_for_shot(project, shot)
         app_state._autosave(self.app)
+        return app_state._project_payload(project, self.app.state.dirty)
+
+    def method_remove_fixed_layer(self, shot_id: str, layer_id: str) -> dict[str, Any]:
+        project = app_state._require_project(self.app)
+        shot = app_state._find_shot(project, shot_id)
+        cleaned = str(layer_id or "").strip().lower()
+        with project_transaction.mutate_project(project):
+            if cleaned == "background":
+                project_manager.remove_board_background_for_shot(project, shot)
+                reference_segments.clear_shot_reference_layer_state(shot)
+            elif cleaned == "codex":
+                project_manager.remove_codex_layer_for_shot(project, shot)
+                shot.generation_state["approved_output_id"] = ""
+                shot.generation_state["review_status"] = (
+                    "needs-review" if shot.generation_state.get("active_output_id") else "unreviewed"
+                )
+            else:
+                raise app_error(AppErrorCode.INVALID_REQUEST, "Only background and Codex layers can be removed here.")
+            app_state._autosave(self.app)
         return app_state._project_payload(project, self.app.state.dirty)
 
     def method_relink_preview(self, shot_id: str, relative_path: str) -> dict[str, Any]:
@@ -1057,6 +1179,8 @@ class StoryboardBackendService(ExportServiceMixin):
                 project,
                 title=str(data.get("title") or ""),
                 description=str(data.get("description") or ""),
+                environment_prompt=str(data.get("environment_prompt") or ""),
+                consistency_anchors=data.get("consistency_anchors") if isinstance(data.get("consistency_anchors"), list) else [],
             )
         except (FileNotFoundError, ValueError) as exc:
             logger.exception("Failed to create Scene 2D")
@@ -1072,17 +1196,45 @@ class StoryboardBackendService(ExportServiceMixin):
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
+        shots_changed = False
+        if "title" in data:
+            for shot in project.shots:
+                if shot.scene_id == scene["id"] and shot.scene != scene["title"]:
+                    shot.scene = scene["title"]
+                    shots_changed = True
+        if {"environment_prompt", "consistency_anchors"}.intersection(data):
+            shots_changed = bool(
+                generation_service.mark_scene_dependents_stale(project, scene["id"], scene["title"])
+            ) or shots_changed
+        if shots_changed:
+            app_state._autosave(self.app)
         app_state._touch_live_bridge(self.app)
         return {"scene": scene, "scenes": scenes}
 
     def method_delete_scene2d(self, scene_id: str) -> dict[str, Any]:
         project = app_state._require_project(self.app)
         try:
+            existing_scene = next(
+                (item for item in scene2d.list_scenes(project) if item.get("id") == scene_id),
+                None,
+            )
             scenes = scene2d.delete_scene(project, scene_id)
         except FileNotFoundError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
+        unlinked = False
+        for shot in project.shots:
+            if shot.scene_id != scene_id:
+                continue
+            shot.scene_id = ""
+            if not shot.scene and existing_scene:
+                shot.scene = str(existing_scene.get("title") or "")
+            if generation_service.has_generation_activity(shot):
+                shot.generation_state["freshness_status"] = "stale"
+            unlinked = True
+        if unlinked:
+            app_state._autosave(self.app)
         app_state._touch_live_bridge(self.app)
         return {"scenes": scenes}
 
@@ -1583,6 +1735,8 @@ _MUTATING_METHODS = (
     # Shot CRUD / ordering
     "method_add_shot", "method_duplicate_shot", "method_update_shot", "method_delete_shot",
     "method_restore_shot", "method_reorder_shots", "method_move_shot_up", "method_move_shot_down",
+    "method_create_generation_request", "method_reconcile_generation_results",
+    "method_accept_generation_candidate", "method_remove_fixed_layer",
     # Shot media / sources
     "method_import_image_path", "method_import_shot_image", "method_add_shot_reference_image",
     "method_import_shot_source", "method_remove_shot_image", "method_relink_preview",

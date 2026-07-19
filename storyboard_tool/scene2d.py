@@ -243,10 +243,21 @@ def _normalize_scene(raw: dict[str, Any], *, legacy: bool = False) -> dict[str, 
     primary_id = str(raw.get("primary_perspective_id") or "").strip()
     if primary_id not in {item["id"] for item in unique_perspectives}:
         primary_id = unique_perspectives[0]["id"] if unique_perspectives else ""
+    raw_anchors = raw.get("consistency_anchors")
+    anchors: list[str] = []
+    seen_anchors: set[str] = set()
+    if isinstance(raw_anchors, list):
+        for value in raw_anchors:
+            anchor = str(value or "").strip()
+            if anchor and anchor not in seen_anchors:
+                seen_anchors.add(anchor)
+                anchors.append(anchor)
     scene = {
         "id": scene_id,
         "title": title,
         "description": str(raw.get("description") or ""),
+        "environment_prompt": str(raw.get("environment_prompt") or ""),
+        "consistency_anchors": anchors,
         "linked_scene3d_id": str(raw.get("linked_scene3d_id") or "").strip(),
         "primary_perspective_id": primary_id,
         "created_at": created_at,
@@ -1343,7 +1354,13 @@ def _create_psd(project: Project, relative_path: str) -> None:
     create_blank_psd(_safe_rel_path(project, relative_path), width, height, background_color=background)
 
 
-def create_scene(project: Project, title: str = "", description: str = "") -> tuple[dict[str, Any], list[dict[str, Any]]]:
+def create_scene(
+    project: Project,
+    title: str = "",
+    description: str = "",
+    environment_prompt: str = "",
+    consistency_anchors: list[str] | None = None,
+) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     scenes = list_scenes(project)
     scene_id = new_uuid()
     perspective_id = new_uuid()
@@ -1365,6 +1382,8 @@ def create_scene(project: Project, title: str = "", description: str = "") -> tu
             "id": scene_id,
             "title": title.strip() or f"Scene 2D {len(scenes) + 1}",
             "description": description,
+            "environment_prompt": environment_prompt,
+            "consistency_anchors": consistency_anchors or [],
             "linked_scene3d_id": "",
             "primary_perspective_id": perspective["id"],
             "created_at": timestamp,
@@ -1389,6 +1408,15 @@ def update_scene(project: Project, scene_id: str, changes: dict[str, Any]) -> tu
         changed = True
     if "description" in changes and changes["description"] is not None:
         scene["description"] = str(changes["description"] or "")
+        changed = True
+    if "environment_prompt" in changes and changes["environment_prompt"] is not None:
+        scene["environment_prompt"] = str(changes["environment_prompt"] or "").strip()
+        changed = True
+    if "consistency_anchors" in changes and changes["consistency_anchors"] is not None:
+        values = changes["consistency_anchors"] if isinstance(changes["consistency_anchors"], list) else []
+        scene["consistency_anchors"] = list(dict.fromkeys(
+            str(value or "").strip() for value in values if str(value or "").strip()
+        ))
         changed = True
     if "linked_scene3d_id" in changes and changes["linked_scene3d_id"] is not None:
         scene["linked_scene3d_id"] = str(changes["linked_scene3d_id"] or "").strip()

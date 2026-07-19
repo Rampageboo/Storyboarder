@@ -6,7 +6,9 @@ import {
   recoverShotSource,
   relinkPreview,
   removeShotImage,
+  removeShotLayer,
   shotBoardBackgroundUrl,
+  shotCodexLayerUrl,
   shotImageUrl,
   syncShot,
   uploadShotImage,
@@ -18,6 +20,8 @@ import { shotHasPreview, shotShouldOverlayPreview } from '../utils/shotPreview'
 import './CanvasBoard.css'
 
 type SyncResult = { synced?: boolean; message?: string }
+type LayerId = 'background' | 'codex' | 'artwork'
+const ALL_LAYERS_VISIBLE: Record<LayerId, boolean> = { background: true, codex: true, artwork: true }
 
 export function CanvasBoard() {
   const { project, selectedShotId, setProject, flushDirtyShots, projectActionBusy, reportError, missingFiles } = useProject()
@@ -25,7 +29,6 @@ export function CanvasBoard() {
   const [loadFailed, setLoadFailed] = useState(false)
   const [busy, setBusy] = useState(false)
   const [note, setNote] = useState('')
-  const [missing, setMissing] = useState<{ source: boolean; preview: boolean; refs: number } | null>(null)
   const [relinkPath, setRelinkPath] = useState('')
   const [autoOpenPs, setAutoOpenPs] = useState<boolean>(() => {
     try {
@@ -36,6 +39,7 @@ export function CanvasBoard() {
   })
   const [previewZoom, setPreviewZoom] = useState(100)
   const [fitPreview, setFitPreview] = useState(true)
+  const [layerVisibility, setLayerVisibility] = useState<Record<LayerId, boolean>>(ALL_LAYERS_VISIBLE)
   const imageInputRef = useRef<HTMLInputElement | null>(null)
   const sourceInputRef = useRef<HTMLInputElement | null>(null)
   const canvasBodyRef = useRef<HTMLDivElement | null>(null)
@@ -51,33 +55,45 @@ export function CanvasBoard() {
   const hasSource = !!sourcePath
   const hasPreview = shot ? shotHasPreview(shot) : false
   const hasBoardBg = shot?.has_board_background === true
+  const hasCodexLayer = shot?.has_codex_layer === true
   const hasArtworkImage = hasPreview
-  const hasVisual = (hasArtworkImage || hasBoardBg) && !loadFailed
+  const hasVisibleLayer = (
+    (hasBoardBg && layerVisibility.background)
+    || (hasCodexLayer && layerVisibility.codex)
+    || (hasArtworkImage && layerVisibility.artwork)
+  )
+  const hasVisual = hasVisibleLayer && !loadFailed
   const canvasAspect = `${Number(project?.settings?.canvas_width || 1920)} / ${Number(project?.settings?.canvas_height || 1080)}`
-  const linkedCount = [hasSource, hasPreview, hasBoardBg].filter(Boolean).length
-  const linkedTotal = hasBoardBg ? 3 : 2
-  const linkedLabel = linkedCount === linkedTotal ? 'All linked' : `Linked ${linkedCount}/${linkedTotal}`
+  const linkedCount = [hasBoardBg, hasCodexLayer, hasPreview].filter(Boolean).length
+  const linkedTotal = 3
+  const linkedLabel = `Layers ${linkedCount}/${linkedTotal}`
   const linkedTitle = [
-    `Source: ${hasSource ? 'linked' : 'missing'}`,
-    `Preview: ${hasPreview ? 'linked' : 'missing'}`,
-    hasBoardBg ? 'Reference background: linked' : 'Reference background: none',
+    hasPreview ? 'Artist artwork: linked' : 'Artist artwork: none',
+    hasCodexLayer ? 'Codex image: linked' : 'Codex image: none',
+    hasBoardBg ? 'Background: linked' : 'Background: none',
   ].join('\n')
 
   const artworkSrc = useMemo(() => {
-    if (!shot) return ''
+    if (!shot || !layerVisibility.artwork) return ''
     if (!shotShouldOverlayPreview(shot)) return ''
     const v = shot.preview_disk_mtime || shot.thumbnail_disk_mtime || bust || 0
     return `${shotImageUrl(shot.shot_id)}?v=${encodeURIComponent(String(v))}`
-  }, [shot, bust])
+  }, [shot, bust, layerVisibility.artwork])
 
   const backgroundSrc = useMemo(() => {
-    if (!shot || shot.has_board_background !== true) return ''
+    if (!shot || shot.has_board_background !== true || !layerVisibility.background) return ''
     const v = shot.board_background_disk_mtime || shot.thumbnail_disk_mtime || bust || 0
     return `${shotBoardBackgroundUrl(shot.shot_id)}?v=${encodeURIComponent(String(v))}`
-  }, [shot, bust])
+  }, [shot, bust, layerVisibility.background])
+
+  const codexSrc = useMemo(() => {
+    if (!shot || shot.has_codex_layer !== true || !layerVisibility.codex) return ''
+    const v = shot.codex_layer_disk_mtime || shot.thumbnail_disk_mtime || bust || 0
+    return `${shotCodexLayerUrl(shot.shot_id)}?v=${encodeURIComponent(String(v))}`
+  }, [shot, bust, layerVisibility.codex])
 
   // Clear the failed-load flag when the visual source identity changes.
-  const loadFailedKey = `${selectedShotId}:${shot?.image_path ?? ''}:${shot?.preview_image_path ?? ''}:${shot?.preview_disk_mtime ?? ''}:${shot?.board_background_disk_mtime ?? ''}:${shot?.preview_has_transparency ? '1' : '0'}:${hasBoardBg ? '1' : '0'}`
+  const loadFailedKey = `${selectedShotId}:${shot?.image_path ?? ''}:${shot?.preview_image_path ?? ''}:${shot?.preview_disk_mtime ?? ''}:${shot?.board_background_disk_mtime ?? ''}:${shot?.codex_layer_disk_mtime ?? ''}:${shot?.preview_has_transparency ? '1' : '0'}:${hasBoardBg ? '1' : '0'}:${hasCodexLayer ? '1' : '0'}`
   const [prevLoadFailedKey, setPrevLoadFailedKey] = useState(loadFailedKey)
   if (loadFailedKey !== prevLoadFailedKey) {
     setPrevLoadFailedKey(loadFailedKey)
@@ -89,19 +105,12 @@ export function CanvasBoard() {
   if (selectedShotId !== prevShotId) {
     setPrevShotId(selectedShotId)
     setNote('')
-    if (!selectedShotId) {
-      setMissing(null)
-    }
+    setLayerVisibility(ALL_LAYERS_VISIBLE)
+    setPreviewZoom(100)
+    setFitPreview(true)
     const cur = project?.shots.find((s) => s.shot_id === selectedShotId)
     setRelinkPath(cur?.preview_image_path || cur?.image_path || '')
   }
-
-  // Reset zoom on shot change so each shot opens at Fit
-  // (runs after the prevShotId guard above has already updated prevShotId)
-  useEffect(() => {
-    setPreviewZoom(100)
-    setFitPreview(true)
-  }, [selectedShotId])
 
   // Keep the zoom guard in sync with whether the canvas has something to zoom
   useEffect(() => {
@@ -124,17 +133,14 @@ export function CanvasBoard() {
   }, [])
 
   // Derive missing-file status from the shared context scan (no per-shot API call).
-  useEffect(() => {
-    if (!selectedShotId || !missingFiles) {
-      setMissing(null)
-      return
-    }
+  const missing = useMemo(() => {
+    if (!selectedShotId || !missingFiles) return null
     const rows = missingFiles.filter((r) => r.shot_id === selectedShotId)
-    setMissing({
+    return {
       source: rows.some((r) => r.field === 'source_file_path'),
       preview: rows.some((r) => r.field === 'preview_image_path'),
       refs: rows.filter((r) => r.field === 'reference_image_paths').length,
-    })
+    }
   }, [selectedShotId, missingFiles])
 
   const disabled = busy || projectActionBusy
@@ -182,6 +188,23 @@ export function CanvasBoard() {
       setBust((x) => x + 1)
       setNote('Preview image deleted.')
     })
+  }
+
+  const handleRemoveLayer = (layerId: 'background' | 'codex') => {
+    if (!shot) return
+    const label = layerId === 'codex' ? 'Codex image' : 'background'
+    if (!window.confirm(`Delete the ${label} layer for this shot?`)) return
+    const shotId = shot.shot_id
+    void runReplacing(async () => {
+      setProject(await removeShotLayer(shotId, layerId))
+      setLoadFailed(false)
+      setBust((x) => x + 1)
+      setNote(`${layerId === 'codex' ? 'Codex' : 'Background'} layer deleted. Artist artwork was not changed.`)
+    })
+  }
+
+  const toggleLayer = (layerId: LayerId) => {
+    setLayerVisibility((current) => ({ ...current, [layerId]: !current[layerId] }))
   }
 
   const handleCreateCanvas = () => {
@@ -346,6 +369,63 @@ export function CanvasBoard() {
           >
             {linkedLabel}
           </span>
+          <details className="canvas-more canvas-layers">
+            <summary aria-label="Manage fixed layers">Layers</summary>
+            <div className="canvas-more-menu canvas-layer-menu">
+              <div className="canvas-layer-heading">
+                <strong>Fixed layers</strong>
+                <span>Top to bottom</span>
+              </div>
+              <div className="canvas-layer-row">
+                <button
+                  type="button"
+                  className="canvas-layer-toggle"
+                  aria-pressed={layerVisibility.artwork}
+                  onClick={() => toggleLayer('artwork')}
+                  disabled={!hasPreview}
+                >
+                  {layerVisibility.artwork ? 'On' : 'Off'}
+                </button>
+                <span className="canvas-layer-name">Artist artwork</span>
+                <span className="canvas-layer-protected">Protected</span>
+              </div>
+              <div className="canvas-layer-row">
+                <button
+                  type="button"
+                  className="canvas-layer-toggle"
+                  aria-pressed={layerVisibility.codex}
+                  onClick={() => toggleLayer('codex')}
+                  disabled={!hasCodexLayer}
+                >
+                  {layerVisibility.codex ? 'On' : 'Off'}
+                </button>
+                <span className="canvas-layer-name">Codex image</span>
+                {hasCodexLayer ? (
+                  <button type="button" className="canvas-layer-delete" onClick={() => handleRemoveLayer('codex')} disabled={disabled}>
+                    Delete
+                  </button>
+                ) : <span className="canvas-layer-empty">Empty</span>}
+              </div>
+              <div className="canvas-layer-row">
+                <button
+                  type="button"
+                  className="canvas-layer-toggle"
+                  aria-pressed={layerVisibility.background}
+                  onClick={() => toggleLayer('background')}
+                  disabled={!hasBoardBg}
+                >
+                  {layerVisibility.background ? 'On' : 'Off'}
+                </button>
+                <span className="canvas-layer-name">Background</span>
+                {hasBoardBg ? (
+                  <button type="button" className="canvas-layer-delete" onClick={() => handleRemoveLayer('background')} disabled={disabled}>
+                    Delete
+                  </button>
+                ) : <span className="canvas-layer-empty">Empty</span>}
+              </div>
+              <p className="canvas-layer-note">Codex results replace only the Codex layer.</p>
+            </div>
+          </details>
           <details className="canvas-more">
             <summary aria-label="More preview actions">More</summary>
             <div className="canvas-more-menu">
@@ -482,7 +562,18 @@ export function CanvasBoard() {
                   src={backgroundSrc}
                   alt=""
                   onError={() => {
-                    if (!artworkSrc) setLoadFailed(true)
+                    if (!codexSrc && !artworkSrc) setLoadFailed(true)
+                  }}
+                  onLoad={() => setLoadFailed(false)}
+                />
+              ) : null}
+              {codexSrc ? (
+                <img
+                  className="canvas-image canvas-image-codex"
+                  src={codexSrc}
+                  alt=""
+                  onError={() => {
+                    if (!backgroundSrc && !artworkSrc) setLoadFailed(true)
                   }}
                   onLoad={() => setLoadFailed(false)}
                 />
@@ -493,14 +584,19 @@ export function CanvasBoard() {
                   src={artworkSrc}
                   alt=""
                   onError={() => {
-                    if (!backgroundSrc) setLoadFailed(true)
+                    if (!backgroundSrc && !codexSrc) setLoadFailed(true)
                   }}
                   onLoad={() => setLoadFailed(false)}
                 />
               ) : null}
             </div>
           </div>
-        ) : !hasSource && !hasPreview && !hasBoardBg ? (
+        ) : (hasPreview || hasCodexLayer || hasBoardBg) && !hasVisibleLayer ? (
+          <div className="canvas-placeholder">
+            <p>All layers are hidden</p>
+            <p className="canvas-empty-hint">Open Layers and turn on at least one layer.</p>
+          </div>
+        ) : !hasSource && !hasPreview && !hasCodexLayer && !hasBoardBg ? (
           <div className="canvas-placeholder">
             <p>Start drawing this shot</p>
             <p className="canvas-empty-hint">Create a blank PSD canvas, upload an image, or upload an existing PSD.</p>

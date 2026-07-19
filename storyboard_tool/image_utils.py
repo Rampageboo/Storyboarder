@@ -68,6 +68,10 @@ def board_background_filename(shot_id: str) -> str:
     return f"{shot_id}_background.png"
 
 
+def codex_layer_filename(shot_id: str) -> str:
+    return f"{shot_id}_codex.png"
+
+
 def preview_export_layer_filter(layer) -> bool:
     # Mirror the plugin's preview export: drop the board background reference
     # (`SB bg`), the canvas-color fill (`Background`), and onion-skin overlays

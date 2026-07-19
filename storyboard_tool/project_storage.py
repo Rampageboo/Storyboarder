@@ -35,6 +35,7 @@ DEFAULT_SETTINGS: dict = {
     "canvas_width": 1920,
     "canvas_height": 1080,
     "preheat_photoshop_on_open": False,
+    "character_bible_prompt": "",
     "reference_video_path": "",
     "reference_model_path": "",
     "reference_image_path": "",

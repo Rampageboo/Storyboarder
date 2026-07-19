@@ -64,6 +64,8 @@ def update_shot(shot: Shot, data: dict[str, Any]) -> None:
     prior_generation_inputs = _generation_input_snapshot(shot)
     shot.title = str(data.get("title", shot.title))
     shot.scene = str(data.get("scene", shot.scene))
+    if data.get("scene_id") is not None:
+        shot.scene_id = str(data.get("scene_id") or "").strip()
     shot.sequence = str(data.get("sequence", shot.sequence))
     shot.description = str(data.get("description", shot.description))
     shot.action_note = str(data.get("action_note", shot.action_note))
@@ -120,6 +122,7 @@ def _has_generation_activity(shot: Shot) -> bool:
 def _generation_input_snapshot(shot: Shot) -> dict[str, Any]:
     continuity = shot.continuity
     return deepcopy({
+        "scene_id": shot.scene_id,
         "description": shot.description,
         "action_note": shot.action_note,
         "camera_note": shot.camera_note,

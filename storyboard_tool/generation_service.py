@@ -1,0 +1,655 @@
+"""Generation request snapshots and Codex handoff storage.
+
+Storyboarder owns request state.  External generators receive immutable request
+snapshots and may only deposit result manifests/artifacts in the generation
+inbox.  The desktop backend explicitly reconciles those results into shot
+generation state, keeping external processes away from ``shots.json``.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import os
+import re
+import shutil
+import tempfile
+import uuid
+from datetime import UTC, datetime
+from pathlib import Path
+from typing import Any
+
+from PIL import Image
+
+from . import scene2d, shot_assets
+from .models import Project, Shot
+from .project_storage import atomic_write_json
+from .shot_files import resolve_project_relative_path
+
+SCHEMA_VERSION = 1
+DESTINATIONS = frozenset({"queue", "codex"})
+REQUEST_STATUSES = frozenset({"queued", "needs-review", "completed", "failed", "cancelled"})
+IMAGE_SUFFIXES = frozenset({".png", ".jpg", ".jpeg", ".webp"})
+MAX_ARTIFACTS = 8
+MAX_ARTIFACT_BYTES = 64 * 1024 * 1024
+_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,96}$")
+
+
+def _utc_now() -> str:
+    return datetime.now(UTC).isoformat(timespec="milliseconds").replace("+00:00", "Z")
+
+
+def _new_id(prefix: str) -> str:
+    return f"{prefix}_{uuid.uuid4().hex}"
+
+
+def _generation_root(project: Project) -> Path:
+    return project.root_path / "generation"
+
+
+def _requests_dir(project: Project) -> Path:
+    return _generation_root(project) / "requests"
+
+
+def _results_dir(project: Project) -> Path:
+    return _generation_root(project) / "results"
+
+
+def _state_dir(project: Project) -> Path:
+    return _generation_root(project) / "state"
+
+
+def _candidates_dir(project: Project) -> Path:
+    return _generation_root(project) / "candidates"
+
+
+def _validate_id(value: str, label: str) -> str:
+    cleaned = str(value or "").strip()
+    if not _ID_RE.fullmatch(cleaned):
+        raise ValueError(f"Invalid {label}.")
+    return cleaned
+
+
+def _read_json_object(path: Path) -> dict[str, Any]:
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ValueError(f"Invalid generation data: {path.name}") from exc
+    if not isinstance(value, dict):
+        raise ValueError(f"Invalid generation data: {path.name}")
+    return value
+
+
+def _request_path(project: Project, request_id: str) -> Path:
+    return _requests_dir(project) / f"{_validate_id(request_id, 'request id')}.json"
+
+
+def _state_path(project: Project, request_id: str) -> Path:
+    return _state_dir(project) / f"{_validate_id(request_id, 'request id')}.json"
+
+
+def _apply_request_state(project: Project, request: dict[str, Any]) -> dict[str, Any]:
+    request_id = str(request.get("request_id") or "")
+    state_path = _state_path(project, request_id)
+    if state_path.is_file():
+        try:
+            state = _read_json_object(state_path)
+        except ValueError:
+            state = {}
+        status = str(state.get("status") or "")
+        if status in REQUEST_STATUSES:
+            request["status"] = status
+        if state.get("updated_at"):
+            request["updated_at"] = str(state["updated_at"])
+    return request
+
+
+def _canonical_hash(value: dict[str, Any]) -> str:
+    encoded = json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def has_generation_activity(shot: Shot) -> bool:
+    state = shot.generation_state
+    return bool(
+        state.get("latest_attempt_id")
+        or state.get("active_output_id")
+        or state.get("approved_output_id")
+        or state.get("execution_status") in {"queued", "running", "succeeded", "failed"}
+    )
+
+
+def mark_scene_dependents_stale(project: Project, scene_id: str, scene_title: str = "") -> list[str]:
+    """Mark generated shots linked to a changed Scene Bible as stale."""
+    wanted_id = str(scene_id or "").strip()
+    wanted_title = str(scene_title or "").strip().casefold()
+    updated: list[str] = []
+    for shot in project.shots:
+        linked = shot.scene_id == wanted_id if wanted_id else False
+        if not linked and not shot.scene_id and wanted_title:
+            linked = str(shot.scene or "").strip().casefold() == wanted_title
+        if linked and has_generation_activity(shot):
+            shot.generation_state["freshness_status"] = "stale"
+            updated.append(shot.shot_id)
+    return updated
+
+
+def mark_all_generated_shots_stale(project: Project) -> list[str]:
+    """Character Bible changes affect every shot that already has generation activity."""
+    updated: list[str] = []
+    for shot in project.shots:
+        if has_generation_activity(shot):
+            shot.generation_state["freshness_status"] = "stale"
+            updated.append(shot.shot_id)
+    return updated
+
+
+def _append_prompt_line(lines: list[str], label: str, value: Any) -> None:
+    if isinstance(value, list):
+        text = "; ".join(str(item).strip() for item in value if str(item).strip())
+    else:
+        text = str(value or "").strip()
+    if text:
+        lines.append(f"{label}: {text}")
+
+
+def _compile_shot_override(shot: Shot) -> str:
+    """Compile only the per-shot layer; scene and identity live above it."""
+    prompt = shot.prompt_config
+    if prompt.get("mode") == "manual" and str(prompt.get("manual_prompt") or "").strip():
+        return str(prompt["manual_prompt"]).strip()
+
+    design = shot.shot_design
+    continuity = shot.continuity
+    lines: list[str] = []
+    story_and_action = str(design.get("story_beat") or shot.description or "").strip()
+    action_note = str(shot.action_note or "").strip()
+    _append_prompt_line(lines, "Story beat", story_and_action)
+    if action_note and action_note.casefold() not in story_and_action.casefold():
+        _append_prompt_line(lines, "Action", action_note)
+    _append_prompt_line(lines, "Camera note", shot.camera_note)
+    _append_prompt_line(lines, "Shot size", design.get("shot_size"))
+    camera = ", ".join(
+        str(design.get(key) or "").strip()
+        for key in ("camera_position", "camera_height", "camera_angle", "camera_direction")
+        if str(design.get(key) or "").strip()
+    )
+    _append_prompt_line(lines, "Camera", camera)
+    _append_prompt_line(lines, "Camera movement", design.get("camera_movement"))
+    _append_prompt_line(lines, "Lens / FOV intent", design.get("lens_intent"))
+    _append_prompt_line(lines, "Subject movement", design.get("subject_movement"))
+    _append_prompt_line(lines, "Composition", design.get("composition"))
+    _append_prompt_line(lines, "Focal point", design.get("focal_point"))
+    _append_prompt_line(lines, "Foreground", design.get("foreground"))
+    _append_prompt_line(lines, "Midground", design.get("midground"))
+    _append_prompt_line(lines, "Background", design.get("background"))
+    _append_prompt_line(lines, "Characters", shot.character_note)
+    _append_prompt_line(lines, "Dialogue", shot.dialogue)
+    _append_prompt_line(lines, "Lighting", shot.lighting_note)
+    _append_prompt_line(lines, "Axis of action", design.get("axis_of_action"))
+    if design.get("intentional_axis_crossing"):
+        lines.append("Axis crossing: intentional")
+    _append_prompt_line(lines, "Continuity in", continuity.get("expected_in"))
+    _append_prompt_line(lines, "Continuity out", continuity.get("expected_out"))
+    _append_prompt_line(lines, "Preserve", continuity.get("preserve"))
+    _append_prompt_line(lines, "Intentional changes", continuity.get("intentional_changes"))
+    _append_prompt_line(lines, "Additional instruction", prompt.get("prompt_extra"))
+    return "\n".join(lines) or "Create a storyboard frame for this shot."
+
+
+def compile_prompt(
+    shot: Shot,
+    *,
+    scene_bible: dict[str, Any] | None = None,
+    character_bible_prompt: str = "",
+) -> str:
+    """Compile Scene Bible -> Character Bible -> Shot Override in a fixed order."""
+    shot_override = _compile_shot_override(shot)
+    scene = scene_bible if isinstance(scene_bible, dict) else {}
+    environment_prompt = str(scene.get("environment_prompt") or "").strip()
+    anchors = scene.get("consistency_anchors") if isinstance(scene.get("consistency_anchors"), list) else []
+    character_prompt = str(character_bible_prompt or "").strip()
+    if not environment_prompt and not anchors and not character_prompt:
+        return shot_override
+
+    sections: list[str] = []
+    if environment_prompt or anchors:
+        scene_lines = ["SCENE BIBLE — keep this environment constant across every shot linked to this scene."]
+        _append_prompt_line(scene_lines, "Scene", scene.get("title"))
+        _append_prompt_line(scene_lines, "Environment", environment_prompt)
+        _append_prompt_line(scene_lines, "Locked environment anchors", anchors)
+        sections.append("\n".join(scene_lines))
+    if character_prompt:
+        sections.append(
+            "CHARACTER BIBLE — preserve identity and wardrobe exactly; render only characters named in the shot.\n"
+            f"Character identities: {character_prompt}"
+        )
+    sections.append(
+        "SHOT OVERRIDE — change framing, camera, action, expression, and staging only.\n"
+        f"{shot_override}"
+    )
+    sections.append(
+        "CONSISTENCY RULES — do not redesign the location, move locked fixtures, change character identity, "
+        "or introduce unrequested people. A shot-level background note may describe what is visible from this angle, "
+        "but it does not replace the Scene Bible."
+    )
+    return "\n\n".join(sections)
+
+
+def _scene_bible_snapshot(project: Project, shot: Shot) -> dict[str, Any] | None:
+    scenes = scene2d.list_scenes(project)
+    linked = next((scene for scene in scenes if scene.get("id") == shot.scene_id), None)
+    if linked is None and str(shot.scene or "").strip():
+        wanted_title = str(shot.scene).strip().casefold()
+        linked = next((scene for scene in scenes if str(scene.get("title") or "").strip().casefold() == wanted_title), None)
+    if linked is None:
+        return None
+    primary_path = str(linked.get("preview_image_path") or "").strip()
+    return {
+        "scene_id": str(linked.get("id") or ""),
+        "title": str(linked.get("title") or ""),
+        "environment_prompt": str(linked.get("environment_prompt") or ""),
+        "consistency_anchors": list(linked.get("consistency_anchors") or []),
+        "primary_perspective_id": str(linked.get("primary_perspective_id") or ""),
+        "primary_reference_path": primary_path,
+        "updated_at": str(linked.get("updated_at") or ""),
+    }
+
+
+def _reference_snapshot(
+    project: Project,
+    shot: Shot,
+    scene_bible: dict[str, Any] | None = None,
+) -> list[dict[str, Any]]:
+    raw_paths: list[tuple[str, str]] = [(path, "shot-reference") for path in shot.reference_image_paths]
+    if scene_bible:
+        scene_reference = str(scene_bible.get("primary_reference_path") or "").strip()
+        if scene_reference:
+            raw_paths.insert(0, (scene_reference, "scene-environment"))
+    for binding in shot.prompt_config.get("reference_bindings", []):
+        if not isinstance(binding, dict):
+            continue
+        path = binding.get("path") or binding.get("relative_path") or binding.get("reference_path")
+        if path:
+            raw_paths.append((str(path), str(binding.get("role") or "prompt-binding")))
+
+    seen: set[str] = set()
+    result: list[dict[str, Any]] = []
+    for raw_path, role in raw_paths:
+        cleaned = str(raw_path or "").strip()
+        if not cleaned or cleaned in seen:
+            continue
+        seen.add(cleaned)
+        try:
+            resolved = resolve_project_relative_path(project, cleaned)
+            inside_project = True
+        except ValueError:
+            resolved = Path(cleaned).expanduser().resolve()
+            inside_project = False
+        result.append({
+            "role": role,
+            "project_relative_path": cleaned if inside_project else "",
+            "absolute_path": str(resolved),
+            "exists": resolved.is_file(),
+            "media_type": resolved.suffix.lower().lstrip("."),
+        })
+    return result
+
+
+def _continuity_context(project: Project, shot: Shot) -> list[dict[str, Any]]:
+    wanted = list(shot.continuity.get("depends_on_shot_ids", []))
+    primary = str(shot.continuity.get("primary_continuity_source_shot_id") or "").strip()
+    if primary and primary not in wanted:
+        wanted.insert(0, primary)
+    by_id = {candidate.shot_id: candidate for candidate in project.shots}
+    context: list[dict[str, Any]] = []
+    for shot_id in wanted:
+        candidate = by_id.get(str(shot_id))
+        if candidate is None:
+            continue
+        context.append({
+            "shot_id": candidate.shot_id,
+            "title": candidate.title,
+            "description": candidate.description,
+            "resolved_out": candidate.continuity.get("resolved_out", ""),
+            "expected_out": candidate.continuity.get("expected_out", ""),
+            "approved_output_id": candidate.generation_state.get("approved_output_id", ""),
+        })
+    return context
+
+
+def build_request_snapshot(project: Project, shot: Shot, destination: str) -> dict[str, Any]:
+    destination = str(destination or "").strip().lower()
+    if destination not in DESTINATIONS:
+        raise ValueError("Destination must be 'queue' or 'codex'.")
+    created_at = _utc_now()
+    request_id = _new_id("gen")
+    canvas_width = int(project.settings.get("canvas_width") or 1920)
+    canvas_height = int(project.settings.get("canvas_height") or 1080)
+    scene_bible = _scene_bible_snapshot(project, shot)
+    character_bible_prompt = str(project.settings.get("character_bible_prompt") or "").strip()
+    character_bible = {"prompt": character_bible_prompt}
+    authored = {
+        "shot_id": shot.shot_id,
+        "title": shot.title,
+        "scene": shot.scene,
+        "scene_id": shot.scene_id,
+        "sequence": shot.sequence,
+        "description": shot.description,
+        "action_note": shot.action_note,
+        "camera_note": shot.camera_note,
+        "character_note": shot.character_note,
+        "dialogue": shot.dialogue,
+        "lighting_note": shot.lighting_note,
+        "transition_note": shot.transition_note,
+        "duration_seconds": shot.duration_seconds,
+        "tags": list(shot.tags),
+        "shot_design": dict(shot.shot_design),
+    }
+    input_snapshot = {
+        "shot": authored,
+        "scene_bible": scene_bible,
+        "character_bible": character_bible,
+        "prompt_config": dict(shot.prompt_config),
+        "continuity": dict(shot.continuity),
+        "references": _reference_snapshot(project, shot, scene_bible),
+        "continuity_context": _continuity_context(project, shot),
+        "canvas": {"width": canvas_width, "height": canvas_height},
+    }
+    return {
+        "schema_version": SCHEMA_VERSION,
+        "request_id": request_id,
+        "project_name": project.name,
+        "project_root": str(project.root_path.resolve()),
+        "shot_id": shot.shot_id,
+        "destination": destination,
+        "status": "queued",
+        "created_at": created_at,
+        "updated_at": created_at,
+        "input_revision": _canonical_hash(input_snapshot),
+        "consistency_revision": _canonical_hash({
+            "scene_bible": scene_bible or {},
+            "character_bible": character_bible,
+        }),
+        **input_snapshot,
+        "prompt": {
+            "mode": shot.prompt_config.get("mode", "auto"),
+            "compiled_prompt": compile_prompt(
+                shot,
+                scene_bible=scene_bible,
+                character_bible_prompt=character_bible_prompt,
+            ),
+            "layers": {
+                "scene": str((scene_bible or {}).get("environment_prompt") or ""),
+                "characters": character_bible_prompt,
+                "shot": _compile_shot_override(shot),
+            },
+            "negative_prompt": str(shot.prompt_config.get("negative_prompt") or ""),
+            "style_profile_id": str(shot.prompt_config.get("style_profile_id") or ""),
+            "aspect_ratio": str(shot.prompt_config.get("aspect_ratio_override") or f"{canvas_width}:{canvas_height}"),
+            "variant_count": int(shot.prompt_config.get("variant_count") or 1),
+        },
+        "output_contract": {
+            "kind": "storyboard-image",
+            "width": canvas_width,
+            "height": canvas_height,
+            "accepted_formats": ["png", "jpg", "jpeg", "webp"],
+            "review_required": True,
+        },
+    }
+
+
+def create_request(project: Project, shot: Shot, destination: str) -> dict[str, Any]:
+    request = build_request_snapshot(project, shot, destination)
+    atomic_write_json(_request_path(project, request["request_id"]), request)
+    return request
+
+
+def delete_request(project: Project, request_id: str) -> None:
+    try:
+        _request_path(project, request_id).unlink(missing_ok=True)
+        _state_path(project, request_id).unlink(missing_ok=True)
+    except OSError:
+        pass
+
+
+def get_request(project: Project, request_id: str) -> dict[str, Any]:
+    path = _request_path(project, request_id)
+    if not path.is_file():
+        raise ValueError(f"Generation request not found: {request_id}")
+    request = _apply_request_state(project, _read_json_object(path))
+    request["results"] = list_results(project, request_id)
+    if request["results"]:
+        request["latest_result"] = request["results"][0]
+    return request
+
+
+def list_requests(
+    project: Project,
+    *,
+    shot_id: str = "",
+    destination: str = "",
+    status: str = "",
+) -> list[dict[str, Any]]:
+    destination = str(destination or "").strip().lower()
+    status = str(status or "").strip().lower()
+    if destination and destination not in DESTINATIONS:
+        raise ValueError("Invalid generation destination filter.")
+    if status and status not in REQUEST_STATUSES:
+        raise ValueError("Invalid generation status filter.")
+    rows: list[dict[str, Any]] = []
+    directory = _requests_dir(project)
+    if not directory.is_dir():
+        return rows
+    for path in directory.glob("*.json"):
+        try:
+            row = _apply_request_state(project, _read_json_object(path))
+        except ValueError:
+            continue
+        if shot_id and row.get("shot_id") != shot_id:
+            continue
+        if destination and row.get("destination") != destination:
+            continue
+        if status and row.get("status") != status:
+            continue
+        results = list_results(project, str(row.get("request_id") or ""))
+        row["result_count"] = len(results)
+        if results:
+            row["latest_result"] = results[0]
+        rows.append(row)
+    rows.sort(key=lambda row: str(row.get("created_at") or ""), reverse=True)
+    return rows
+
+
+def _result_request_dir(project: Project, request_id: str) -> Path:
+    return _results_dir(project) / _validate_id(request_id, "request id")
+
+
+def list_results(project: Project, request_id: str) -> list[dict[str, Any]]:
+    directory = _result_request_dir(project, request_id)
+    if not directory.is_dir():
+        return []
+    rows: list[dict[str, Any]] = []
+    for path in directory.glob("*.json"):
+        try:
+            rows.append(_read_json_object(path))
+        except ValueError:
+            continue
+    rows.sort(key=lambda row: str(row.get("created_at") or ""), reverse=True)
+    return rows
+
+
+def _copy_image_artifact(source: Path, target: Path) -> None:
+    if not source.is_file():
+        raise ValueError(f"Artifact not found: {source}")
+    if source.suffix.lower() not in IMAGE_SUFFIXES:
+        raise ValueError(f"Unsupported artifact format: {source.suffix}")
+    size = source.stat().st_size
+    if size <= 0 or size > MAX_ARTIFACT_BYTES:
+        raise ValueError("Artifact must be a non-empty image no larger than 64 MB.")
+    with Image.open(source) as image:
+        image.verify()
+    target.parent.mkdir(parents=True, exist_ok=True)
+    # Keep the temporary name short so atomic copies also work near Windows' legacy MAX_PATH limit.
+    fd, tmp_name = tempfile.mkstemp(dir=str(target.parent), prefix=".tmp-", suffix=target.suffix)
+    os.close(fd)
+    try:
+        shutil.copyfile(source, tmp_name)
+        os.replace(tmp_name, target)
+    except Exception:
+        try:
+            os.unlink(tmp_name)
+        except OSError:
+            pass
+        raise
+
+
+def submit_result(
+    project: Project,
+    request_id: str,
+    artifact_paths: list[str],
+    *,
+    summary: str = "",
+) -> dict[str, Any]:
+    request = get_request(project, request_id)
+    if request.get("status") in {"completed", "cancelled"}:
+        raise ValueError("Generation request is no longer accepting results.")
+    paths = [Path(str(path)).expanduser().resolve() for path in artifact_paths if str(path).strip()]
+    if not paths or len(paths) > MAX_ARTIFACTS:
+        raise ValueError(f"Provide between 1 and {MAX_ARTIFACTS} image artifacts.")
+
+    result_id = _new_id("out")
+    candidate_dir = _candidates_dir(project) / request_id / result_id
+    artifacts: list[dict[str, Any]] = []
+    try:
+        for index, source in enumerate(paths, start=1):
+            suffix = source.suffix.lower()
+            target = candidate_dir / f"candidate_{index:03d}{suffix}"
+            _copy_image_artifact(source, target)
+            artifacts.append({
+                "name": target.name,
+                "project_relative_path": target.relative_to(project.root_path).as_posix(),
+                "absolute_path": str(target.resolve()),
+                "media_type": suffix.lstrip("."),
+            })
+        result = {
+            "schema_version": SCHEMA_VERSION,
+            "result_id": result_id,
+            "request_id": request_id,
+            "shot_id": request.get("shot_id", ""),
+            "created_at": _utc_now(),
+            "summary": str(summary or "").strip(),
+            "artifacts": artifacts,
+        }
+        atomic_write_json(_result_request_dir(project, request_id) / f"{result_id}.json", result)
+        return result
+    except BaseException:
+        shutil.rmtree(candidate_dir, ignore_errors=True)
+        raise
+
+
+def reconcile_results(project: Project) -> dict[str, Any]:
+    """Import deposited result state into requests and their canonical shots."""
+    by_shot = {shot.shot_id: shot for shot in project.shots}
+    updated_request_ids: list[str] = []
+    updated_shot_ids: list[str] = []
+    for request in list_requests(project):
+        latest = request.get("latest_result")
+        if not isinstance(latest, dict):
+            continue
+        request_id = str(request.get("request_id") or "")
+        result_id = str(latest.get("result_id") or "")
+        shot = by_shot.get(str(request.get("shot_id") or ""))
+        if not request_id or not result_id or shot is None:
+            continue
+        changed = request.get("status") != "needs-review"
+        if changed:
+            atomic_write_json(
+                _state_path(project, request_id),
+                {
+                    "schema_version": SCHEMA_VERSION,
+                    "request_id": request_id,
+                    "status": "needs-review",
+                    "updated_at": _utc_now(),
+                },
+            )
+            updated_request_ids.append(request_id)
+        state = shot.generation_state
+        desired = {
+            "execution_status": "succeeded",
+            "review_status": "needs-review",
+            "freshness_status": "current",
+            "active_output_id": result_id,
+            "latest_attempt_id": request_id,
+        }
+        if any(state.get(key) != value for key, value in desired.items()):
+            state.update(desired)
+            updated_shot_ids.append(shot.shot_id)
+    return {
+        "updated_request_ids": updated_request_ids,
+        "updated_shot_ids": list(dict.fromkeys(updated_shot_ids)),
+    }
+
+
+def accept_candidate_as_codex_layer(
+    project: Project,
+    shot: Shot,
+    request_id: str,
+    result_id: str,
+    artifact_path: str,
+) -> Path:
+    """Accept one returned candidate into the shot's independent Codex layer."""
+    request = get_request(project, request_id)
+    if str(request.get("shot_id") or "") != shot.shot_id:
+        raise ValueError("Generation request does not belong to this shot.")
+    result_id = _validate_id(result_id, "result id")
+    result = next(
+        (row for row in request.get("results", []) if str(row.get("result_id") or "") == result_id),
+        None,
+    )
+    if not isinstance(result, dict):
+        raise ValueError("Generation result not found.")
+    cleaned_path = str(artifact_path or "").strip()
+    artifact = next(
+        (
+            row
+            for row in result.get("artifacts", [])
+            if isinstance(row, dict) and str(row.get("project_relative_path") or "") == cleaned_path
+        ),
+        None,
+    )
+    if artifact is None:
+        raise ValueError("Generation artifact not found in this result.")
+    source = resolve_project_relative_path(project, cleaned_path)
+    candidate_root = (_candidates_dir(project) / _validate_id(request_id, "request id") / result_id).resolve()
+    if candidate_root not in source.parents:
+        raise ValueError("Generation artifact is outside its candidate folder.")
+    destination = shot_assets.save_codex_layer_from_path(project, shot, source)
+    now = _utc_now()
+    atomic_write_json(
+        _state_path(project, request_id),
+        {
+            "schema_version": SCHEMA_VERSION,
+            "request_id": request_id,
+            "status": "completed",
+            "updated_at": now,
+        },
+    )
+    shot.generation_state.update({
+        "execution_status": "succeeded",
+        "review_status": "accepted",
+        "freshness_status": "current",
+        "active_output_id": result_id,
+        "approved_output_id": result_id,
+        "latest_attempt_id": request_id,
+    })
+    return destination
+
+
+def codex_handoff_prompt(request_id: str) -> str:
+    request_id = _validate_id(request_id, "request id")
+    return (
+        "Use the Storyboarder MCP tools to fetch generation request "
+        f"{request_id}, generate the requested storyboard image variants, then submit the image files "
+        "with storyboard_submit_generation_result. Do not edit shots.json directly."
+    )

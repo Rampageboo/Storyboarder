@@ -1015,3 +1015,9 @@ details[open] > .scene2d-insp-desc-summary::before {
 
   .scene2d-zoom-slider { display: none; }
 }
+.scene2d-insp-help {
+  color: var(--color-muted);
+  font-size: 10px;
+  font-weight: 400;
+  line-height: 1.4;
+}

@@ -85,6 +85,8 @@ export function Scene2DPanel({ active = false }: { active?: boolean }) {
   const [selectedPerspectiveId, setSelectedPerspectiveId] = useState('')
   const [sceneTitle, setSceneTitle] = useState('')
   const [sceneDescription, setSceneDescription] = useState('')
+  const [sceneEnvironmentPrompt, setSceneEnvironmentPrompt] = useState('')
+  const [sceneConsistencyText, setSceneConsistencyText] = useState('')
   const [scene3dLink, setScene3dLink] = useState('')
   const [perspectiveTitle, setPerspectiveTitle] = useState('')
   const [perspective3dLink, setPerspective3dLink] = useState('')
@@ -120,6 +122,7 @@ export function Scene2DPanel({ active = false }: { active?: boolean }) {
       null
     )
   }, [selectedPerspectiveId, selectedScene])
+  const selectedSceneConsistencyText = (selectedScene?.consistency_anchors ?? []).join('\n')
 
   const disabled = busy || projectActionBusy
   const previewKey = selectedScene && selectedPerspective ? `${selectedScene.id}:${selectedPerspective.id}` : ''
@@ -129,6 +132,8 @@ export function Scene2DPanel({ active = false }: { active?: boolean }) {
   const sceneDirty =
     sceneTitle !== (selectedScene?.title ?? '') ||
     sceneDescription !== (selectedScene?.description ?? '') ||
+    sceneEnvironmentPrompt !== (selectedScene?.environment_prompt ?? '') ||
+    sceneConsistencyText !== selectedSceneConsistencyText ||
     scene3dLink !== (selectedScene?.linked_scene3d_id ?? '')
 
   const perspectiveDirty =
@@ -174,6 +179,8 @@ export function Scene2DPanel({ active = false }: { active?: boolean }) {
   useEffect(() => {
     setSceneTitle(selectedScene?.title ?? '')
     setSceneDescription(selectedScene?.description ?? '')
+    setSceneEnvironmentPrompt(selectedScene?.environment_prompt ?? '')
+    setSceneConsistencyText(selectedSceneConsistencyText)
     setScene3dLink(selectedScene?.linked_scene3d_id ?? '')
     setSelectedPerspectiveId((current) => {
       const perspectives = selectedScene?.perspectives ?? []
@@ -184,6 +191,8 @@ export function Scene2DPanel({ active = false }: { active?: boolean }) {
     selectedScene?.id,
     selectedScene?.title,
     selectedScene?.description,
+    selectedScene?.environment_prompt,
+    selectedSceneConsistencyText,
     selectedScene?.linked_scene3d_id,
     selectedScene?.primary_perspective_id,
   ])
@@ -266,6 +275,11 @@ export function Scene2DPanel({ active = false }: { active?: boolean }) {
       const payload = await updateScene2D(selectedScene.id, {
         title: sceneTitle,
         description: sceneDescription,
+        environment_prompt: sceneEnvironmentPrompt,
+        consistency_anchors: sceneConsistencyText
+          .split(/\r?\n/)
+          .map((value) => value.trim())
+          .filter(Boolean),
         linked_scene3d_id: scene3dLink,
       })
       setScenes(payload.scenes)
@@ -277,7 +291,16 @@ export function Scene2DPanel({ active = false }: { active?: boolean }) {
       sceneSavingRef.current = false
       setBusy(false)
     }
-  }, [flushDirtyShots, reportError, scene3dLink, sceneDescription, sceneTitle, selectedScene])
+  }, [
+    flushDirtyShots,
+    reportError,
+    scene3dLink,
+    sceneConsistencyText,
+    sceneDescription,
+    sceneEnvironmentPrompt,
+    sceneTitle,
+    selectedScene,
+  ])
 
   const addPerspective = useCallback(async () => {
     if (!selectedScene) return
@@ -810,6 +833,31 @@ export function Scene2DPanel({ active = false }: { active?: boolean }) {
                                 </option>
                               ))}
                             </select>
+                          </label>
+
+                          <label className="scene2d-insp-field">
+                            <span>Scene Prompt · environment only</span>
+                            <textarea
+                              value={sceneEnvironmentPrompt}
+                              onChange={(e) => setSceneEnvironmentPrompt(e.target.value)}
+                              disabled={disabled}
+                              rows={6}
+                              placeholder="Describe the stable location, spatial layout, time, weather, lighting baseline, materials, and permanent props. Do not describe a camera angle or shot action."
+                            />
+                            <small className="scene2d-insp-help">
+                              Shared by every linked shot. Camera, composition, action, and performance stay in Shot Detail.
+                            </small>
+                          </label>
+
+                          <label className="scene2d-insp-field">
+                            <span>Locked anchors · one per line</span>
+                            <textarea
+                              value={sceneConsistencyText}
+                              onChange={(e) => setSceneConsistencyText(e.target.value)}
+                              disabled={disabled}
+                              rows={4}
+                              placeholder={'Door remains on the north wall\nArchive shelves stay dark green\nWindow light always comes from camera-left side of the room'}
+                            />
                           </label>
 
                           <details

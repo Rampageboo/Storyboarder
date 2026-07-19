@@ -8,7 +8,7 @@ to do with them.
 Checks performed:
 - Duplicate shot IDs.
 - Missing shot directories.
-- image_path / preview_image_path pointing to the background plate.
+- image_path / preview_image_path pointing to a background or Codex layer.
 - Path-traversal in metadata paths (escaping project root).
 - source_file_path pointing to a non-existent file.
 """
@@ -16,7 +16,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from .image_utils import board_background_filename
+from .image_utils import board_background_filename, codex_layer_filename
 from .models import Project
 from .shot_files import get_shot_dir
 
@@ -44,13 +44,19 @@ def validate_project_integrity(project: Project) -> list[dict]:
                 "path": str(get_shot_dir(project, shot)),
             })
 
-        # image_path / preview_image_path must never be the background plate.
+        # Artwork metadata must never point at a managed background/Codex layer.
         bg_filename = board_background_filename(shot.shot_id)
+        codex_filename = codex_layer_filename(shot.shot_id)
+        managed_filenames = {bg_filename, codex_filename}
         for field in ("image_path", "preview_image_path"):
             value = getattr(shot, field, "") or ""
-            if value and Path(value).name == bg_filename:
+            if value and Path(value).name in managed_filenames:
                 issues.append({
-                    "kind": "metadata_points_to_background",
+                    "kind": (
+                        "metadata_points_to_background"
+                        if Path(value).name == bg_filename
+                        else "metadata_points_to_codex_layer"
+                    ),
                     "shot_id": shot.shot_id,
                     "field": field,
                     "value": value,

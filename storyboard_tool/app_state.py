@@ -56,6 +56,13 @@ def _shot_payload(project: Project, shot: Shot, cache: dict[str, Any] | None = N
             data["board_background_disk_mtime"] = board_background_path.stat().st_mtime
         except OSError:
             pass
+    codex_layer_path = project_manager.get_shot_codex_layer_path(project, shot)
+    data["has_codex_layer"] = codex_layer_path is not None
+    if codex_layer_path is not None:
+        try:
+            data["codex_layer_disk_mtime"] = codex_layer_path.stat().st_mtime
+        except OSError:
+            pass
 
     if preview_path is not None and preview_path.is_file():
         hit = preview_analysis_cache.get_cached(cache or {}, preview_path)
