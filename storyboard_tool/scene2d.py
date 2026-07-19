@@ -256,6 +256,8 @@ def _normalize_scene(raw: dict[str, Any], *, legacy: bool = False) -> dict[str, 
         "id": scene_id,
         "title": title,
         "description": str(raw.get("description") or ""),
+        "location": str(raw.get("location") or ""),
+        "time_of_day": str(raw.get("time_of_day") or ""),
         "environment_prompt": str(raw.get("environment_prompt") or ""),
         "consistency_anchors": anchors,
         "linked_scene3d_id": str(raw.get("linked_scene3d_id") or "").strip(),
@@ -1358,6 +1360,8 @@ def create_scene(
     project: Project,
     title: str = "",
     description: str = "",
+    location: str = "",
+    time_of_day: str = "",
     environment_prompt: str = "",
     consistency_anchors: list[str] | None = None,
 ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
@@ -1380,8 +1384,10 @@ def create_scene(
     scene = _normalize_scene(
         {
             "id": scene_id,
-            "title": title.strip() or f"Scene 2D {len(scenes) + 1}",
+            "title": title.strip() or f"Scene {len(scenes) + 1}",
             "description": description,
+            "location": location,
+            "time_of_day": time_of_day,
             "environment_prompt": environment_prompt,
             "consistency_anchors": consistency_anchors or [],
             "linked_scene3d_id": "",
@@ -1408,6 +1414,12 @@ def update_scene(project: Project, scene_id: str, changes: dict[str, Any]) -> tu
         changed = True
     if "description" in changes and changes["description"] is not None:
         scene["description"] = str(changes["description"] or "")
+        changed = True
+    if "location" in changes and changes["location"] is not None:
+        scene["location"] = str(changes["location"] or "").strip()
+        changed = True
+    if "time_of_day" in changes and changes["time_of_day"] is not None:
+        scene["time_of_day"] = str(changes["time_of_day"] or "").strip()
         changed = True
     if "environment_prompt" in changes and changes["environment_prompt"] is not None:
         scene["environment_prompt"] = str(changes["environment_prompt"] or "").strip()

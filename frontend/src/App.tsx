@@ -43,13 +43,13 @@ function WelcomePanel() {
     <div className="welcome-panel">
       <div className="welcome-card">
         <h2>No project open</h2>
-        <p>Create a new storyboard project in a chosen folder, or open an existing project folder.</p>
+        <p>Create or open a local Storyboarder document. Scenes, shots, and artwork stay together in one .sbd file.</p>
         <div className="welcome-actions">
           <button type="button" className="primary" onClick={() => void handleNew()} disabled={projectActionBusy}>
             New project
           </button>
           <button type="button" onClick={() => void handleOpen()} disabled={projectActionBusy}>
-            Open project folder
+            Open document
           </button>
         </div>
       </div>
@@ -95,12 +95,12 @@ function LeftRail({
               type="button"
               className={`left-rail-item ${workspaceMode === 'scene2d' ? 'is-active' : ''}`}
               onClick={() => onSetWorkspaceMode('scene2d')}
-              title="Scene 2D"
+              title="Scenes"
               aria-current={workspaceMode === 'scene2d' ? 'page' : undefined}
               aria-pressed={workspaceMode === 'scene2d'}
             >
               <span className="left-rail-icon">&#9636;</span>
-              <span>2D</span>
+              <span>Scenes</span>
             </button>
             <button
               type="button"
@@ -221,14 +221,6 @@ function RightRail({
   return (
     <nav className="right-rail" aria-label="Workspace tools">
       <div className="right-rail-group right-rail-bottom">
-        <button type="button" className="right-rail-item" disabled title="Upload is not wired yet">
-          <span className="right-rail-icon">&#8679;</span>
-          <span>Upload</span>
-        </button>
-        <button type="button" className="right-rail-item" disabled title="Share is not wired yet">
-          <span className="right-rail-icon">&#8599;</span>
-          <span>Share</span>
-        </button>
         <div className="right-rail-menu" ref={menuRef}>
           <button
             type="button"
@@ -363,7 +355,7 @@ function AppInner() {
         </div>
       </div>
       <ReferenceAssignmentPopover />
-      <SettingsModal open={settingsOpen} onClose={() => setSettingsOpen(false)} />
+      {settingsOpen ? <SettingsModal open onClose={() => setSettingsOpen(false)} /> : null}
     </div>
   )
 }

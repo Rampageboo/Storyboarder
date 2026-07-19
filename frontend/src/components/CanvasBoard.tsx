@@ -17,11 +17,11 @@ import {
 import { useProject } from '../state/useProject'
 import { shotDisplayLabel } from '../utils/shotDisplay'
 import { shotHasPreview, shotShouldOverlayPreview } from '../utils/shotPreview'
+import { FloatingLayersPanel, type CanvasLayerId } from './FloatingLayersPanel'
 import './CanvasBoard.css'
 
 type SyncResult = { synced?: boolean; message?: string }
-type LayerId = 'background' | 'codex' | 'artwork'
-const ALL_LAYERS_VISIBLE: Record<LayerId, boolean> = { background: true, codex: true, artwork: true }
+const ALL_LAYERS_VISIBLE: Record<CanvasLayerId, boolean> = { background: true, codex: true, artwork: true }
 
 export function CanvasBoard() {
   const { project, selectedShotId, setProject, flushDirtyShots, projectActionBusy, reportError, missingFiles } = useProject()
@@ -39,7 +39,8 @@ export function CanvasBoard() {
   })
   const [previewZoom, setPreviewZoom] = useState(100)
   const [fitPreview, setFitPreview] = useState(true)
-  const [layerVisibility, setLayerVisibility] = useState<Record<LayerId, boolean>>(ALL_LAYERS_VISIBLE)
+  const [layerVisibility, setLayerVisibility] = useState<Record<CanvasLayerId, boolean>>(ALL_LAYERS_VISIBLE)
+  const [layersPanelOpen, setLayersPanelOpen] = useState(true)
   const imageInputRef = useRef<HTMLInputElement | null>(null)
   const sourceInputRef = useRef<HTMLInputElement | null>(null)
   const canvasBodyRef = useRef<HTMLDivElement | null>(null)
@@ -203,7 +204,7 @@ export function CanvasBoard() {
     })
   }
 
-  const toggleLayer = (layerId: LayerId) => {
+  const toggleLayer = (layerId: CanvasLayerId) => {
     setLayerVisibility((current) => ({ ...current, [layerId]: !current[layerId] }))
   }
 
@@ -362,70 +363,16 @@ export function CanvasBoard() {
           >
             Refresh
           </button>
-          <span
+          <button
+            type="button"
             className={`canvas-link-pill ${linkedCount === linkedTotal ? 'ok' : 'partial'}`}
             title={linkedTitle}
             aria-label={linkedTitle}
+            aria-pressed={layersPanelOpen}
+            onClick={() => setLayersPanelOpen((open) => !open)}
           >
             {linkedLabel}
-          </span>
-          <details className="canvas-more canvas-layers">
-            <summary aria-label="Manage fixed layers">Layers</summary>
-            <div className="canvas-more-menu canvas-layer-menu">
-              <div className="canvas-layer-heading">
-                <strong>Fixed layers</strong>
-                <span>Top to bottom</span>
-              </div>
-              <div className="canvas-layer-row">
-                <button
-                  type="button"
-                  className="canvas-layer-toggle"
-                  aria-pressed={layerVisibility.artwork}
-                  onClick={() => toggleLayer('artwork')}
-                  disabled={!hasPreview}
-                >
-                  {layerVisibility.artwork ? 'On' : 'Off'}
-                </button>
-                <span className="canvas-layer-name">Artist artwork</span>
-                <span className="canvas-layer-protected">Protected</span>
-              </div>
-              <div className="canvas-layer-row">
-                <button
-                  type="button"
-                  className="canvas-layer-toggle"
-                  aria-pressed={layerVisibility.codex}
-                  onClick={() => toggleLayer('codex')}
-                  disabled={!hasCodexLayer}
-                >
-                  {layerVisibility.codex ? 'On' : 'Off'}
-                </button>
-                <span className="canvas-layer-name">Codex image</span>
-                {hasCodexLayer ? (
-                  <button type="button" className="canvas-layer-delete" onClick={() => handleRemoveLayer('codex')} disabled={disabled}>
-                    Delete
-                  </button>
-                ) : <span className="canvas-layer-empty">Empty</span>}
-              </div>
-              <div className="canvas-layer-row">
-                <button
-                  type="button"
-                  className="canvas-layer-toggle"
-                  aria-pressed={layerVisibility.background}
-                  onClick={() => toggleLayer('background')}
-                  disabled={!hasBoardBg}
-                >
-                  {layerVisibility.background ? 'On' : 'Off'}
-                </button>
-                <span className="canvas-layer-name">Background</span>
-                {hasBoardBg ? (
-                  <button type="button" className="canvas-layer-delete" onClick={() => handleRemoveLayer('background')} disabled={disabled}>
-                    Delete
-                  </button>
-                ) : <span className="canvas-layer-empty">Empty</span>}
-              </div>
-              <p className="canvas-layer-note">Codex results replace only the Codex layer.</p>
-            </div>
-          </details>
+          </button>
           <details className="canvas-more">
             <summary aria-label="More preview actions">More</summary>
             <div className="canvas-more-menu">
@@ -650,6 +597,20 @@ export function CanvasBoard() {
           </div>
         )}
       </div>
+      {layersPanelOpen ? (
+        <FloatingLayersPanel
+          key={`${project.project_json_path}:${shot.shot_id}`}
+          shot={shot}
+          layerVisibility={layerVisibility}
+          hasArtwork={hasArtworkImage}
+          hasCodexLayer={hasCodexLayer}
+          hasBackground={hasBoardBg}
+          disabled={disabled}
+          onToggleLayer={toggleLayer}
+          onRemoveLayer={handleRemoveLayer}
+          onClose={() => setLayersPanelOpen(false)}
+        />
+      ) : null}
     </div>
   )
 }

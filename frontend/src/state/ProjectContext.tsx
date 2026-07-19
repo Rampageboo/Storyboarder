@@ -30,7 +30,7 @@ import {
   updateSettings,
   updateShot,
 } from '../api'
-import { bootstrapApp, browseFolder, refreshPreviewAnalysis, updateAppSession } from '../api'
+import { bootstrapApp, browseProjectJson, browseProjectSave, refreshPreviewAnalysis, updateAppSession } from '../api'
 import type { MissingFileRow, ProjectPathRequest, ProjectPayload, SettingsUpdate, ShotUpdate } from '../types'
 import { shotToUpdate } from '../utils/shotUpdate'
 import { ProjectContext } from './useProject'
@@ -95,11 +95,6 @@ export interface ProjectContextValue {
   missingFilesLoading: boolean
   refreshMissingFiles: () => void
   refreshPreviewFields: () => Promise<void>
-}
-
-function projectJsonInFolder(folderPath: string): string {
-  const trimmed = folderPath.replace(/[\\/]+$/, '')
-  return `${trimmed}/project.json`
 }
 
 function draftIsDirty(draft: ShotUpdate | undefined): boolean {
@@ -515,7 +510,7 @@ export function ProjectProvider({ children }: PropsWithChildren) {
         await flushDirtyShots()
         let nextBody = body
         if (!nextBody.path) {
-          const result = await browseFolder()
+          const result = await browseProjectSave()
           if (result.cancelled || !result.path) return
           nextBody = { ...nextBody, path: result.path }
         }
@@ -535,9 +530,9 @@ export function ProjectProvider({ children }: PropsWithChildren) {
     setProjectActionBusy(true)
     try {
       await flushDirtyShots()
-      const result = await browseFolder()
+      const result = await browseProjectJson()
       if (result.cancelled || !result.path) return
-      const payload = await openProject({ project_json_path: projectJsonInFolder(result.path) })
+      const payload = await openProject({ project_json_path: result.path })
       openPayload(payload, payload.shots[0]?.shot_id ?? null)
     } catch (error) {
       setLastError(error instanceof Error ? error.message : String(error))

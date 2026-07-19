@@ -84,3 +84,8 @@ export function browseFolder(): Promise<BrowseResult> {
 export function browseProjectJson(): Promise<BrowseResult> {
   return requestJson<BrowseResult>('/api/system/browse-project-json', { method: 'POST' })
 }
+
+/** Opens the native Save As picker for a new single-file Storyboarder document. */
+export function browseProjectSave(): Promise<BrowseResult> {
+  return requestJson<BrowseResult>('/api/system/browse-project-save', { method: 'POST' })
+}

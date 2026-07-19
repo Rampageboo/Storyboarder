@@ -1,0 +1,75 @@
+.keyword-textarea-field {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.keyword-textarea-shell {
+  position: relative;
+  min-width: 0;
+  background: color-mix(in srgb, var(--bg-input) 88%, transparent);
+  border-radius: 8px;
+}
+
+.keyword-textarea-backdrop {
+  position: absolute;
+  z-index: 0;
+  inset: 1px;
+  overflow: hidden;
+  padding: 8px 10px;
+  border-radius: 7px;
+  color: var(--color-text);
+  font: inherit;
+  line-height: normal;
+  overflow-wrap: break-word;
+  pointer-events: none;
+  white-space: pre-wrap;
+}
+
+.keyword-textarea-backdrop mark {
+  padding: 1px 0;
+  border-radius: 3px;
+  color: inherit;
+  background: color-mix(in srgb, var(--color-accent) 38%, transparent);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--color-accent) 28%, transparent);
+}
+
+.inspector .keyword-textarea-control {
+  position: relative;
+  z-index: 1;
+  display: block;
+  color: transparent;
+  caret-color: var(--color-text);
+  background: transparent;
+  -webkit-text-fill-color: transparent;
+}
+
+.inspector .keyword-textarea-control::placeholder {
+  color: var(--color-muted);
+  -webkit-text-fill-color: var(--color-muted);
+}
+
+.inspector .keyword-textarea-control::selection {
+  color: transparent;
+  background: color-mix(in srgb, var(--color-accent) 30%, transparent);
+  -webkit-text-fill-color: transparent;
+}
+
+.keyword-asset-matches {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  margin-top: 5px;
+  color: var(--color-muted);
+  font-size: 9px;
+}
+
+.keyword-asset-match {
+  padding: 2px 5px;
+  border: 1px solid color-mix(in srgb, var(--color-accent) 34%, var(--color-border));
+  border-radius: 4px;
+  color: color-mix(in srgb, var(--color-accent) 72%, var(--color-text));
+  background: color-mix(in srgb, var(--color-accent) 9%, transparent);
+  font-weight: 600;
+}

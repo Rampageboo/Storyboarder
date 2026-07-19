@@ -1,0 +1,382 @@
+.floating-layers-panel {
+  position: absolute;
+  z-index: 24;
+  top: 72px;
+  right: 14px;
+  width: min(340px, calc(100% - 28px));
+  max-height: calc(100% - 88px);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid color-mix(in srgb, var(--color-border) 88%, transparent);
+  border-radius: 10px;
+  color: var(--color-text);
+  background: color-mix(in srgb, var(--color-surface) 96%, #090a0d);
+  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.48), 0 1px 0 rgba(255, 255, 255, 0.04) inset;
+}
+
+.floating-panel-header {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 46px;
+  padding: 8px 10px 8px 12px;
+  border-bottom: 1px solid color-mix(in srgb, var(--color-border) 72%, transparent);
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.035), transparent);
+}
+
+.floating-panel-header > div {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.floating-panel-header strong {
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.floating-panel-header span {
+  overflow: hidden;
+  color: var(--color-muted);
+  font-size: 9px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.floating-panel-header button,
+.floating-section-heading button,
+.floating-layer-eye,
+.floating-layer-remove,
+.floating-queue-actions button,
+.floating-artifact-row button {
+  border: 1px solid var(--color-border);
+  color: var(--color-text);
+  background: color-mix(in srgb, var(--bg-elevated) 78%, transparent);
+  cursor: pointer;
+}
+
+.floating-panel-header button {
+  min-width: 42px;
+  min-height: 24px;
+  padding: 3px 7px;
+  border-color: transparent;
+  border-radius: 6px;
+  color: var(--color-muted);
+  background: transparent;
+  font-size: 9px;
+}
+
+.floating-panel-section {
+  flex: 0 0 auto;
+  padding: 8px;
+  border-bottom: 1px solid color-mix(in srgb, var(--color-border) 72%, transparent);
+}
+
+.floating-panel-section:last-child {
+  border-bottom: 0;
+}
+
+.floating-section-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-height: 24px;
+  padding: 0 4px 6px;
+}
+
+.floating-section-heading > span {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.floating-section-heading small {
+  color: var(--color-muted);
+  font-size: 9px;
+}
+
+.floating-layer-list {
+  display: grid;
+  gap: 2px;
+}
+
+.floating-layer-row {
+  display: grid;
+  grid-template-columns: 30px 32px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 7px;
+  min-height: 38px;
+  padding: 3px 6px 3px 2px;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--bg-elevated) 58%, transparent);
+}
+
+.floating-layer-row.is-empty {
+  opacity: 0.58;
+}
+
+.floating-layer-eye {
+  width: 28px;
+  min-height: 28px;
+  padding: 0;
+  border-color: transparent;
+  border-radius: 5px;
+  color: var(--color-muted);
+  background: transparent;
+  font-size: 8px;
+}
+
+.floating-layer-eye[aria-pressed='true'] {
+  color: var(--color-text);
+  background: color-mix(in srgb, var(--color-accent) 10%, transparent);
+}
+
+.floating-layer-thumb {
+  width: 30px;
+  height: 26px;
+  border: 1px solid color-mix(in srgb, var(--color-border) 84%, transparent);
+  border-radius: 4px;
+  background: linear-gradient(135deg, #2d323c, #171a20);
+}
+
+.floating-layer-thumb.layer-artwork {
+  background: linear-gradient(135deg, #d6bc83, #705b39);
+}
+
+.floating-layer-thumb.layer-codex {
+  background: linear-gradient(135deg, #8b78e8, #372d75);
+}
+
+.floating-layer-thumb.layer-background {
+  background: linear-gradient(135deg, #668ba8, #26394a);
+}
+
+.floating-layer-name {
+  overflow: hidden;
+  font-size: 10px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.floating-layer-lock,
+.floating-layer-empty {
+  color: var(--color-muted);
+  font-size: 8px;
+  text-transform: uppercase;
+}
+
+.floating-layer-remove {
+  min-height: 24px;
+  padding: 3px 5px;
+  border-color: transparent;
+  border-radius: 5px;
+  color: var(--color-danger);
+  background: transparent;
+  font-size: 8px;
+}
+
+.floating-queue-section {
+  min-height: 0;
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+}
+
+.floating-section-heading button {
+  min-height: 22px;
+  padding: 2px 7px;
+  border-radius: 5px;
+  color: var(--color-muted);
+  font-size: 8px;
+}
+
+.floating-queue-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+  padding-bottom: 7px;
+}
+
+.floating-queue-actions button {
+  min-height: 30px;
+  border-radius: 6px;
+  font-size: 9px;
+  font-weight: 700;
+}
+
+.floating-queue-actions .queue-primary {
+  border-color: color-mix(in srgb, var(--color-accent) 60%, var(--color-border));
+  color: #120d05;
+  background: var(--color-accent);
+}
+
+.floating-queue-notice {
+  margin-bottom: 7px;
+  padding: 6px 7px;
+  border-left: 2px solid var(--color-accent);
+  border-radius: 0 5px 5px 0;
+  color: color-mix(in srgb, var(--color-text) 84%, var(--color-muted));
+  background: color-mix(in srgb, var(--color-accent) 8%, transparent);
+  font-size: 9px;
+  line-height: 1.35;
+}
+
+.floating-queue-list {
+  min-height: 76px;
+  display: grid;
+  gap: 4px;
+  overflow-y: auto;
+  scrollbar-width: thin;
+}
+
+.floating-queue-row {
+  content-visibility: auto;
+  contain-intrinsic-size: 62px;
+  display: grid;
+  gap: 5px;
+  padding: 7px;
+  border: 1px solid color-mix(in srgb, var(--color-border) 66%, transparent);
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--bg-elevated) 52%, transparent);
+}
+
+.floating-queue-topline {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.floating-queue-topline strong {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.floating-status {
+  width: 7px;
+  height: 7px;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  background: var(--color-muted);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--color-muted) 12%, transparent);
+}
+
+.floating-status.status-queued {
+  background: #d9a441;
+}
+
+.floating-status.status-needs-review,
+.floating-status.status-completed {
+  background: var(--color-success);
+}
+
+.floating-status.status-failed,
+.floating-status.status-cancelled {
+  background: var(--color-danger);
+}
+
+.floating-destination {
+  padding: 2px 5px;
+  border-radius: 999px;
+  color: #acd3f4;
+  background: color-mix(in srgb, #4c8bc1 20%, transparent);
+  font-size: 8px;
+  font-weight: 700;
+}
+
+.floating-destination.is-codex {
+  color: #c8beff;
+  background: color-mix(in srgb, #7661d8 24%, transparent);
+}
+
+.floating-queue-meta {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--color-muted);
+  font-size: 8px;
+}
+
+.floating-status-label {
+  text-transform: capitalize;
+}
+
+.floating-queue-assets {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  color: var(--color-muted);
+  font-size: 8px;
+}
+
+.floating-queue-assets span:not(:first-child) {
+  padding: 2px 5px;
+  border-radius: 4px;
+  color: #c8beff;
+  background: color-mix(in srgb, #7661d8 20%, transparent);
+}
+
+.floating-artifact-list {
+  display: grid;
+  gap: 4px;
+  padding-top: 2px;
+}
+
+.floating-artifact-row {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.floating-artifact-row a {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  color: color-mix(in srgb, var(--color-accent) 72%, var(--color-text));
+  font-size: 8px;
+  text-decoration: none;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.floating-artifact-row button {
+  flex: 0 0 auto;
+  min-height: 22px;
+  padding: 2px 6px;
+  border-radius: 5px;
+  font-size: 8px;
+}
+
+.floating-queue-empty {
+  display: grid;
+  min-height: 76px;
+  place-items: center;
+  border: 1px dashed color-mix(in srgb, var(--color-border) 72%, transparent);
+  border-radius: 6px;
+  color: var(--color-muted);
+  font-size: 9px;
+}
+
+.floating-layers-panel button:disabled {
+  cursor: default;
+  opacity: 0.45;
+}
+
+@media (max-width: 900px) {
+  .floating-layers-panel {
+    top: 64px;
+    right: 8px;
+    width: min(320px, calc(100% - 16px));
+    max-height: calc(100% - 76px);
+  }
+}

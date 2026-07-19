@@ -36,6 +36,62 @@ function fileName(path: string) {
   return path.split(/[/\\]/).pop() || path
 }
 
+function parseKeywords(value: string) {
+  const seen = new Set<string>()
+  return value
+    .split(',')
+    .map((item) => item.trim())
+    .filter((item) => {
+      const key = item.toLocaleLowerCase()
+      if (!item || seen.has(key)) return false
+      seen.add(key)
+      return true
+    })
+}
+
+function Scene3DKeywordEditor({
+  scene,
+  disabled,
+  onSave,
+}: {
+  scene: Scene3DRecord
+  disabled: boolean
+  onSave: (keywords: string[]) => Promise<void>
+}) {
+  const initialValue = (scene.keywords || []).join(', ')
+  const [value, setValue] = useState(initialValue)
+  const [saving, setSaving] = useState(false)
+
+  const save = async () => {
+    const keywords = parseKeywords(value)
+    const normalized = keywords.join(', ')
+    if (normalized === initialValue) return
+    setSaving(true)
+    try {
+      await onSave(keywords)
+      setValue(normalized)
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <input
+      className="scene3d-keywords-input"
+      value={value}
+      onChange={(event) => setValue(event.target.value)}
+      onBlur={() => void save().catch(() => {})}
+      onKeyDown={(event) => {
+        if (event.key === 'Enter') event.currentTarget.blur()
+      }}
+      placeholder="Keywords: school, classroom"
+      aria-label="Scene 3D keywords"
+      title="Comma-separated words that link shot details to this 3D asset"
+      disabled={disabled || saving}
+    />
+  )
+}
+
 function sceneSettings(project: ProjectPayload | null): Scene3DSettings {
   const value = project?.settings?.scene3d
   return value && typeof value === 'object' ? (value as Scene3DSettings) : {}
@@ -92,6 +148,7 @@ export function Scene3DPanel({ active }: { active: boolean }) {
   const [scene3ds, setScene3ds] = useState<Scene3DRecord[]>([])
   const [activeScene3dId, setActiveScene3dId] = useState('')
   const inputRef = useRef<HTMLInputElement | null>(null)
+  const blendInputRef = useRef<HTMLInputElement | null>(null)
   const editorRootRef = useRef<HTMLDivElement | null>(null)
   const editorRef = useRef<Scene3DEditorInstance | null>(null)
   const loadedSceneKeyRef = useRef('')
@@ -294,7 +351,7 @@ export function Scene3DPanel({ active }: { active: boolean }) {
     }
   }, [flushDirtyShots, reportError, setProject])
 
-  const importGlb = useCallback(
+  const importSceneAsset = useCallback(
     async (file: File | undefined) => {
       if (!file) return
       setBusy(true)
@@ -317,16 +374,34 @@ export function Scene3DPanel({ active }: { active: boolean }) {
           loadedSceneKeyRef.current = sceneKey(payload)
           requestAnimationFrame(() => editor._resize?.())
         }
-        setNote(`Imported GLB: ${file.name}`)
+        setNote(file.name.toLocaleLowerCase().endsWith('.blend') ? `Attached Blender file: ${file.name}` : `Imported 3D preview: ${file.name}`)
       } catch (error) {
         reportError(error)
       } finally {
         setBusy(false)
         if (inputRef.current) inputRef.current.value = ''
+        if (blendInputRef.current) blendInputRef.current.value = ''
       }
     },
     [flushDirtyShots, reportError, setProject],
   )
+
+  const saveSceneKeywords = useCallback(async (sceneId: string, keywords: string[]) => {
+    setBusy(true)
+    try {
+      await flushDirtyShots()
+      const payload = await updateScene3D(sceneId, { keywords })
+      setScene3ds(payload.scenes)
+      setActiveScene3dId(payload.active_scene3d_id)
+      setProject(await getProject())
+      setNote(keywords.length ? `Keywords saved: ${keywords.join(', ')}` : 'Scene keywords cleared.')
+    } catch (error) {
+      reportError(error)
+      throw error
+    } finally {
+      setBusy(false)
+    }
+  }, [flushDirtyShots, reportError, setProject])
 
   const applyCameraFromEditor = useCallback(
     async (cameraState: CameraState) => {
@@ -510,7 +585,16 @@ export function Scene3DPanel({ active }: { active: boolean }) {
         accept=".glb,.gltf"
         hidden
         onChange={(event) => {
-          void importGlb(event.target.files?.[0] ?? undefined)
+          void importSceneAsset(event.target.files?.[0] ?? undefined)
+        }}
+      />
+      <input
+        ref={blendInputRef}
+        type="file"
+        accept=".blend"
+        hidden
+        onChange={(event) => {
+          void importSceneAsset(event.target.files?.[0] ?? undefined)
         }}
       />
 
@@ -541,11 +625,22 @@ export function Scene3DPanel({ active }: { active: boolean }) {
                   <option value="">No Scene 3D records</option>
                 )}
               </select>
+              {activeScene3d ? (
+                <Scene3DKeywordEditor
+                  key={`${activeScene3d.id}:${activeScene3d.updated_at}`}
+                  scene={activeScene3d}
+                  disabled={disabled}
+                  onSave={(keywords) => saveSceneKeywords(activeScene3d.id, keywords)}
+                />
+              ) : null}
               <button type="button" onClick={() => void create3dScene()} disabled={disabled}>
                 Add 3D Scene
               </button>
               <button type="button" onClick={() => inputRef.current?.click()} disabled={disabled}>
                 Import GLB
+              </button>
+              <button type="button" onClick={() => blendInputRef.current?.click()} disabled={disabled}>
+                Attach .blend
               </button>
               <button type="button" onClick={() => void openBlender()} disabled={disabled}>
                 Open Blender

@@ -4,6 +4,7 @@ import type { Shot, ShotStatus } from './shot'
 export interface ProjectPayload {
   project_path: string
   project_json_path: string
+  document_path?: string
   name: string
   dirty: boolean
   settings: ProjectSettings

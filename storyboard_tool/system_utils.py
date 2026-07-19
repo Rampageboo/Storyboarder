@@ -131,8 +131,20 @@ def validate_project_json_path(path: str) -> str:
         raise FileNotFoundError(f"File not found: {candidate}")
     if not candidate.is_file():
         raise ValueError(f"Path is not a file: {candidate}")
-    if candidate.name.lower() != "project.json":
-        raise ValueError("Choose a project.json file.")
+    if candidate.name.lower() != "project.json" and candidate.suffix.lower() != ".sbd":
+        raise ValueError("Choose a Storyboarder .sbd file or legacy project.json.")
+    return str(candidate.resolve())
+
+
+def validate_project_save_path(path: str) -> str:
+    value = path.strip().strip('"')
+    if not value:
+        return ""
+    candidate = Path(value).expanduser()
+    if candidate.suffix.lower() != ".sbd":
+        candidate = candidate.with_suffix(".sbd")
+    if not candidate.parent.is_dir():
+        raise FileNotFoundError(f"Folder not found: {candidate.parent}")
     return str(candidate.resolve())
 
 
@@ -142,6 +154,10 @@ def browse_folder(initial_dir: str = "") -> str | None:
 
 def browse_project_json(initial_dir: str = "") -> str | None:
     return _run_dialog_process("project-json", initial_dir)
+
+
+def browse_project_save(initial_dir: str = "") -> str | None:
+    return _run_dialog_process("project-save", initial_dir)
 
 
 def browse_photoshop_executable(initial_dir: str = "") -> str | None:

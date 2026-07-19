@@ -168,6 +168,22 @@
   font-size: 11px;
 }
 
+.scene3d-keywords-input {
+  min-width: 190px;
+  max-width: 260px;
+  padding: 6px 8px;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 8px;
+  color: #f3f4f6;
+  background: #15171b;
+  font-size: 11px;
+}
+
+.scene3d-keywords-input:focus {
+  border-color: color-mix(in srgb, var(--color-accent) 70%, white);
+  outline: none;
+}
+
 .scene3d-workspace-actions button:hover:not(:disabled) {
   background: rgba(255, 255, 255, 0.14);
 }

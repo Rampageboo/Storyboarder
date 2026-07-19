@@ -19,6 +19,19 @@ export interface GenerationResult {
   artifacts: GenerationArtifact[]
 }
 
+export interface GenerationKeywordAsset {
+  scene3d_id: string
+  title: string
+  description: string
+  matched_keywords: string[]
+  file_path: string
+  absolute_path: string
+  file_exists: boolean
+  blend_file_path: string
+  blend_absolute_path: string
+  blend_file_exists: boolean
+}
+
 export interface GenerationRequest {
   schema_version: number
   request_id: string
@@ -39,6 +52,7 @@ export interface GenerationRequest {
     updated_at: string
   } | null
   character_bible?: { prompt: string }
+  keyword_assets?: GenerationKeywordAsset[]
   prompt: {
     mode: 'auto' | 'manual'
     compiled_prompt: string

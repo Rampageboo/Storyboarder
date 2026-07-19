@@ -21,7 +21,7 @@ from typing import Any
 
 from PIL import Image
 
-from . import scene2d, shot_assets
+from . import shot_assets
 from .models import Project, Shot
 from .project_storage import atomic_write_json
 from .shot_files import resolve_project_relative_path
@@ -119,21 +119,6 @@ def has_generation_activity(shot: Shot) -> bool:
     )
 
 
-def mark_scene_dependents_stale(project: Project, scene_id: str, scene_title: str = "") -> list[str]:
-    """Mark generated shots linked to a changed Scene Bible as stale."""
-    wanted_id = str(scene_id or "").strip()
-    wanted_title = str(scene_title or "").strip().casefold()
-    updated: list[str] = []
-    for shot in project.shots:
-        linked = shot.scene_id == wanted_id if wanted_id else False
-        if not linked and not shot.scene_id and wanted_title:
-            linked = str(shot.scene or "").strip().casefold() == wanted_title
-        if linked and has_generation_activity(shot):
-            shot.generation_state["freshness_status"] = "stale"
-            updated.append(shot.shot_id)
-    return updated
-
-
 def mark_all_generated_shots_stale(project: Project) -> list[str]:
     """Character Bible changes affect every shot that already has generation activity."""
     updated: list[str] = []
@@ -155,13 +140,10 @@ def _append_prompt_line(lines: list[str], label: str, value: Any) -> None:
 
 def _compile_shot_override(shot: Shot) -> str:
     """Compile only the per-shot layer; scene and identity live above it."""
-    prompt = shot.prompt_config
-    if prompt.get("mode") == "manual" and str(prompt.get("manual_prompt") or "").strip():
-        return str(prompt["manual_prompt"]).strip()
-
     design = shot.shot_design
     continuity = shot.continuity
     lines: list[str] = []
+    _append_prompt_line(lines, "Scene", shot.scene)
     story_and_action = str(design.get("story_beat") or shot.description or "").strip()
     action_note = str(shot.action_note or "").strip()
     _append_prompt_line(lines, "Story beat", story_and_action)
@@ -193,7 +175,6 @@ def _compile_shot_override(shot: Shot) -> str:
     _append_prompt_line(lines, "Continuity out", continuity.get("expected_out"))
     _append_prompt_line(lines, "Preserve", continuity.get("preserve"))
     _append_prompt_line(lines, "Intentional changes", continuity.get("intentional_changes"))
-    _append_prompt_line(lines, "Additional instruction", prompt.get("prompt_extra"))
     return "\n".join(lines) or "Create a storyboard frame for this shot."
 
 
@@ -202,27 +183,46 @@ def compile_prompt(
     *,
     scene_bible: dict[str, Any] | None = None,
     character_bible_prompt: str = "",
+    keyword_assets: list[dict[str, Any]] | None = None,
 ) -> str:
-    """Compile Scene Bible -> Character Bible -> Shot Override in a fixed order."""
+    """Compile ordinary storyboard fields into generation instructions."""
     shot_override = _compile_shot_override(shot)
-    scene = scene_bible if isinstance(scene_bible, dict) else {}
-    environment_prompt = str(scene.get("environment_prompt") or "").strip()
-    anchors = scene.get("consistency_anchors") if isinstance(scene.get("consistency_anchors"), list) else []
     character_prompt = str(character_bible_prompt or "").strip()
-    if not environment_prompt and not anchors and not character_prompt:
+    scene_context = scene_bible or {}
+    scene_lines: list[str] = []
+    _append_prompt_line(scene_lines, "Scene", scene_context.get("title") or shot.scene)
+    _append_prompt_line(scene_lines, "Location", scene_context.get("location"))
+    _append_prompt_line(scene_lines, "Time of day", scene_context.get("time_of_day"))
+    _append_prompt_line(scene_lines, "Setting", scene_context.get("environment_prompt"))
+    _append_prompt_line(scene_lines, "Fixed scene details", scene_context.get("consistency_anchors"))
+    _append_prompt_line(scene_lines, "Scene context", scene_context.get("description"))
+    relevant_assets = keyword_assets or []
+    if not character_prompt and not scene_context and not relevant_assets:
         return shot_override
 
     sections: list[str] = []
-    if environment_prompt or anchors:
-        scene_lines = ["SCENE BIBLE — keep this environment constant across every shot linked to this scene."]
-        _append_prompt_line(scene_lines, "Scene", scene.get("title"))
-        _append_prompt_line(scene_lines, "Environment", environment_prompt)
-        _append_prompt_line(scene_lines, "Locked environment anchors", anchors)
-        sections.append("\n".join(scene_lines))
+    if scene_lines:
+        sections.append("SCENE — keep these facts consistent across its shots.\n" + "\n".join(scene_lines))
     if character_prompt:
         sections.append(
             "CHARACTER BIBLE — preserve identity and wardrobe exactly; render only characters named in the shot.\n"
             f"Character identities: {character_prompt}"
+        )
+    if relevant_assets:
+        asset_lines = []
+        for asset in relevant_assets:
+            paths = [
+                str(asset.get("blend_file_path") or "").strip(),
+                str(asset.get("file_path") or "").strip(),
+            ]
+            path_text = "; ".join(path for path in paths if path)
+            matched = ", ".join(str(item) for item in asset.get("matched_keywords") or [])
+            asset_lines.append(
+                f"- {asset.get('title') or asset.get('scene3d_id')}: matched {matched}; inspect {path_text}"
+            )
+        sections.append(
+            "RELEVANT 3D ASSETS — inspect these project files before generating; use them for environment, "
+            "layout, proportions, and camera context.\n" + "\n".join(asset_lines)
         )
     sections.append(
         "SHOT OVERRIDE — change framing, camera, action, expression, and staging only.\n"
@@ -231,29 +231,93 @@ def compile_prompt(
     sections.append(
         "CONSISTENCY RULES — do not redesign the location, move locked fixtures, change character identity, "
         "or introduce unrequested people. A shot-level background note may describe what is visible from this angle, "
-        "but it does not replace the Scene Bible."
+        "and must stay consistent with the named scene."
     )
     return "\n\n".join(sections)
 
 
-def _scene_bible_snapshot(project: Project, shot: Shot) -> dict[str, Any] | None:
-    scenes = scene2d.list_scenes(project)
-    linked = next((scene for scene in scenes if scene.get("id") == shot.scene_id), None)
-    if linked is None and str(shot.scene or "").strip():
-        wanted_title = str(shot.scene).strip().casefold()
-        linked = next((scene for scene in scenes if str(scene.get("title") or "").strip().casefold() == wanted_title), None)
-    if linked is None:
-        return None
-    primary_path = str(linked.get("preview_image_path") or "").strip()
-    return {
-        "scene_id": str(linked.get("id") or ""),
-        "title": str(linked.get("title") or ""),
-        "environment_prompt": str(linked.get("environment_prompt") or ""),
-        "consistency_anchors": list(linked.get("consistency_anchors") or []),
-        "primary_perspective_id": str(linked.get("primary_perspective_id") or ""),
-        "primary_reference_path": primary_path,
-        "updated_at": str(linked.get("updated_at") or ""),
-    }
+def _keyword_is_present(text: str, keyword: str) -> bool:
+    cleaned = str(keyword or "").strip()
+    if not cleaned:
+        return False
+    if re.fullmatch(r"[A-Za-z0-9_ -]+", cleaned):
+        return re.search(rf"(?<![A-Za-z0-9_]){re.escape(cleaned)}(?![A-Za-z0-9_])", text, re.IGNORECASE) is not None
+    return cleaned.casefold() in text.casefold()
+
+
+def semantic_asset_keywords(asset: dict[str, Any] | None) -> list[str]:
+    asset = asset or {}
+    file_path = str(asset.get("file_path") or "").strip()
+    blend_file_path = str(asset.get("blend_file_path") or "").strip()
+    candidates = [
+        *(asset.get("keywords") or []),
+        asset.get("title") or "",
+        Path(file_path).stem if file_path else "",
+        Path(blend_file_path).stem if blend_file_path else "",
+    ]
+    result: list[str] = []
+    seen: set[str] = set()
+    for raw in candidates:
+        keyword = str(raw or "").strip()
+        folded = keyword.casefold()
+        if not keyword or folded in seen:
+            continue
+        seen.add(folded)
+        result.append(keyword)
+    return result
+
+
+def mark_generated_shots_for_asset_keywords_stale(project: Project, keywords: list[str]) -> list[str]:
+    cleaned = semantic_asset_keywords({"keywords": keywords})
+    updated: list[str] = []
+    for shot in project.shots:
+        if not has_generation_activity(shot):
+            continue
+        search_text = "\n".join([shot.title, _compile_shot_override(shot), "; ".join(shot.tags)])
+        if any(_keyword_is_present(search_text, keyword) for keyword in cleaned):
+            shot.generation_state["freshness_status"] = "stale"
+            updated.append(shot.shot_id)
+    return updated
+
+
+def _keyword_asset_snapshot(
+    project: Project,
+    shot: Shot,
+    scene_context: dict[str, Any] | None,
+) -> list[dict[str, Any]]:
+    from . import scene3d
+
+    search_text = "\n".join([
+        shot.title,
+        _compile_shot_override(shot),
+        "; ".join(shot.tags),
+        json.dumps(scene_context or {}, ensure_ascii=False, sort_keys=True),
+    ])
+    result: list[dict[str, Any]] = []
+    for asset in scene3d.list_scenes(project).get("scenes", []):
+        file_path = str(asset.get("file_path") or "").strip()
+        blend_file_path = str(asset.get("blend_file_path") or "").strip()
+        if not file_path and not blend_file_path:
+            continue
+        keywords = semantic_asset_keywords(asset)
+        matched = [keyword for keyword in keywords if _keyword_is_present(search_text, keyword)]
+        if not matched:
+            continue
+        file_resolved = resolve_project_relative_path(project, file_path) if file_path else None
+        blend_resolved = resolve_project_relative_path(project, blend_file_path) if blend_file_path else None
+        result.append({
+            "scene3d_id": str(asset.get("id") or ""),
+            "title": str(asset.get("title") or ""),
+            "description": str(asset.get("description") or ""),
+            "matched_keywords": matched,
+            "file_path": file_path,
+            "absolute_path": str(file_resolved) if file_resolved else "",
+            "file_exists": bool(file_resolved and file_resolved.is_file()),
+            "blend_file_path": blend_file_path,
+            "blend_absolute_path": str(blend_resolved) if blend_resolved else "",
+            "blend_file_exists": bool(blend_resolved and blend_resolved.is_file()),
+        })
+    return result
 
 
 def _reference_snapshot(
@@ -263,7 +327,9 @@ def _reference_snapshot(
 ) -> list[dict[str, Any]]:
     raw_paths: list[tuple[str, str]] = [(path, "shot-reference") for path in shot.reference_image_paths]
     if scene_bible:
-        scene_reference = str(scene_bible.get("primary_reference_path") or "").strip()
+        scene_reference = str(
+            scene_bible.get("primary_reference_path") or scene_bible.get("preview_image_path") or ""
+        ).strip()
         if scene_reference:
             raw_paths.insert(0, (scene_reference, "scene-environment"))
     for binding in shot.prompt_config.get("reference_bindings", []):
@@ -326,9 +392,17 @@ def build_request_snapshot(project: Project, shot: Shot, destination: str) -> di
     request_id = _new_id("gen")
     canvas_width = int(project.settings.get("canvas_width") or 1920)
     canvas_height = int(project.settings.get("canvas_height") or 1080)
-    scene_bible = _scene_bible_snapshot(project, shot)
+    scene_context = None
+    if shot.scene_id:
+        from . import scene2d
+
+        scene_context = next(
+            (scene for scene in scene2d.list_scenes(project) if scene.get("id") == shot.scene_id),
+            None,
+        )
     character_bible_prompt = str(project.settings.get("character_bible_prompt") or "").strip()
     character_bible = {"prompt": character_bible_prompt}
+    keyword_assets = _keyword_asset_snapshot(project, shot, scene_context)
     authored = {
         "shot_id": shot.shot_id,
         "title": shot.title,
@@ -348,11 +422,13 @@ def build_request_snapshot(project: Project, shot: Shot, destination: str) -> di
     }
     input_snapshot = {
         "shot": authored,
-        "scene_bible": scene_bible,
+        "scene_bible": None,
+        "scene_context": scene_context,
         "character_bible": character_bible,
         "prompt_config": dict(shot.prompt_config),
         "continuity": dict(shot.continuity),
-        "references": _reference_snapshot(project, shot, scene_bible),
+        "references": _reference_snapshot(project, shot, scene_context),
+        "keyword_assets": keyword_assets,
         "continuity_context": _continuity_context(project, shot),
         "canvas": {"width": canvas_width, "height": canvas_height},
     }
@@ -368,23 +444,25 @@ def build_request_snapshot(project: Project, shot: Shot, destination: str) -> di
         "updated_at": created_at,
         "input_revision": _canonical_hash(input_snapshot),
         "consistency_revision": _canonical_hash({
-            "scene_bible": scene_bible or {},
+            "scene": scene_context or {"title": shot.scene},
             "character_bible": character_bible,
         }),
         **input_snapshot,
         "prompt": {
-            "mode": shot.prompt_config.get("mode", "auto"),
+            "mode": "auto",
             "compiled_prompt": compile_prompt(
                 shot,
-                scene_bible=scene_bible,
+                scene_bible=scene_context,
                 character_bible_prompt=character_bible_prompt,
+                keyword_assets=keyword_assets,
             ),
             "layers": {
-                "scene": str((scene_bible or {}).get("environment_prompt") or ""),
+                "scene": str((scene_context or {}).get("title") or shot.scene or ""),
+                "scene_context": scene_context or {},
                 "characters": character_bible_prompt,
                 "shot": _compile_shot_override(shot),
             },
-            "negative_prompt": str(shot.prompt_config.get("negative_prompt") or ""),
+            "negative_prompt": "",
             "style_profile_id": str(shot.prompt_config.get("style_profile_id") or ""),
             "aspect_ratio": str(shot.prompt_config.get("aspect_ratio_override") or f"{canvas_width}:{canvas_height}"),
             "variant_count": int(shot.prompt_config.get("variant_count") or 1),
@@ -401,6 +479,13 @@ def build_request_snapshot(project: Project, shot: Shot, destination: str) -> di
 
 def create_request(project: Project, shot: Shot, destination: str) -> dict[str, Any]:
     request = build_request_snapshot(project, shot, destination)
+    if request["destination"] == "queue":
+        queued = [
+            row for row in list_requests(project, shot_id=shot.shot_id, destination="queue")
+            if row.get("status") == "queued"
+        ]
+        if queued:
+            request["request_id"] = str(queued[0]["request_id"])
     atomic_write_json(_request_path(project, request["request_id"]), request)
     return request
 
@@ -651,5 +736,6 @@ def codex_handoff_prompt(request_id: str) -> str:
     return (
         "Use the Storyboarder MCP tools to fetch generation request "
         f"{request_id}, generate the requested storyboard image variants, then submit the image files "
-        "with storyboard_submit_generation_result. Do not edit shots.json directly."
+        "with storyboard_submit_generation_result. Inspect every matched file in keyword_assets before generating. "
+        "Do not edit shots.json directly."
     )

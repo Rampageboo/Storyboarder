@@ -41,10 +41,21 @@ def ensure_project_blend_file(project: Project) -> Path:
     return blend_path
 
 
-def open_blender_scene(project: Project) -> Path:
+def open_blender_scene(project: Project, relative_path: str = "") -> Path:
     from .system_utils import detect_blender_paths, resolve_blender_executable
 
-    blend_path = ensure_project_blend_file(project)
+    cleaned_path = pm._normalize_rel_path(str(relative_path or "").strip())
+    if cleaned_path:
+        blend_path = (project.root_path / cleaned_path).resolve()
+        root = project.root_path.resolve()
+        if blend_path != root and root not in blend_path.parents:
+            raise ValueError("Blender file path must stay inside the project.")
+        if blend_path.suffix.lower() != ".blend":
+            raise ValueError("Attached Blender asset must be a .blend file.")
+        if not blend_path.is_file():
+            raise FileNotFoundError(f"Blender file not found: {cleaned_path}")
+    else:
+        blend_path = ensure_project_blend_file(project)
     if not blend_path.exists():
         template = blend_template_path()
         if not template.is_file():

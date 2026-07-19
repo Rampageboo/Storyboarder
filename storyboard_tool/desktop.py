@@ -329,4 +329,5 @@ def open_desktop_window(app, title: str = "Storyboard Tool") -> int:
         )
     except Exception as exc:
         print(f"Reference cleanup failed: {exc}")
+    project_manager.cleanup_document_working_root(app.state.project)
     return 0

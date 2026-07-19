@@ -96,6 +96,39 @@ class Scene3DLibraryTests(unittest.TestCase):
         self.assertEqual(file_response.status_code, 200, file_response.text)
         self.assertEqual(file_response.content, b"active glb")
 
+    def test_blend_asset_and_keywords_persist_on_scene3d_record(self) -> None:
+        created = _quiet(
+            lambda: self.client.post(
+                "/api/project/scenes3d",
+                json={"title": "School layout", "keywords": ["school", "classroom"]},
+            )
+        )
+        self.assertEqual(created.status_code, 200, created.text)
+        scene_id = created.json()["scene"]["id"]
+
+        attached = _quiet(
+            lambda: self.client.post(
+                f"/api/project/scenes3d/{scene_id}/import",
+                files={"file": ("school.blend", b"blend bytes", "application/octet-stream")},
+            )
+        )
+        self.assertEqual(attached.status_code, 200, attached.text)
+        scene = attached.json()["scene"]
+        self.assertTrue(scene["blend_file_path"].endswith("/school.blend"))
+        self.assertEqual(scene["keywords"], ["school", "classroom"])
+        self.assertEqual((self.project_root / scene["blend_file_path"]).read_bytes(), b"blend bytes")
+
+        updated = _quiet(
+            lambda: self.client.patch(
+                f"/api/project/scenes3d/{scene_id}",
+                json={"keywords": ["School", "campus", "school", ""]},
+            )
+        )
+        self.assertEqual(updated.status_code, 200, updated.text)
+        self.assertEqual(updated.json()["scene"]["keywords"], ["School", "campus"])
+        project = _quiet(lambda: self.client.get("/api/project")).json()
+        self.assertEqual(project["settings"]["scene3d"]["keywords"], ["School", "campus"])
+
     def test_scene2d_linked_scene3d_id_persists(self) -> None:
         scene3d = _quiet(lambda: self.client.post("/api/project/scenes3d", json={"title": "Street"})).json()["scene"]
         scene2d = _quiet(lambda: self.client.post("/api/project/scenes2d", json={"title": "Street plan"})).json()["scene"]

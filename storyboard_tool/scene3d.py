@@ -17,7 +17,7 @@ from . import scene2d
 
 SCENE3D_ROOT = "scenes3d"
 SCENE3D_INDEX = "scenes3d.json"
-SCENE3D_EXTENSIONS = {".glb", ".gltf"}
+SCENE3D_EXTENSIONS = {".glb", ".gltf", ".blend"}
 SCENE3D_ID_RE = re.compile(r"^scene3d_(\d{3,})$")
 
 
@@ -52,6 +52,22 @@ def _validate_scene_id(scene_id: str) -> str:
 def _slug(value: str) -> str:
     text = re.sub(r"[^a-zA-Z0-9]+", "_", str(value or "").strip().lower()).strip("_")
     return text[:80]
+
+
+def _normalize_keywords(value: Any) -> list[str]:
+    raw_items = value.split(",") if isinstance(value, str) else value if isinstance(value, list) else []
+    result: list[str] = []
+    seen: set[str] = set()
+    for raw in raw_items:
+        keyword = str(raw or "").strip()[:80]
+        folded = keyword.casefold()
+        if not keyword or folded in seen:
+            continue
+        seen.add(folded)
+        result.append(keyword)
+        if len(result) >= 32:
+            break
+    return result
 
 
 def _safe_rel_path(project: Project, relative_path: str) -> Path:
@@ -107,6 +123,7 @@ def _normalize_scene(raw: dict[str, Any]) -> dict[str, Any]:
         "file_path": file_path,
         "file_name": file_name,
         "blend_file_path": project_manager._normalize_rel_path(str(raw.get("blend_file_path") or "").strip()),
+        "keywords": _normalize_keywords(raw.get("keywords")),
         "reference_view": reference_view if isinstance(reference_view, dict) else {},
         "display_settings": _default_display_settings(raw.get("display_settings") if isinstance(raw.get("display_settings"), dict) else raw),
         "created_at": created_at,
@@ -182,6 +199,10 @@ def _mirror_active_to_settings(project: Project, scene: dict[str, Any] | None) -
                 "file_path": scene.get("file_path") or "",
                 "file_name": scene.get("file_name") or "",
                 "blend_file_path": scene.get("blend_file_path") or "",
+                "title": scene.get("title") or "",
+                "description": scene.get("description") or "",
+                "keywords": list(scene.get("keywords") or []),
+                "updated_at": scene.get("updated_at") or "",
                 "reference_view": scene.get("reference_view") or {},
             }
         )
@@ -246,7 +267,12 @@ def _next_scene_id(scenes: list[dict[str, Any]]) -> str:
         candidate += 1
 
 
-def create_scene(project: Project, title: str = "", description: str = "") -> dict[str, Any]:
+def create_scene(
+    project: Project,
+    title: str = "",
+    description: str = "",
+    keywords: list[str] | None = None,
+) -> dict[str, Any]:
     payload = list_scenes(project)
     scenes = payload["scenes"]
     scene_id = _next_scene_id(scenes)
@@ -256,6 +282,7 @@ def create_scene(project: Project, title: str = "", description: str = "") -> di
             "id": scene_id,
             "title": title.strip() or f"Scene 3D {len(scenes) + 1}",
             "description": description,
+            "keywords": keywords or [],
             "created_at": timestamp,
             "updated_at": timestamp,
         }
@@ -272,6 +299,8 @@ def update_scene(project: Project, scene_id: str, changes: dict[str, Any]) -> di
         scene["title"] = str(changes["title"] or "").strip() or scene["id"]
     if "description" in changes and changes["description"] is not None:
         scene["description"] = str(changes["description"] or "")
+    if "keywords" in changes and changes["keywords"] is not None:
+        scene["keywords"] = _normalize_keywords(changes["keywords"])
     if "reference_view" in changes:
         view = changes.get("reference_view")
         scene["reference_view"] = view if isinstance(view, dict) else {}
@@ -318,18 +347,27 @@ def import_scene_file(project: Project, scene_id: str, filename: str, data: byte
     _active_id, scene, scenes = _find_scene(project, scene_id)
     suffix = Path(filename or "").suffix.lower()
     if suffix not in SCENE3D_EXTENSIONS:
-        raise ValueError("Only .glb and .gltf Scene 3D files are supported.")
+        raise ValueError("Only .blend, .glb, and .gltf Scene 3D files are supported.")
     stem = _slug(Path(filename or "").stem) or scene["id"]
     destination_rel = f"{SCENE3D_ROOT}/{scene['id']}/{stem}{suffix}"
     _write_binary_atomic(_safe_rel_path(project, destination_rel), bytes(data))
-    scene.update(
-        {
-            "source_type": "glb" if suffix == ".glb" else "gltf",
-            "file_path": destination_rel,
-            "file_name": Path(filename or "").name or f"{stem}{suffix}",
+    keywords = _normalize_keywords([*(scene.get("keywords") or []), Path(filename or "").stem])
+    if suffix == ".blend":
+        scene.update({
+            "blend_file_path": destination_rel,
+            "keywords": keywords,
             "updated_at": _now_iso(),
-        }
-    )
+        })
+    else:
+        scene.update(
+            {
+                "source_type": "glb" if suffix == ".glb" else "gltf",
+                "file_path": destination_rel,
+                "file_name": Path(filename or "").name or f"{stem}{suffix}",
+                "keywords": keywords,
+                "updated_at": _now_iso(),
+            }
+        )
     _save(project, scene["id"], scenes)
     return {"scene": scene, **list_scenes(project)}
 
@@ -351,10 +389,13 @@ def file_path(project: Project, scene_id: str | None = None) -> Path | None:
 
 def open_blender_scene(project: Project) -> Path:
     scene = ensure_active_scene(project)
+    attached_path = str(scene.get("blend_file_path") or "").strip()
+    if attached_path:
+        return project_manager.open_blender_scene(project, attached_path)
     blend_path = project_manager.ensure_project_blend_file(project)
     if blend_path.exists():
         payload = update_scene(project, scene["id"], {"display_settings": scene.get("display_settings") or {}})
-        updated = payload["scene"]
+        updated = next(item for item in payload["scenes"] if item["id"] == scene["id"])
         updated["blend_file_path"] = blend_path.relative_to(project.root_path).as_posix()
         _save(project, payload["active_scene3d_id"], payload["scenes"])
     return project_manager.open_blender_scene(project)

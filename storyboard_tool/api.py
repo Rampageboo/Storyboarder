@@ -176,6 +176,7 @@ def create_app(base_dir: Path, bridge_port: int = 8000) -> FastAPI:
             stop_event.set()
             refresh_thread.join(timeout=2.0)
             _shutdown_reference_cleanup(app)
+            project_manager.cleanup_document_working_root(app.state.project)
 
     app = FastAPI(title="Storyboard Tool", lifespan=lifespan)
     app.state.base_dir = base_dir
@@ -431,6 +432,10 @@ def create_app(base_dir: Path, bridge_port: int = 8000) -> FastAPI:
     @app.post("/api/system/browse-project-json")
     def browse_project_json_dialog() -> dict[str, Any]:
         return _svc().method_browse_project_json()
+
+    @app.post("/api/system/browse-project-save")
+    def browse_project_save_dialog() -> dict[str, Any]:
+        return _svc().method_browse_project_save()
 
     @app.post("/api/system/browse-photoshop")
     def browse_photoshop() -> dict[str, str]:

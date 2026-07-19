@@ -85,6 +85,8 @@ export function Scene2DPanel({ active = false }: { active?: boolean }) {
   const [selectedPerspectiveId, setSelectedPerspectiveId] = useState('')
   const [sceneTitle, setSceneTitle] = useState('')
   const [sceneDescription, setSceneDescription] = useState('')
+  const [sceneLocation, setSceneLocation] = useState('')
+  const [sceneTimeOfDay, setSceneTimeOfDay] = useState('')
   const [sceneEnvironmentPrompt, setSceneEnvironmentPrompt] = useState('')
   const [sceneConsistencyText, setSceneConsistencyText] = useState('')
   const [scene3dLink, setScene3dLink] = useState('')
@@ -132,6 +134,8 @@ export function Scene2DPanel({ active = false }: { active?: boolean }) {
   const sceneDirty =
     sceneTitle !== (selectedScene?.title ?? '') ||
     sceneDescription !== (selectedScene?.description ?? '') ||
+    sceneLocation !== (selectedScene?.location ?? '') ||
+    sceneTimeOfDay !== (selectedScene?.time_of_day ?? '') ||
     sceneEnvironmentPrompt !== (selectedScene?.environment_prompt ?? '') ||
     sceneConsistencyText !== selectedSceneConsistencyText ||
     scene3dLink !== (selectedScene?.linked_scene3d_id ?? '')
@@ -179,6 +183,8 @@ export function Scene2DPanel({ active = false }: { active?: boolean }) {
   useEffect(() => {
     setSceneTitle(selectedScene?.title ?? '')
     setSceneDescription(selectedScene?.description ?? '')
+    setSceneLocation(selectedScene?.location ?? '')
+    setSceneTimeOfDay(selectedScene?.time_of_day ?? '')
     setSceneEnvironmentPrompt(selectedScene?.environment_prompt ?? '')
     setSceneConsistencyText(selectedSceneConsistencyText)
     setScene3dLink(selectedScene?.linked_scene3d_id ?? '')
@@ -191,6 +197,8 @@ export function Scene2DPanel({ active = false }: { active?: boolean }) {
     selectedScene?.id,
     selectedScene?.title,
     selectedScene?.description,
+    selectedScene?.location,
+    selectedScene?.time_of_day,
     selectedScene?.environment_prompt,
     selectedSceneConsistencyText,
     selectedScene?.linked_scene3d_id,
@@ -257,7 +265,7 @@ export function Scene2DPanel({ active = false }: { active?: boolean }) {
       setScenes(payload.scenes)
       setSelectedSceneId(payload.scene.id)
       setSelectedPerspectiveId(payload.scene.primary_perspective_id)
-      setNote(`Created ${payload.scene.id}.`)
+      setNote(`Created ${payload.scene.title}.`)
     } catch (error) {
       reportError(error)
     } finally {
@@ -275,6 +283,8 @@ export function Scene2DPanel({ active = false }: { active?: boolean }) {
       const payload = await updateScene2D(selectedScene.id, {
         title: sceneTitle,
         description: sceneDescription,
+        location: sceneLocation,
+        time_of_day: sceneTimeOfDay,
         environment_prompt: sceneEnvironmentPrompt,
         consistency_anchors: sceneConsistencyText
           .split(/\r?\n/)
@@ -284,7 +294,7 @@ export function Scene2DPanel({ active = false }: { active?: boolean }) {
       })
       setScenes(payload.scenes)
       setSelectedSceneId(payload.scene.id)
-      setNote('Scene group saved.')
+      setNote('Scene saved.')
     } catch (error) {
       reportError(error)
     } finally {
@@ -297,6 +307,8 @@ export function Scene2DPanel({ active = false }: { active?: boolean }) {
     scene3dLink,
     sceneConsistencyText,
     sceneDescription,
+    sceneLocation,
+    sceneTimeOfDay,
     sceneEnvironmentPrompt,
     sceneTitle,
     selectedScene,
@@ -564,14 +576,14 @@ export function Scene2DPanel({ active = false }: { active?: boolean }) {
 
   const removeScene = useCallback(async () => {
     if (!selectedScene) return
-    if (!window.confirm(`Delete Scene 2D "${sceneLabel(selectedScene)}"?`)) return
+    if (!window.confirm(`Delete scene "${sceneLabel(selectedScene)}"?`)) return
     setBusy(true)
     try {
       await flushDirtyShots()
       const payload = await deleteScene2D(selectedScene.id)
       setScenes(payload.scenes)
       setSelectedSceneId(payload.scenes[0]?.id ?? '')
-      setNote('Scene 2D deleted.')
+      setNote('Scene deleted.')
     } catch (error) {
       reportError(error)
     } finally {
@@ -626,13 +638,13 @@ export function Scene2DPanel({ active = false }: { active?: boolean }) {
   }
 
   return (
-    <section className="scene2d-workspace-page" aria-label="Scene 2D workspace">
+    <section className="scene2d-workspace-page" aria-label="Scene library">
       <div className="scene2d-workspace">
 
         {/* ── LEFT: Scene list ─────────────────────────────────────────── */}
         <aside className="scene2d-scene-list">
           <div className="scene2d-scene-list-header">
-            <span className="scene2d-workspace-section-title">Scene groups</span>
+            <span className="scene2d-workspace-section-title">Scenes</span>
           </div>
 
           {scenes.map((scene) => (
@@ -650,7 +662,7 @@ export function Scene2DPanel({ active = false }: { active?: boolean }) {
           ))}
 
           {scenes.length === 0 && (
-            <div className="scene2d-empty">No Scene 2D boards yet.</div>
+            <div className="scene2d-empty">No scenes yet.</div>
           )}
 
           <button
@@ -820,6 +832,26 @@ export function Scene2DPanel({ active = false }: { active?: boolean }) {
                           </label>
 
                           <label className="scene2d-insp-field">
+                            <span>Location</span>
+                            <input
+                              value={sceneLocation}
+                              onChange={(e) => setSceneLocation(e.target.value)}
+                              disabled={disabled}
+                              placeholder="Archive basement, city rooftop, kitchen..."
+                            />
+                          </label>
+
+                          <label className="scene2d-insp-field">
+                            <span>Time of day</span>
+                            <input
+                              value={sceneTimeOfDay}
+                              onChange={(e) => setSceneTimeOfDay(e.target.value)}
+                              disabled={disabled}
+                              placeholder="Dawn, afternoon, midnight..."
+                            />
+                          </label>
+
+                          <label className="scene2d-insp-field">
                             <span>Linked Scene 3D</span>
                             <select
                               value={scene3dLink}
@@ -836,21 +868,21 @@ export function Scene2DPanel({ active = false }: { active?: boolean }) {
                           </label>
 
                           <label className="scene2d-insp-field">
-                            <span>Scene Prompt · environment only</span>
+                            <span>Setting &amp; atmosphere</span>
                             <textarea
                               value={sceneEnvironmentPrompt}
                               onChange={(e) => setSceneEnvironmentPrompt(e.target.value)}
                               disabled={disabled}
                               rows={6}
-                              placeholder="Describe the stable location, spatial layout, time, weather, lighting baseline, materials, and permanent props. Do not describe a camera angle or shot action."
+                              placeholder="Spatial layout, weather, baseline lighting, materials, and permanent props."
                             />
                             <small className="scene2d-insp-help">
-                              Shared by every linked shot. Camera, composition, action, and performance stay in Shot Detail.
+                              These facts stay shared across every shot in this scene.
                             </small>
                           </label>
 
                           <label className="scene2d-insp-field">
-                            <span>Locked anchors · one per line</span>
+                            <span>Fixed scene details · one per line</span>
                             <textarea
                               value={sceneConsistencyText}
                               onChange={(e) => setSceneConsistencyText(e.target.value)}
@@ -1032,8 +1064,8 @@ export function Scene2DPanel({ active = false }: { active?: boolean }) {
             {/* Preview / empty states */}
             {!selectedScene ? (
               <div className="scene2d-canvas-empty">
-                <strong>No Scene 2D groups yet</strong>
-                <span>Create a Scene to begin organizing Perspectives.</span>
+                <strong>No scenes yet</strong>
+                <span>Create a scene for the facts and artwork shared by its shots.</span>
                 <button
                   type="button"
                   className="scene2d-canvas-empty-btn"

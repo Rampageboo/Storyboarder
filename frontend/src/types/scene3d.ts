@@ -6,6 +6,7 @@ export interface Scene3DRecord {
   file_path: string
   file_name: string
   blend_file_path: string
+  keywords: string[]
   reference_view: Record<string, unknown>
   display_settings: Record<string, unknown>
   created_at: string
@@ -24,11 +25,13 @@ export interface Scene3DSceneResponse extends Scene3DListResponse {
 export interface Scene3DCreateRequest {
   title?: string
   description?: string
+  keywords?: string[]
 }
 
 export interface Scene3DUpdateRequest {
   title?: string
   description?: string
+  keywords?: string[]
   reference_view?: Record<string, unknown> | null
   display_settings?: Record<string, unknown> | null
 }

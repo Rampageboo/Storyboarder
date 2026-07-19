@@ -25,8 +25,9 @@ logger = logging.getLogger(__name__)
 def _project_payload(project: Project, dirty: bool) -> dict[str, Any]:
     cache = preview_analysis_cache.load_cache(project.root_path)
     return {
-        "project_path": str(project.root_path),
-        "project_json_path": str(project.json_path),
+        "project_path": str(project.visible_path),
+        "project_json_path": str(project.reopen_path),
+        "document_path": str(project.document_path) if project.document_path else "",
         "name": project.name,
         "dirty": dirty,
         "settings": project.settings,
@@ -179,9 +180,9 @@ def _dialog_initial_dir(app: FastAPI, kind: str) -> str:
         return str(Path.home())
 
     if kind == "folder":
-        candidate = project.root_path.parent
+        candidate = project.visible_path.parent
     elif kind == "project-json":
-        candidate = project.root_path
+        candidate = project.visible_path.parent if project.document_path else project.root_path
     elif kind == "blender":
         current = str(project.settings.get("blender_path", "") or "")
         candidate = Path(current).parent if current else Path(r"C:\Program Files\Blender Foundation")
@@ -195,12 +196,12 @@ def _dialog_initial_dir(app: FastAPI, kind: str) -> str:
 
 
 def _remember_recent(project: Project) -> None:
-    recent = [str(project.root_path)]
+    """Update session-facing recents without rewriting the opened document."""
+    recent = [str(project.visible_path)]
     for item in project.settings.get("recent_projects", []):
         if item not in recent:
             recent.append(item)
     project.settings["recent_projects"] = recent[:10]
-    project_manager.save_settings(project)
 
 
 def _touch_live_bridge(app: FastAPI, *, selected_shot_id: str | None = None) -> dict[str, Any]:
@@ -392,7 +393,7 @@ def _persist_app_session(app: FastAPI, *, selected_shot_id: str | None = None) -
         return
     session_store.update_session(
         app.state.base_dir,
-        last_project_json_path=str(project.json_path),
+        last_project_json_path=str(project.reopen_path),
         selected_shot_id=selected_shot_id,
         recent_projects=[str(item) for item in project.settings.get("recent_projects", [])],
     )

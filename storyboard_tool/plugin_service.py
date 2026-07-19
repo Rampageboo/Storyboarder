@@ -302,6 +302,7 @@ class PluginBridgeService:
         sc["updated_at"] = timestamp
         updated_scenes = scene2d._replace_scene(scenes, scene2d._with_legacy_aliases(sc))
         scene2d._save_scenes(project, updated_scenes)
+        project_manager.sync_document(project)
 
         runtime_state.mark_scene2d_changed(self.app, scene_id, perspective_id)
         app_state._touch_live_bridge(self.app)
@@ -336,6 +337,7 @@ class PluginBridgeService:
         sc["updated_at"] = timestamp
         updated_scenes = scene2d._replace_scene(scenes, scene2d._with_legacy_aliases(sc))
         scene2d._save_scenes(project, updated_scenes)
+        project_manager.sync_document(project)
 
         work_ctx = runtime_state.active_work_context(self.app)
         return {"work_context": work_ctx, "scene": scene2d._with_legacy_aliases(sc), "perspective": perspective}

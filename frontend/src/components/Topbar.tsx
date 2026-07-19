@@ -11,7 +11,7 @@ type WorkspaceMode = 'board' | 'scene2d' | 'scene3d'
 
 const workspaceLabels: Record<WorkspaceMode, string> = {
   board: 'Board workspace',
-  scene2d: 'Scene 2D workspace',
+  scene2d: 'Scene library',
   scene3d: 'Scene 3D workspace',
 }
 

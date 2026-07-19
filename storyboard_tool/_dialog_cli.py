@@ -37,10 +37,10 @@ def _pick_file(initial_dir: str | None, kind: str) -> str:
     from tkinter import filedialog
 
     if kind == "project-json":
-        title = "Choose project.json"
+        title = "Open Storyboarder document"
         filetypes = [
-            ("Project file", "project.json"),
-            ("JSON", "*.json"),
+            ("Storyboarder document", "*.sbd"),
+            ("Legacy project", "project.json"),
             ("All files", "*.*"),
         ]
     elif kind == "blender":
@@ -68,6 +68,26 @@ def _pick_file(initial_dir: str | None, kind: str) -> str:
         root.destroy()
 
 
+def _save_project(initial_dir: str | None) -> str:
+    import tkinter as tk
+    from tkinter import filedialog
+
+    root = tk.Tk()
+    root.withdraw()
+    root.attributes("-topmost", True)
+    root.update_idletasks()
+    try:
+        return filedialog.asksaveasfilename(
+            title="New Storyboarder document",
+            initialdir=initial_dir,
+            initialfile="Untitled.sbd",
+            defaultextension=".sbd",
+            filetypes=[("Storyboarder document", "*.sbd")],
+        ) or ""
+    finally:
+        root.destroy()
+
+
 def main() -> int:
     kind = sys.argv[1] if len(sys.argv) > 1 else ""
     initial = sys.argv[2] if len(sys.argv) > 2 else ""
@@ -75,6 +95,8 @@ def main() -> int:
 
     if kind == "folder":
         selected = _pick_folder(initial_dir)
+    elif kind == "project-save":
+        selected = _save_project(initial_dir)
     elif kind in {"project-json", "photoshop", "blender"}:
         selected = _pick_file(initial_dir, kind)
     else:

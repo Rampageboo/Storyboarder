@@ -220,6 +220,7 @@ class Project:
     root_path: Path
     shots: list[Shot] = field(default_factory=list)
     settings: dict[str, Any] = field(default_factory=dict)
+    document_path: Path | None = None
 
     @property
     def json_path(self) -> Path:
@@ -263,12 +264,21 @@ class Project:
 
     @property
     def name(self) -> str:
-        return self.root_path.name
+        return self.document_path.stem if self.document_path else self.root_path.name
+
+    @property
+    def visible_path(self) -> Path:
+        return self.document_path or self.root_path
+
+    @property
+    def reopen_path(self) -> Path:
+        return self.document_path or self.json_path
 
     def to_dict(self) -> dict[str, Any]:
         return {
             "name": self.name,
             "root_path": str(self.root_path),
+            "document_path": str(self.document_path) if self.document_path else "",
             "shots": [shot.to_dict() for shot in self.shots],
             "settings": dict(self.settings),
         }

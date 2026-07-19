@@ -201,6 +201,8 @@ class SettingsUpdateRequest(BaseModel):
 class Scene2DCreateRequest(BaseModel):
     title: str | None = None
     description: str | None = None
+    location: str | None = None
+    time_of_day: str | None = None
     environment_prompt: str | None = None
     consistency_anchors: list[str] | None = None
 
@@ -208,6 +210,8 @@ class Scene2DCreateRequest(BaseModel):
 class Scene2DUpdateRequest(BaseModel):
     title: str | None = None
     description: str | None = None
+    location: str | None = None
+    time_of_day: str | None = None
     environment_prompt: str | None = None
     consistency_anchors: list[str] | None = None
     linked_scene3d_id: str | None = None
@@ -238,11 +242,13 @@ class Scene2DPerspectiveReorderRequest(BaseModel):
 class Scene3DCreateRequest(BaseModel):
     title: str | None = None
     description: str | None = None
+    keywords: list[str] | None = None
 
 
 class Scene3DUpdateRequest(BaseModel):
     title: str | None = None
     description: str | None = None
+    keywords: list[str] | None = None
     reference_view: dict[str, Any] | None = None
     display_settings: dict[str, Any] | None = None
 

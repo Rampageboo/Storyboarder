@@ -171,6 +171,7 @@ The `base: '/react/'` setting means all Vite-generated asset paths are prefixed 
 | `ReferenceAssignmentPopover.tsx` | Shot-range apply modal for image/video references |
 | `ReferenceAssignmentPopover3dApply.tsx` | Shot-range apply modal for 3D captures |
 | `Scene3DPanel.tsx` | 3D workspace (import GLB, edit scene, capture frames) |
+| `KeywordTextarea.tsx` | Shot-detail textarea overlay that highlights words linked to Scene 3D assets. |
 
 ### State and API client
 
@@ -300,7 +301,7 @@ All shot business logic lives here. **No FastAPI or HTTP imports** — errors ar
 
 **Responsibilities**
 
-- Project lifecycle: `create_project()`, `open_project()`, `save_project()`
+- Project lifecycle: legacy folder `create_project()`, single-file `create_document()`, `open_project()`, `save_project()`
 - Shot list CRUD: `add_shot()`, `duplicate_shot()`, `delete_shot()`, `restore_shot()`, `reorder_shots()`
 - Canonical file paths: `get_shot_dir()`, `resolve_shot_preview_path()`, `resolve_shot_thumbnail_path()`
 - Canvas management: `get_canvas_color()`, `create_canvas_for_shot()`
@@ -309,9 +310,9 @@ All shot business logic lives here. **No FastAPI or HTTP imports** — errors ar
 
 **Atomic save**
 
-`save_project()` and `save_settings()` use `_atomic_write_json()` so a crash or write error during save never leaves a partial or empty JSON file.
+`save_project()` and `save_settings()` use `_atomic_write_json()` so a crash or write error during save never leaves a partial or empty JSON file. New projects are user-visible `.sbd` ZIP documents. They are expanded into a private working directory while open, then `project_document.pack_document()` writes a sibling temporary archive and uses `os.replace()` so the visible document is never partially overwritten. Legacy folder projects remain readable.
 
-**On-disk project structure**
+**Expanded project structure (inside `.sbd`, or visible for a legacy folder project)**
 
 ```
 Storyboard_Project/
@@ -784,7 +785,8 @@ Four per-shot files serve distinct roles and must not be conflated:
 
 | Flow | Files touched | Module | Transaction-safe? |
 |---|---|---|---|
-| `create_project` | root dirs, project.json, settings.json | `project_manager` | atomic JSON writes only |
+| `create_document` | private work tree + one visible `.sbd` archive | `project_manager` / `project_document` | atomic JSON plus atomic archive replacement |
+| `create_project` | legacy root dirs, project.json, settings.json | `project_manager` | atomic JSON writes only |
 | `add_shot` | `shots/<id>/` dir, optional blank canvas PSD | `project_manager` | no rollback needed — shot ID is new |
 | `delete_shot` | removes Shot from `project.shots`; files are NOT deleted | `shot_service` → `project_manager` | `mutate_project` in `backend_service` |
 | `import_image_for_shot` | writes `<id>_preview.png` + `<id>_background.png`, sets shot fields | `project_manager` | file write before metadata; `_autosave` commits |
@@ -857,14 +859,16 @@ The desktop API exposes:
 
 ---
 
-## 21. Scene and Character Prompt Bibles
+## 21. Scene, Shot, and Automatic Generation Input
 
-Generation prompts have a fixed ownership hierarchy:
+The UI does not expose a separate prompt authoring surface. Generation input is compiled from normal storyboard data with this ownership hierarchy:
 
-1. **Scene Bible** (`scenes2d/scenes2d.json`) owns stable environment, spatial layout, permanent props, baseline time/weather/light, and explicit locked anchors. The Scene 2D primary perspective is attached to generation requests as a `scene-environment` visual reference.
-2. **Character Bible** (`settings.json.character_bible_prompt`) owns project-wide recurring identity and wardrobe. It does not decide who appears in a shot.
-3. **Shot Override** (`shots.json`) owns framing, camera, composition, action, expression, dialogue, and angle-specific visibility. It cannot replace the two consistency layers, including in manual prompt mode.
+1. **Scene** (`scenes2d/scenes2d.json`) owns facts shared across its shots: title, location, time of day, setting/atmosphere, fixed details, description, and visual perspectives.
+2. **Shot** (`shots.json`) owns story/action, framing, camera, composition, characters visible in that shot, dialogue, lighting, and continuity.
+3. **Compatibility identity data** (`settings.json.character_bible_prompt`) may still be read from older projects, but it is no longer authored through a special prompt field in the main UI.
 
-Shots store both a backward-compatible free-text `scene` label and a stable `scene_id` link. Existing projects with no `scene_id` resolve a Scene Bible by an exact case-insensitive title match. Generation requests freeze the resolved Scene Bible, Character Bible, their visual reference, an overall `input_revision`, and a separate `consistency_revision`.
+Scene 3D records may own an attached `.blend` source, a GLB/GLTF preview, and explicit semantic keywords. The filename stem and Scene 3D title are also treated as keywords. When an authored Shot field contains a whole keyword, the UI highlights it and the generation request freezes that Scene 3D record under `keyword_assets`, including project-relative and absolute asset paths. Codex handoffs are instructed to inspect every matched asset before generating. ASCII keywords match whole words (`school` does not match `schoolyard`); non-ASCII keywords match literal text.
 
-Changing a linked Scene Bible marks generated shots in that scene stale. Changing the Character Bible marks every shot with generation activity stale. No existing request snapshot is rewritten.
+Shots store both a backward-compatible free-text `scene` label and a stable `scene_id` link. New UI flows select/create a Scene by ID. Generation requests freeze the resolved ordinary Scene data as `scene_context`, keep the retired `scene_bible` field null for compatibility, and include overall `input_revision` and `consistency_revision` hashes.
+
+Changing linked Scene facts marks generated shots in that scene stale. A second **queued** request for the same shot and queue destination replaces that pending request in place; completed and review history is preserved.

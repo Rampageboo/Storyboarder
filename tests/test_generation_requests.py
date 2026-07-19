@@ -76,6 +76,26 @@ class TestGenerationRequests(unittest.TestCase):
         self.assertEqual(listed.status_code, 200)
         self.assertEqual([item["request_id"] for item in listed.json()["requests"]], [request["request_id"]])
 
+    def test_send_to_queue_replaces_the_existing_queued_request_for_the_shot(self) -> None:
+        first = self.client.post(
+            f"/api/shots/{self.shot_id}/generation-requests",
+            json={"destination": "queue"},
+        ).json()["request"]
+        self.client.patch(
+            f"/api/shots/{self.shot_id}",
+            json={"description": "The detective opens the archive door."},
+        )
+
+        second = self.client.post(
+            f"/api/shots/{self.shot_id}/generation-requests",
+            json={"destination": "queue"},
+        ).json()["request"]
+
+        self.assertEqual(second["request_id"], first["request_id"])
+        self.assertIn("Story beat: The detective opens the archive door.", second["prompt"]["compiled_prompt"])
+        listed = self.client.get("/api/generation/requests", params={"shot_id": self.shot_id, "destination": "queue"})
+        self.assertEqual([item["request_id"] for item in listed.json()["requests"]], [first["request_id"]])
+
     def test_send_to_codex_returns_copyable_handoff_prompt(self) -> None:
         response = _quiet(lambda: self.client.post(
             f"/api/shots/{self.shot_id}/generation-requests",
@@ -86,20 +106,7 @@ class TestGenerationRequests(unittest.TestCase):
         self.assertIn(request_id, response.json()["codex_prompt"])
         self.assertIn("Storyboarder MCP", response.json()["codex_prompt"])
 
-    def test_scene_character_and_shot_prompts_compile_in_fixed_layers(self) -> None:
-        scene_response = _quiet(lambda: self.client.post(
-            "/api/project/scenes2d",
-            json={
-                "title": "Archive interior",
-                "environment_prompt": "A narrow municipal archive with dark green steel shelving and cold fluorescent light.",
-                "consistency_anchors": [
-                    "The security door remains on the north wall",
-                    "Shelving remains dark green",
-                ],
-            },
-        ))
-        self.assertEqual(scene_response.status_code, 200, scene_response.text)
-        scene = scene_response.json()["scene"]
+    def test_scene_name_character_and_shot_details_compile_without_scene_bible(self) -> None:
         settings = _quiet(lambda: self.client.patch(
             "/api/project/settings",
             json={
@@ -112,8 +119,7 @@ class TestGenerationRequests(unittest.TestCase):
         updated = _quiet(lambda: self.client.patch(
             f"/api/shots/{self.shot_id}",
             json={
-                "scene": scene["title"],
-                "scene_id": scene["id"],
+                "scene": "Archive interior",
                 "description": "Maya searches the third shelf",
                 "character_note": "Maya is visible, tense, reaching upward",
                 "camera_note": "Medium profile from the aisle",
@@ -127,25 +133,83 @@ class TestGenerationRequests(unittest.TestCase):
         ))
         self.assertEqual(queued.status_code, 200, queued.text)
         request = queued.json()["request"]
-        self.assertEqual(request["shot"]["scene_id"], scene["id"])
-        self.assertEqual(request["scene_bible"]["scene_id"], scene["id"])
-        self.assertEqual(request["scene_bible"]["consistency_anchors"], scene["consistency_anchors"])
+        self.assertEqual(request["shot"]["scene"], "Archive interior")
+        self.assertIsNone(request["scene_bible"])
         self.assertIn("MAYA", request["character_bible"]["prompt"])
         self.assertTrue(request["consistency_revision"])
-        scene_reference = next(item for item in request["references"] if item["role"] == "scene-environment")
-        self.assertEqual(scene_reference["project_relative_path"], scene["preview_image_path"])
         compiled = request["prompt"]["compiled_prompt"]
-        self.assertLess(compiled.index("SCENE BIBLE"), compiled.index("CHARACTER BIBLE"))
         self.assertLess(compiled.index("CHARACTER BIBLE"), compiled.index("SHOT OVERRIDE"))
-        self.assertIn("Environment: A narrow municipal archive", compiled)
+        self.assertNotIn("SCENE BIBLE", compiled)
+        self.assertIn("Scene: Archive interior", compiled)
         self.assertIn("Story beat: Maya searches the third shelf", compiled)
-        self.assertEqual(request["prompt"]["layers"]["scene"], scene["environment_prompt"])
+        self.assertEqual(request["prompt"]["layers"]["scene"], "Archive interior")
 
-    def test_manual_prompt_remains_a_shot_override_below_consistency_bibles(self) -> None:
-        scene = self.client.post(
-            "/api/project/scenes2d",
-            json={"title": "Station", "environment_prompt": "A fixed tiled railway platform at blue hour."},
+    def test_shot_keyword_links_blend_asset_into_immutable_generation_request(self) -> None:
+        scene3d = self.client.post(
+            "/api/project/scenes3d",
+            json={"title": "Campus model", "keywords": ["school", "campus"]},
         ).json()["scene"]
+        attached = self.client.post(
+            f"/api/project/scenes3d/{scene3d['id']}/import",
+            files={"file": ("school.blend", b"blend asset", "application/octet-stream")},
+        )
+        self.assertEqual(attached.status_code, 200, attached.text)
+        blend_path = attached.json()["scene"]["blend_file_path"]
+        self.client.patch(
+            f"/api/shots/{self.shot_id}",
+            json={"description": "A student runs through the school entrance."},
+        )
+
+        response = self.client.post(
+            f"/api/shots/{self.shot_id}/generation-requests",
+            json={"destination": "codex"},
+        )
+        self.assertEqual(response.status_code, 200, response.text)
+        request = response.json()["request"]
+        self.assertEqual(len(request["keyword_assets"]), 1)
+        asset = request["keyword_assets"][0]
+        self.assertEqual(asset["scene3d_id"], scene3d["id"])
+        self.assertIn("school", [keyword.casefold() for keyword in asset["matched_keywords"]])
+        self.assertEqual(asset["blend_file_path"], blend_path)
+        self.assertTrue(asset["blend_file_exists"])
+        self.assertIn("RELEVANT 3D ASSETS", request["prompt"]["compiled_prompt"])
+        self.assertIn(blend_path, request["prompt"]["compiled_prompt"])
+        self.assertIn("keyword_assets", response.json()["codex_prompt"])
+
+        self.client.patch(
+            f"/api/project/scenes3d/{scene3d['id']}",
+            json={"keywords": ["gym"]},
+        )
+        project_payload = self.client.get("/api/project").json()
+        changed_shot = next(item for item in project_payload["shots"] if item["shot_id"] == self.shot_id)
+        self.assertEqual(changed_shot["generation_state"]["freshness_status"], "stale")
+        project = project_manager.open_project(self.project_root / "project.json")
+        fetched = generation_service.get_request(project, request["request_id"])
+        self.assertEqual(fetched["keyword_assets"], request["keyword_assets"])
+
+    def test_ascii_asset_keyword_matches_whole_word_only(self) -> None:
+        scene3d = self.client.post(
+            "/api/project/scenes3d",
+            json={"title": "Unrelated model", "keywords": ["school"]},
+        ).json()["scene"]
+        self.client.post(
+            f"/api/project/scenes3d/{scene3d['id']}/import",
+            files={"file": ("building.blend", b"blend asset", "application/octet-stream")},
+        )
+        self.client.patch(
+            f"/api/shots/{self.shot_id}",
+            json={"description": "A wide schoolyard exterior."},
+        )
+
+        request = self.client.post(
+            f"/api/shots/{self.shot_id}/generation-requests",
+            json={"destination": "queue"},
+        ).json()["request"]
+
+        self.assertEqual(request["keyword_assets"], [])
+        self.assertNotIn("RELEVANT 3D ASSETS", request["prompt"]["compiled_prompt"])
+
+    def test_legacy_manual_prompt_is_ignored_in_favor_of_storyboard_data(self) -> None:
         self.client.patch(
             "/api/project/settings",
             json={"character_bible_prompt": "NOAH — shaved head, red scarf, charcoal coat."},
@@ -153,8 +217,8 @@ class TestGenerationRequests(unittest.TestCase):
         self.client.patch(
             f"/api/shots/{self.shot_id}",
             json={
-                "scene": scene["title"],
-                "scene_id": scene["id"],
+                "scene": "Station",
+                "description": "Noah looks right as a train arrives.",
                 "prompt_config": {"mode": "manual", "manual_prompt": "Extreme close-up as Noah looks left."},
             },
         )
@@ -163,38 +227,89 @@ class TestGenerationRequests(unittest.TestCase):
             json={"destination": "queue"},
         ).json()["request"]
         compiled = request["prompt"]["compiled_prompt"]
-        self.assertIn("SCENE BIBLE", compiled)
+        self.assertNotIn("SCENE BIBLE", compiled)
         self.assertIn("CHARACTER BIBLE", compiled)
         self.assertIn("SHOT OVERRIDE", compiled)
-        self.assertIn("Extreme close-up as Noah looks left.", compiled)
+        self.assertIn("Scene: Station", compiled)
+        self.assertIn("Story beat: Noah looks right as a train arrives.", compiled)
+        self.assertNotIn("Extreme close-up as Noah looks left.", compiled)
+        self.assertEqual(request["prompt"]["mode"], "auto")
 
-    def test_scene_and_character_bible_changes_mark_existing_generation_stale(self) -> None:
+    def test_linked_scene_fields_are_compiled_from_normal_scene_data(self) -> None:
+        created_scene = self.client.post(
+            "/api/project/scenes2d",
+            json={
+                "title": "Archive",
+                "location": "Basement level B2",
+                "time_of_day": "Midnight",
+                "environment_prompt": "Narrow aisles, green metal shelves, cold fluorescent light",
+                "consistency_anchors": ["Door stays on the north wall", "Shelves remain dark green"],
+            },
+        )
+        self.assertEqual(created_scene.status_code, 200, created_scene.text)
+        scene = created_scene.json()["scene"]
+        updated = self.client.patch(
+            f"/api/shots/{self.shot_id}",
+            json={"scene_id": scene["id"], "scene": scene["title"], "description": "Maya enters."},
+        )
+        self.assertEqual(updated.status_code, 200, updated.text)
+
+        request = self.client.post(
+            f"/api/shots/{self.shot_id}/generation-requests",
+            json={"destination": "queue"},
+        ).json()["request"]
+
+        self.assertIsNone(request["scene_bible"])
+        self.assertEqual(request["scene_context"]["location"], "Basement level B2")
+        self.assertEqual(request["references"][0]["role"], "scene-environment")
+        self.assertTrue(request["references"][0]["project_relative_path"].endswith("/preview.png"))
+        compiled = request["prompt"]["compiled_prompt"]
+        self.assertIn("Location: Basement level B2", compiled)
+        self.assertIn("Time of day: Midnight", compiled)
+        self.assertIn("Fixed scene details: Door stays on the north wall; Shelves remain dark green", compiled)
+
+    def test_only_actual_linked_scene_changes_mark_generation_stale(self) -> None:
         scene = self.client.post(
             "/api/project/scenes2d",
-            json={"title": "Kitchen", "environment_prompt": "A compact blue kitchen."},
+            json={"title": "Kitchen", "location": "Family home", "time_of_day": "Morning"},
         ).json()["scene"]
         self.client.patch(
             f"/api/shots/{self.shot_id}",
-            json={"scene": scene["title"], "scene_id": scene["id"], "description": "A cook enters."},
+            json={"scene_id": scene["id"], "scene": scene["title"], "description": "Breakfast begins."},
         )
         self.client.post(
             f"/api/shots/{self.shot_id}/generation-requests",
             json={"destination": "queue"},
         )
 
-        changed_scene = self.client.patch(
+        unchanged = self.client.patch(
             f"/api/project/scenes2d/{scene['id']}",
-            json={"environment_prompt": "A compact blue kitchen with a fixed copper range."},
+            json={"title": "Kitchen", "location": "Family home", "time_of_day": "Morning"},
         )
-        self.assertEqual(changed_scene.status_code, 200, changed_scene.text)
-        project_after_scene = self.client.get("/api/project").json()
-        shot_after_scene = next(item for item in project_after_scene["shots"] if item["shot_id"] == self.shot_id)
-        self.assertEqual(shot_after_scene["generation_state"]["freshness_status"], "stale")
+        self.assertEqual(unchanged.status_code, 200, unchanged.text)
+        project = self.client.get("/api/project").json()
+        current_shot = next(item for item in project["shots"] if item["shot_id"] == self.shot_id)
+        self.assertEqual(current_shot["generation_state"]["freshness_status"], "current")
 
+        changed = self.client.patch(
+            f"/api/project/scenes2d/{scene['id']}",
+            json={"time_of_day": "Night"},
+        )
+        self.assertEqual(changed.status_code, 200, changed.text)
+        project = self.client.get("/api/project").json()
+        current_shot = next(item for item in project["shots"] if item["shot_id"] == self.shot_id)
+        self.assertEqual(current_shot["generation_state"]["freshness_status"], "stale")
+
+    def test_character_bible_changes_mark_existing_generation_stale(self) -> None:
+        self.client.patch(
+            f"/api/shots/{self.shot_id}",
+            json={"scene": "Kitchen", "description": "A cook enters."},
+        )
         self.client.post(
             f"/api/shots/{self.shot_id}/generation-requests",
             json={"destination": "queue"},
         )
+
         changed_characters = self.client.patch(
             "/api/project/settings",
             json={"character_bible_prompt": "CHEF — white jacket, blue apron, round glasses."},

@@ -20,12 +20,14 @@ generated files are recovered, and what the manual smoke-test checklist covers.
 | `settings.json` | Project settings | `save_settings` (atomic) |
 | `project.json` | Project manifest | `save_project` (atomic) |
 | `storyboard_session.json` | UI session state | `write_session` (atomic) |
-| `generation/requests/*.json` | Immutable generation input snapshots | `generation_service.create_request` (atomic, create once) |
+| `generation/requests/*.json` | Generation input snapshots; the one pending queue request per shot may be atomically replaced before execution | `generation_service.create_request` |
 | `generation/state/*.json` | Generation request status | Storyboarder reconciliation only (atomic) |
 | `generation/results/**/*.json` | External result manifests | Storyboarder MCP result submission (atomic) |
 | `generation/candidates/**/*` | Unapproved generated candidates | Storyboarder MCP result submission; never treated as board artwork until approval |
-| `scenes2d/scenes2d.json` + scene meta | Scene Bible environment prompt, anchors, primary perspective | Scene 2D service only (atomic) |
-| `settings.json.character_bible_prompt` | Project-wide character identity bible | Project settings API only (atomic) |
+| `scenes2d/scenes2d.json` + scene meta | Scene title, location, time, shared setting/fixed details, perspectives | Scene 2D service only (atomic) |
+| `scenes3d/scenes3d.json` + scene meta | Scene 3D title, semantic keywords, GLB/GLTF preview path, attached `.blend` source path | Scene 3D service only (atomic) |
+| `<name>.sbd` | User-visible single-file document containing the expanded project tree | `project_document.pack_document` (sibling temp + `os.replace`) |
+| `settings.json.character_bible_prompt` | Legacy project-wide identity compatibility data (not a primary UI field) | Project settings API only (atomic) |
 
 **Hard invariant:** `image_path` and `preview_image_path` on a `Shot` must NEVER
 point to `<id>_background.png` or `<id>_codex.png`. Those files are managed layers;
@@ -95,6 +97,8 @@ All API endpoints that mutate project state must set `app.state.dirty = True` or
 call `_autosave()` before returning.
 
 Scene and character consistency edits never mutate immutable generation requests. They mark affected canonical shots `freshness_status = "stale"`; a new request captures the new consistency revision.
+
+Scene 3D keyword matches are resolved only when a generation request is created. The matched keyword list and both `.blend`/preview paths are copied into the immutable request under `keyword_assets`; later keyword edits must not alter an existing request. Changing an asset title, description, or keywords marks existing generated shots stale when their authored details match either the old or new semantic terms.
 
 ---
 

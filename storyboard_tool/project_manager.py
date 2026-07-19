@@ -50,6 +50,7 @@ from .image_utils import (
 )
 from .linked_sync import linked_mtime, sync_shot_from_linked_files
 from .models import Project, Shot
+from . import project_document
 from .shot_store import (
     load_shots_csv,
     load_shots_json,
@@ -132,16 +133,56 @@ def create_project(
     return project
 
 
+def create_document(
+    document_path: Path,
+    *,
+    canvas_width: int = 1920,
+    canvas_height: int = 1080,
+) -> Project:
+    """Create a user-visible single-file project backed by a private work tree."""
+    document = document_path.expanduser().resolve()
+    if document.suffix.lower() != project_document.DOCUMENT_SUFFIX:
+        document = document.with_suffix(project_document.DOCUMENT_SUFFIX)
+    if document.exists():
+        raise ValueError(f"A file already exists at: {document}")
+    root = project_document.create_working_root(document)
+    _ensure_project_dirs(root)
+    width, height = normalize_canvas_size(canvas_width, canvas_height)
+    settings = DEFAULT_SETTINGS.copy()
+    settings["canvas_width"] = width
+    settings["canvas_height"] = height
+    project = Project(root_path=root, settings=settings, document_path=document)
+    save_project(project)
+    ensure_project_blend_file(project)
+    save_project(project)
+    return project
+
+
 def reload_project_if_changed(project: Project, loaded_mtime: float) -> tuple[Project, float, bool]:
     """Reload project.json from disk when the plugin or another tool updated it."""
     disk_mtime = project_disk_mtime(project)
     if disk_mtime <= loaded_mtime + 1e-6:
         return project, loaded_mtime, False
     reloaded = open_project(project.json_path)
+    reloaded.document_path = project.document_path
     return reloaded, disk_mtime, True
 
 
 def open_project(project_json_path: Path) -> Project:
+    if project_json_path.suffix.lower() == project_document.DOCUMENT_SUFFIX:
+        document_path = project_json_path.expanduser().resolve()
+        working_root = project_document.extract_document(document_path)
+        try:
+            project = _open_expanded_project(working_root / "project.json")
+        except Exception:
+            shutil.rmtree(working_root, ignore_errors=True)
+            raise
+        project.document_path = document_path
+        return project
+    return _open_expanded_project(project_json_path)
+
+
+def _open_expanded_project(project_json_path: Path) -> Project:
     if not project_json_path.exists():
         raise FileNotFoundError(f"Project file not found: {project_json_path}")
 
@@ -211,6 +252,31 @@ def save_project(project: Project) -> None:
         # even if another thread mutates project.shots between the two writes.
         save_shots(project.root_path, list(project.shots))
         save_settings(project)
+        if project.document_path:
+            project_document.pack_document(project.root_path, project.document_path)
+
+
+def sync_document(project: Project) -> None:
+    """Flush direct asset/index writes into the visible document, when applicable."""
+    if not project.document_path:
+        return
+    with PROJECT_LOCK:
+        project_document.pack_document(project.root_path, project.document_path)
+
+
+def cleanup_document_working_root(project: Project | None) -> bool:
+    """Best-effort removal of a private expanded `.sbd` work tree."""
+    if project is None or not project.document_path:
+        return False
+    root = project.root_path.resolve()
+    temp_root = Path(tempfile.gettempdir()).resolve()
+    if root.parent != temp_root or not root.name.startswith("storyboarder-"):
+        return False
+    try:
+        shutil.rmtree(root)
+    except OSError:
+        return False
+    return True
 
 
 def add_shot(project: Project, *, after_index: int | None = None) -> Shot:
