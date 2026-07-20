@@ -137,12 +137,7 @@ class TestMediaNotFoundError(unittest.TestCase):
         self._tmp.cleanup()
 
     def test_open_source_no_source_file(self) -> None:
-        # add_shot always creates a canvas (source_file_path is set), so mock _find_shot
-        # to return a bare shot with no source_file_path to exercise the MEDIA_NOT_FOUND path.
-        from storyboard_tool.models import Shot
-        bare = Shot(shot_id=self.shot_id)
-        with patch("storyboard_tool.app_state._find_shot", return_value=bare):
-            response = _quiet(lambda: self.client.post(f"/api/shots/{self.shot_id}/open-source"))
+        response = _quiet(lambda: self.client.post(f"/api/shots/{self.shot_id}/open-source"))
         self.assertEqual(response.status_code, 400)
         body = response.json()
         self.assertEqual(body.get("code"), "MEDIA_NOT_FOUND")

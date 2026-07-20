@@ -32,10 +32,19 @@ export interface GenerationKeywordAsset {
   blend_file_exists: boolean
 }
 
+export interface GenerationRequestShotSnapshot {
+  shot_id: string
+  title: string
+  scene: string
+  sequence: string
+}
+
 export interface GenerationRequest {
   schema_version: number
   request_id: string
   shot_id: string
+  shot_number?: number
+  shot?: GenerationRequestShotSnapshot
   destination: GenerationDestination
   status: GenerationRequestStatus
   created_at: string
@@ -77,11 +86,27 @@ export interface GenerationRequestResponse {
   codex_prompt?: string
 }
 
+export interface GenerationBatchRequestResponse {
+  requests: GenerationRequest[]
+  project: ProjectPayload
+  created_request_ids: string[]
+  codex_prompt: string
+}
+
+export interface GenerationRequestDeleteResponse {
+  requests: GenerationRequest[]
+  project: ProjectPayload
+}
+
 export interface GenerationReconcileResponse {
   updated_request_ids: string[]
   updated_shot_ids: string[]
   requests: GenerationRequest[]
   project: ProjectPayload
+}
+
+export interface GenerationPullResponse extends GenerationReconcileResponse {
+  accepted_request_ids: string[]
 }
 
 export interface GenerationCandidateAcceptRequest {

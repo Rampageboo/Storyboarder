@@ -216,6 +216,10 @@
   background: var(--color-accent);
 }
 
+.floating-queue-actions .queue-batch-codex {
+  grid-column: 1 / -1;
+}
+
 .floating-queue-notice {
   margin-bottom: 7px;
   padding: 6px 7px;
@@ -296,6 +300,15 @@
 .floating-destination.is-codex {
   color: #c8beff;
   background: color-mix(in srgb, #7661d8 24%, transparent);
+}
+
+.floating-queue-delete {
+  flex: 0 0 auto;
+  min-height: 20px;
+  padding: 2px 5px;
+  border-color: color-mix(in srgb, var(--color-danger) 44%, var(--color-border));
+  color: color-mix(in srgb, var(--color-danger) 82%, var(--color-text));
+  font-size: 8px;
 }
 
 .floating-queue-meta {

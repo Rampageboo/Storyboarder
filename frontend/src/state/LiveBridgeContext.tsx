@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type PropsWithChildren } from 'react'
 import { getBridgeStatus, publishLiveBridge, type BridgeStatusPayload } from '../api'
+import { apiBase } from '../api/base'
 import { useProject } from './useProject'
 import { BridgeStatusContext } from './liveBridgeUtils'
 
@@ -7,10 +8,25 @@ const HEARTBEAT_MS = 1500
 const STATUS_POLL_MS = 2500
 
 export function LiveBridgeProvider({ children }: PropsWithChildren) {
-  const { project, selectedShotId, refreshProjectFromBridge, refreshPreviewFields } = useProject()
+  const { project, selectedShotId, refreshProjectFromBridge, refreshProjectFromGeneration, refreshPreviewFields } = useProject()
   const [bridgeStatus, setBridgeStatus] = useState<BridgeStatusPayload | null>(null)
   const lastPluginProjectRevisionByProjectRef = useRef(new Map<string, number>())
   const lastPreviewRevisionByProjectRef = useRef(new Map<string, number>())
+  const lastGenerationRevisionByProjectRef = useRef(new Map<string, number>())
+  const projectPath = project?.project_path ?? ''
+
+  useEffect(() => {
+    if (!projectPath) return
+    const events = new EventSource(`${apiBase()}/api/generation/events`)
+    const onGenerationResult = () => {
+      void refreshProjectFromGeneration()
+    }
+    events.addEventListener('generation-result', onGenerationResult)
+    return () => {
+      events.removeEventListener('generation-result', onGenerationResult)
+      events.close()
+    }
+  }, [projectPath, refreshProjectFromGeneration])
 
   useEffect(() => {
     if (!project) {
@@ -42,6 +58,12 @@ export function LiveBridgeProvider({ children }: PropsWithChildren) {
           }
         }
 
+        const generationRevision = Number(status.generation_result_revision ?? 0)
+        if (generationRevision > 0 && generationRevision !== lastGenerationRevisionByProjectRef.current.get(projectPath)) {
+          lastGenerationRevisionByProjectRef.current.set(projectPath, generationRevision)
+          await refreshProjectFromGeneration()
+        }
+
         const pa = status.preview_analysis
         if (
           pa &&
@@ -71,8 +93,7 @@ export function LiveBridgeProvider({ children }: PropsWithChildren) {
       window.clearInterval(heartbeatTimer)
       window.clearInterval(statusTimer)
     }
-  }, [project, selectedShotId, refreshProjectFromBridge, refreshPreviewFields])
+  }, [project, selectedShotId, refreshProjectFromBridge, refreshProjectFromGeneration, refreshPreviewFields])
 
   return <BridgeStatusContext.Provider value={project ? bridgeStatus : null}>{children}</BridgeStatusContext.Provider>
 }
-

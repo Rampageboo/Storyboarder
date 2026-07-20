@@ -565,6 +565,31 @@ class StoryboardBackendService(ExportServiceMixin):
             response["codex_prompt"] = generation_service.codex_handoff_prompt(request["request_id"])
         return response
 
+    def method_create_codex_batch_requests(self) -> dict[str, Any]:
+        project = app_state._require_project(self.app)
+        try:
+            with project_transaction.mutate_project(project):
+                requests = [generation_service.create_request(project, shot, "codex") for shot in project.shots]
+                for shot, request in zip(project.shots, requests, strict=True):
+                    shot.generation_state.update({
+                        "execution_status": "queued",
+                        "review_status": "unreviewed",
+                        "freshness_status": "current",
+                        "active_output_id": "",
+                        "latest_attempt_id": request["request_id"],
+                    })
+                app_state._autosave(self.app)
+        except (OSError, ValueError) as exc:
+            raise app_error(AppErrorCode.GENERATION_REQUEST_FAILED, str(exc)) from exc
+        return {
+            "requests": generation_service.list_requests(project),
+            "project": app_state._project_payload(project, self.app.state.dirty),
+            "created_request_ids": [str(request["request_id"]) for request in requests],
+            "codex_prompt": generation_service.codex_batch_handoff_prompt(
+                [str(request["request_id"]) for request in requests],
+            ),
+        }
+
     def method_list_generation_requests(
         self,
         *,
@@ -583,6 +608,51 @@ class StoryboardBackendService(ExportServiceMixin):
         except ValueError as exc:
             raise app_error(AppErrorCode.INVALID_REQUEST, str(exc)) from exc
         return {"requests": requests}
+
+    def method_delete_generation_request(self, request_id: str) -> dict[str, Any]:
+        project = app_state._require_project(self.app)
+        try:
+            request = generation_service.get_request(project, request_id)
+        except ValueError as exc:
+            raise app_error(AppErrorCode.GENERATION_REQUEST_FAILED, str(exc), status=404) from exc
+
+        try:
+            with project_transaction.mutate_project(project):
+                generation_service.delete_request(project, request_id)
+                shot = next((candidate for candidate in project.shots if candidate.shot_id == request.get("shot_id")), None)
+                if shot and shot.generation_state.get("latest_attempt_id") == request_id:
+                    remaining = generation_service.list_requests(project, shot_id=shot.shot_id)
+                    if remaining:
+                        shot.generation_state["latest_attempt_id"] = str(remaining[-1].get("request_id") or "")
+                    else:
+                        shot.generation_state.update({
+                            "execution_status": "idle",
+                            "review_status": "unreviewed",
+                            "active_output_id": "",
+                            "latest_attempt_id": "",
+                        })
+                app_state._autosave(self.app)
+        except (OSError, ValueError) as exc:
+            raise app_error(AppErrorCode.GENERATION_REQUEST_FAILED, str(exc)) from exc
+        return {
+            "requests": generation_service.list_requests(project),
+            "project": app_state._project_payload(project, self.app.state.dirty),
+        }
+
+    def method_pull_generation_results(self) -> dict[str, Any]:
+        project = app_state._require_project(self.app)
+        try:
+            with project_transaction.mutate_project(project):
+                result = generation_service.pull_results(project)
+                if result["updated_shot_ids"] or result["accepted_request_ids"]:
+                    app_state._autosave(self.app)
+        except (OSError, ValueError) as exc:
+            raise app_error(AppErrorCode.GENERATION_REQUEST_FAILED, str(exc)) from exc
+        return {
+            **result,
+            "requests": generation_service.list_requests(project),
+            "project": app_state._project_payload(project, self.app.state.dirty),
+        }
 
     def method_reconcile_generation_results(self) -> dict[str, Any]:
         project = app_state._require_project(self.app)
@@ -1813,7 +1883,7 @@ _MUTATING_METHODS = (
     # Shot CRUD / ordering
     "method_add_shot", "method_duplicate_shot", "method_update_shot", "method_delete_shot",
     "method_restore_shot", "method_reorder_shots", "method_move_shot_up", "method_move_shot_down",
-    "method_create_generation_request", "method_reconcile_generation_results",
+    "method_create_generation_request", "method_create_codex_batch_requests", "method_delete_generation_request", "method_pull_generation_results", "method_reconcile_generation_results",
     "method_accept_generation_candidate", "method_remove_fixed_layer",
     # Shot media / sources
     "method_import_image_path", "method_import_shot_image", "method_add_shot_reference_image",

@@ -20,16 +20,23 @@ export function shotHasBoardBackground(
   return shot.has_board_background === true
 }
 
+/** True when the shot has an accepted generated image layer. */
+export function shotHasCodexLayer(
+  shot: Pick<Shot, 'has_codex_layer'>,
+): boolean {
+  return shot.has_codex_layer === true
+}
+
 /**
  * True when the shot has any displayable visual — either artist artwork preview
- * or a reference background plate.  Use this to decide whether to show a thumbnail
+ * a reference background plate, or an accepted Codex layer. Use this to decide whether to show a thumbnail
  * or enable display controls (Refresh); do NOT use it for artwork-only operations
  * (Delete image, Open preview) — use `shotHasPreview` for those.
  */
 export function shotHasBoardVisual(
-  shot: Pick<Shot, 'image_path' | 'preview_image_path' | 'thumbnail_path' | 'has_artwork_preview' | 'has_board_background'>,
+  shot: Pick<Shot, 'image_path' | 'preview_image_path' | 'thumbnail_path' | 'has_artwork_preview' | 'has_board_background' | 'has_codex_layer'>,
 ): boolean {
-  return shotHasPreview(shot) || shotHasBoardBackground(shot)
+  return shotHasPreview(shot) || shotHasBoardBackground(shot) || shotHasCodexLayer(shot)
 }
 
 /** True when the preview file is safe to draw over a fresher board background. */
@@ -41,8 +48,10 @@ export function shotShouldOverlayPreview(
     | 'thumbnail_path'
     | 'has_artwork_preview'
     | 'has_board_background'
+    | 'has_codex_layer'
     | 'preview_disk_mtime'
     | 'board_background_disk_mtime'
+    | 'codex_layer_disk_mtime'
     | 'preview_has_transparency'
   >,
 ): boolean {
@@ -68,16 +77,24 @@ export function shotDisplayVersion(
     | 'thumbnail_path'
     | 'has_artwork_preview'
     | 'has_board_background'
+    | 'has_codex_layer'
     | 'preview_disk_mtime'
     | 'thumbnail_disk_mtime'
     | 'board_background_disk_mtime'
+    | 'codex_layer_disk_mtime'
   >,
   visualEpoch: number,
   index: number,
 ): string | number {
   if (!shotHasBoardVisual(shot)) return `empty-${visualEpoch}`
-  if (shot.has_board_background === true && shot.board_background_disk_mtime) return shot.board_background_disk_mtime
-  return shot.preview_disk_mtime || shot.thumbnail_disk_mtime || `${visualEpoch}-${index}`
+  return [
+    shot.board_background_disk_mtime || 0,
+    shot.codex_layer_disk_mtime || 0,
+    shot.preview_disk_mtime || 0,
+    shot.thumbnail_disk_mtime || 0,
+    visualEpoch,
+    index,
+  ].join(':')
 }
 
 /**
@@ -92,9 +109,11 @@ export function shotThumbVersion(
     | 'thumbnail_path'
     | 'has_artwork_preview'
     | 'has_board_background'
+    | 'has_codex_layer'
     | 'preview_disk_mtime'
     | 'thumbnail_disk_mtime'
     | 'board_background_disk_mtime'
+    | 'codex_layer_disk_mtime'
   >,
   visualEpoch: number,
   index: number,

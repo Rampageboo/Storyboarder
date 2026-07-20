@@ -41,6 +41,7 @@ export interface BridgeStatusPayload {
   plugin_open_shot_ids?: string[]
   plugin_last_exported_preview?: Record<string, number>
   plugin_project_revision?: number
+  generation_result_revision?: number
   work_context?: WorkContext
   plugin_active_work_key?: string
   plugin_open_work_keys?: string[]

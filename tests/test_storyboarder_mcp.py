@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -7,11 +8,28 @@ from unittest.mock import patch
 
 from PIL import Image
 
-from storyboard_tool import generation_service, mcp_server
+from storyboard_tool import generation_service, mcp_server, session_store
 from storyboard_tool.models import Project, Shot
 
 
 class TestStoryboarderMcp(unittest.TestCase):
+    def test_live_bridge_project_takes_priority_over_saved_document_path(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            unpacked = base / "active" / "project.json"
+            unpacked.parent.mkdir()
+            unpacked.write_text("{}", encoding="utf-8")
+            document = base / "Untitled.sbd"
+            document.write_bytes(b"not opened")
+            session_store.write_session(base, {"last_project_json_path": str(document)})
+            bridge_path = base / "Sessions" / "storyboard_live_bridge.json"
+            bridge_path.write_text(
+                '{"app_running": true, "project_json_path": ' + json.dumps(str(unpacked)) + '}',
+                encoding="utf-8",
+            )
+
+            self.assertEqual(mcp_server.resolve_project_json(session_base=base), unpacked.resolve())
+
     def test_initialize_and_tool_catalog_follow_stdio_mcp_contract(self) -> None:
         initialized = mcp_server.handle_message(
             {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocolVersion": "2025-06-18"}},

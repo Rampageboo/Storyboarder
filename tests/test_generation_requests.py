@@ -3,9 +3,11 @@ from __future__ import annotations
 import contextlib
 import io
 import tempfile
+import time
 import unittest
 import warnings
 from pathlib import Path
+from unittest.mock import patch
 
 from PIL import Image
 
@@ -58,6 +60,7 @@ class TestGenerationRequests(unittest.TestCase):
         body = response.json()
         request = body["request"]
         self.assertEqual(request["destination"], "queue")
+        self.assertEqual(request["shot_number"], 1)
         self.assertEqual(request["shot"]["description"], "A detective enters the archive")
         self.assertEqual(request["prompt"]["variant_count"], 2)
         self.assertIn("Shot size: wide", request["prompt"]["compiled_prompt"])
@@ -95,6 +98,69 @@ class TestGenerationRequests(unittest.TestCase):
         self.assertIn("Story beat: The detective opens the archive door.", second["prompt"]["compiled_prompt"])
         listed = self.client.get("/api/generation/requests", params={"shot_id": self.shot_id, "destination": "queue"})
         self.assertEqual([item["request_id"] for item in listed.json()["requests"]], [first["request_id"]])
+
+    def test_queue_is_oldest_first_and_requests_can_be_removed(self) -> None:
+        with patch(
+            "storyboard_tool.generation_service._utc_now",
+            side_effect=["2026-07-20T00:00:00.000Z", "2026-07-20T00:00:01.000Z"],
+        ):
+            first = self.client.post(
+                f"/api/shots/{self.shot_id}/generation-requests",
+                json={"destination": "queue"},
+            ).json()["request"]
+            second_shot = self.client.post("/api/shots", json={}).json()["shot"]
+            second = self.client.post(
+                f"/api/shots/{second_shot['shot_id']}/generation-requests",
+                json={"destination": "queue"},
+            ).json()["request"]
+
+        listed = self.client.get("/api/generation/requests")
+        self.assertEqual(
+            [item["request_id"] for item in listed.json()["requests"]],
+            [first["request_id"], second["request_id"]],
+        )
+
+        deleted = self.client.delete(f"/api/generation/requests/{first['request_id']}")
+        self.assertEqual(deleted.status_code, 200, deleted.text)
+        self.assertEqual(
+            [item["request_id"] for item in deleted.json()["requests"]],
+            [second["request_id"]],
+        )
+        request_manifest = self.project_root / "generation" / "requests" / f"{first['request_id']}.json"
+        state_manifest = self.project_root / "generation" / "state" / f"{first['request_id']}.json"
+        self.assertFalse(request_manifest.exists())
+        self.assertFalse(state_manifest.exists())
+        listed_after_delete = self.client.get("/api/generation/requests")
+        self.assertEqual(
+            [item["request_id"] for item in listed_after_delete.json()["requests"]],
+            [second["request_id"]],
+        )
+
+    def test_remove_request_keeps_a_cancellation_marker_only_when_manifest_is_locked(self) -> None:
+        request = self.client.post(
+            f"/api/shots/{self.shot_id}/generation-requests",
+            json={"destination": "queue"},
+        ).json()["request"]
+
+        with patch("pathlib.Path.unlink", side_effect=PermissionError("request is in use")):
+            deleted = self.client.delete(f"/api/generation/requests/{request['request_id']}")
+
+        self.assertEqual(deleted.status_code, 200, deleted.text)
+        listed = self.client.get("/api/generation/requests")
+        self.assertEqual(listed.json()["requests"], [])
+        cancelled = self.client.get("/api/generation/requests", params={"status": "cancelled"})
+        self.assertEqual([item["request_id"] for item in cancelled.json()["requests"]], [request["request_id"]])
+
+    def test_send_all_to_codex_creates_a_handoff_for_every_shot(self) -> None:
+        second_shot = self.client.post("/api/shots", json={}).json()["shot"]
+
+        response = self.client.post("/api/generation/requests/codex-batch")
+        self.assertEqual(response.status_code, 200, response.text)
+        body = response.json()
+        self.assertEqual(len(body["requests"]), 2)
+        self.assertEqual({item["shot_id"] for item in body["requests"]}, {self.shot_id, second_shot["shot_id"]})
+        self.assertTrue(all(item["destination"] == "codex" for item in body["requests"]))
+        self.assertTrue(all(item["request_id"] in body["codex_prompt"] for item in body["requests"]))
 
     def test_send_to_codex_returns_copyable_handoff_prompt(self) -> None:
         response = _quiet(lambda: self.client.post(
@@ -235,6 +301,39 @@ class TestGenerationRequests(unittest.TestCase):
         self.assertNotIn("Extreme close-up as Noah looks left.", compiled)
         self.assertEqual(request["prompt"]["mode"], "auto")
 
+    def test_draft_prompt_uses_line_drawing_and_ignores_lighting(self) -> None:
+        self.client.patch(
+            f"/api/shots/{self.shot_id}",
+            json={
+                "description": "A statue is framed through an archway.",
+                "lighting_note": "Golden-hour rim light with glossy marble reflections.",
+                "status": "Draft",
+            },
+        )
+        request = self.client.post(
+            f"/api/shots/{self.shot_id}/generation-requests",
+            json={"destination": "codex"},
+        ).json()["request"]
+
+        compiled = request["prompt"]["compiled_prompt"]
+        self.assertIn("DRAFT STORYBOARD MODE", compiled)
+        self.assertIn("simple monochrome line drawing only", compiled)
+        self.assertIn("A statue is framed through an archway.", compiled)
+        self.assertNotIn("Golden-hour rim light", compiled)
+        self.assertNotIn("Lighting:", compiled)
+
+    def test_non_draft_prompt_keeps_lighting_direction(self) -> None:
+        self.client.patch(
+            f"/api/shots/{self.shot_id}",
+            json={"lighting_note": "Hard side light from the window.", "status": "In Progress"},
+        )
+        request = self.client.post(
+            f"/api/shots/{self.shot_id}/generation-requests",
+            json={"destination": "codex"},
+        ).json()["request"]
+
+        self.assertIn("Lighting: Hard side light from the window.", request["prompt"]["compiled_prompt"])
+
     def test_linked_scene_fields_are_compiled_from_normal_scene_data(self) -> None:
         created_scene = self.client.post(
             "/api/project/scenes2d",
@@ -356,6 +455,93 @@ class TestGenerationRequests(unittest.TestCase):
         artifact = self.project_root / result["artifacts"][0]["project_relative_path"]
         self.assertTrue(artifact.is_file())
         self.assertEqual(request_path.read_bytes(), original_snapshot)
+
+    def test_result_inbox_revision_changes_when_codex_deposits_a_result(self) -> None:
+        queued = self.client.post(
+            f"/api/shots/{self.shot_id}/generation-requests",
+            json={"destination": "codex"},
+        )
+        request_id = queued.json()["request"]["request_id"]
+        project = project_manager.open_project(self.project_root / "project.json")
+        self.assertEqual(generation_service.result_inbox_revision(project), 0)
+
+        source = self.base / "signal-candidate.png"
+        Image.new("RGB", (32, 18), (20, 40, 60)).save(source)
+        generation_service.submit_result(project, request_id, [str(source)])
+
+        self.assertGreater(generation_service.result_inbox_revision(project), 0)
+
+    def test_deposited_result_survives_a_storyboarder_restart(self) -> None:
+        queued = self.client.post(
+            f"/api/shots/{self.shot_id}/generation-requests",
+            json={"destination": "codex"},
+        )
+        request_id = queued.json()["request"]["request_id"]
+        codex_process_project = project_manager.open_project(self.project_root / "project.json")
+        source = self.base / "restart-candidate.png"
+        Image.new("RGB", (32, 18), (40, 80, 120)).save(source)
+        generation_service.submit_result(codex_process_project, request_id, [str(source)])
+
+        restarted_project = project_manager.open_project(self.project_root / "project.json")
+        recovered = generation_service.pull_results(restarted_project)
+
+        self.assertEqual(recovered["accepted_request_ids"], [request_id])
+        self.assertTrue(
+            (self.project_root / "shots" / self.shot_id / f"{self.shot_id}_codex.png").is_file(),
+        )
+
+    def test_desktop_watcher_imports_the_codex_signal_without_a_ui_pull(self) -> None:
+        watcher_root = self.base / "watcher-project"
+        with TestClient(api_module.create_app(self.base), raise_server_exceptions=False) as watcher_client:
+            created = watcher_client.post("/api/project/new", json={"path": str(watcher_root)})
+            self.assertEqual(created.status_code, 200, created.text)
+            watcher_project_json = Path(created.json()["project_json_path"])
+            added = watcher_client.post("/api/shots", json={})
+            self.assertEqual(added.status_code, 200, added.text)
+            shot_id = added.json()["shot"]["shot_id"]
+            queued = watcher_client.post(
+                f"/api/shots/{shot_id}/generation-requests",
+                json={"destination": "codex"},
+            )
+            request_id = queued.json()["request"]["request_id"]
+            codex_process_project = project_manager.open_project(watcher_project_json)
+            source = self.base / "watcher-candidate.png"
+            Image.new("RGB", (32, 18), (60, 100, 140)).save(source)
+            generation_service.submit_result(codex_process_project, request_id, [str(source)])
+
+            deadline = time.monotonic() + 4.0
+            imported = False
+            while time.monotonic() < deadline:
+                payload = watcher_client.get("/api/project").json()
+                watched_shot = next(item for item in payload["shots"] if item["shot_id"] == shot_id)
+                if watched_shot["has_codex_layer"]:
+                    imported = True
+                    break
+                time.sleep(0.05)
+
+        self.assertTrue(imported, "The server watcher did not import the deposited Codex result.")
+
+    def test_pull_automatically_places_mcp_result_on_its_shot(self) -> None:
+        queued = self.client.post(
+            f"/api/shots/{self.shot_id}/generation-requests",
+            json={"destination": "codex"},
+        )
+        request_id = queued.json()["request"]["request_id"]
+        source = self.base / "automatic-candidate.png"
+        Image.new("RGB", (32, 18), (10, 80, 180)).save(source)
+        project = project_manager.open_project(self.project_root / "project.json")
+        result = generation_service.submit_result(project, request_id, [str(source)])
+
+        pulled = _quiet(lambda: self.client.post("/api/generation/pull"))
+        self.assertEqual(pulled.status_code, 200, pulled.text)
+        body = pulled.json()
+        self.assertEqual(body["accepted_request_ids"], [request_id])
+        shot = next(item for item in body["project"]["shots"] if item["shot_id"] == self.shot_id)
+        self.assertTrue(shot["has_codex_layer"])
+        self.assertEqual(shot["generation_state"]["review_status"], "accepted")
+        self.assertEqual(shot["generation_state"]["approved_output_id"], result["result_id"])
+        request = next(item for item in body["requests"] if item["request_id"] == request_id)
+        self.assertEqual(request["status"], "completed")
 
     def test_accept_candidate_creates_separate_codex_layer_and_preserves_artist_preview(self) -> None:
         artwork = io.BytesIO()

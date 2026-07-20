@@ -51,8 +51,9 @@ TOOLS: list[dict[str, Any]] = [
     {
         "name": "storyboard_submit_generation_result",
         "description": (
-            "Copy generated storyboard image files into the project and deposit a result for Storyboarder review. "
-            "This never edits shots.json or approves an output."
+            "Copy generated storyboard image files into the project and signal Storyboarder to import the result. "
+            "The deposited result is durable and will be recovered after a Storyboarder restart; this never edits "
+            "shots.json directly."
         ),
         "inputSchema": {
             "type": "object",
@@ -81,11 +82,26 @@ def resolve_project_json(*, session_base: Path, explicit_project: str = "") -> P
         if candidate.is_dir():
             candidate = candidate / "project.json"
     else:
-        session = session_store.read_session(session_base)
-        candidate = Path(str(session.get("last_project_json_path") or "")).expanduser()
+        candidate = _live_project_json(session_base)
+        if candidate is None:
+            session = session_store.read_session(session_base)
+            candidate = Path(str(session.get("last_project_json_path") or "")).expanduser()
     if not str(candidate) or not candidate.is_file():
         raise ValueError("No active Storyboarder project. Open a project in Storyboarder and try again.")
     return candidate.resolve()
+
+
+def _live_project_json(session_base: Path) -> Path | None:
+    """Return the running desktop app's working project, including unpacked .sbd files."""
+    bridge_path = session_base / "Sessions" / "storyboard_live_bridge.json"
+    try:
+        bridge = json.loads(bridge_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    if not isinstance(bridge, dict) or not bridge.get("app_running"):
+        return None
+    candidate = Path(str(bridge.get("project_json_path") or "")).expanduser()
+    return candidate if candidate.is_file() else None
 
 
 def _project(session_base: Path, explicit_project: str = ""):
@@ -123,7 +139,7 @@ def dispatch_tool(
         )
         return {
             "result": result,
-            "next_step": "In Storyboarder, open Generation and choose Refresh results to import this candidate for review.",
+            "next_step": "Storyboarder has been signaled to import this candidate into the matching shot.",
         }
     raise ValueError(f"Unknown tool: {name}")
 

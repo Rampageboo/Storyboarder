@@ -167,7 +167,8 @@ def _compile_shot_override(shot: Shot) -> str:
     _append_prompt_line(lines, "Background", design.get("background"))
     _append_prompt_line(lines, "Characters", shot.character_note)
     _append_prompt_line(lines, "Dialogue", shot.dialogue)
-    _append_prompt_line(lines, "Lighting", shot.lighting_note)
+    if shot.status != "Draft":
+        _append_prompt_line(lines, "Lighting", shot.lighting_note)
     _append_prompt_line(lines, "Axis of action", design.get("axis_of_action"))
     if design.get("intentional_axis_crossing"):
         lines.append("Axis crossing: intentional")
@@ -187,6 +188,7 @@ def compile_prompt(
 ) -> str:
     """Compile ordinary storyboard fields into generation instructions."""
     shot_override = _compile_shot_override(shot)
+    draft_mode = shot.status == "Draft"
     character_prompt = str(character_bible_prompt or "").strip()
     scene_context = scene_bible or {}
     scene_lines: list[str] = []
@@ -197,10 +199,17 @@ def compile_prompt(
     _append_prompt_line(scene_lines, "Fixed scene details", scene_context.get("consistency_anchors"))
     _append_prompt_line(scene_lines, "Scene context", scene_context.get("description"))
     relevant_assets = keyword_assets or []
+    draft_instruction = (
+        "DRAFT STORYBOARD MODE â€” render a simple monochrome line drawing only. Prioritize framing, camera, "
+        "action, silhouette, and spatial relationships. Do not create a polished style frame, concept art, color "
+        "rendering, materials, textures, or cinematic lighting. Ignore lighting direction and mood."
+    )
     if not character_prompt and not scene_context and not relevant_assets:
-        return shot_override
+        return f"{draft_instruction}\n\n{shot_override}" if draft_mode else shot_override
 
     sections: list[str] = []
+    if draft_mode:
+        sections.append(draft_instruction)
     if scene_lines:
         sections.append("SCENE — keep these facts consistent across its shots.\n" + "\n".join(scene_lines))
     if character_prompt:
@@ -388,6 +397,12 @@ def build_request_snapshot(project: Project, shot: Shot, destination: str) -> di
     destination = str(destination or "").strip().lower()
     if destination not in DESTINATIONS:
         raise ValueError("Destination must be 'queue' or 'codex'.")
+    shot_number = next(
+        (index + 1 for index, candidate in enumerate(project.shots) if candidate.shot_id == shot.shot_id),
+        0,
+    )
+    if shot_number == 0:
+        raise ValueError("Shot not found in project.")
     created_at = _utc_now()
     request_id = _new_id("gen")
     canvas_width = int(project.settings.get("canvas_width") or 1920)
@@ -438,6 +453,7 @@ def build_request_snapshot(project: Project, shot: Shot, destination: str) -> di
         "project_name": project.name,
         "project_root": str(project.root_path.resolve()),
         "shot_id": shot.shot_id,
+        "shot_number": shot_number,
         "destination": destination,
         "status": "queued",
         "created_at": created_at,
@@ -490,11 +506,48 @@ def create_request(project: Project, shot: Shot, destination: str) -> dict[str, 
     return request
 
 
+def codex_batch_handoff_prompt(request_ids: list[str]) -> str:
+    cleaned_ids = [_validate_id(request_id, "request id") for request_id in request_ids]
+    if not cleaned_ids:
+        raise ValueError("No Codex generation requests were created.")
+    return (
+        "Use the Storyboarder MCP tools to fetch and generate one storyboard image for every request ID below. "
+        "For each request, inspect every matched keyword asset before generating, then submit its image with "
+        "storyboard_submit_generation_result. Do not edit shots.json directly.\n\n"
+        "Request IDs:\n"
+        + "\n".join(f"- {request_id}" for request_id in cleaned_ids)
+    )
+
+
 def delete_request(project: Project, request_id: str) -> None:
+    """Remove a request, with a cancellation marker only as a lock fallback.
+
+    The normal path deletes both the immutable request and mutable state files.
+    If Windows has the request open momentarily, the cancellation marker still
+    hides it and rejects a late Codex result until the file can be removed.
+    """
+    request_id = _validate_id(request_id, "request id")
+    request_path = _request_path(project, request_id)
+    state_path = _state_path(project, request_id)
+    atomic_write_json(
+        state_path,
+        {
+            "schema_version": SCHEMA_VERSION,
+            "request_id": request_id,
+            "status": "cancelled",
+            "updated_at": _utc_now(),
+        },
+    )
     try:
-        _request_path(project, request_id).unlink(missing_ok=True)
-        _state_path(project, request_id).unlink(missing_ok=True)
+        request_path.unlink(missing_ok=True)
     except OSError:
+        # Keep the cancellation marker: the request cannot reappear or accept a
+        # result while another process has its manifest open.
+        return
+    try:
+        state_path.unlink(missing_ok=True)
+    except OSError:
+        # An orphaned state file has no effect once the request manifest is gone.
         pass
 
 
@@ -531,6 +584,11 @@ def list_requests(
             row = _apply_request_state(project, _read_json_object(path))
         except ValueError:
             continue
+        # A removed queue item remains on disk as an immutable audit record so
+        # Codex cannot submit a late result for it. It is not an active queue
+        # item unless a caller explicitly asks for cancelled requests.
+        if not status and row.get("status") == "cancelled":
+            continue
         if shot_id and row.get("shot_id") != shot_id:
             continue
         if destination and row.get("destination") != destination:
@@ -542,7 +600,7 @@ def list_requests(
         if results:
             row["latest_result"] = results[0]
         rows.append(row)
-    rows.sort(key=lambda row: str(row.get("created_at") or ""), reverse=True)
+    rows.sort(key=lambda row: str(row.get("created_at") or ""))
     return rows
 
 
@@ -562,6 +620,25 @@ def list_results(project: Project, request_id: str) -> list[dict[str, Any]]:
             continue
     rows.sort(key=lambda row: str(row.get("created_at") or ""), reverse=True)
     return rows
+
+
+def result_inbox_revision(project: Project) -> int:
+    """Return a durable change marker for deposited generation results.
+
+    A result manifest is written atomically only after every candidate has been
+    copied into the project. The desktop process can therefore use its mtime as
+    a safe, restart-resilient completion signal without polling from the UI.
+    """
+    latest = 0
+    directory = _results_dir(project)
+    if not directory.is_dir():
+        return latest
+    for path in directory.rglob("*.json"):
+        try:
+            latest = max(latest, path.stat().st_mtime_ns)
+        except OSError:
+            continue
+    return latest
 
 
 def _copy_image_artifact(source: Path, target: Path) -> None:
@@ -674,6 +751,29 @@ def reconcile_results(project: Project) -> dict[str, Any]:
         "updated_request_ids": updated_request_ids,
         "updated_shot_ids": list(dict.fromkeys(updated_shot_ids)),
     }
+
+
+def pull_results(project: Project) -> dict[str, Any]:
+    """Pull submitted candidates into their matching shot Codex layers."""
+    reconciled = reconcile_results(project)
+    shots_by_id = {shot.shot_id: shot for shot in project.shots}
+    accepted_request_ids: list[str] = []
+    for request in list_requests(project, status="needs-review"):
+        latest = request.get("latest_result")
+        if not isinstance(latest, dict):
+            continue
+        artifacts = latest.get("artifacts")
+        if not isinstance(artifacts, list) or not artifacts:
+            continue
+        artifact_path = str((artifacts[0] or {}).get("project_relative_path") or "")
+        shot = shots_by_id.get(str(request.get("shot_id") or ""))
+        request_id = str(request.get("request_id") or "")
+        result_id = str(latest.get("result_id") or "")
+        if not shot or not request_id or not result_id or not artifact_path:
+            continue
+        accept_candidate_as_codex_layer(project, shot, request_id, result_id, artifact_path)
+        accepted_request_ids.append(request_id)
+    return {**reconciled, "accepted_request_ids": accepted_request_ids}
 
 
 def accept_candidate_as_codex_layer(

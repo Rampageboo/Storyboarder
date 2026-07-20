@@ -282,7 +282,9 @@ def cleanup_document_working_root(project: Project | None) -> bool:
 def add_shot(project: Project, *, after_index: int | None = None) -> Shot:
     shot = Shot(shot_id=new_shot_id())
     _ensure_shot_files(project, shot)
-    create_canvas_for_shot(project, shot)
+    # A blank PSD is created only when the user chooses Create canvas or Open
+    # in Photoshop. Creating it here makes every Add Board wait on a full PSD
+    # write even though most newly created boards remain empty initially.
     if after_index is None:
         project.shots.append(shot)
     else:

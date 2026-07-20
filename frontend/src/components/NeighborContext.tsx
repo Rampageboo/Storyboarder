@@ -2,7 +2,7 @@ import { useMemo } from 'react'
 import type { Shot } from '../types'
 import { useProject } from '../state/useProject'
 import { shotDisplayLabel } from '../utils/shotDisplay'
-import { shotHasBoardBackground, shotShouldOverlayPreview, shotThumbVersion } from '../utils/shotPreview'
+import { shotHasBoardBackground, shotHasCodexLayer, shotShouldOverlayPreview, shotThumbVersion } from '../utils/shotPreview'
 import { ShotThumb } from './ShotThumb'
 import './NeighborContext.css'
 
@@ -36,6 +36,7 @@ function NeighborCard({
           version={shotThumbVersion(shot, visualEpoch, index)}
           hasImage={shotShouldOverlayPreview(shot)}
           hasBg={shotHasBoardBackground(shot)}
+          hasCodex={shotHasCodexLayer(shot)}
         />
       </div>
       <div className="neighbor-name">{shotDisplayLabel(shot)}</div>

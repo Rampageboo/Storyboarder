@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import time
+import threading
 from typing import Any
 
 from fastapi import FastAPI
@@ -25,6 +26,8 @@ def init_bridge_state(app: FastAPI, bridge_port: int) -> None:
     app.state.plugin_active_work_key = ""
     app.state.plugin_open_work_keys = []
     app.state.plugin_change = {}
+    app.state.generation_result_revision = 0
+    app.state.generation_result_condition = threading.Condition()
 
     # Per-project preview-analysis jobs: norm_root → job dict
     app.state.preview_analysis_jobs = {}
@@ -138,6 +141,31 @@ def plugin_project_revision(app: FastAPI) -> int:
 
 def mark_plugin_project_changed(app: FastAPI) -> None:
     app.state.plugin_project_revision = plugin_project_revision(app) + 1
+
+
+def generation_result_revision(app: FastAPI) -> int:
+    return int(getattr(app.state, "generation_result_revision", 0) or 0)
+
+
+def mark_generation_results_changed(app: FastAPI) -> None:
+    """Notify the desktop UI that a durable Codex result has been imported."""
+    condition = getattr(app.state, "generation_result_condition", None)
+    if not isinstance(condition, threading.Condition):
+        app.state.generation_result_condition = threading.Condition()
+        condition = app.state.generation_result_condition
+    with condition:
+        app.state.generation_result_revision = generation_result_revision(app) + 1
+        condition.notify_all()
+
+
+def wait_for_generation_result_change(app: FastAPI, revision: int, timeout: float) -> int:
+    """Block until an imported result changes the revision, or return on timeout."""
+    condition = getattr(app.state, "generation_result_condition", None)
+    if not isinstance(condition, threading.Condition):
+        return generation_result_revision(app)
+    with condition:
+        condition.wait_for(lambda: generation_result_revision(app) != revision, timeout=timeout)
+        return generation_result_revision(app)
 
 
 # ── Generic work-context accessors ────────────────────────────────────────

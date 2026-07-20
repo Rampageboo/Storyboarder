@@ -1,7 +1,9 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import {
   acceptGenerationCandidate,
+  createCodexBatchRequests,
   createGenerationRequest,
+  deleteGenerationRequest,
   listGenerationRequests,
   projectFileUrl,
   reconcileGenerationRequests,
@@ -116,60 +118,84 @@ export function FloatingLayersPanel({
   const [loadedProjectPath, setLoadedProjectPath] = useState('')
   const [loading, setLoading] = useState(true)
   const [dispatchingTo, setDispatchingTo] = useState<GenerationDestination | null>(null)
+  const [dispatchingAllToCodex, setDispatchingAllToCodex] = useState(false)
   const [acceptingArtifact, setAcceptingArtifact] = useState('')
+  const [deletingRequestId, setDeletingRequestId] = useState('')
   const [notice, setNotice] = useState('')
   const projectPath = project?.project_json_path ?? ''
+  const selectedShotIdRef = useRef<string | null>(selectedShotId)
+  const requestListRevisionRef = useRef(0)
+
+  // Generation results arrive asynchronously while the user may be moving between
+  // boards. Always preserve the selection at the moment a response is applied,
+  // rather than the selection that existed when the request was started.
+  useLayoutEffect(() => {
+    selectedShotIdRef.current = selectedShotId
+  }, [selectedShotId])
+  const replaceWithCurrentSelection = useCallback((payload: typeof project) => {
+    if (payload) replaceProject(payload, selectedShotIdRef.current)
+  }, [replaceProject])
 
   const loadRequests = useCallback(async (quiet = false) => {
+    const revision = ++requestListRevisionRef.current
     if (!quiet) setLoading(true)
     try {
       const response = await listGenerationRequests()
+      if (revision !== requestListRevisionRef.current) return
       setRequests(response.requests)
       setLoadedProjectPath(projectPath)
     } catch (error) {
-      reportError(error)
+      if (revision === requestListRevisionRef.current) reportError(error)
     } finally {
-      setLoading(false)
+      if (revision === requestListRevisionRef.current) setLoading(false)
     }
   }, [projectPath, reportError])
 
   useEffect(() => {
-    let cancelled = false
-    listGenerationRequests()
-      .then((response) => {
-        if (!cancelled) {
-          setRequests(response.requests)
-          setLoadedProjectPath(projectPath)
-          setLoading(false)
-        }
-      })
-      .catch((error) => {
-        if (!cancelled) {
-          reportError(error)
-          setLoading(false)
-        }
-      })
+    if (!project) return
+    void loadRequests()
     return () => {
-      cancelled = true
+      requestListRevisionRef.current += 1
     }
-  }, [projectPath, reportError])
+  }, [project, loadRequests])
 
   const visibleRequests = loadedProjectPath === projectPath ? requests : []
   const queueLoading = loading || loadedProjectPath !== projectPath
-  const hasQueuedRequests = visibleRequests.some((request) => request.status === 'queued')
-  useEffect(() => {
-    if (!hasQueuedRequests) return
-    const timer = window.setInterval(() => void loadRequests(true), 4000)
-    return () => window.clearInterval(timer)
-  }, [hasQueuedRequests, loadRequests])
-
-  const shotLabels = useMemo(() => {
-    const labels = new Map<string, string>()
-    for (const candidate of project?.shots ?? []) {
-      labels.set(candidate.shot_id, shotDisplayLabel(candidate))
+  const requestShotNumbers = useMemo(() => {
+    const numbers = new Map<string, number>()
+    const usedNumbers = new Set<number>()
+    const currentShotNumbers = new Map<string, number>()
+    for (const [index, candidate] of (project?.shots ?? []).entries()) {
+      currentShotNumbers.set(candidate.shot_id, index + 1)
     }
-    return labels
-  }, [project?.shots])
+
+    const orderedRequests = [...requests].sort((left, right) => left.created_at.localeCompare(right.created_at))
+    for (const request of orderedRequests) {
+      const snapshotNumber = Number(request.shot_number)
+      const number = Number.isInteger(snapshotNumber) && snapshotNumber > 0
+        ? snapshotNumber
+        : currentShotNumbers.get(request.shot_id)
+      if (number && !numbers.has(request.shot_id)) numbers.set(request.shot_id, number)
+      if (number) usedNumbers.add(number)
+    }
+
+    let nextNumber = 1
+    for (const request of orderedRequests) {
+      if (numbers.has(request.shot_id)) continue
+      while (usedNumbers.has(nextNumber)) nextNumber += 1
+      numbers.set(request.shot_id, nextNumber)
+      usedNumbers.add(nextNumber)
+    }
+    return numbers
+  }, [project?.shots, requests])
+
+  const requestShotLabel = (request: GenerationRequest) => {
+    const snapshotNumber = Number(request.shot_number)
+    const number = Number.isInteger(snapshotNumber) && snapshotNumber > 0
+      ? snapshotNumber
+      : requestShotNumbers.get(request.shot_id) ?? 1
+    return `Shot ${number}`
+  }
 
   const dispatchGeneration = async (destination: GenerationDestination) => {
     setDispatchingTo(destination)
@@ -177,7 +203,7 @@ export function FloatingLayersPanel({
     try {
       await flushDirtyShots()
       const response = await createGenerationRequest(shot.shot_id, destination)
-      replaceProject(response.project, selectedShotId)
+      replaceWithCurrentSelection(response.project)
       await loadRequests(true)
       if (destination === 'codex' && response.codex_prompt) {
         const copied = await copyTextWithTimeout(response.codex_prompt)
@@ -192,12 +218,34 @@ export function FloatingLayersPanel({
     }
   }
 
+  const dispatchAllToCodex = async () => {
+    setDispatchingAllToCodex(true)
+    setNotice('')
+    try {
+      await flushDirtyShots()
+      const response = await createCodexBatchRequests()
+      replaceWithCurrentSelection(response.project)
+      setRequests(response.requests)
+      setLoadedProjectPath(projectPath)
+      const copied = await copyTextWithTimeout(response.codex_prompt)
+      setNotice(
+        copied
+          ? `${response.created_request_ids.length} shot handoffs copied for Codex.`
+          : `${response.created_request_ids.length} shot handoffs are ready for Codex.`,
+      )
+    } catch (error) {
+      reportError(error)
+    } finally {
+      setDispatchingAllToCodex(false)
+    }
+  }
+
   const refreshResults = async () => {
     setLoading(true)
     setNotice('')
     try {
       const response = await reconcileGenerationRequests()
-      replaceProject(response.project, selectedShotId)
+      replaceWithCurrentSelection(response.project)
       setRequests(response.requests)
       setLoadedProjectPath(projectPath)
       setNotice(
@@ -212,6 +260,29 @@ export function FloatingLayersPanel({
     }
   }
 
+  const deleteRequest = async (requestId: string) => {
+    const previousRequests = requests
+    requestListRevisionRef.current += 1
+    setDeletingRequestId(requestId)
+    setNotice('')
+    setRequests((current) => current.filter((request) => request.request_id !== requestId))
+    try {
+      const response = await deleteGenerationRequest(requestId)
+      if (response.requests.some((request) => request.request_id === requestId)) {
+        throw new Error('Storyboarder could not remove this queue item.')
+      }
+      replaceWithCurrentSelection(response.project)
+      setRequests(response.requests)
+      setLoadedProjectPath(projectPath)
+      setNotice('Queue item removed.')
+    } catch (error) {
+      setRequests(previousRequests)
+      reportError(error)
+    } finally {
+      setDeletingRequestId('')
+    }
+  }
+
   const acceptAsCodexLayer = async (request: GenerationRequest, artifactPath: string) => {
     const resultId = request.latest_result?.result_id
     if (!resultId) return
@@ -223,7 +294,7 @@ export function FloatingLayersPanel({
         result_id: resultId,
         artifact_path: artifactPath,
       })
-      replaceProject(response.project, selectedShotId)
+      replaceWithCurrentSelection(response.project)
       await loadRequests(true)
       setNotice('Result placed on the shot Codex layer.')
     } catch (error) {
@@ -302,6 +373,14 @@ export function FloatingLayersPanel({
           >
             {dispatchingTo === 'codex' ? 'Preparing...' : 'Send to Codex'}
           </button>
+          <button
+            type="button"
+            className="queue-batch-codex"
+            disabled={disabled || dispatchingTo !== null || dispatchingAllToCodex}
+            onClick={() => void dispatchAllToCodex()}
+          >
+            {dispatchingAllToCodex ? 'Preparing all...' : 'Send All to Codex'}
+          </button>
         </div>
         {notice ? <div className="floating-queue-notice" role="status">{notice}</div> : null}
         <div className="floating-queue-list">
@@ -309,10 +388,19 @@ export function FloatingLayersPanel({
             <article className="floating-queue-row" key={request.request_id}>
               <div className="floating-queue-topline">
                 <span className={`floating-status status-${request.status}`} aria-hidden="true" />
-                <strong title={request.shot_id}>{shotLabels.get(request.shot_id) || request.shot_id}</strong>
+                <strong>{requestShotLabel(request)}</strong>
                 <span className={`floating-destination is-${request.destination}`}>
                   {request.destination === 'codex' ? 'Codex' : 'Queue'}
                 </span>
+                <button
+                  type="button"
+                  className="floating-queue-delete"
+                  disabled={deletingRequestId === request.request_id}
+                  onClick={() => void deleteRequest(request.request_id)}
+                  title="Remove from queue"
+                >
+                  {deletingRequestId === request.request_id ? 'Removing...' : 'Remove'}
+                </button>
               </div>
               <div className="floating-queue-meta">
                 <span className="floating-status-label">{request.status}</span>

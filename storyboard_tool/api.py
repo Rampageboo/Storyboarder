@@ -13,10 +13,10 @@ from typing import Any
 
 from fastapi import FastAPI, File, Form, HTTPException, Request, Response, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
-from . import app_state, logging_config, project_manager, runtime_state
+from . import app_state, generation_service, logging_config, project_manager, runtime_state
 from .backend_service import StoryboardBackendService
 from .errors import AppErrorCode
 from .logging_config import setup_logging
@@ -61,6 +61,7 @@ from .schemas import (
 
 # Photoshop plugin treats bridge files older than ~8s as stale (see BRIDGE_STALE_MS in panel.js).
 _BRIDGE_REFRESH_SECONDS = 1.5
+_GENERATION_SIGNAL_SECONDS = 0.5
 
 # Uploads are buffered in memory by _read_upload; cap the size so a single large or
 # hostile upload cannot exhaust process memory. Generous enough for reference-video
@@ -164,17 +165,57 @@ def create_app(base_dir: Path, bridge_port: int = 8000) -> FastAPI:
                     # persistent failure should be visible in the log, not silent.
                     logger.debug("Live bridge refresh failed", exc_info=True)
 
+        def generation_result_loop() -> None:
+            # Codex deposits an immutable result manifest through the MCP server.
+            # Watching that durable marker makes the handoff effectively push-based
+            # while still recovering results submitted during an app crash/restart.
+            observed_revisions: dict[str, int] = {}
+            while not stop_event.wait(_GENERATION_SIGNAL_SECONDS):
+                project = app.state.project
+                if project is None:
+                    continue
+                project_key = str(project.root_path.resolve())
+                revision = generation_service.result_inbox_revision(project)
+                previous = observed_revisions.get(project_key)
+                if previous is not None and revision <= previous:
+                    continue
+                if revision <= 0:
+                    observed_revisions[project_key] = revision
+                    continue
+                try:
+                    with project_manager.PROJECT_LOCK:
+                        # Do not let a result from a project just closed or replaced
+                        # get applied to whichever project became active meanwhile.
+                        if app.state.project is not project:
+                            continue
+                        result = _svc().method_pull_generation_results()
+                    if result["updated_shot_ids"] or result["accepted_request_ids"]:
+                        runtime_state.mark_generation_results_changed(app)
+                        app_state._touch_live_bridge(app)
+                    observed_revisions[project_key] = revision
+                except Exception:
+                    # Keep watching: an interrupted import remains deposited and
+                    # will be retried without asking Codex to generate it again.
+                    logger.debug("Generation result signal processing failed", exc_info=True)
+
         refresh_thread = threading.Thread(
             target=bridge_refresh_loop,
             name="storyboard-bridge-refresh",
             daemon=True,
         )
+        generation_thread = threading.Thread(
+            target=generation_result_loop,
+            name="storyboard-generation-results",
+            daemon=True,
+        )
         refresh_thread.start()
+        generation_thread.start()
         try:
             yield
         finally:
             stop_event.set()
             refresh_thread.join(timeout=2.0)
+            generation_thread.join(timeout=2.0)
             _shutdown_reference_cleanup(app)
             project_manager.cleanup_document_working_root(app.state.project)
 
@@ -356,6 +397,24 @@ def create_app(base_dir: Path, bridge_port: int = 8000) -> FastAPI:
     @app.get("/api/bridge/status")
     def bridge_status() -> dict[str, Any]:
         return _svc().method_bridge_status()
+
+    @app.get("/api/generation/events")
+    def generation_events() -> StreamingResponse:
+        def event_stream():
+            revision = runtime_state.generation_result_revision(app)
+            while True:
+                next_revision = runtime_state.wait_for_generation_result_change(app, revision, timeout=15.0)
+                if next_revision != revision:
+                    revision = next_revision
+                    yield f"event: generation-result\ndata: {revision}\n\n"
+                else:
+                    yield ": keep-alive\n\n"
+
+        return StreamingResponse(
+            event_stream(),
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        )
 
     @app.post("/api/bridge/plugin-heartbeat")
     def plugin_heartbeat(payload: PluginHeartbeatRequest | None = None) -> dict[str, str]:
@@ -667,6 +726,10 @@ def create_app(base_dir: Path, bridge_port: int = 8000) -> FastAPI:
     def create_generation_request(shot_id: str, request: GenerationRequestCreateRequest) -> dict[str, Any]:
         return _svc().method_create_generation_request(shot_id, request.destination)
 
+    @app.post("/api/generation/requests/codex-batch")
+    def create_codex_batch_requests() -> dict[str, Any]:
+        return _svc().method_create_codex_batch_requests()
+
     @app.get("/api/generation/requests")
     def list_generation_requests(
         shot_id: str = "",
@@ -678,6 +741,14 @@ def create_app(base_dir: Path, bridge_port: int = 8000) -> FastAPI:
             destination=destination,
             status=status,
         )
+
+    @app.delete("/api/generation/requests/{request_id}")
+    def delete_generation_request(request_id: str) -> dict[str, Any]:
+        return _svc().method_delete_generation_request(request_id)
+
+    @app.post("/api/generation/pull")
+    def pull_generation_results() -> dict[str, Any]:
+        return _svc().method_pull_generation_results()
 
     @app.post("/api/generation/reconcile")
     def reconcile_generation_results() -> dict[str, Any]:

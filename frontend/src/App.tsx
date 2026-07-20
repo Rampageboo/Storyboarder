@@ -137,7 +137,13 @@ function LeftRail({
   )
 }
 
-function BoardWorkspace() {
+function BoardWorkspace({
+  inspectorCollapsed,
+  onToggleInspector,
+}: {
+  inspectorCollapsed: boolean
+  onToggleInspector: () => void
+}) {
   return (
     <>
       <main className="main-center">
@@ -145,9 +151,23 @@ function BoardWorkspace() {
         <NeighborContext />
         <BoardStrip />
       </main>
-      <aside className="main-right">
-        <ShotInspector />
-        <AdvancedPanel />
+      <aside className={`main-right${inspectorCollapsed ? ' is-collapsed' : ''}`}>
+        <button
+          type="button"
+          className="inspector-size-toggle"
+          onClick={onToggleInspector}
+          aria-label={inspectorCollapsed ? 'Show shot details' : 'Hide shot details'}
+          aria-pressed={!inspectorCollapsed}
+          title={inspectorCollapsed ? 'Show shot details' : 'Hide shot details to expand the canvas'}
+        >
+          <span aria-hidden="true">{inspectorCollapsed ? '\u2039' : '\u203a'}</span>
+        </button>
+        {!inspectorCollapsed ? (
+          <>
+            <ShotInspector />
+            <AdvancedPanel />
+          </>
+        ) : null}
       </aside>
     </>
   )
@@ -281,6 +301,7 @@ function AppInner() {
   const [workspaceMode, setWorkspaceMode] = useState<WorkspaceMode>('board')
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [refsOpen, setRefsOpen] = useState(false)
+  const [inspectorCollapsed, setInspectorCollapsed] = useState(false)
   const uiReadyReportedRef = useRef(false)
   useGlobalShortcuts()
 
@@ -331,7 +352,7 @@ function AppInner() {
           </div>
         ) : null}
         <div className="workspace-shell">
-          <div className={`workspace workspace-${workspaceMode}`}>
+          <div className={`workspace workspace-${workspaceMode}${inspectorCollapsed ? ' is-inspector-collapsed' : ''}`}>
             {initialLoading ? (
               <div className="loading-panel">Loading project...</div>
             ) : !project ? (
@@ -339,8 +360,11 @@ function AppInner() {
             ) : (
               <>
                 <ReferenceSidebar open={refsOpen} onOpenChange={setRefsOpen} />
-                <div className="workspace-content workspace-content-board" hidden={workspaceMode !== 'board'}>
-                  <BoardWorkspace />
+                <div className={`workspace-content workspace-content-board${inspectorCollapsed ? ' is-inspector-collapsed' : ''}`} hidden={workspaceMode !== 'board'}>
+                  <BoardWorkspace
+                    inspectorCollapsed={inspectorCollapsed}
+                    onToggleInspector={() => setInspectorCollapsed((value) => !value)}
+                  />
                 </div>
                 <div className="workspace-content workspace-content-scene" hidden={workspaceMode !== 'scene2d'}>
                   <Scene2DPanel active={workspaceMode === 'scene2d'} />

@@ -7,7 +7,7 @@ import {
   segmentMarkerTooltip,
   type RefSegmentRecord,
 } from '../utils/refSegmentDisplay'
-import { shotDisplayVersion, shotHasBoardBackground, shotHasPreview, shotShouldOverlayPreview } from '../utils/shotPreview'
+import { shotDisplayVersion, shotHasBoardBackground, shotHasCodexLayer, shotHasPreview, shotShouldOverlayPreview } from '../utils/shotPreview'
 import { ShotThumb } from './ShotThumb'
 import './BoardStrip.css'
 
@@ -290,7 +290,6 @@ export function BoardStrip() {
     if (!project) return
     setBusy(true)
     try {
-      await flushDirtyShots()
       forceAlignSelectedRef.current = true
       await addShotAfterSelection()
     } catch {
@@ -298,13 +297,12 @@ export function BoardStrip() {
     } finally {
       setBusy(false)
     }
-  }, [project, flushDirtyShots, addShotAfterSelection])
+  }, [project, addShotAfterSelection])
 
   const handleInsertAt = useCallback(async (index: number) => {
     if (!project) return
     setBusy(true)
     try {
-      await flushDirtyShots()
       forceAlignSelectedRef.current = true
       await insertShotAtIndex(index)
     } catch (error) {
@@ -312,7 +310,7 @@ export function BoardStrip() {
     } finally {
       setBusy(false)
     }
-  }, [project, flushDirtyShots, insertShotAtIndex, reportError])
+  }, [project, insertShotAtIndex, reportError])
 
   const handleDelete = useCallback(async () => {
     if (!project || !selectedShotId) return
@@ -656,6 +654,7 @@ export function BoardStrip() {
                       version={shotDisplayVersion(shot, visualEpoch, index)}
                       hasImage={shotShouldOverlayPreview(shot)}
                       hasBg={shotHasBoardBackground(shot)}
+                      hasCodex={shotHasCodexLayer(shot)}
                     />
                     <span className="board-strip-index">#{index + 1}</span>
                     {hasDraft ? (

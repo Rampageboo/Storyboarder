@@ -41,6 +41,7 @@ export interface ProjectContextValue {
   setSelectedShotId: (shotId: string | null) => void
   replaceProject: (payload: ProjectPayload, preferredShotId?: string | null) => void
   refreshProjectFromBridge: (pluginSelectedShotId?: string | null) => Promise<void>
+  refreshProjectFromGeneration: () => Promise<void>
   setProject: Dispatch<SetStateAction<ProjectPayload | null>>
   reloadProject: () => Promise<void>
   newProject: (body?: ProjectPathRequest) => Promise<void>
@@ -128,10 +129,12 @@ function projectVisualEpoch(payload: ProjectPayload | null): number {
     hash = mixHash(hash, shot.preview_disk_mtime)
     hash = mixHash(hash, shot.thumbnail_disk_mtime)
     hash = mixHash(hash, shot.board_background_disk_mtime)
+    hash = mixHash(hash, shot.codex_layer_disk_mtime)
     hash = mixHash(hash, shot.image_path)
     hash = mixHash(hash, shot.preview_image_path)
     hash = mixHash(hash, shot.source_file_path)
     hash = mixHash(hash, shot.has_board_background ? '1' : '0')
+    hash = mixHash(hash, shot.has_codex_layer ? '1' : '0')
   }
   hash = mixHash(hash, JSON.stringify(payload.settings?.ref_segments ?? []))
   return hash
@@ -369,6 +372,12 @@ export function ProjectProvider({ children }: PropsWithChildren) {
     },
     [replaceProject],
   )
+
+  const refreshProjectFromGeneration = useCallback(async () => {
+    // A result is a background update, not a navigation request. Keep the board
+    // the artist is currently viewing even when Codex finished another shot.
+    replaceProject(await getProject())
+  }, [replaceProject])
 
   const editShotField = useCallback(<K extends keyof ShotUpdate>(shotId: string, key: K, value: ShotUpdate[K]) => {
     versionsRef.current[shotId] = (versionsRef.current[shotId] ?? 0) + 1
@@ -781,6 +790,7 @@ export function ProjectProvider({ children }: PropsWithChildren) {
       setSelectedShotId,
       replaceProject,
       refreshProjectFromBridge,
+      refreshProjectFromGeneration,
       setProject,
       reloadProject,
       newProject: newProjectAction,
@@ -834,7 +844,7 @@ export function ProjectProvider({ children }: PropsWithChildren) {
       refreshMissingFiles,
       refreshPreviewFields,
     }),
-    [project, selectedShotId, replaceProject, refreshProjectFromBridge, reloadProject, newProjectAction, openProjectFromDialog, saveProjectAction, addShotAfterSelection, insertShotAtIndex, deleteSelectedShot, moveSelectedShot, reorderBoards, deleteActiveRefSegment, deleteRefSegmentUndoable, recordRefApply, undo, redo, undoStack, redoStack, syncSelectedShot, openSelectedShotSource, initialLoading, projectActionBusy, getDraft, editShotField, isShotDirty, dirtyShotIds, savingShots, saveShot, flushDirtyShots, visualEpoch, segmentRange, setSegmentAnchor, setSegmentEnd, pickSegmentShot, clearSegmentRange, activeAppliedSegmentId, setActiveAppliedSegmentId, clearActiveAppliedSegment, refSegmentInspectOpen, openRefSegmentInspect, closeRefSegmentInspect, dismissRefSegmentUi, refApplyUndoToken, lastError, clearError, reportError, missingFiles, missingFilesLoading, refreshMissingFiles, refreshPreviewFields],
+    [project, selectedShotId, replaceProject, refreshProjectFromBridge, refreshProjectFromGeneration, reloadProject, newProjectAction, openProjectFromDialog, saveProjectAction, addShotAfterSelection, insertShotAtIndex, deleteSelectedShot, moveSelectedShot, reorderBoards, deleteActiveRefSegment, deleteRefSegmentUndoable, recordRefApply, undo, redo, undoStack, redoStack, syncSelectedShot, openSelectedShotSource, initialLoading, projectActionBusy, getDraft, editShotField, isShotDirty, dirtyShotIds, savingShots, saveShot, flushDirtyShots, visualEpoch, segmentRange, setSegmentAnchor, setSegmentEnd, pickSegmentShot, clearSegmentRange, activeAppliedSegmentId, setActiveAppliedSegmentId, clearActiveAppliedSegment, refSegmentInspectOpen, openRefSegmentInspect, closeRefSegmentInspect, dismissRefSegmentUi, refApplyUndoToken, lastError, clearError, reportError, missingFiles, missingFilesLoading, refreshMissingFiles, refreshPreviewFields],
   )
 
   return <ProjectContext.Provider value={value}>{children}</ProjectContext.Provider>

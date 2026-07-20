@@ -71,6 +71,14 @@ class TestAddShot:
         shot = project_manager.add_shot(project)
         assert project_manager.get_shot_dir(project, shot).is_dir()
 
+    def test_defers_blank_psd_until_the_user_creates_a_canvas(self):
+        project = _make_project(self._tmp)
+        shot = project_manager.add_shot(project)
+
+        shot_dir = project_manager.get_shot_dir(project, shot)
+        assert shot.source_file_path == ""
+        assert not (shot_dir / f"{shot.shot_id}.psd").exists()
+
     def test_after_index_inserts_at_correct_position(self):
         project = _make_project(self._tmp)
         s0 = project_manager.add_shot(project)

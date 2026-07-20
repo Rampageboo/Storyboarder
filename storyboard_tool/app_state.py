@@ -368,6 +368,7 @@ def _bridge_status_payload(app: FastAPI) -> dict[str, Any]:
         "plugin_open_shot_ids": open_shot_ids,
         "plugin_last_exported_preview": last_exported,
         "plugin_project_revision": runtime_state.plugin_project_revision(app),
+        "generation_result_revision": runtime_state.generation_result_revision(app),
         # Generic work context fields
         "work_context": runtime_state.active_work_context(app),
         "plugin_active_work_key": active_work_key,
