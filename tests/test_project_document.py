@@ -17,6 +17,9 @@ def test_create_save_and_reopen_single_file_document(tmp_path: Path, monkeypatch
     project = project_manager.create_document(document, canvas_width=1280, canvas_height=720)
     shot = project_manager.add_shot(project)
     shot.title = "Opening image"
+    # A freshly added shot has no PSD; the canvas is created on demand. Creating it
+    # here verifies a shot canvas round-trips into the single-file document.
+    project_manager.create_canvas_for_shot(project, shot)
     project_manager.save_project(project)
 
     assert document.is_file()
