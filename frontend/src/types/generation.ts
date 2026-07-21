@@ -1,6 +1,8 @@
 import type { ProjectPayload } from './project'
 
 export type GenerationDestination = 'queue' | 'codex'
+export type GenerationProvider = 'codex' | 'stable_diffusion'
+export type GenerationMode = 'draft' | 'clean' | 'final'
 export type GenerationRequestStatus = 'queued' | 'needs-review' | 'completed' | 'failed' | 'cancelled'
 
 export interface GenerationArtifact {
@@ -46,6 +48,8 @@ export interface GenerationRequest {
   shot_number?: number
   shot?: GenerationRequestShotSnapshot
   destination: GenerationDestination
+  provider?: GenerationProvider
+  mode?: GenerationMode
   status: GenerationRequestStatus
   created_at: string
   updated_at: string

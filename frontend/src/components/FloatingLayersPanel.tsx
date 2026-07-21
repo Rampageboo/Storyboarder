@@ -9,7 +9,7 @@ import {
   reconcileGenerationRequests,
 } from '../api'
 import { useProject } from '../state/useProject'
-import type { GenerationDestination, GenerationRequest, Shot } from '../types'
+import type { GenerationDestination, GenerationMode, GenerationProvider, GenerationRequest, Shot } from '../types'
 import { shotDisplayLabel } from '../utils/shotDisplay'
 import './FloatingLayersPanel.css'
 
@@ -119,6 +119,9 @@ export function FloatingLayersPanel({
   const [loading, setLoading] = useState(true)
   const [dispatchingTo, setDispatchingTo] = useState<GenerationDestination | null>(null)
   const [dispatchingAllToCodex, setDispatchingAllToCodex] = useState(false)
+  const [provider, setProvider] = useState<GenerationProvider>('codex')
+  // Empty string = let the backend derive the precision mode from the shot's status.
+  const [mode, setMode] = useState<GenerationMode | ''>('')
   const [acceptingArtifact, setAcceptingArtifact] = useState('')
   const [deletingRequestId, setDeletingRequestId] = useState('')
   const [notice, setNotice] = useState('')
@@ -202,7 +205,7 @@ export function FloatingLayersPanel({
     setNotice('')
     try {
       await flushDirtyShots()
-      const response = await createGenerationRequest(shot.shot_id, destination)
+      const response = await createGenerationRequest(shot.shot_id, destination, { provider, mode })
       replaceWithCurrentSelection(response.project)
       await loadRequests(true)
       if (destination === 'codex' && response.codex_prompt) {
@@ -356,6 +359,32 @@ export function FloatingLayersPanel({
           <button type="button" onClick={() => void refreshResults()} disabled={queueLoading}>
             {queueLoading ? 'Refreshing...' : 'Refresh'}
           </button>
+        </div>
+        <div className="floating-queue-config">
+          <label>
+            <span>Backend</span>
+            <select
+              value={provider}
+              disabled={disabled || dispatchingTo !== null || dispatchingAllToCodex}
+              onChange={(event) => setProvider(event.target.value as GenerationProvider)}
+            >
+              <option value="codex">Codex</option>
+              <option value="stable_diffusion">Stable Diffusion</option>
+            </select>
+          </label>
+          <label>
+            <span>Mode</span>
+            <select
+              value={mode}
+              disabled={disabled || dispatchingTo !== null || dispatchingAllToCodex}
+              onChange={(event) => setMode(event.target.value as GenerationMode | '')}
+            >
+              <option value="">Auto (by status)</option>
+              <option value="draft">Draft</option>
+              <option value="clean">Clean</option>
+              <option value="final">Final</option>
+            </select>
+          </label>
         </div>
         <div className="floating-queue-actions">
           <button

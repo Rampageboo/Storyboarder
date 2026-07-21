@@ -196,6 +196,41 @@
   font-size: 8px;
 }
 
+.floating-queue-config {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+  padding-bottom: 7px;
+}
+
+.floating-queue-config label {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  font-size: 8px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--color-muted);
+}
+
+.floating-queue-config select {
+  min-height: 28px;
+  padding: 0 5px;
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  color: var(--color-text);
+  background: color-mix(in srgb, var(--bg-elevated) 78%, transparent);
+  font-size: 9px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.floating-queue-config select:disabled {
+  cursor: default;
+  opacity: 0.6;
+}
+
 .floating-queue-actions {
   display: grid;
   grid-template-columns: 1fr 1fr;
