@@ -24,7 +24,7 @@ Storyboarder is a **Windows desktop-only** storyboard planning app:
 
 - **Shell**: pywebview (EdgeWebView2 window) launched by `python main.py`
 - **Server**: FastAPI + uvicorn on `127.0.0.1:<port>` — internal implementation detail, loopback only, never browser-exposed
-- **Frontend**: React 19 + TypeScript, built with Vite from `frontend/src/`, committed as a prebuilt bundle to `storyboard_tool/web/dist/`
+- **Frontend**: React 19 + TypeScript, built with Vite from `frontend/src/` into `storyboard_tool/web/dist/`. NOTE: `web/dist/` is currently **gitignored** (`.gitignore` line 22) — built locally, NOT committed — which contradicts older docs (architecture doc + this file previously said "committed"). Open question for Owner: intended, or a gitignore mistake affecting Node-less deployment?
 - **3D**: Three.js (pinned vendor copy) + a separately compiled Scene3D workspace bundle
 - **Photoshop integration**: a UXP plugin in `photoshop_uxp_plugin/` talks to `/api/plugin/*` and `/api/bridge/*`
 - **Storage**: projects are folders on disk (`project.json`, `settings.json`, `shots.json`, per-shot PNG/PSD files). No database, no cloud, no network features.
@@ -34,8 +34,8 @@ Non-goals (do not add): browser mode, hosted server, cloud sync, audio, multi-wi
 ## 2. Current state
 
 ```text
-Current working area: generation provider + mode backend (committed on branch feat/generation-provider-mode)
-Last completed task: prior-frame wiring — generation_plan.prior_frame carries the shot's accepted Codex layer (_codex.png) for clean/final img2img. 3 commits on feat/generation-provider-mode: 5085eed docs protocol sync, 9bd2f77 provider+mode feature, b446d3e prior-frame.
+Current working area: generation provider + mode (backend + UI) on branch feat/generation-provider-mode (pushed to origin)
+Last completed task: frontend Backend/Mode selectors on the floating generation panel (FloatingLayersPanel). Commits: 5085eed docs protocol sync, 9bd2f77 provider+mode backend, b446d3e prior-frame, 5dcbd02 context, 2b25276 UI selectors. Frontend build passes (tsc+vite), dist rebuilt locally (gitignored). GUI smoke by Owner still pending.
 Current build/test status: test_generation_requests.py 36 passed. Full suite still has 2 PRE-EXISTING UNRELATED failures (proven via stash-to-HEAD baseline): tests/test_smoke.py::test_open_blender_scene_returns_project_payload (blender mock arity drift) and tests/test_project_document.py::test_create_save_and_reopen_single_file_document (shot .psd not in .sbd archive) — NOT yet fixed.
 ```
 
@@ -58,7 +58,7 @@ Progress (2026-07-21):
 - DONE: `mode` field (draft/clean/final) + per-mode `generation_plan` block. Owner spec 2026-07-21. Default mode derives from shot.status (Draft->draft, In Progress/Review->clean, Approved/Final->final); explicit `mode` overrides. Chosen default profile numbers (tunable, in generation_service._MODE_PROFILES): draft = longest-edge 768, steps 12, cfg 5.0, upscale_to_panel, overwrite_final False; clean = longest-edge 1024, steps 22, cfg 6.5, use_prior_frame_as_reference; final = full panel size, steps 32, cfg 7.0, overwrite_final True. generation_plan carries target_width/height, panel_width/height, steps, cfg_scale, style_hint, use_prior_frame_as_reference, output_policy{preserve_aspect_ratio, upscale_to_panel, overwrite_final}. These are ADVISORY payload guidance — no engine executes them yet.
 - Field mapping (Owner payload -> existing snapshot): target->destination, backend->provider; new: mode, generation_plan, generation_plan.output_policy. Existing snake_case field names NOT renamed.
 - DONE: generation_plan.prior_frame — for clean/final (use_prior_frame_as_reference), the request now carries the shot's accepted Codex layer (_codex.png) as {source, project_relative_path, absolute_path, exists}; null in draft or when no layer exists. SD handoff prompt says to use prior_frame as the img2img base. Advisory: the actual img2img/upscale/overwrite-final execution is still Codex/SD-operator side, not built here.
-- PENDING (UI): React "Send to Codex" provider+mode selector in the generation panel; needs frontend TS + `npm run build` bundle rebuild + manual GUI smoke.
+- DONE (UI): FloatingLayersPanel now has Backend (Codex / Stable Diffusion) + Mode (Auto-by-status / Draft / Clean / Final) dropdowns; Send to Queue/Codex pass provider+mode (Send All to Codex keeps defaults). tsc+vite build pass. PENDING: Owner GUI click-test.
 - Two pre-existing UNRELATED test failures on this branch (not from this work; proven via stash baseline): blender smoke mock arity; project_document .sbd missing shot .psd. Fix separately if desired.
 ```
 
@@ -110,11 +110,12 @@ There is no CI; all validation is local. Python 3.11+, deps in `requirements.txt
 
 ## 5. Hard-won active gotchas
 
-1. **Generated files are committed but never hand-edited.**
-   - `storyboard_tool/web/dist/**` — regenerate with `cd frontend && npm run build`
-   - `storyboard_tool/web/static/runtime/scene3d_workspace.js` — regenerate with `npm run build:workspace`
-   - `storyboard_tool/web/static/vendor/three/**` — pinned vendor, never modify
+1. **Generated bundles are never hand-edited; rebuild after editing `frontend/src/**`.**
+   - `storyboard_tool/web/dist/**` — regenerate with `cd frontend && npm run build`. **Gitignored** (`.gitignore` line 22) — built locally, not committed (contradicts older "committed" docs; flagged for Owner). Do NOT `git add -f` it or change the policy without Owner sign-off.
+   - `storyboard_tool/web/static/runtime/scene3d_workspace.js` — regenerate with `npm run build:workspace`.
+   - `storyboard_tool/web/static/vendor/three/**` — pinned vendor, never modify.
    After editing `frontend/src/**`, rebuild the bundle or the running app won't reflect the change.
+   Also note: `npm run lint` is currently RED on `main` (8 pre-existing `react-hooks/set-state-in-effect` errors in App/Scene2DPanel/ReferenceAssignmentPopover3dApply/FloatingLayersPanel) — not from recent work.
 
 2. **Layering**: routes (`api.py`) → service (`backend_service.py`) → domain (`shot_service.py`, `reference_segments.py`, `project_manager.py`). Domain modules must not import FastAPI. New business logic goes in the service/domain layer, never in routes.
 
