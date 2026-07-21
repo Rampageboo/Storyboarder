@@ -540,6 +540,50 @@ class TestGenerationRequests(unittest.TestCase):
         self.assertIn("clean mode", prompt)
         self.assertIn("generation_plan", prompt)
 
+    def test_clean_mode_references_existing_codex_layer_as_prior_frame(self) -> None:
+        queued = self.client.post(
+            f"/api/shots/{self.shot_id}/generation-requests",
+            json={"destination": "codex"},
+        ).json()["request"]
+        source = self.base / "prior-frame.png"
+        Image.new("RGB", (32, 18), (5, 10, 15)).save(source)
+        project = project_manager.open_project(self.project_root / "project.json")
+        result = generation_service.submit_result(project, queued["request_id"], [str(source)])
+        accepted = _quiet(lambda: self.client.post(
+            f"/api/shots/{self.shot_id}/codex-layer/accept",
+            json={
+                "request_id": queued["request_id"],
+                "result_id": result["result_id"],
+                "artifact_path": result["artifacts"][0]["project_relative_path"],
+            },
+        ))
+        self.assertEqual(accepted.status_code, 200, accepted.text)
+
+        request = self.client.post(
+            f"/api/shots/{self.shot_id}/generation-requests",
+            json={"destination": "codex", "mode": "clean"},
+        ).json()["request"]
+        prior = request["generation_plan"]["prior_frame"]
+        self.assertIsNotNone(prior)
+        self.assertEqual(prior["source"], "codex-layer")
+        self.assertTrue(prior["project_relative_path"].endswith(f"{self.shot_id}_codex.png"))
+        self.assertTrue(prior["exists"])
+
+    def test_draft_mode_never_references_a_prior_frame(self) -> None:
+        request = self.client.post(
+            f"/api/shots/{self.shot_id}/generation-requests",
+            json={"destination": "codex", "mode": "draft"},
+        ).json()["request"]
+        self.assertIsNone(request["generation_plan"]["prior_frame"])
+
+    def test_clean_mode_without_codex_layer_has_null_prior_frame(self) -> None:
+        request = self.client.post(
+            f"/api/shots/{self.shot_id}/generation-requests",
+            json={"destination": "codex", "mode": "clean"},
+        ).json()["request"]
+        self.assertTrue(request["generation_plan"]["use_prior_frame_as_reference"])
+        self.assertIsNone(request["generation_plan"]["prior_frame"])
+
     def test_reconcile_imports_mcp_result_as_needs_review(self) -> None:
         queued = self.client.post(
             f"/api/shots/{self.shot_id}/generation-requests",

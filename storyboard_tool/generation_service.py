@@ -115,6 +115,22 @@ def _build_generation_plan(mode: str, canvas_width: int, canvas_height: int) -> 
     }
 
 
+def _prior_frame_ref(project: Project, path: Path | None) -> dict[str, Any] | None:
+    """Describe an existing accepted Codex layer for use as an img2img base."""
+    if path is None:
+        return None
+    try:
+        rel = path.resolve().relative_to(project.root_path.resolve()).as_posix()
+    except ValueError:
+        rel = ""
+    return {
+        "source": "codex-layer",
+        "project_relative_path": rel,
+        "absolute_path": str(path.resolve()),
+        "exists": path.is_file(),
+    }
+
+
 def _utc_now() -> str:
     return datetime.now(UTC).isoformat(timespec="milliseconds").replace("+00:00", "Z")
 
@@ -540,6 +556,12 @@ def build_request_snapshot(
         "continuity_context": _continuity_context(project, shot),
         "canvas": {"width": canvas_width, "height": canvas_height},
     }
+    generation_plan = _build_generation_plan(mode, canvas_width, canvas_height)
+    generation_plan["prior_frame"] = (
+        _prior_frame_ref(project, shot_assets.get_shot_codex_layer_path(project, shot))
+        if generation_plan["use_prior_frame_as_reference"]
+        else None
+    )
     return {
         "schema_version": SCHEMA_VERSION,
         "request_id": request_id,
@@ -550,7 +572,7 @@ def build_request_snapshot(
         "destination": destination,
         "provider": provider,
         "mode": mode,
-        "generation_plan": _build_generation_plan(mode, canvas_width, canvas_height),
+        "generation_plan": generation_plan,
         "status": "queued",
         "created_at": created_at,
         "updated_at": created_at,
@@ -946,7 +968,8 @@ def codex_handoff_prompt(request_id: str, *, provider: str = "codex", mode: str 
             "Stable Diffusion to render the storyboard image rather than generating it directly. Follow the "
             "request's generation_plan for target size, steps, style, and output policy; build the positive prompt "
             "from compiled_prompt, apply its negative_prompt and every reference, preserve the panel aspect ratio, "
-            "and upscale back to panel size when the plan requests it. Produce the requested number of variants, "
+            "and upscale back to panel size when the plan requests it. If generation_plan.prior_frame is present, "
+            "use it as the img2img base. Produce the requested number of variants, "
             "then submit the image files with storyboard_submit_generation_result. Inspect every matched file in "
             "keyword_assets before generating. Do not edit shots.json directly."
         )
