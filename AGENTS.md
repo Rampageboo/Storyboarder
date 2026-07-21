@@ -171,6 +171,8 @@ Read only modules triggered by the current task:
 
 - Codex MCP thread creation, effort selection, reply, or effort upgrade:
   `docs/ai-workflow/codex-mcp-effort.md`
+- Codex model selection, Spark routing, or Spark escalation:
+  `docs/ai-workflow/codex-model-routing.md`
 - Git mode, status, diff, branch, worktree, commit, push, or handoff:
   `docs/ai-workflow/git-execution.md`
 - Sub-agents, parallel work, specialized tools, or independent verification:

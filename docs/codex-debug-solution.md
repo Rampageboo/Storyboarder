@@ -23,6 +23,10 @@ layers mask each other.
   `~/.codex/sessions/<yyyy>/<mm>/<dd>/rollout-*.jsonl`. The `turn_context`
   line shows the real `model` and `effort` per turn; `token_count` events show
   real usage; `patch_apply_end` events prove it was editing files.
+- **Spark identity check**: Spark is the Codex model
+  `gpt-5.3-codex-spark`, not a separate workflow, tool, or server. If Claude
+  says "Spark" but the rollout's `turn_context.model` is not
+  `gpt-5.3-codex-spark`, then Spark did not actually run.
 - **Check live env vars** in a PowerShell tool call:
   `$env:MCP_TOOL_TIMEOUT`, `$env:CLAUDE_CODE_MCP_TOOL_IDLE_TIMEOUT`.
   Settings-file env changes only apply after a window reload.
@@ -83,6 +87,19 @@ If the current MCP tool accepts nested `config.model_reasoning_effort`, follow
 effort changed without current-environment evidence. Signature of the original
 problem: a long run whose `reasoning_output_tokens` was tiny while it
 mechanically applied patches.
+
+## Symptom 5a: Claude intended Spark, but ordinary Codex ran
+
+Cause: Spark was treated as a label in the prompt instead of a concrete model
+selection. Spark means `gpt-5.3-codex-spark`; prompt text alone does not switch
+models. `codex-reply` also cannot change model mid-thread.
+
+Fix: start a new Codex thread with a model override for
+`gpt-5.3-codex-spark`, or set the environment-specific model knob when the
+current MCP tool shape exposes no model parameter. Verify the next rollout's
+`turn_context.model` before reporting Spark as used. If the model is rejected
+or unavailable, mark Spark `not available` and route to ordinary Codex with the
+lowest adequate effort.
 
 ## Symptom 6: `codex exec` CLI hangs at "Reading additional input from stdin..."
 

@@ -12,6 +12,7 @@ Received brief
 - Goal:
 - Task coordination mode: claude-routed / owner-direct
 - Execution target: Spark / Codex / not available / not applicable
+- Codex model: gpt-5.3-codex-spark / ordinary Codex / unknown / not applicable
 - Capability routing:
   - Sub-agents: allowed / required / not useful / prohibited
   - Specialized tools expected:
@@ -74,6 +75,7 @@ B decision; ask the Owner directly only for category C.
 Failure Packet
 - Task:
 - Execution target:
+- Codex model:
 - Assigned effort:
 - Failing command:
 - Exact error:
@@ -97,6 +99,7 @@ Failure Packet
 Effort Upgrade Handoff Packet
 - Previous thread ID:
 - Previous execution target: Spark / Codex / not available
+- Previous Codex model:
 - Previous configured effort: verified / assumed / unknown
 - Original task:
 - Git execution environment:
@@ -127,6 +130,7 @@ handoff proves stale.
 ```text
 Review Packet
 - Execution target:
+- Codex model:
 - Effort used:
 - Original goal:
 - Summary of implementation:
@@ -165,6 +169,7 @@ Technical Summary
 - Completed:
 - Task coordination mode: claude-routed / owner-direct
 - Execution target: Spark / Codex / not available / not applicable
+- Codex model: gpt-5.3-codex-spark / ordinary Codex / unknown / not applicable
 - Capabilities used:
   - Sub-agents:
   - Specialized tools:
