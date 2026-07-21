@@ -10,8 +10,8 @@
 ```text
 Last updated: 2026-07-21
 Last verified branch: main
-Last verified commit: d8e7023 (Codex batch/pull + inspector-collapse & queue UI)
-Updated by: Claude
+Last verified commit: cb69ae4
+Updated by: Codex (owner-direct)
 Context confidence: current
 
 Git execution environments:
@@ -34,19 +34,32 @@ Non-goals (do not add): browser mode, hosted server, cloud sync, audio, multi-wi
 ## 2. Current state
 
 ```text
-Current working area: AI collaboration protocol files (this update)
-Last completed task: installed AI Collaboration Protocol v4 (AGENTS/CLAUDE/docs/ai-workflow)
-Current build/test status: not re-run this round — no application code changed
+Current working area: generation provider + mode (draft/clean/final) precision strategy — backend
+Last completed task: `provider` (codex/stable_diffusion) + `mode` (draft/clean/final) threaded end-to-end; per-mode `generation_plan` block (target size, steps, cfg, style_hint, output_policy) added to the request payload; provider+mode-aware Codex handoff prompt
+Current build/test status: full suite 714 passed, 1 skipped, 2 failed. Both failures PRE-EXISTING and UNRELATED (proven via stash-to-HEAD baseline): tests/test_smoke.py::test_open_blender_scene_returns_project_payload (blender mock arity drift) and tests/test_project_document.py::test_create_save_and_reopen_single_file_document (shot .psd not in .sbd archive). generation tests: test_generation_requests.py 33 passed.
 ```
 
-## 3. Pending decision / next fork
+## 3. Generation handoff decision / next fork
 
 ```text
-Pending decision: whether to wire Codex into Storyboarder generation flows
-Why it matters: mcp_server.py / generation_service.py exist for Codex handoffs but Owner deferred integration
-Options: keep deferred / begin integration
-Recommended option: keep deferred until Owner asks ("暂时不要codex接入")
-Owner input needed: yes
+Decision: "Send to Codex" remains the single handoff to the Codex agent. Stable Diffusion is not a separate receiver; it is a tool/workflow that Codex may operate after receiving the task.
+Backend choices: explicit only - `codex` or `stable_diffusion`. Do not add `auto`.
+Workflow meaning:
+- `backend=codex`: Codex directly handles image generation.
+- `backend=stable_diffusion`: Codex prepares prompt/reference/size/seed settings and operates SD to generate the image.
+Status/detail strategy: generation precision should follow shot/status/mode. Draft should favor speed with proportional downscale, low resolution, possible upscale back to panel size, and rough/line-art storyboard output. Cleaner/final statuses can increase resolution, steps, refinement, and polish.
+Next fork: implement provider/mode fields in the generation request payload and UI selector while preserving the user-facing "Send to Codex" handoff semantics.
+Owner input needed: no for the above semantics; yes only for later SD-specific runtime/configuration choices.
+
+Progress (2026-07-21):
+- DONE: `provider` field on the request snapshot (generation_service PROVIDERS={codex,stable_diffusion}, default codex, validated before any FS write). Backend Spark-authored slice, kept.
+- DONE: `provider` threaded end-to-end — GenerationRequestCreateRequest.provider, api create-generation-request route, method_create_generation_request(shot_id, destination, provider). Default codex, backward compatible.
+- DONE: codex_handoff_prompt(request_id, *, provider="codex", mode="") is provider+mode-aware; stable_diffusion variant instructs Codex to OPERATE Stable Diffusion per the request's generation_plan (build prompt from compiled_prompt, apply negative_prompt+references, preserve aspect, upscale back to panel) instead of generating directly.
+- DONE: `mode` field (draft/clean/final) + per-mode `generation_plan` block. Owner spec 2026-07-21. Default mode derives from shot.status (Draft->draft, In Progress/Review->clean, Approved/Final->final); explicit `mode` overrides. Chosen default profile numbers (tunable, in generation_service._MODE_PROFILES): draft = longest-edge 768, steps 12, cfg 5.0, upscale_to_panel, overwrite_final False; clean = longest-edge 1024, steps 22, cfg 6.5, use_prior_frame_as_reference; final = full panel size, steps 32, cfg 7.0, overwrite_final True. generation_plan carries target_width/height, panel_width/height, steps, cfg_scale, style_hint, use_prior_frame_as_reference, output_policy{preserve_aspect_ratio, upscale_to_panel, overwrite_final}. These are ADVISORY payload guidance — no engine executes them yet.
+- Field mapping (Owner payload -> existing snapshot): target->destination, backend->provider; new: mode, generation_plan, generation_plan.output_policy. Existing snake_case field names NOT renamed.
+- PENDING (execution): nothing consumes generation_plan yet — Codex/SD operator reads it at handoff. Actual img2img prior-frame referencing + upscale + overwrite-final behavior is execution-side, not built.
+- PENDING (UI): React "Send to Codex" provider+mode selector in the generation panel; needs frontend TS + `npm run build` bundle rebuild + manual GUI smoke.
+- Two pre-existing UNRELATED test failures on this branch (not from this work; proven via stash baseline): blender smoke mock arity; project_document .sbd missing shot .psd. Fix separately if desired.
 ```
 
 ## 4. What's built — module map

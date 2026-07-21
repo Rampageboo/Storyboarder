@@ -131,6 +131,8 @@ class ShotUpdateRequest(BaseModel):
 
 class GenerationRequestCreateRequest(BaseModel):
     destination: str = "queue"
+    provider: str = "codex"
+    mode: str = ""
 
 
 class GenerationCandidateAcceptRequest(BaseModel):

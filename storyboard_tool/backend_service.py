@@ -534,13 +534,17 @@ class StoryboardBackendService(ExportServiceMixin):
         app_state._autosave(self.app)
         return app_state._project_payload(project, self.app.state.dirty)
 
-    def method_create_generation_request(self, shot_id: str, destination: str) -> dict[str, Any]:
+    def method_create_generation_request(
+        self, shot_id: str, destination: str, provider: str = "codex", mode: str = ""
+    ) -> dict[str, Any]:
         project = app_state._require_project(self.app)
         shot = app_state._find_shot(project, shot_id)
         request: dict[str, Any] | None = None
         try:
             with project_transaction.mutate_project(project):
-                request = generation_service.create_request(project, shot, destination)
+                request = generation_service.create_request(
+                    project, shot, destination, provider=provider, mode=mode
+                )
                 shot.generation_state.update({
                     "execution_status": "queued",
                     "review_status": "unreviewed",
@@ -562,7 +566,11 @@ class StoryboardBackendService(ExportServiceMixin):
             "project": app_state._project_payload(project, self.app.state.dirty),
         }
         if request["destination"] == "codex":
-            response["codex_prompt"] = generation_service.codex_handoff_prompt(request["request_id"])
+            response["codex_prompt"] = generation_service.codex_handoff_prompt(
+                request["request_id"],
+                provider=str(request.get("provider") or "codex"),
+                mode=str(request.get("mode") or ""),
+            )
         return response
 
     def method_create_codex_batch_requests(self) -> dict[str, Any]:

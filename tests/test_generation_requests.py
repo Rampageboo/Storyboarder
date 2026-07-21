@@ -429,6 +429,117 @@ class TestGenerationRequests(unittest.TestCase):
         request_dir = self.project_root / "generation" / "requests"
         self.assertFalse(request_dir.exists() and any(request_dir.iterdir()))
 
+    def test_generation_request_defaults_provider_to_codex(self) -> None:
+        project = project_manager.open_project(self.project_root / "project.json")
+        shot = project.shots[0]
+        snapshot = generation_service.build_request_snapshot(project, shot, "queue")
+        self.assertEqual(snapshot["provider"], "codex")
+
+    def test_generation_request_records_explicit_provider(self) -> None:
+        project = project_manager.open_project(self.project_root / "project.json")
+        shot = project.shots[0]
+        snapshot = generation_service.build_request_snapshot(
+            project,
+            shot,
+            "codex",
+            provider="stable_diffusion",
+        )
+        self.assertEqual(snapshot["provider"], "stable_diffusion")
+
+    def test_invalid_provider_is_rejected_without_writing_request(self) -> None:
+        project = project_manager.open_project(self.project_root / "project.json")
+        shot = project.shots[0]
+        with self.assertRaises(ValueError):
+            generation_service.create_request(project, shot, "codex", provider="midjourney")
+        request_dir = self.project_root / "generation" / "requests"
+        self.assertFalse(any(request_dir.glob("*.json")))
+
+    def test_send_to_codex_with_stable_diffusion_provider_requests_sd_operation(self) -> None:
+        response = _quiet(lambda: self.client.post(
+            f"/api/shots/{self.shot_id}/generation-requests",
+            json={"destination": "codex", "provider": "stable_diffusion"},
+        ))
+        self.assertEqual(response.status_code, 200, response.text)
+        body = response.json()
+        self.assertEqual(body["request"]["provider"], "stable_diffusion")
+        prompt = body["codex_prompt"]
+        self.assertIn("Stable Diffusion", prompt)
+        self.assertIn(body["request"]["request_id"], prompt)
+
+    def test_send_to_codex_defaults_to_codex_provider(self) -> None:
+        response = _quiet(lambda: self.client.post(
+            f"/api/shots/{self.shot_id}/generation-requests",
+            json={"destination": "codex"},
+        ))
+        self.assertEqual(response.status_code, 200, response.text)
+        body = response.json()
+        self.assertEqual(body["request"]["provider"], "codex")
+        self.assertNotIn("Stable Diffusion", body["codex_prompt"])
+
+    def test_invalid_provider_via_api_is_rejected_without_writing_request(self) -> None:
+        response = _quiet(lambda: self.client.post(
+            f"/api/shots/{self.shot_id}/generation-requests",
+            json={"destination": "codex", "provider": "midjourney"},
+        ))
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.json()["code"], "GENERATION_REQUEST_FAILED")
+        request_dir = self.project_root / "generation" / "requests"
+        self.assertFalse(request_dir.exists() and any(request_dir.iterdir()))
+
+    def test_generation_mode_defaults_to_draft_for_draft_status(self) -> None:
+        self.client.patch(f"/api/shots/{self.shot_id}", json={"status": "Draft"})
+        request = self.client.post(
+            f"/api/shots/{self.shot_id}/generation-requests",
+            json={"destination": "codex"},
+        ).json()["request"]
+        self.assertEqual(request["mode"], "draft")
+        plan = request["generation_plan"]
+        self.assertEqual(plan["target_width"], 768)
+        self.assertEqual(plan["target_height"], 432)
+        self.assertEqual(plan["steps"], 12)
+        self.assertTrue(plan["output_policy"]["upscale_to_panel"])
+        self.assertFalse(plan["output_policy"]["overwrite_final"])
+
+    def test_generation_mode_defaults_to_final_for_final_status(self) -> None:
+        self.client.patch(f"/api/shots/{self.shot_id}", json={"status": "Final"})
+        request = self.client.post(
+            f"/api/shots/{self.shot_id}/generation-requests",
+            json={"destination": "codex"},
+        ).json()["request"]
+        self.assertEqual(request["mode"], "final")
+        plan = request["generation_plan"]
+        self.assertEqual((plan["target_width"], plan["target_height"]), (1920, 1080))
+        self.assertEqual(plan["steps"], 32)
+
+    def test_explicit_mode_overrides_shot_status(self) -> None:
+        self.client.patch(f"/api/shots/{self.shot_id}", json={"status": "Draft"})
+        request = self.client.post(
+            f"/api/shots/{self.shot_id}/generation-requests",
+            json={"destination": "codex", "mode": "final"},
+        ).json()["request"]
+        self.assertEqual(request["mode"], "final")
+
+    def test_invalid_mode_is_rejected_without_writing_request(self) -> None:
+        response = _quiet(lambda: self.client.post(
+            f"/api/shots/{self.shot_id}/generation-requests",
+            json={"destination": "codex", "mode": "ultra"},
+        ))
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.json()["code"], "GENERATION_REQUEST_FAILED")
+        request_dir = self.project_root / "generation" / "requests"
+        self.assertFalse(request_dir.exists() and any(request_dir.iterdir()))
+
+    def test_stable_diffusion_handoff_prompt_names_the_mode(self) -> None:
+        body = self.client.post(
+            f"/api/shots/{self.shot_id}/generation-requests",
+            json={"destination": "codex", "provider": "stable_diffusion", "mode": "clean"},
+        ).json()
+        self.assertEqual(body["request"]["mode"], "clean")
+        prompt = body["codex_prompt"]
+        self.assertIn("Stable Diffusion", prompt)
+        self.assertIn("clean mode", prompt)
+        self.assertIn("generation_plan", prompt)
+
     def test_reconcile_imports_mcp_result_as_needs_review(self) -> None:
         queued = self.client.post(
             f"/api/shots/{self.shot_id}/generation-requests",

@@ -724,7 +724,9 @@ def create_app(base_dir: Path, bridge_port: int = 8000) -> FastAPI:
 
     @app.post("/api/shots/{shot_id}/generation-requests")
     def create_generation_request(shot_id: str, request: GenerationRequestCreateRequest) -> dict[str, Any]:
-        return _svc().method_create_generation_request(shot_id, request.destination)
+        return _svc().method_create_generation_request(
+            shot_id, request.destination, request.provider, request.mode
+        )
 
     @app.post("/api/generation/requests/codex-batch")
     def create_codex_batch_requests() -> dict[str, Any]:
