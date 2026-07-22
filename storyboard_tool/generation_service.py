@@ -631,6 +631,24 @@ def create_request(
     return request
 
 
+def clear_pending_queue_requests(project: Project, shot_id: str) -> list[str]:
+    """Remove a shot's pending (queued) queue-destination requests.
+
+    Dispatching a shot to Codex supersedes its staged queue entry, so the queue
+    should no longer list it. Codex-destination requests are left untouched (they
+    track the handoff and its results). Returns the removed request ids.
+    """
+    removed: list[str] = []
+    for row in list_requests(project, shot_id=shot_id, destination="queue"):
+        if row.get("status") != "queued":
+            continue
+        request_id = str(row.get("request_id") or "")
+        if request_id:
+            delete_request(project, request_id)
+            removed.append(request_id)
+    return removed
+
+
 def codex_batch_handoff_prompt(request_ids: list[str]) -> str:
     cleaned_ids = [_validate_id(request_id, "request id") for request_id in request_ids]
     if not cleaned_ids:

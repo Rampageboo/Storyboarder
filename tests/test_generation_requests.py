@@ -584,6 +584,22 @@ class TestGenerationRequests(unittest.TestCase):
         self.assertTrue(request["generation_plan"]["use_prior_frame_as_reference"])
         self.assertIsNone(request["generation_plan"]["prior_frame"])
 
+    def test_send_to_codex_removes_shot_pending_queue_request(self) -> None:
+        self.client.post(f"/api/shots/{self.shot_id}/generation-requests", json={"destination": "queue"})
+        before = self.client.get(f"/api/generation/requests?shot_id={self.shot_id}").json()["requests"]
+        self.assertTrue(any(row["destination"] == "queue" for row in before))
+
+        self.client.post(f"/api/shots/{self.shot_id}/generation-requests", json={"destination": "codex"})
+        after = self.client.get(f"/api/generation/requests?shot_id={self.shot_id}").json()["requests"]
+        self.assertFalse(any(row["destination"] == "queue" for row in after))
+        self.assertTrue(any(row["destination"] == "codex" for row in after))
+
+    def test_send_all_to_codex_clears_the_queue(self) -> None:
+        self.client.post(f"/api/shots/{self.shot_id}/generation-requests", json={"destination": "queue"})
+        self.client.post("/api/generation/requests/codex-batch")
+        rows = self.client.get("/api/generation/requests").json()["requests"]
+        self.assertFalse(any(row["destination"] == "queue" for row in rows))
+
     def test_reconcile_imports_mcp_result_as_needs_review(self) -> None:
         queued = self.client.post(
             f"/api/shots/{self.shot_id}/generation-requests",

@@ -560,6 +560,9 @@ class StoryboardBackendService(ExportServiceMixin):
         except (OSError, ValueError) as exc:
             raise app_error(AppErrorCode.GENERATION_REQUEST_FAILED, str(exc)) from exc
         assert request is not None
+        # Dispatching a shot to Codex removes its pending queue (staging) entry.
+        if request["destination"] == "codex":
+            generation_service.clear_pending_queue_requests(project, shot_id)
         response = {
             "request": request,
             "requests": generation_service.list_requests(project, shot_id=shot_id),
@@ -589,6 +592,9 @@ class StoryboardBackendService(ExportServiceMixin):
                 app_state._autosave(self.app)
         except (OSError, ValueError) as exc:
             raise app_error(AppErrorCode.GENERATION_REQUEST_FAILED, str(exc)) from exc
+        # Sending every shot to Codex clears the pending queue (staging) entries.
+        for shot in project.shots:
+            generation_service.clear_pending_queue_requests(project, shot.shot_id)
         return {
             "requests": generation_service.list_requests(project),
             "project": app_state._project_payload(project, self.app.state.dirty),
