@@ -15,6 +15,7 @@ _DOWNLOAD_URLS: dict[str, str] = {
     "shot_list": "/api/export/shot-list",
     "timing": "/api/export/timing",
     "contact_sheet": "/api/export/contact-sheet",
+    "animatic": "/api/export/animatic",
 }
 
 _MEDIA_TYPES: dict[str, str] = {
@@ -22,6 +23,7 @@ _MEDIA_TYPES: dict[str, str] = {
     "shot_list": "text/csv",
     "timing": "application/json",
     "contact_sheet": "image/png",
+    "animatic": "video/mp4",
 }
 
 _FILENAMES: dict[str, str] = {
@@ -29,6 +31,7 @@ _FILENAMES: dict[str, str] = {
     "shot_list": "shot_list.csv",
     "timing": "timing.json",
     "contact_sheet": "contact_sheet.png",
+    "animatic": "animatic.mp4",
 }
 
 
@@ -73,6 +76,40 @@ class ExportServiceMixin:
             logger.exception("Contact sheet export failed")
             raise app_error(AppErrorCode.EXPORT_FAILED, str(exc), status=500) from exc
         return {"path": str(output_path), "download_url": _DOWNLOAD_URLS["contact_sheet"]}
+
+    def method_export_animatic(
+        self,
+        *,
+        fps: int = 24,
+        seconds_per_board: float | None = None,
+        captions: bool = False,
+    ) -> dict[str, str]:
+        project = app_state._require_project(self.app)
+        try:
+            output_path = export_service.export_animatic(
+                project,
+                fps=fps,
+                seconds_per_board=seconds_per_board,
+                captions=captions,
+            )
+        except ValueError as exc:
+            raise app_error(AppErrorCode.EXPORT_FAILED, str(exc)) from exc
+        except Exception as exc:
+            logger.exception("Animatic export failed")
+            raise app_error(AppErrorCode.EXPORT_FAILED, str(exc), status=500) from exc
+        return {"path": str(output_path), "download_url": _DOWNLOAD_URLS["animatic"]}
+
+    def method_download_animatic(self) -> dict[str, str]:
+        project = app_state._require_project(self.app)
+        try:
+            output_path = export_service.check_export_exists(project, "animatic")
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        return {
+            "path": str(output_path),
+            "media_type": _MEDIA_TYPES["animatic"],
+            "filename": _FILENAMES["animatic"],
+        }
 
     def method_export_image_sequence(self) -> dict[str, str]:
         project = app_state._require_project(self.app)

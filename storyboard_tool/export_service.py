@@ -21,6 +21,7 @@ _OUTPUT_PATHS: dict[str, str] = {
     "timing": "timing.json",
     "contact_sheet": "contact_sheet.png",
     "image_sequence": "image_sequence",
+    "animatic": "animatic.mp4",
 }
 
 
@@ -69,3 +70,22 @@ def export_contact_sheet(project: Project) -> Path:
 def export_image_sequence(project: Project) -> Path:
     output_dir = resolve_output_path(project, "image_sequence")
     return _export_image_sequence(project, output_dir)
+
+
+def export_animatic(
+    project: Project,
+    *,
+    fps: int = 24,
+    seconds_per_board: float | None = None,
+    captions: bool = False,
+) -> Path:
+    from .video_export import export_animatic as _export_animatic
+
+    output_path = resolve_output_path(project, "animatic")
+    return _export_animatic(
+        project,
+        output_path,
+        fps=fps,
+        seconds_per_board=seconds_per_board,
+        captions=captions,
+    )

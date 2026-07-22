@@ -179,6 +179,13 @@ class PdfExportRequest(BaseModel):
     layout: str = "two_per_page"
 
 
+class AnimaticExportRequest(BaseModel):
+    fps: int = 24
+    # None: hold each board for its own duration_seconds. Otherwise a global override.
+    seconds_per_board: float | None = None
+    captions: bool = False
+
+
 class SettingsUpdateRequest(BaseModel):
     photoshop_path: str | None = None
     blender_path: str | None = None
