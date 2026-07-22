@@ -168,10 +168,18 @@ def _refresh_project_from_disk(app: FastAPI) -> Project:
 
 
 def _autosave(app: FastAPI) -> None:
+    """Persist metadata after a mutation, but defer the expensive .sbd pack.
+
+    Packing a single-file document re-zips the whole project, which is too slow to
+    run on every edit. The working tree is kept current here (cheap); the .sbd is
+    flushed by periodic autosave, manual save (Ctrl+S / Save), and save-on-close.
+    For a plain folder project there is nothing to pack, so the metadata write is
+    already the durable save and the project is not left dirty.
+    """
     project = _require_project(app)
-    project_manager.save_project(project)
+    project_manager.save_project(project, flush_document=False)
     app.state.project_disk_mtime = project_manager.project_disk_mtime(project)
-    app.state.dirty = False
+    app.state.dirty = bool(project.document_path)
 
 
 def _dialog_initial_dir(app: FastAPI, kind: str) -> str:

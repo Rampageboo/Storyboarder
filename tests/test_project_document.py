@@ -95,3 +95,38 @@ def test_document_api_create_scene_and_reopen_without_rewriting_on_open(
     assert reopened.status_code == 200, reopened.text
     assert reopened.json()["name"] == "API Film"
     assert document.read_bytes() == before_open
+
+
+def test_mutations_defer_sbd_pack_until_save(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(project_document.tempfile, "tempdir", str(tmp_path))
+    document = tmp_path / "Deferred.sbd"
+    app_dir = tmp_path / "app"
+    app_dir.mkdir()
+    client = TestClient(api_module.create_app(app_dir))
+    assert client.post("/api/project/new", json={"path": str(document)}).status_code == 200
+
+    added = client.post("/api/shots")
+    assert added.status_code == 200, added.text
+    shot_id = added.json()["shot"]["shot_id"]
+
+    # Interactive autosave keeps the working tree current but DEFERS the .sbd pack.
+    with zipfile.ZipFile(document) as archive:
+        assert not any(f"shots/{shot_id}/" in name for name in archive.namelist())
+
+    # Manual save flushes the document.
+    assert client.post("/api/project/save").status_code == 200
+    with zipfile.ZipFile(document) as archive:
+        assert any(f"shots/{shot_id}/" in name for name in archive.namelist())
+
+
+def test_autosave_interval_setting_persists(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(project_document.tempfile, "tempdir", str(tmp_path))
+    document = tmp_path / "Interval.sbd"
+    app_dir = tmp_path / "app-interval"
+    app_dir.mkdir()
+    client = TestClient(api_module.create_app(app_dir))
+    assert client.post("/api/project/new", json={"path": str(document)}).status_code == 200
+
+    resp = client.patch("/api/project/settings", json={"autosave_interval_minutes": 10})
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["settings"]["autosave_interval_minutes"] == 10

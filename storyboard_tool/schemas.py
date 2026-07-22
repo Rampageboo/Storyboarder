@@ -187,6 +187,7 @@ class SettingsUpdateRequest(BaseModel):
     canvas_height: int | None = None
     apply_canvas_size_to_blank_shots: bool | None = None
     preheat_photoshop_on_open: bool | None = None
+    autosave_interval_minutes: int | None = None
     character_bible_prompt: str | None = None
     scene3d: dict[str, Any] | None = None
     reference_video_path: str | None = None

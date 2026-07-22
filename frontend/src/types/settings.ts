@@ -28,6 +28,7 @@ export interface ProjectSettings {
   canvas_height?: number
   apply_canvas_size_to_blank_shots?: boolean
   preheat_photoshop_on_open?: boolean
+  autosave_interval_minutes?: number
   character_bible_prompt?: string
   scene3d?: Record<string, unknown>
   reference_video_path?: string
@@ -52,6 +53,7 @@ export interface SettingsUpdate {
   canvas_height?: number | null
   apply_canvas_size_to_blank_shots?: boolean | null
   preheat_photoshop_on_open?: boolean | null
+  autosave_interval_minutes?: number | null
   character_bible_prompt?: string | null
   scene3d?: Record<string, unknown> | null
   reference_video_path?: string | null

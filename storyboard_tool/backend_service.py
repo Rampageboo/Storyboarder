@@ -1021,6 +1021,12 @@ class StoryboardBackendService(ExportServiceMixin):
             # TODO(preheat-photoshop): wire this stored startup preference to a lightweight
             # Photoshop warmup hook if one is added; do not launch Photoshop from settings writes.
             project.settings["preheat_photoshop_on_open"] = bool(data.get("preheat_photoshop_on_open"))
+        if data.get("autosave_interval_minutes") is not None:
+            try:
+                minutes = int(data["autosave_interval_minutes"])
+            except (TypeError, ValueError):
+                minutes = 5
+            project.settings["autosave_interval_minutes"] = min(60, max(1, minutes))
         if "character_bible_prompt" in data:
             project.settings["character_bible_prompt"] = str(data.get("character_bible_prompt") or "").strip()
         if "scene3d" in data:

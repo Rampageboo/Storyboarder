@@ -15,6 +15,7 @@ import { ProjectProvider } from './state/ProjectContext'
 import { useProject } from './state/useProject'
 import { LiveBridgeProvider } from './state/LiveBridgeContext'
 import { useGlobalShortcuts } from './hooks/useGlobalShortcuts'
+import { useAutosave } from './hooks/useAutosave'
 import type { ProjectPathRequest } from './types'
 import './App.css'
 
@@ -304,6 +305,7 @@ function AppInner() {
   const [inspectorCollapsed, setInspectorCollapsed] = useState(false)
   const uiReadyReportedRef = useRef(false)
   useGlobalShortcuts()
+  useAutosave()
 
   const themeVars: CSSProperties = {
     '--thumb-empty-bg': project?.settings?.canvas_background_color || undefined,

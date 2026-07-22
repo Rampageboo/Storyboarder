@@ -240,7 +240,15 @@ def _open_expanded_project(project_json_path: Path) -> Project:
     return project
 
 
-def save_project(project: Project) -> None:
+def save_project(project: Project, *, flush_document: bool = True) -> None:
+    """Persist the project.
+
+    Metadata (project.json/shots.json/settings) is always written to the working
+    tree; it is cheap and keeps the tree current for the plugin and crash recovery.
+    ``flush_document`` additionally packs a single-file ``.sbd`` document — the
+    expensive step. Interactive autosave defers it (``flush_document=False``) and
+    relies on periodic autosave, manual save, and save-on-close to flush.
+    """
     with PROJECT_LOCK:
         _ensure_project_dirs(project.root_path)
         if project.settings.get("backup_on_save", True):
@@ -252,7 +260,7 @@ def save_project(project: Project) -> None:
         # even if another thread mutates project.shots between the two writes.
         save_shots(project.root_path, list(project.shots))
         save_settings(project)
-        if project.document_path:
+        if flush_document and project.document_path:
             project_document.pack_document(project.root_path, project.document_path)
 
 
