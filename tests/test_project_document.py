@@ -130,3 +130,19 @@ def test_autosave_interval_setting_persists(tmp_path: Path, monkeypatch: pytest.
     resp = client.patch("/api/project/settings", json={"autosave_interval_minutes": 10})
     assert resp.status_code == 200, resp.text
     assert resp.json()["settings"]["autosave_interval_minutes"] == 10
+
+
+def test_backups_are_not_packed_into_sbd(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(project_document.tempfile, "tempdir", str(tmp_path))
+    document = tmp_path / "NoBackups.sbd"
+    project = project_manager.create_document(document, canvas_width=1280, canvas_height=720)
+    project_manager.add_shot(project)
+    project_manager.save_project(project)  # backup_on_save default True -> writes backups/
+    project_manager.add_shot(project)
+    project_manager.save_project(project)
+
+    # The working tree keeps local recovery snapshots...
+    assert any((project.root_path / "backups").glob("shots_*.json"))
+    # ...but the shared single-file document never embeds them.
+    with zipfile.ZipFile(document) as archive:
+        assert not any(name.startswith("backups/") for name in archive.namelist())

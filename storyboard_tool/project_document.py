@@ -28,6 +28,11 @@ _STORED_SUFFIXES = frozenset({
 })
 _PACK_COMPRESS_LEVEL = 1
 
+# Top-level working-tree dirs never embedded in the shared .sbd. `backups/` is a
+# local, write-only recovery snapshot set (the app never reads it back); packing
+# it bloats the document and slows every save.
+_UNPACKED_DIRS = frozenset({"backups"})
+
 
 def create_working_root(document_path: Path) -> Path:
     stem = document_path.stem.strip() or "Storyboard"
@@ -89,12 +94,15 @@ def pack_document(working_root: Path, document_path: Path) -> None:
             for path in sorted(root.rglob("*")):
                 if not path.is_file() or path.is_symlink():
                     continue
+                relative = path.relative_to(root)
+                if relative.parts and relative.parts[0] in _UNPACKED_DIRS:
+                    continue
                 compress_type = (
                     zipfile.ZIP_STORED
                     if path.suffix.lower() in _STORED_SUFFIXES
                     else zipfile.ZIP_DEFLATED
                 )
-                archive.write(path, path.relative_to(root).as_posix(), compress_type=compress_type)
+                archive.write(path, relative.as_posix(), compress_type=compress_type)
         with temporary.open("r+b") as stream:
             stream.flush()
             os.fsync(stream.fileno())
