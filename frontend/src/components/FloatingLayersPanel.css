@@ -196,14 +196,26 @@
   font-size: 8px;
 }
 
-.floating-queue-config {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 6px;
-  padding-bottom: 7px;
+.floating-codex-confirm {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  margin-bottom: 7px;
+  padding: 8px;
+  border: 1px solid color-mix(in srgb, var(--color-accent) 45%, var(--color-border));
+  border-radius: 7px;
+  background: color-mix(in srgb, var(--color-accent) 7%, var(--bg-elevated));
 }
 
-.floating-queue-config label {
+.floating-codex-confirm-title {
+  font-size: 10px;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--color-text);
+}
+
+.floating-codex-field {
   display: flex;
   flex-direction: column;
   gap: 3px;
@@ -214,7 +226,7 @@
   color: var(--color-muted);
 }
 
-.floating-queue-config select {
+.floating-codex-field select {
   min-height: 28px;
   padding: 0 5px;
   border: 1px solid var(--color-border);
@@ -226,7 +238,47 @@
   cursor: pointer;
 }
 
-.floating-queue-config select:disabled {
+.floating-codex-field select:disabled {
+  cursor: default;
+  opacity: 0.6;
+}
+
+.floating-codex-mode {
+  margin: 0;
+  font-size: 9px;
+  line-height: 1.35;
+  color: color-mix(in srgb, var(--color-text) 84%, var(--color-muted));
+}
+
+.floating-codex-mode strong {
+  color: var(--color-text);
+  text-transform: capitalize;
+}
+
+.floating-codex-confirm-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+}
+
+.floating-codex-confirm-actions button {
+  min-height: 30px;
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  color: var(--color-text);
+  background: color-mix(in srgb, var(--bg-elevated) 78%, transparent);
+  font-size: 9px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.floating-codex-confirm-actions .queue-primary {
+  border-color: color-mix(in srgb, var(--color-accent) 60%, var(--color-border));
+  color: #120d05;
+  background: var(--color-accent);
+}
+
+.floating-codex-confirm-actions button:disabled {
   cursor: default;
   opacity: 0.6;
 }
