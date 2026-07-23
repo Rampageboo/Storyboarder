@@ -1,0 +1,135 @@
+.board-view-toggle {
+  display: flex;
+  gap: 4px;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.board-view-toggle button {
+  padding: 3px 12px;
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--color-muted);
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.board-view-toggle button.is-active {
+  color: var(--color-text);
+  background: color-mix(in srgb, var(--color-accent) 18%, transparent);
+  border-color: color-mix(in srgb, var(--color-accent) 55%, var(--color-border));
+}
+
+.board-grid {
+  flex: 1 1 0;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
+  gap: 12px;
+  padding: 14px;
+  align-content: start;
+}
+
+.board-grid-tile {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 6px;
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--bg-elevated) 70%, transparent);
+  color: var(--color-text);
+  cursor: pointer;
+  text-align: left;
+}
+
+.board-grid-tile.is-selected {
+  border-color: var(--color-accent);
+  box-shadow: 0 0 0 1px var(--color-accent);
+}
+
+.board-grid-thumb {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  border-radius: 5px;
+  overflow: hidden;
+  background: var(--thumb-empty-bg, #1b1d22);
+}
+
+.board-grid-index {
+  position: absolute;
+  left: 5px;
+  top: 5px;
+  padding: 1px 6px;
+  border-radius: 4px;
+  font-size: 10px;
+  font-weight: 700;
+  color: #fff;
+  background: rgba(0, 0, 0, 0.55);
+}
+
+.board-grid-dirty {
+  position: absolute;
+  right: 6px;
+  top: 4px;
+  color: var(--color-accent);
+  font-size: 12px;
+}
+
+.board-grid-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.board-grid-label {
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.board-grid-sub {
+  display: flex;
+  justify-content: space-between;
+  font-size: 10px;
+  color: var(--color-muted);
+}
+
+.board-grid-add {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 132px;
+  border: 1px dashed var(--color-border);
+  border-radius: 8px;
+  background: transparent;
+  color: var(--color-muted);
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.board-grid-add:hover:not(:disabled) {
+  color: var(--color-text);
+  border-color: var(--color-accent);
+}
+
+.board-grid-add:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.board-grid-add-plus {
+  font-size: 26px;
+  line-height: 1;
+}

@@ -265,21 +265,44 @@ export function BoardStrip() {
     return () => window.clearTimeout(timer)
   }, [project?.project_json_path, selectedShotId, selectedIndex])
 
-  // Convert vertical mouse-wheel delta to horizontal scroll. Horizontal trackpad
-  // deltas are handled by the browser natively on the overflow-x container.
-  // Using passive:true lets the browser composite without waiting for this handler,
-  // which eliminates the jank that the previous passive:false approach caused.
+  // Convert vertical mouse-wheel delta to horizontal scroll. A raw
+  // `scrollLeft += deltaY` jumps a full notch per event, which reads as stepped.
+  // Instead accumulate a target and ease toward it each frame for smooth glide.
+  // Horizontal trackpad deltas keep scrolling natively (passive:true, no jank).
   useEffect(() => {
     const viewport = viewportRef.current
     if (!viewport) return
+    let raf = 0
+    let target = viewport.scrollLeft
+    let animating = false
+    const tick = () => {
+      const diff = target - viewport.scrollLeft
+      if (Math.abs(diff) < 0.5) {
+        viewport.scrollLeft = target
+        animating = false
+        raf = 0
+        return
+      }
+      viewport.scrollLeft += diff * 0.22
+      raf = requestAnimationFrame(tick)
+    }
     const onWheel = (e: WheelEvent) => {
       if (viewport.scrollWidth <= viewport.clientWidth) return
       // Only intercept vertical-dominant events; horizontal (trackpad) scroll natively.
       if (Math.abs(e.deltaX) >= Math.abs(e.deltaY)) return
-      viewport.scrollLeft += e.deltaY
+      const max = viewport.scrollWidth - viewport.clientWidth
+      if (!animating) target = viewport.scrollLeft
+      target = Math.max(0, Math.min(max, target + e.deltaY))
+      if (!animating) {
+        animating = true
+        raf = requestAnimationFrame(tick)
+      }
     }
     viewport.addEventListener('wheel', onWheel, { passive: true })
-    return () => viewport.removeEventListener('wheel', onWheel)
+    return () => {
+      viewport.removeEventListener('wheel', onWheel)
+      if (raf) cancelAnimationFrame(raf)
+    }
   }, [])
 
   // missingShots is derived from the shared ProjectContext.missingFiles (no per-strip API call).

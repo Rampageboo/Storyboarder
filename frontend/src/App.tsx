@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState, type CSSProperties } from 're
 import { reportUiReady } from './api'
 import { Topbar } from './components/Topbar'
 import { ShotInspector } from './components/ShotInspector'
+import { BoardGrid } from './components/BoardGrid'
 import { BoardStrip } from './components/BoardStrip'
 import { CanvasBoard } from './components/CanvasBoard'
 import { ReferenceSidebar } from './components/ReferenceSidebar'
@@ -146,12 +147,39 @@ function BoardWorkspace({
   inspectorCollapsed: boolean
   onToggleInspector: () => void
 }) {
+  const [boardView, setBoardView] = useState<'strip' | 'grid'>('strip')
   return (
     <>
       <main className="main-center">
-        <CanvasBoard />
-        <NeighborContext />
-        <BoardStrip />
+        <div className="board-view-toggle" role="tablist" aria-label="Board view">
+          <button
+            type="button"
+            role="tab"
+            aria-selected={boardView === 'strip'}
+            className={boardView === 'strip' ? 'is-active' : ''}
+            onClick={() => setBoardView('strip')}
+          >
+            Strip
+          </button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={boardView === 'grid'}
+            className={boardView === 'grid' ? 'is-active' : ''}
+            onClick={() => setBoardView('grid')}
+          >
+            Grid
+          </button>
+        </div>
+        {boardView === 'grid' ? (
+          <BoardGrid />
+        ) : (
+          <>
+            <CanvasBoard />
+            <NeighborContext />
+            <BoardStrip />
+          </>
+        )}
       </main>
       <aside className={`main-right${inspectorCollapsed ? ' is-collapsed' : ''}`}>
         <button

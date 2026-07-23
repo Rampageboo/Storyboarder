@@ -34,7 +34,8 @@ Non-goals (do not add): browser mode, hosted server, cloud sync, audio, multi-wi
 ## 2. Current state
 
 ```text
-Current working area: export feature on branch feat/generation-provider-mode (pushed to origin). Branch also carries: generation provider/mode (backend+UI), periodic-autosave save model, .sbd pack perf fixes.
+Current working area: board UX on branch feat/generation-provider-mode (pushed). Branch carries: generation provider/mode (backend+UI), periodic-autosave save model, .sbd pack perf fixes, export feature (video+UI), and now board Strip/Grid view + smooth wheel scroll. Preparing PR to main.
+Board view: BoardWorkspace now has a Strip/Grid toggle. Grid = BoardGrid.tsx (responsive tile grid of all boards, reuses ShotThumb; click selects -> same ShotInspector detail; trailing "Add board" tile). BoardStrip horizontal wheel scroll now eases toward an rAF target (was instant per-notch = stepped).
 Last completed task: EXPORT feature. NEW video animatic (storyboard -> .mp4, H.264 via ffmpeg / mp4v fallback, duration-driven, optional captions) in video_export.py. Discovered the backend already had a full export suite (PDF one_per_page/two_per_page/thumbnails, contact sheet, shot-list CSV, timing JSON, image sequence) but NO frontend UI exposed any of it. Built ExportModal (video + PDF layout picker + images + data) reached from the RightRail "More > Export…" menu; new api/export.ts; new POST /api/export/open opens a generated file in the OS default app (os.startfile). PDF one_per_page already IS the "shot detail" export (big image + all metadata).
 Current build/test status: full suite 726 passed, 1 skipped, 0 failed (the 2 previously-noted failures were fixed earlier this branch). Frontend tsc+vite build passes; lint at pre-existing baseline (8 errors, none new). GUI click-test by Owner pending.
 ```
