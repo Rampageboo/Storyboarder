@@ -34,9 +34,9 @@ Non-goals (do not add): browser mode, hosted server, cloud sync, audio, multi-wi
 ## 2. Current state
 
 ```text
-Current working area: generation provider + mode (backend + UI) on branch feat/generation-provider-mode (pushed to origin)
-Last completed task: reworked generation UI per Owner — removed the standalone Mode selector (precision now follows shot Status; no 'auto'); "Send to Codex" now opens a confirmation popup carrying the Backend (Codex/Stable Diffusion) choice + derived-mode display. Fixed the 2 stale tests (full suite 719 passed, 1 skipped, 0 failed). Committed the prebuilt web/dist bundle (un-ignored). Latest commit f48c99c. GUI click-test by Owner still pending.
-Current build/test status: test_generation_requests.py 36 passed. Full suite still has 2 PRE-EXISTING UNRELATED failures (proven via stash-to-HEAD baseline): tests/test_smoke.py::test_open_blender_scene_returns_project_payload (blender mock arity drift) and tests/test_project_document.py::test_create_save_and_reopen_single_file_document (shot .psd not in .sbd archive) — NOT yet fixed.
+Current working area: export feature on branch feat/generation-provider-mode (pushed to origin). Branch also carries: generation provider/mode (backend+UI), periodic-autosave save model, .sbd pack perf fixes.
+Last completed task: EXPORT feature. NEW video animatic (storyboard -> .mp4, H.264 via ffmpeg / mp4v fallback, duration-driven, optional captions) in video_export.py. Discovered the backend already had a full export suite (PDF one_per_page/two_per_page/thumbnails, contact sheet, shot-list CSV, timing JSON, image sequence) but NO frontend UI exposed any of it. Built ExportModal (video + PDF layout picker + images + data) reached from the RightRail "More > Export…" menu; new api/export.ts; new POST /api/export/open opens a generated file in the OS default app (os.startfile). PDF one_per_page already IS the "shot detail" export (big image + all metadata).
+Current build/test status: full suite 726 passed, 1 skipped, 0 failed (the 2 previously-noted failures were fixed earlier this branch). Frontend tsc+vite build passes; lint at pre-existing baseline (8 errors, none new). GUI click-test by Owner pending.
 ```
 
 ## 3. Generation handoff decision / next fork

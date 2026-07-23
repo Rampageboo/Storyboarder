@@ -11,6 +11,7 @@ import { Scene3DPanel } from './components/Scene3DPanel'
 import { NeighborContext } from './components/NeighborContext'
 import { AdvancedPanel } from './components/AdvancedPanel'
 import { SettingsModal } from './components/SettingsModal'
+import { ExportModal } from './components/ExportModal'
 import { ProjectProvider } from './state/ProjectContext'
 import { useProject } from './state/useProject'
 import { LiveBridgeProvider } from './state/LiveBridgeContext'
@@ -176,8 +177,10 @@ function BoardWorkspace({
 
 function RightRail({
   onOpenSettings,
+  onOpenExport,
 }: {
   onOpenSettings: () => void
+  onOpenExport: () => void
 }) {
   const { project, newProject, openProjectFromDialog, saveProject, dirtyShotIds, projectActionBusy, initialLoading } =
     useProject()
@@ -280,6 +283,14 @@ function RightRail({
               >
                 {projectActionBusy ? 'Saving...' : 'Save Project'}
               </button>
+              <button
+                type="button"
+                role="menuitem"
+                onClick={() => runMenuAction(onOpenExport)}
+                disabled={!project || projectActionBusy || initialLoading}
+              >
+                Export…
+              </button>
               <div className="right-rail-menu-divider" />
               <button
                 type="button"
@@ -301,6 +312,7 @@ function AppInner() {
   const { project, initialLoading, lastError, clearError, reloadProject } = useProject()
   const [workspaceMode, setWorkspaceMode] = useState<WorkspaceMode>('board')
   const [settingsOpen, setSettingsOpen] = useState(false)
+  const [exportOpen, setExportOpen] = useState(false)
   const [refsOpen, setRefsOpen] = useState(false)
   const [inspectorCollapsed, setInspectorCollapsed] = useState(false)
   const uiReadyReportedRef = useRef(false)
@@ -374,7 +386,10 @@ function AppInner() {
                 <div className="workspace-content workspace-content-scene" hidden={workspaceMode !== 'scene3d'}>
                   <Scene3DPanel active={workspaceMode === 'scene3d'} />
                 </div>
-                <RightRail onOpenSettings={() => setSettingsOpen(true)} />
+                <RightRail
+                  onOpenSettings={() => setSettingsOpen(true)}
+                  onOpenExport={() => setExportOpen(true)}
+                />
               </>
             )}
           </div>
@@ -382,6 +397,7 @@ function AppInner() {
       </div>
       <ReferenceAssignmentPopover />
       {settingsOpen ? <SettingsModal open onClose={() => setSettingsOpen(false)} /> : null}
+      {exportOpen ? <ExportModal open onClose={() => setExportOpen(false)} /> : null}
     </div>
   )
 }

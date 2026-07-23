@@ -1,0 +1,178 @@
+.export-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: rgba(0, 0, 0, 0.5);
+}
+
+.export-modal {
+  display: flex;
+  flex-direction: column;
+  width: min(560px, 100%);
+  max-height: 90vh;
+  overflow: hidden;
+  border: 1px solid var(--color-border);
+  border-radius: 12px;
+  background: var(--bg-elevated);
+  color: var(--color-text);
+  box-shadow: 0 24px 64px rgba(0, 0, 0, 0.4);
+}
+
+.export-modal-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 16px 18px;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.export-modal-header h2 {
+  margin: 0;
+  font-size: 16px;
+}
+
+.export-modal-header p {
+  margin: 4px 0 0;
+  font-size: 11px;
+  color: var(--color-muted);
+}
+
+.export-modal-close {
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  width: 26px;
+  height: 26px;
+  background: transparent;
+  color: var(--color-text);
+  cursor: pointer;
+}
+
+.export-modal-body {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 16px 18px;
+  overflow-y: auto;
+}
+
+.export-group {
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  padding: 12px;
+  background: color-mix(in srgb, var(--bg-elevated) 70%, transparent);
+}
+
+.export-group h3 {
+  margin: 0 0 4px;
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.export-group > p {
+  margin: 0 0 10px;
+  font-size: 11px;
+  color: var(--color-muted);
+}
+
+.export-options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+
+.export-options label {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  font-size: 9px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--color-muted);
+}
+
+.export-options select {
+  min-height: 30px;
+  padding: 0 6px;
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--bg-elevated) 78%, transparent);
+  color: var(--color-text);
+  font-size: 11px;
+}
+
+.export-options .export-check {
+  flex-direction: row;
+  align-items: center;
+  gap: 6px;
+  text-transform: none;
+  letter-spacing: normal;
+  font-weight: 500;
+  font-size: 11px;
+  color: var(--color-text);
+}
+
+.export-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.export-actions button {
+  min-height: 32px;
+  padding: 0 12px;
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--bg-elevated) 78%, transparent);
+  color: var(--color-text);
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.export-actions button.primary {
+  border-color: color-mix(in srgb, var(--color-accent) 60%, var(--color-border));
+  color: #120d05;
+  background: var(--color-accent);
+}
+
+.export-actions button.export-open {
+  border-style: dashed;
+  background: transparent;
+}
+
+.export-actions button:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.export-modal-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 18px;
+  border-top: 1px solid var(--color-border);
+}
+
+.export-note {
+  font-size: 10px;
+  color: var(--color-muted);
+}
+
+.export-modal-footer button {
+  min-height: 30px;
+  padding: 0 14px;
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--color-text);
+  cursor: pointer;
+}

@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import os
+import subprocess
+import sys
 from pathlib import Path
 from typing import Literal
 
@@ -36,6 +39,18 @@ def check_export_exists(project: Project, export_type: str) -> Path:
     path = resolve_output_path(project, export_type)
     if not path.exists():
         raise FileNotFoundError(f"No {export_type} export found. Run the export first.")
+    return path
+
+
+def open_export(project: Project, export_type: str) -> Path:
+    """Open a previously generated export in the OS default application."""
+    path = check_export_exists(project, export_type)
+    if sys.platform.startswith("win"):
+        os.startfile(str(path))  # type: ignore[attr-defined]
+    elif sys.platform == "darwin":
+        subprocess.Popen(["open", str(path)])
+    else:
+        subprocess.Popen(["xdg-open", str(path)])
     return path
 
 

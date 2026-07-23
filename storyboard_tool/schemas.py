@@ -186,6 +186,10 @@ class AnimaticExportRequest(BaseModel):
     captions: bool = False
 
 
+class ExportOpenRequest(BaseModel):
+    type: str
+
+
 class SettingsUpdateRequest(BaseModel):
     photoshop_path: str | None = None
     blender_path: str | None = None

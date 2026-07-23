@@ -99,6 +99,19 @@ class ExportServiceMixin:
             raise app_error(AppErrorCode.EXPORT_FAILED, str(exc), status=500) from exc
         return {"path": str(output_path), "download_url": _DOWNLOAD_URLS["animatic"]}
 
+    def method_open_export(self, export_type: str) -> dict[str, str]:
+        project = app_state._require_project(self.app)
+        try:
+            output_path = export_service.open_export(project, export_type)
+        except FileNotFoundError as exc:
+            raise app_error(AppErrorCode.EXPORT_FAILED, str(exc), status=404) from exc
+        except ValueError as exc:
+            raise app_error(AppErrorCode.INVALID_REQUEST, str(exc)) from exc
+        except Exception as exc:
+            logger.exception("Opening export failed (%s)", export_type)
+            raise app_error(AppErrorCode.EXPORT_FAILED, str(exc), status=500) from exc
+        return {"path": str(output_path)}
+
     def method_download_animatic(self) -> dict[str, str]:
         project = app_state._require_project(self.app)
         try:

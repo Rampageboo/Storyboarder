@@ -36,6 +36,7 @@ from .schemas import (
     LiveBridgeUpdateRequest,
     OpenProjectRequest,
     AnimaticExportRequest,
+    ExportOpenRequest,
     PdfExportRequest,
     PluginHeartbeatRequest,
     PluginNextShotRequest,
@@ -936,6 +937,10 @@ def create_app(base_dir: Path, bridge_port: int = 8000) -> FastAPI:
     @app.get("/api/export/animatic")
     def download_animatic() -> FileResponse:
         return _file_response_from_meta(_svc().method_download_animatic())
+
+    @app.post("/api/export/open")
+    def open_export(request: ExportOpenRequest) -> dict[str, str]:
+        return _svc().method_open_export(request.type)
 
     return app
 
