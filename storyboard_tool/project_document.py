@@ -17,6 +17,22 @@ from pathlib import Path, PurePosixPath
 DOCUMENT_SUFFIX = ".sbd"
 _REQUIRED_MEMBER = "project.json"
 
+# Already-compressed imports (reference images, video, nested zips): re-DEFLATE
+# only burns CPU for ~0% gain, so store them verbatim. PSD canvases are raw and
+# storyboard-flat, so they DO compress well (measured 89 MB -> ~1 MB) and must
+# stay DEFLATE. The rest of the archive uses fast DEFLATE level 1, which is ~2x
+# faster than level 6 for a negligible size increase on this content.
+_STORED_SUFFIXES = frozenset({
+    ".png", ".jpg", ".jpeg", ".webp", ".gif",
+    ".mp4", ".mov", ".m4v", ".webm", ".mkv", ".zip",
+})
+_PACK_COMPRESS_LEVEL = 1
+
+# Top-level working-tree dirs never embedded in the shared .sbd. `backups/` is a
+# local, write-only recovery snapshot set (the app never reads it back); packing
+# it bloats the document and slows every save.
+_UNPACKED_DIRS = frozenset({"backups"})
+
 
 def create_working_root(document_path: Path) -> Path:
     stem = document_path.stem.strip() or "Storyboard"
@@ -74,11 +90,19 @@ def pack_document(working_root: Path, document_path: Path) -> None:
     os.close(descriptor)
     temporary = Path(temporary_name)
     try:
-        with zipfile.ZipFile(temporary, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=6) as archive:
+        with zipfile.ZipFile(temporary, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=_PACK_COMPRESS_LEVEL) as archive:
             for path in sorted(root.rglob("*")):
                 if not path.is_file() or path.is_symlink():
                     continue
-                archive.write(path, path.relative_to(root).as_posix())
+                relative = path.relative_to(root)
+                if relative.parts and relative.parts[0] in _UNPACKED_DIRS:
+                    continue
+                compress_type = (
+                    zipfile.ZIP_STORED
+                    if path.suffix.lower() in _STORED_SUFFIXES
+                    else zipfile.ZIP_DEFLATED
+                )
+                archive.write(path, relative.as_posix(), compress_type=compress_type)
         with temporary.open("r+b") as stream:
             stream.flush()
             os.fsync(stream.fileno())

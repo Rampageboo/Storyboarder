@@ -4,6 +4,8 @@ import type {
   GenerationCandidateAcceptResponse,
   GenerationBatchRequestResponse,
   GenerationDestination,
+  GenerationMode,
+  GenerationProvider,
   GenerationReconcileResponse,
   GenerationPullResponse,
   GenerationRequest,
@@ -11,13 +13,27 @@ import type {
   GenerationRequestResponse,
 } from '../types'
 
+export interface CreateGenerationRequestOptions {
+  provider?: GenerationProvider
+  // Empty string lets the backend derive the mode from the shot's status.
+  mode?: GenerationMode | ''
+}
+
 export function createGenerationRequest(
   shotId: string,
   destination: GenerationDestination,
+  options: CreateGenerationRequestOptions = {},
 ): Promise<GenerationRequestResponse> {
+  const body: {
+    destination: GenerationDestination
+    provider?: GenerationProvider
+    mode?: GenerationMode
+  } = { destination }
+  if (options.provider) body.provider = options.provider
+  if (options.mode) body.mode = options.mode
   return requestJson<GenerationRequestResponse>(
     `/api/shots/${encodeURIComponent(shotId)}/generation-requests`,
-    { method: 'POST', body: { destination } },
+    { method: 'POST', body },
   )
 }
 

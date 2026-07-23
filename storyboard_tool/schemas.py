@@ -131,6 +131,8 @@ class ShotUpdateRequest(BaseModel):
 
 class GenerationRequestCreateRequest(BaseModel):
     destination: str = "queue"
+    provider: str = "codex"
+    mode: str = ""
 
 
 class GenerationCandidateAcceptRequest(BaseModel):
@@ -177,6 +179,17 @@ class PdfExportRequest(BaseModel):
     layout: str = "two_per_page"
 
 
+class AnimaticExportRequest(BaseModel):
+    fps: int = 24
+    # None: hold each board for its own duration_seconds. Otherwise a global override.
+    seconds_per_board: float | None = None
+    captions: bool = False
+
+
+class ExportOpenRequest(BaseModel):
+    type: str
+
+
 class SettingsUpdateRequest(BaseModel):
     photoshop_path: str | None = None
     blender_path: str | None = None
@@ -185,6 +198,7 @@ class SettingsUpdateRequest(BaseModel):
     canvas_height: int | None = None
     apply_canvas_size_to_blank_shots: bool | None = None
     preheat_photoshop_on_open: bool | None = None
+    autosave_interval_minutes: int | None = None
     character_bible_prompt: str | None = None
     scene3d: dict[str, Any] | None = None
     reference_video_path: str | None = None

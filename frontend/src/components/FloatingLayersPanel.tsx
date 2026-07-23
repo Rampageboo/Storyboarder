@@ -9,11 +9,20 @@ import {
   reconcileGenerationRequests,
 } from '../api'
 import { useProject } from '../state/useProject'
-import type { GenerationDestination, GenerationRequest, Shot } from '../types'
+import type { GenerationDestination, GenerationMode, GenerationProvider, GenerationRequest, Shot } from '../types'
 import { shotDisplayLabel } from '../utils/shotDisplay'
 import './FloatingLayersPanel.css'
 
 export type CanvasLayerId = 'background' | 'codex' | 'artwork'
+
+// Display mirror of the backend generation_service._default_mode_for_status: the
+// precision mode is driven by the shot's status, not chosen separately.
+function generationModeForStatus(status: string): GenerationMode {
+  const normalized = status.trim().toLowerCase()
+  if (normalized === 'approved' || normalized === 'final') return 'final'
+  if (normalized === 'in progress' || normalized === 'review') return 'clean'
+  return 'draft'
+}
 
 interface FloatingLayersPanelProps {
   shot: Shot
@@ -119,6 +128,8 @@ export function FloatingLayersPanel({
   const [loading, setLoading] = useState(true)
   const [dispatchingTo, setDispatchingTo] = useState<GenerationDestination | null>(null)
   const [dispatchingAllToCodex, setDispatchingAllToCodex] = useState(false)
+  const [provider, setProvider] = useState<GenerationProvider>('codex')
+  const [codexConfirmOpen, setCodexConfirmOpen] = useState(false)
   const [acceptingArtifact, setAcceptingArtifact] = useState('')
   const [deletingRequestId, setDeletingRequestId] = useState('')
   const [notice, setNotice] = useState('')
@@ -197,12 +208,16 @@ export function FloatingLayersPanel({
     return `Shot ${number}`
   }
 
-  const dispatchGeneration = async (destination: GenerationDestination) => {
+  const dispatchGeneration = async (
+    destination: GenerationDestination,
+    requestProvider: GenerationProvider = 'codex',
+  ) => {
     setDispatchingTo(destination)
     setNotice('')
     try {
       await flushDirtyShots()
-      const response = await createGenerationRequest(shot.shot_id, destination)
+      // Omit mode: the backend derives the precision mode from the shot's status.
+      const response = await createGenerationRequest(shot.shot_id, destination, { provider: requestProvider })
       replaceWithCurrentSelection(response.project)
       await loadRequests(true)
       if (destination === 'codex' && response.codex_prompt) {
@@ -368,20 +383,58 @@ export function FloatingLayersPanel({
           </button>
           <button
             type="button"
-            disabled={disabled || dispatchingTo !== null}
-            onClick={() => void dispatchGeneration('codex')}
+            disabled={disabled || dispatchingTo !== null || codexConfirmOpen}
+            onClick={() => { setNotice(''); setCodexConfirmOpen(true) }}
           >
-            {dispatchingTo === 'codex' ? 'Preparing...' : 'Send to Codex'}
+            Send to Codex…
           </button>
           <button
             type="button"
             className="queue-batch-codex"
-            disabled={disabled || dispatchingTo !== null || dispatchingAllToCodex}
+            disabled={disabled || dispatchingTo !== null || dispatchingAllToCodex || codexConfirmOpen}
             onClick={() => void dispatchAllToCodex()}
           >
             {dispatchingAllToCodex ? 'Preparing all...' : 'Send All to Codex'}
           </button>
         </div>
+        {codexConfirmOpen ? (
+          <div className="floating-codex-confirm" role="group" aria-label="Send to Codex options">
+            <div className="floating-codex-confirm-title">Send to Codex</div>
+            <label className="floating-codex-field">
+              <span>Backend</span>
+              <select
+                value={provider}
+                disabled={dispatchingTo !== null}
+                onChange={(event) => setProvider(event.target.value as GenerationProvider)}
+              >
+                <option value="codex">Codex</option>
+                <option value="stable_diffusion">Stable Diffusion</option>
+              </select>
+            </label>
+            <p className="floating-codex-mode">
+              Precision follows this shot&rsquo;s status{' '}
+              <strong>{shot.status}</strong>{' → '}
+              <strong>{generationModeForStatus(shot.status)}</strong>
+            </p>
+            <div className="floating-codex-confirm-actions">
+              <button
+                type="button"
+                className="queue-primary"
+                disabled={dispatchingTo !== null}
+                onClick={() => { setCodexConfirmOpen(false); void dispatchGeneration('codex', provider) }}
+              >
+                {dispatchingTo === 'codex' ? 'Preparing...' : 'Send'}
+              </button>
+              <button
+                type="button"
+                disabled={dispatchingTo !== null}
+                onClick={() => setCodexConfirmOpen(false)}
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        ) : null}
         {notice ? <div className="floating-queue-notice" role="status">{notice}</div> : null}
         <div className="floating-queue-list">
           {visibleRequests.length > 0 ? visibleRequests.map((request) => (

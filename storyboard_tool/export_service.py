@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import os
+import subprocess
+import sys
 from pathlib import Path
 from typing import Literal
 
@@ -21,6 +24,7 @@ _OUTPUT_PATHS: dict[str, str] = {
     "timing": "timing.json",
     "contact_sheet": "contact_sheet.png",
     "image_sequence": "image_sequence",
+    "animatic": "animatic.mp4",
 }
 
 
@@ -35,6 +39,18 @@ def check_export_exists(project: Project, export_type: str) -> Path:
     path = resolve_output_path(project, export_type)
     if not path.exists():
         raise FileNotFoundError(f"No {export_type} export found. Run the export first.")
+    return path
+
+
+def open_export(project: Project, export_type: str) -> Path:
+    """Open a previously generated export in the OS default application."""
+    path = check_export_exists(project, export_type)
+    if sys.platform.startswith("win"):
+        os.startfile(str(path))  # type: ignore[attr-defined]
+    elif sys.platform == "darwin":
+        subprocess.Popen(["open", str(path)])
+    else:
+        subprocess.Popen(["xdg-open", str(path)])
     return path
 
 
@@ -69,3 +85,22 @@ def export_contact_sheet(project: Project) -> Path:
 def export_image_sequence(project: Project) -> Path:
     output_dir = resolve_output_path(project, "image_sequence")
     return _export_image_sequence(project, output_dir)
+
+
+def export_animatic(
+    project: Project,
+    *,
+    fps: int = 24,
+    seconds_per_board: float | None = None,
+    captions: bool = False,
+) -> Path:
+    from .video_export import export_animatic as _export_animatic
+
+    output_path = resolve_output_path(project, "animatic")
+    return _export_animatic(
+        project,
+        output_path,
+        fps=fps,
+        seconds_per_board=seconds_per_board,
+        captions=captions,
+    )

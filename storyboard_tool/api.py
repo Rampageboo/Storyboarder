@@ -35,6 +35,8 @@ from .schemas import (
     ImportImagePathRequest,
     LiveBridgeUpdateRequest,
     OpenProjectRequest,
+    AnimaticExportRequest,
+    ExportOpenRequest,
     PdfExportRequest,
     PluginHeartbeatRequest,
     PluginNextShotRequest,
@@ -724,7 +726,9 @@ def create_app(base_dir: Path, bridge_port: int = 8000) -> FastAPI:
 
     @app.post("/api/shots/{shot_id}/generation-requests")
     def create_generation_request(shot_id: str, request: GenerationRequestCreateRequest) -> dict[str, Any]:
-        return _svc().method_create_generation_request(shot_id, request.destination)
+        return _svc().method_create_generation_request(
+            shot_id, request.destination, request.provider, request.mode
+        )
 
     @app.post("/api/generation/requests/codex-batch")
     def create_codex_batch_requests() -> dict[str, Any]:
@@ -921,6 +925,22 @@ def create_app(base_dir: Path, bridge_port: int = 8000) -> FastAPI:
     @app.get("/api/export/pdf")
     def download_pdf() -> FileResponse:
         return _file_response_from_meta(_svc().method_download_pdf())
+
+    @app.post("/api/export/animatic")
+    def export_animatic(request: AnimaticExportRequest = AnimaticExportRequest()) -> dict[str, str]:
+        return _svc().method_export_animatic(
+            fps=request.fps,
+            seconds_per_board=request.seconds_per_board,
+            captions=request.captions,
+        )
+
+    @app.get("/api/export/animatic")
+    def download_animatic() -> FileResponse:
+        return _file_response_from_meta(_svc().method_download_animatic())
+
+    @app.post("/api/export/open")
+    def open_export(request: ExportOpenRequest) -> dict[str, str]:
+        return _svc().method_open_export(request.type)
 
     return app
 

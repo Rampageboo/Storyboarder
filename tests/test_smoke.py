@@ -371,7 +371,7 @@ class StoryboardSmokeTests(unittest.TestCase):
 
             original_open = project_manager.open_blender_scene
 
-            def fake_open_blender_scene(project):
+            def fake_open_blender_scene(project, relative_path=""):
                 blend = project.root_path / "scene3d" / "scene.blend"
                 blend.parent.mkdir(parents=True, exist_ok=True)
                 blend.write_text("fake", encoding="utf-8")

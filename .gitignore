@@ -18,8 +18,10 @@ playwright-report/
 frontend/node_modules/
 frontend/dist/
 
-# React build output served by FastAPI at /react
-storyboard_tool/web/dist/
+# React build output served by FastAPI at /react.
+# Committed on purpose: the Python desktop app ships without Node, so the
+# prebuilt bundle must be in-repo for `pip install` + `python main.py` to work.
+# Regenerate with `cd frontend && npm run build` after editing frontend/src/**.
 
 *.log
 

@@ -26,6 +26,7 @@ PROJECT_JSON_VERSION = 3
 
 DEFAULT_SETTINGS: dict = {
     "autosave": True,
+    "autosave_interval_minutes": 5,
     "pdf_layout": "two_per_page",
     "recent_projects": [],
     "backup_on_save": True,

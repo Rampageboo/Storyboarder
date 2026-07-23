@@ -17,6 +17,9 @@ def test_create_save_and_reopen_single_file_document(tmp_path: Path, monkeypatch
     project = project_manager.create_document(document, canvas_width=1280, canvas_height=720)
     shot = project_manager.add_shot(project)
     shot.title = "Opening image"
+    # A freshly added shot has no PSD; the canvas is created on demand. Creating it
+    # here verifies a shot canvas round-trips into the single-file document.
+    project_manager.create_canvas_for_shot(project, shot)
     project_manager.save_project(project)
 
     assert document.is_file()
@@ -92,3 +95,54 @@ def test_document_api_create_scene_and_reopen_without_rewriting_on_open(
     assert reopened.status_code == 200, reopened.text
     assert reopened.json()["name"] == "API Film"
     assert document.read_bytes() == before_open
+
+
+def test_mutations_defer_sbd_pack_until_save(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(project_document.tempfile, "tempdir", str(tmp_path))
+    document = tmp_path / "Deferred.sbd"
+    app_dir = tmp_path / "app"
+    app_dir.mkdir()
+    client = TestClient(api_module.create_app(app_dir))
+    assert client.post("/api/project/new", json={"path": str(document)}).status_code == 200
+
+    added = client.post("/api/shots")
+    assert added.status_code == 200, added.text
+    shot_id = added.json()["shot"]["shot_id"]
+
+    # Interactive autosave keeps the working tree current but DEFERS the .sbd pack.
+    with zipfile.ZipFile(document) as archive:
+        assert not any(f"shots/{shot_id}/" in name for name in archive.namelist())
+
+    # Manual save flushes the document.
+    assert client.post("/api/project/save").status_code == 200
+    with zipfile.ZipFile(document) as archive:
+        assert any(f"shots/{shot_id}/" in name for name in archive.namelist())
+
+
+def test_autosave_interval_setting_persists(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(project_document.tempfile, "tempdir", str(tmp_path))
+    document = tmp_path / "Interval.sbd"
+    app_dir = tmp_path / "app-interval"
+    app_dir.mkdir()
+    client = TestClient(api_module.create_app(app_dir))
+    assert client.post("/api/project/new", json={"path": str(document)}).status_code == 200
+
+    resp = client.patch("/api/project/settings", json={"autosave_interval_minutes": 10})
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["settings"]["autosave_interval_minutes"] == 10
+
+
+def test_backups_are_not_packed_into_sbd(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(project_document.tempfile, "tempdir", str(tmp_path))
+    document = tmp_path / "NoBackups.sbd"
+    project = project_manager.create_document(document, canvas_width=1280, canvas_height=720)
+    project_manager.add_shot(project)
+    project_manager.save_project(project)  # backup_on_save default True -> writes backups/
+    project_manager.add_shot(project)
+    project_manager.save_project(project)
+
+    # The working tree keeps local recovery snapshots...
+    assert any((project.root_path / "backups").glob("shots_*.json"))
+    # ...but the shared single-file document never embeds them.
+    with zipfile.ZipFile(document) as archive:
+        assert not any(name.startswith("backups/") for name in archive.namelist())

@@ -28,11 +28,107 @@ from .shot_files import resolve_project_relative_path
 
 SCHEMA_VERSION = 1
 DESTINATIONS = frozenset({"queue", "codex"})
+PROVIDERS = frozenset({"codex", "stable_diffusion"})
+MODES = frozenset({"draft", "clean", "final"})
 REQUEST_STATUSES = frozenset({"queued", "needs-review", "completed", "failed", "cancelled"})
 IMAGE_SUFFIXES = frozenset({".png", ".jpg", ".jpeg", ".webp"})
 MAX_ARTIFACTS = 8
 MAX_ARTIFACT_BYTES = 64 * 1024 * 1024
 _ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,96}$")
+
+# Generation precision strategy per mode. `backend`/`provider` decides WHO executes;
+# `mode` decides the quality/speed strategy. The numeric values below are starting
+# defaults chosen within Owner-specified ranges; they are advisory guidance emitted
+# in the request payload for whoever operates Stable Diffusion, not engine constraints.
+_MODE_PROFILES: dict[str, dict[str, Any]] = {
+    "draft": {
+        "max_edge": 768,
+        "steps": 12,
+        "cfg_scale": 5.0,
+        "upscale_to_panel": True,
+        "overwrite_final": False,
+        "use_prior_frame_as_reference": False,
+        "style_hint": "rough storyboard, grayscale, loose sketch; prioritize composition, camera, and staging",
+    },
+    "clean": {
+        "max_edge": 1024,
+        "steps": 22,
+        "cfg_scale": 6.5,
+        "upscale_to_panel": True,
+        "overwrite_final": False,
+        "use_prior_frame_as_reference": True,
+        "style_hint": "clean storyboard line art, readable silhouettes, clear staging",
+    },
+    "final": {
+        # max_edge 0 = generate at full panel size (or higher via upscale).
+        "max_edge": 0,
+        "steps": 32,
+        "cfg_scale": 7.0,
+        "upscale_to_panel": True,
+        "overwrite_final": True,
+        "use_prior_frame_as_reference": True,
+        "style_hint": "finished frame with lighting, materials, and character detail",
+    },
+}
+
+# Default mode when a request does not pass one explicitly: driven by shot status.
+_STATUS_MODE_DEFAULTS = {
+    "draft": "draft",
+    "in progress": "clean",
+    "review": "clean",
+    "approved": "final",
+    "final": "final",
+}
+
+
+def _default_mode_for_status(status: str) -> str:
+    return _STATUS_MODE_DEFAULTS.get(str(status or "").strip().lower(), "draft")
+
+
+def _scaled_target(canvas_width: int, canvas_height: int, max_edge: int) -> tuple[int, int]:
+    """Scale a panel down so its longest edge is at most ``max_edge`` (never upscales)."""
+    longest = max(int(canvas_width), int(canvas_height))
+    if max_edge <= 0 or longest <= max_edge:
+        return int(canvas_width), int(canvas_height)
+    scale = max_edge / longest
+    return max(1, round(canvas_width * scale)), max(1, round(canvas_height * scale))
+
+
+def _build_generation_plan(mode: str, canvas_width: int, canvas_height: int) -> dict[str, Any]:
+    profile = _MODE_PROFILES[mode]
+    target_width, target_height = _scaled_target(canvas_width, canvas_height, profile["max_edge"])
+    return {
+        "mode": mode,
+        "target_width": target_width,
+        "target_height": target_height,
+        "panel_width": int(canvas_width),
+        "panel_height": int(canvas_height),
+        "steps": profile["steps"],
+        "cfg_scale": profile["cfg_scale"],
+        "style_hint": profile["style_hint"],
+        "use_prior_frame_as_reference": profile["use_prior_frame_as_reference"],
+        "output_policy": {
+            "preserve_aspect_ratio": True,
+            "upscale_to_panel": profile["upscale_to_panel"],
+            "overwrite_final": profile["overwrite_final"],
+        },
+    }
+
+
+def _prior_frame_ref(project: Project, path: Path | None) -> dict[str, Any] | None:
+    """Describe an existing accepted Codex layer for use as an img2img base."""
+    if path is None:
+        return None
+    try:
+        rel = path.resolve().relative_to(project.root_path.resolve()).as_posix()
+    except ValueError:
+        rel = ""
+    return {
+        "source": "codex-layer",
+        "project_relative_path": rel,
+        "absolute_path": str(path.resolve()),
+        "exists": path.is_file(),
+    }
 
 
 def _utc_now() -> str:
@@ -393,10 +489,23 @@ def _continuity_context(project: Project, shot: Shot) -> list[dict[str, Any]]:
     return context
 
 
-def build_request_snapshot(project: Project, shot: Shot, destination: str) -> dict[str, Any]:
+def build_request_snapshot(
+    project: Project,
+    shot: Shot,
+    destination: str,
+    *,
+    provider: str = "codex",
+    mode: str = "",
+) -> dict[str, Any]:
     destination = str(destination or "").strip().lower()
     if destination not in DESTINATIONS:
         raise ValueError("Destination must be 'queue' or 'codex'.")
+    provider = str(provider or "").strip().lower()
+    if provider not in PROVIDERS:
+        raise ValueError("Provider must be 'codex' or 'stable_diffusion'.")
+    mode = str(mode or "").strip().lower() or _default_mode_for_status(shot.status)
+    if mode not in MODES:
+        raise ValueError("Mode must be 'draft', 'clean', or 'final'.")
     shot_number = next(
         (index + 1 for index, candidate in enumerate(project.shots) if candidate.shot_id == shot.shot_id),
         0,
@@ -447,6 +556,12 @@ def build_request_snapshot(project: Project, shot: Shot, destination: str) -> di
         "continuity_context": _continuity_context(project, shot),
         "canvas": {"width": canvas_width, "height": canvas_height},
     }
+    generation_plan = _build_generation_plan(mode, canvas_width, canvas_height)
+    generation_plan["prior_frame"] = (
+        _prior_frame_ref(project, shot_assets.get_shot_codex_layer_path(project, shot))
+        if generation_plan["use_prior_frame_as_reference"]
+        else None
+    )
     return {
         "schema_version": SCHEMA_VERSION,
         "request_id": request_id,
@@ -455,6 +570,9 @@ def build_request_snapshot(project: Project, shot: Shot, destination: str) -> di
         "shot_id": shot.shot_id,
         "shot_number": shot_number,
         "destination": destination,
+        "provider": provider,
+        "mode": mode,
+        "generation_plan": generation_plan,
         "status": "queued",
         "created_at": created_at,
         "updated_at": created_at,
@@ -493,8 +611,15 @@ def build_request_snapshot(project: Project, shot: Shot, destination: str) -> di
     }
 
 
-def create_request(project: Project, shot: Shot, destination: str) -> dict[str, Any]:
-    request = build_request_snapshot(project, shot, destination)
+def create_request(
+    project: Project,
+    shot: Shot,
+    destination: str,
+    *,
+    provider: str = "codex",
+    mode: str = "",
+) -> dict[str, Any]:
+    request = build_request_snapshot(project, shot, destination, provider=provider, mode=mode)
     if request["destination"] == "queue":
         queued = [
             row for row in list_requests(project, shot_id=shot.shot_id, destination="queue")
@@ -504,6 +629,24 @@ def create_request(project: Project, shot: Shot, destination: str) -> dict[str, 
             request["request_id"] = str(queued[0]["request_id"])
     atomic_write_json(_request_path(project, request["request_id"]), request)
     return request
+
+
+def clear_pending_queue_requests(project: Project, shot_id: str) -> list[str]:
+    """Remove a shot's pending (queued) queue-destination requests.
+
+    Dispatching a shot to Codex supersedes its staged queue entry, so the queue
+    should no longer list it. Codex-destination requests are left untouched (they
+    track the handoff and its results). Returns the removed request ids.
+    """
+    removed: list[str] = []
+    for row in list_requests(project, shot_id=shot_id, destination="queue"):
+        if row.get("status") != "queued":
+            continue
+        request_id = str(row.get("request_id") or "")
+        if request_id:
+            delete_request(project, request_id)
+            removed.append(request_id)
+    return removed
 
 
 def codex_batch_handoff_prompt(request_ids: list[str]) -> str:
@@ -831,8 +974,23 @@ def accept_candidate_as_codex_layer(
     return destination
 
 
-def codex_handoff_prompt(request_id: str) -> str:
+def codex_handoff_prompt(request_id: str, *, provider: str = "codex", mode: str = "") -> str:
     request_id = _validate_id(request_id, "request id")
+    provider = str(provider or "").strip().lower()
+    mode = str(mode or "").strip().lower()
+    mode_label = mode if mode in MODES else "the request's"
+    if provider == "stable_diffusion":
+        return (
+            "Use the Storyboarder MCP tools to fetch generation request "
+            f"{request_id}. This request targets the Stable Diffusion provider in {mode_label} mode: operate "
+            "Stable Diffusion to render the storyboard image rather than generating it directly. Follow the "
+            "request's generation_plan for target size, steps, style, and output policy; build the positive prompt "
+            "from compiled_prompt, apply its negative_prompt and every reference, preserve the panel aspect ratio, "
+            "and upscale back to panel size when the plan requests it. If generation_plan.prior_frame is present, "
+            "use it as the img2img base. Produce the requested number of variants, "
+            "then submit the image files with storyboard_submit_generation_result. Inspect every matched file in "
+            "keyword_assets before generating. Do not edit shots.json directly."
+        )
     return (
         "Use the Storyboarder MCP tools to fetch generation request "
         f"{request_id}, generate the requested storyboard image variants, then submit the image files "

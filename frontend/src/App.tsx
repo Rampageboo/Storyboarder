@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState, type CSSProperties } from 're
 import { reportUiReady } from './api'
 import { Topbar } from './components/Topbar'
 import { ShotInspector } from './components/ShotInspector'
+import { BoardGrid } from './components/BoardGrid'
 import { BoardStrip } from './components/BoardStrip'
 import { CanvasBoard } from './components/CanvasBoard'
 import { ReferenceSidebar } from './components/ReferenceSidebar'
@@ -11,10 +12,12 @@ import { Scene3DPanel } from './components/Scene3DPanel'
 import { NeighborContext } from './components/NeighborContext'
 import { AdvancedPanel } from './components/AdvancedPanel'
 import { SettingsModal } from './components/SettingsModal'
+import { ExportModal } from './components/ExportModal'
 import { ProjectProvider } from './state/ProjectContext'
 import { useProject } from './state/useProject'
 import { LiveBridgeProvider } from './state/LiveBridgeContext'
 import { useGlobalShortcuts } from './hooks/useGlobalShortcuts'
+import { useAutosave } from './hooks/useAutosave'
 import type { ProjectPathRequest } from './types'
 import './App.css'
 
@@ -144,12 +147,39 @@ function BoardWorkspace({
   inspectorCollapsed: boolean
   onToggleInspector: () => void
 }) {
+  const [boardView, setBoardView] = useState<'strip' | 'grid'>('strip')
   return (
     <>
       <main className="main-center">
-        <CanvasBoard />
-        <NeighborContext />
-        <BoardStrip />
+        <div className="board-view-toggle" role="tablist" aria-label="Board view">
+          <button
+            type="button"
+            role="tab"
+            aria-selected={boardView === 'strip'}
+            className={boardView === 'strip' ? 'is-active' : ''}
+            onClick={() => setBoardView('strip')}
+          >
+            Strip
+          </button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={boardView === 'grid'}
+            className={boardView === 'grid' ? 'is-active' : ''}
+            onClick={() => setBoardView('grid')}
+          >
+            Grid
+          </button>
+        </div>
+        {boardView === 'grid' ? (
+          <BoardGrid />
+        ) : (
+          <>
+            <CanvasBoard />
+            <NeighborContext />
+            <BoardStrip />
+          </>
+        )}
       </main>
       <aside className={`main-right${inspectorCollapsed ? ' is-collapsed' : ''}`}>
         <button
@@ -175,8 +205,10 @@ function BoardWorkspace({
 
 function RightRail({
   onOpenSettings,
+  onOpenExport,
 }: {
   onOpenSettings: () => void
+  onOpenExport: () => void
 }) {
   const { project, newProject, openProjectFromDialog, saveProject, dirtyShotIds, projectActionBusy, initialLoading } =
     useProject()
@@ -279,6 +311,14 @@ function RightRail({
               >
                 {projectActionBusy ? 'Saving...' : 'Save Project'}
               </button>
+              <button
+                type="button"
+                role="menuitem"
+                onClick={() => runMenuAction(onOpenExport)}
+                disabled={!project || projectActionBusy || initialLoading}
+              >
+                Export…
+              </button>
               <div className="right-rail-menu-divider" />
               <button
                 type="button"
@@ -300,10 +340,12 @@ function AppInner() {
   const { project, initialLoading, lastError, clearError, reloadProject } = useProject()
   const [workspaceMode, setWorkspaceMode] = useState<WorkspaceMode>('board')
   const [settingsOpen, setSettingsOpen] = useState(false)
+  const [exportOpen, setExportOpen] = useState(false)
   const [refsOpen, setRefsOpen] = useState(false)
   const [inspectorCollapsed, setInspectorCollapsed] = useState(false)
   const uiReadyReportedRef = useRef(false)
   useGlobalShortcuts()
+  useAutosave()
 
   const themeVars: CSSProperties = {
     '--thumb-empty-bg': project?.settings?.canvas_background_color || undefined,
@@ -372,7 +414,10 @@ function AppInner() {
                 <div className="workspace-content workspace-content-scene" hidden={workspaceMode !== 'scene3d'}>
                   <Scene3DPanel active={workspaceMode === 'scene3d'} />
                 </div>
-                <RightRail onOpenSettings={() => setSettingsOpen(true)} />
+                <RightRail
+                  onOpenSettings={() => setSettingsOpen(true)}
+                  onOpenExport={() => setExportOpen(true)}
+                />
               </>
             )}
           </div>
@@ -380,6 +425,7 @@ function AppInner() {
       </div>
       <ReferenceAssignmentPopover />
       {settingsOpen ? <SettingsModal open onClose={() => setSettingsOpen(false)} /> : null}
+      {exportOpen ? <ExportModal open onClose={() => setExportOpen(false)} /> : null}
     </div>
   )
 }

@@ -36,6 +36,11 @@ requirements, shared state risk, or material architecture/public-contract/
 persistence/security impact, upgrade or reroute it to ordinary Codex instead
 of stretching Spark beyond its intended scope.
 
+For the full Spark versus higher-capability Codex selection rules, escalation
+triggers, handoff contents, Spark task brief shape, result requirements, Claude
+acceptance checks, and parallel Spark worker limits, read
+`docs/ai-workflow/codex-model-routing.md`.
+
 ## Supported effort
 
 ```text
