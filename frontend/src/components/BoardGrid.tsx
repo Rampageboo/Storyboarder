@@ -1,3 +1,4 @@
+import { useEffect, useRef, useState, type DragEvent } from 'react'
 import { useProject } from '../state/useProject'
 import { shotDisplayLabel } from '../utils/shotDisplay'
 import {
@@ -9,6 +10,11 @@ import {
 import { ShotThumb } from './ShotThumb'
 import './BoardGrid.css'
 
+function dropIsAfter(e: DragEvent<HTMLButtonElement>): boolean {
+  const rect = e.currentTarget.getBoundingClientRect()
+  return e.clientX > rect.left + rect.width / 2
+}
+
 /** Grid overview of every board. Selecting a tile drives the same shot detail
  *  inspector as the strip; the trailing tile adds a board. */
 export function BoardGrid() {
@@ -18,13 +24,67 @@ export function BoardGrid() {
     setSelectedShotId,
     addShotAfterSelection,
     isShotDirty,
+    flushDirtyShots,
+    reorderBoards,
+    reportError,
     projectActionBusy,
     visualEpoch,
   } = useProject()
   const shots = project?.shots ?? []
+  const [dragShotId, setDragShotId] = useState<string | null>(null)
+  const [dropTarget, setDropTarget] = useState<{ id: string; after: boolean } | null>(null)
+  const gridRef = useRef<HTMLDivElement | null>(null)
+
+  useEffect(() => {
+    if (!selectedShotId || !gridRef.current) return
+    const tile = gridRef.current.querySelector<HTMLButtonElement>(`[data-shot-id="${CSS.escape(selectedShotId)}"]`)
+    tile?.scrollIntoView({ block: 'nearest' })
+  }, [selectedShotId])
+
+  const handleDragStart = (e: DragEvent<HTMLButtonElement>, shotId: string) => {
+    setDragShotId(shotId)
+    e.dataTransfer.effectAllowed = 'move'
+    try {
+      e.dataTransfer.setData('text/plain', shotId)
+    } catch {
+      // some environments disallow setData; drag still works via component state
+    }
+  }
+
+  const handleCardDragOver = (e: DragEvent<HTMLButtonElement>, shotId: string) => {
+    if (!dragShotId || dragShotId === shotId) return
+    e.preventDefault()
+    e.dataTransfer.dropEffect = 'move'
+    const after = dropIsAfter(e)
+    setDropTarget((prev) => (prev && prev.id === shotId && prev.after === after ? prev : { id: shotId, after }))
+  }
+
+  const handleCardDrop = async (e: DragEvent<HTMLButtonElement>, shotId: string) => {
+    e.preventDefault()
+    const dragId = dragShotId
+    const after = dropIsAfter(e)
+    setDragShotId(null)
+    setDropTarget(null)
+    if (!dragId || dragId === shotId) return
+    const ids = shots.map((s) => s.shot_id).filter((id) => id !== dragId)
+    const targetIndex = ids.indexOf(shotId)
+    if (targetIndex < 0) return
+    ids.splice(after ? targetIndex + 1 : targetIndex, 0, dragId)
+    try {
+      await flushDirtyShots()
+      await reorderBoards(ids, dragId)
+    } catch (error) {
+      reportError(error)
+    }
+  }
+
+  const handleDragEnd = () => {
+    setDragShotId(null)
+    setDropTarget(null)
+  }
 
   return (
-    <div className="board-grid" role="list" aria-label="Boards">
+    <div className="board-grid" ref={gridRef} role="list" aria-label="Boards">
       {shots.map((shot, index) => {
         const isSelected = selectedShotId === shot.shot_id
         const label = shotDisplayLabel(shot)
@@ -34,8 +94,13 @@ export function BoardGrid() {
             type="button"
             role="listitem"
             data-shot-id={shot.shot_id}
-            className={`board-grid-tile ${isSelected ? 'is-selected' : ''}`}
+            draggable={!projectActionBusy}
+            className={`board-grid-tile ${isSelected ? 'is-selected' : ''} ${dragShotId === shot.shot_id ? 'is-dragging' : ''} ${dropTarget?.id === shot.shot_id ? (dropTarget.after ? 'drop-after' : 'drop-before') : ''}`}
             onClick={() => setSelectedShotId(shot.shot_id)}
+            onDragStart={(e) => handleDragStart(e, shot.shot_id)}
+            onDragOver={(e) => handleCardDragOver(e, shot.shot_id)}
+            onDrop={(e) => void handleCardDrop(e, shot.shot_id)}
+            onDragEnd={handleDragEnd}
             title={label}
           >
             <div className="board-grid-thumb">
