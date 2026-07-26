@@ -143,6 +143,8 @@ There is no CI; all validation is local. Python 3.11+, deps in `requirements.txt
 
 9. **Adding an export type or option means touching four layers**: `api.py` route → `service_exports.py` `method_export_*` → `export_service.py` → the exporter. A method missed in the middle layer only fails when the route is called; `tests/test_export_service.py::TestExportScopeIsWiredEverywhere` pins the whole set (added after `method_export_image_sequence` was in fact missed).
 
+10. **Anything that deletes a work tree must stop the background loops first.** Every open `.sbd` expands into `%TEMP%/storyboarder-*`, and `bridge_refresh_loop` writes `storyboard_live_bridge.json` into the project root every 1.5 s. Deleting the tree while that loop runs makes Windows leave a delete-pending ghost directory that nothing — not `rmtree`, not `icacls`, not Explorer — can reopen or remove; only a reboot clears it. That is where the ~35 empty `storyboarder-*` husks on the Owner's machine came from. `app_state.stop_background_loops(app)` now runs before every cleanup path (desktop `_finalize`, api lifespan). Work trees carry a `.storyboarder-session.json` marker (pid + document path, excluded from the pack) so `project_document.sweep_orphaned_working_roots()` can reclaim crashed sessions' trees at startup — conservatively: never a live owner's tree, and never one holding writes newer than its document, since that is a crashed session's only copy of unsaved work. `tests/conftest.py` reclaims what the suite creates (session-scoped on purpose: scanning TEMP per test cost the suite ~40 s).
+
 ## 6. Workflow notes
 
 ```text

@@ -146,15 +146,20 @@ def create_document(
     if document.exists():
         raise ValueError(f"A file already exists at: {document}")
     root = project_document.create_working_root(document)
-    _ensure_project_dirs(root)
-    width, height = normalize_canvas_size(canvas_width, canvas_height)
-    settings = DEFAULT_SETTINGS.copy()
-    settings["canvas_width"] = width
-    settings["canvas_height"] = height
-    project = Project(root_path=root, settings=settings, document_path=document)
-    save_project(project)
-    ensure_project_blend_file(project)
-    save_project(project)
+    try:
+        _ensure_project_dirs(root)
+        width, height = normalize_canvas_size(canvas_width, canvas_height)
+        settings = DEFAULT_SETTINGS.copy()
+        settings["canvas_width"] = width
+        settings["canvas_height"] = height
+        project = Project(root_path=root, settings=settings, document_path=document)
+        save_project(project)
+        ensure_project_blend_file(project)
+        save_project(project)
+    except BaseException:
+        # Never strand the expanded tree in TEMP when creation fails partway.
+        project_document.remove_working_root(root)
+        raise
     return project
 
 
@@ -278,13 +283,9 @@ def cleanup_document_working_root(project: Project | None) -> bool:
         return False
     root = project.root_path.resolve()
     temp_root = Path(tempfile.gettempdir()).resolve()
-    if root.parent != temp_root or not root.name.startswith("storyboarder-"):
+    if root.parent != temp_root or not root.name.startswith(project_document.WORKING_ROOT_PREFIX):
         return False
-    try:
-        shutil.rmtree(root)
-    except OSError:
-        return False
-    return True
+    return project_document.remove_working_root(root)
 
 
 def add_shot(project: Project, *, after_index: int | None = None) -> Shot:

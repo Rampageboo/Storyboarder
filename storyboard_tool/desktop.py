@@ -12,7 +12,7 @@ from pathlib import Path
 
 import uvicorn
 
-from . import project_manager
+from . import app_state, project_document, project_manager
 from .backend_service import _get_main_window_restore_state
 from .live_bridge import global_bridge_dir, resolve_server_port, server_identity_url
 
@@ -209,6 +209,36 @@ def _save_window_state(window, maximized: bool = False) -> None:
         pass
 
 
+def _start_working_root_sweep() -> None:
+    """Reclaim TEMP work trees left by crashed sessions, off the launch path.
+
+    Every open `.sbd` expands into a private TEMP tree; a session that never
+    reaches its cleanup leaves that copy behind, and they add up to hundreds of
+    megabytes. The sweep only removes trees it can prove are safe (see
+    `project_document.sweep_orphaned_working_roots`) and runs on a background
+    thread so it never delays the window.
+    """
+
+    def run() -> None:
+        try:
+            result = project_document.sweep_orphaned_working_roots()
+        except Exception:
+            _LOGGER.debug("Working-root sweep failed", exc_info=True)
+            return
+        if any(result.values()):
+            _log_stage(
+                f"working-root sweep: removed {len(result['removed'])}, "
+                f"kept {len(result['kept'])} (possible unsaved work), "
+                f"unreclaimable {len(result['failed'])}"
+            )
+        for path in result["kept"]:
+            _LOGGER.info("Kept work tree with possible unsaved work: %s", path)
+        for path in result["failed"]:
+            _LOGGER.info("Could not reclaim work tree (locked by the OS): %s", path)
+
+    threading.Thread(target=run, name="storyboard-temp-sweep", daemon=True).start()
+
+
 def open_desktop_window(app, title: str = "Storyboard Tool") -> int:
     _log_stage("desktop process entered open_desktop_window")
     try:
@@ -231,6 +261,7 @@ def open_desktop_window(app, title: str = "Storyboard Tool") -> int:
 
     _configure_windows_asyncio_noise()
     start_internal_server(app, _HOST, port)
+    _start_working_root_sweep()
     _log_stage("pywebview window about to be created")
     react_index = Path(__file__).resolve().parent / "web" / "dist" / "index.html"
     if not react_index.is_file():
@@ -308,6 +339,10 @@ def open_desktop_window(app, title: str = "Storyboard Tool") -> int:
         finalized.set()
         project = app.state.project
         started = time.perf_counter()
+        # Silence the bridge/generation watchers first: both write into the work
+        # tree, and a write landing mid-delete is what leaves behind TEMP
+        # directories Windows can no longer open or remove.
+        app_state.stop_background_loops(app)
         try:
             project_manager.shutdown_reference_cleanup(
                 project,

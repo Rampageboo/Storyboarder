@@ -175,6 +175,23 @@ def _refresh_project_from_disk(app: FastAPI) -> Project:
         return project
 
 
+def stop_background_loops(app: FastAPI, timeout: float = 2.0) -> None:
+    """Halt the bridge/generation watchers and wait for them to actually stop.
+
+    Both write into the open project's work tree, so anything that removes that
+    tree must call this first. Otherwise a loop recreates a file mid-delete and
+    Windows leaves behind a directory that can no longer be opened or removed —
+    the `storyboarder-*` husks that pile up in TEMP. Safe to call repeatedly.
+    """
+    stop_event = getattr(app.state, "background_stop", None)
+    if stop_event is None:
+        return
+    stop_event.set()
+    for thread in getattr(app.state, "background_threads", ()):
+        if thread.is_alive():
+            thread.join(timeout=timeout)
+
+
 def _autosave(app: FastAPI) -> None:
     """Persist metadata after a mutation, but defer the expensive .sbd pack.
 

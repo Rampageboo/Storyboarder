@@ -214,12 +214,15 @@ def create_app(base_dir: Path, bridge_port: int = 8000) -> FastAPI:
         )
         refresh_thread.start()
         generation_thread.start()
+        # Exposed so shutdown can halt these loops *before* the work tree is
+        # removed. The bridge loop writes into the project root, so deleting the
+        # tree while it runs leaves a directory Windows can never reclaim.
+        app.state.background_stop = stop_event
+        app.state.background_threads = (refresh_thread, generation_thread)
         try:
             yield
         finally:
-            stop_event.set()
-            refresh_thread.join(timeout=2.0)
-            generation_thread.join(timeout=2.0)
+            app_state.stop_background_loops(app)
             _shutdown_reference_cleanup(app)
             project_manager.cleanup_document_working_root(app.state.project)
 

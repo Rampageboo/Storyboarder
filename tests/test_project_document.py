@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+import json
+import os
+import threading
+import time
 import zipfile
 from pathlib import Path
 
@@ -7,6 +11,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from storyboard_tool import api as api_module
+from storyboard_tool import app_state as app_state_module
 from storyboard_tool import project_document, project_manager
 
 
@@ -146,3 +151,159 @@ def test_backups_are_not_packed_into_sbd(tmp_path: Path, monkeypatch: pytest.Mon
     # ...but the shared single-file document never embeds them.
     with zipfile.ZipFile(document) as archive:
         assert not any(name.startswith("backups/") for name in archive.namelist())
+
+
+def test_session_marker_is_not_packed_into_sbd(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(project_document.tempfile, "tempdir", str(tmp_path))
+    document = tmp_path / "Marked.sbd"
+    project = project_manager.create_document(document, canvas_width=1280, canvas_height=720)
+
+    # The work tree knows which process owns it...
+    marker = project.root_path / project_document.SESSION_MARKER
+    assert marker.is_file()
+    assert json.loads(marker.read_text(encoding="utf-8"))["pid"] == os.getpid()
+
+    # ...but that is machine-local and must never travel inside the document.
+    project_manager.save_project(project)
+    with zipfile.ZipFile(document) as archive:
+        assert project_document.SESSION_MARKER not in archive.namelist()
+
+    # Reopening re-stamps the tree for the process that now owns it.
+    reopened = project_manager.open_project(document)
+    assert (reopened.root_path / project_document.SESSION_MARKER).is_file()
+
+
+def test_failed_document_creation_leaves_no_work_tree(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    temp_root = tmp_path / "temp"
+    temp_root.mkdir()
+    monkeypatch.setattr(project_document.tempfile, "tempdir", str(temp_root))
+
+    def boom(*_args, **_kwargs):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(project_manager, "save_project", boom)
+    with pytest.raises(OSError):
+        project_manager.create_document(tmp_path / "Doomed.sbd")
+
+    assert list(temp_root.glob(f"{project_document.WORKING_ROOT_PREFIX}*")) == []
+
+
+class TestSweepOrphanedWorkingRoots:
+    """The sweep must reclaim abandoned trees without ever discarding unsaved work."""
+
+    def _tree(self, temp_root: Path, name: str, *, marker: dict | None, project_json: bool) -> Path:
+        root = temp_root / f"{project_document.WORKING_ROOT_PREFIX}{name}"
+        root.mkdir()
+        if project_json:
+            (root / "project.json").write_text('{"version": 1}', encoding="utf-8")
+        if marker is not None:
+            (root / project_document.SESSION_MARKER).write_text(json.dumps(marker), encoding="utf-8")
+        return root
+
+    def test_empty_legacy_shell_is_removed(self, tmp_path: Path) -> None:
+        root = self._tree(tmp_path, "Husk", marker=None, project_json=False)
+        result = project_document.sweep_orphaned_working_roots(tmp_path)
+        assert not root.exists()
+        assert str(root) in result["removed"]
+
+    def test_legacy_tree_holding_data_is_kept(self, tmp_path: Path) -> None:
+        root = self._tree(tmp_path, "Legacy", marker=None, project_json=True)
+        result = project_document.sweep_orphaned_working_roots(tmp_path)
+        assert root.is_dir()
+        assert str(root) in result["kept"]
+
+    def test_live_owner_tree_is_untouched(self, tmp_path: Path) -> None:
+        document = tmp_path / "Live.sbd"
+        document.write_bytes(b"x")
+        root = self._tree(
+            tmp_path, "Live", marker={"pid": os.getpid(), "document_path": str(document)}, project_json=True
+        )
+        result = project_document.sweep_orphaned_working_roots(tmp_path)
+        assert root.is_dir()
+        assert str(root) not in result["removed"] and str(root) not in result["kept"]
+
+    def test_orphan_already_flushed_is_removed(self, tmp_path: Path) -> None:
+        root = self._tree(tmp_path, "Flushed", marker=None, project_json=True)
+        document = tmp_path / "Flushed.sbd"
+        document.write_bytes(b"x")
+        # Document packed after every file in the tree: nothing here is unsaved.
+        os.utime(document, (time.time() + 60, time.time() + 60))
+        (root / project_document.SESSION_MARKER).write_text(
+            json.dumps({"pid": 2**31 - 1, "document_path": str(document)}), encoding="utf-8"
+        )
+        result = project_document.sweep_orphaned_working_roots(tmp_path)
+        assert not root.exists()
+        assert str(root) in result["removed"]
+
+    def test_orphan_with_unflushed_work_is_kept(self, tmp_path: Path) -> None:
+        document = tmp_path / "Crashed.sbd"
+        document.write_bytes(b"x")
+        os.utime(document, (time.time() - 600, time.time() - 600))
+        root = self._tree(
+            tmp_path,
+            "Crashed",
+            marker={"pid": 2**31 - 1, "document_path": str(document)},
+            project_json=True,
+        )
+        # project.json is newer than the last pack -> a crashed session's only copy.
+        result = project_document.sweep_orphaned_working_roots(tmp_path)
+        assert root.is_dir()
+        assert str(root) in result["kept"]
+
+    def test_orphan_whose_document_vanished_is_kept(self, tmp_path: Path) -> None:
+        root = self._tree(
+            tmp_path,
+            "Gone",
+            marker={"pid": 2**31 - 1, "document_path": str(tmp_path / "missing.sbd")},
+            project_json=True,
+        )
+        result = project_document.sweep_orphaned_working_roots(tmp_path)
+        assert root.is_dir()
+        assert str(root) in result["kept"]
+
+
+def test_running_app_exposes_its_background_loops_for_shutdown(tmp_path: Path) -> None:
+    """Shutdown can only stop the watchers if the app publishes them.
+
+    Both loops write into the open project's work tree, so removing that tree
+    without stopping them first is what leaves undeletable TEMP directories.
+    """
+    with TestClient(api_module.create_app(tmp_path)) as client:
+        app = client.app
+        assert app.state.background_stop is not None
+        assert len(app.state.background_threads) == 2
+        assert all(thread.is_alive() for thread in app.state.background_threads)
+
+
+def test_stop_background_loops_actually_ends_the_threads(tmp_path: Path) -> None:
+    app = api_module.create_app(tmp_path)
+    stop_event = threading.Event()
+    exited = threading.Event()
+
+    def loop() -> None:
+        while not stop_event.wait(0.01):
+            pass
+        exited.set()
+
+    thread = threading.Thread(target=loop, daemon=True)
+    thread.start()
+    app.state.background_stop = stop_event
+    app.state.background_threads = (thread,)
+
+    app_state_module.stop_background_loops(app)
+
+    assert exited.is_set()
+    assert not thread.is_alive()
+    app_state_module.stop_background_loops(app)  # idempotent
+
+
+def test_sweep_reports_trees_it_cannot_reclaim(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    root = tmp_path / f"{project_document.WORKING_ROOT_PREFIX}Stuck"
+    root.mkdir()  # No project.json -> a removal candidate.
+    monkeypatch.setattr(project_document, "remove_working_root", lambda _root: False)
+
+    result = project_document.sweep_orphaned_working_roots(tmp_path)
+
+    # Neither silently dropped nor reported as removed.
+    assert result["removed"] == []
+    assert str(root) in result["failed"]
