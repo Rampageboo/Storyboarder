@@ -193,6 +193,28 @@ class ShotWorkItemsTests(unittest.TestCase):
 
     # ── key format ────────────────────────────────────────────────────────────
 
+    def test_auto_added_next_shot_inherits_current_scene(self):
+        self._new_project()
+        shot_id = self._add_shot("Scene anchor")
+        updated = _quiet(
+            lambda: self.client.patch(
+                f"/api/shots/{shot_id}",
+                json={"scene": "Kitchen", "scene_id": "scene_kitchen"},
+            )
+        )
+        self.assertEqual(updated.status_code, 200, updated.text)
+
+        response = _quiet(
+            lambda: self.client.post(
+                "/api/plugin/shots/next",
+                json={"current_shot_id": shot_id, "auto_add": True},
+            )
+        )
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertTrue(response.json()["created"])
+        self.assertEqual(response.json()["shot"]["scene"], "Kitchen")
+        self.assertEqual(response.json()["shot"]["scene_id"], "scene_kitchen")
+
     def test_key_uses_shot_prefix(self):
         self._new_project()
         sid = self._add_shot()

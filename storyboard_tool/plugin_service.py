@@ -5,7 +5,7 @@ from typing import Any
 
 from fastapi import FastAPI, HTTPException
 
-from . import app_state, project_manager, runtime_state, scene2d
+from . import app_state, project_manager, runtime_state, scene2d, shot_service
 from .models import Shot
 
 
@@ -209,7 +209,10 @@ class PluginBridgeService:
         if index >= 0 and index + 1 < len(project.shots):
             next_shot = project.shots[index + 1]
         elif auto_add:
-            next_shot = project_manager.add_shot(project, after_index=index if index >= 0 else None)
+            next_shot = shot_service.create_shot(
+                project,
+                after_shot_id=project.shots[index].shot_id if index >= 0 else None,
+            )
             created = next_shot
             app_state._autosave(self.app)
             self.mark_project_changed()

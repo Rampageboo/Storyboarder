@@ -35,9 +35,15 @@ def find_shot(project: Project, shot_id: str) -> Shot:
 
 def create_shot(project: Project, after_shot_id: str | None = None) -> Shot:
     after_index: int | None = None
+    previous_shot: Shot | None = project.shots[-1] if project.shots else None
     if after_shot_id:
         after_index = find_shot_index(project, after_shot_id)
-    return project_manager.add_shot(project, after_index=after_index)
+        previous_shot = project.shots[after_index]
+    shot = project_manager.add_shot(project, after_index=after_index)
+    if previous_shot is not None:
+        shot.scene = previous_shot.scene
+        shot.scene_id = previous_shot.scene_id
+    return shot
 
 
 def duplicate_shot(project: Project, shot_id: str) -> Shot:

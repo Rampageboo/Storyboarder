@@ -232,7 +232,7 @@ function ShotInspectorEditor({
               <span className="field-hint">Replaces separate Description, Story beat, and Action inputs.</span>
             </label>
 
-            <details className="shot-details">
+            <details className="shot-details" open>
               <summary>Shot details</summary>
               <div className="field-grid shot-details-grid">
               <label>

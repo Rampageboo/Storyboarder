@@ -64,14 +64,36 @@ class TestCreateShot(unittest.TestCase):
             second = shot_service.create_shot(project)
             self.assertEqual(project.shots[-1].shot_id, second.shot_id)
 
+    def test_create_shot_inherits_scene_from_previous_shot_only_at_creation(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            project = project_manager.create_project(Path(tmp))
+            first = shot_service.create_shot(project)
+            first.scene = "Kitchen"
+            first.scene_id = "scene_kitchen"
+
+            second = shot_service.create_shot(project)
+            self.assertEqual(second.scene, "Kitchen")
+            self.assertEqual(second.scene_id, "scene_kitchen")
+
+            first.scene = "Garden"
+            first.scene_id = "scene_garden"
+            self.assertEqual(second.scene, "Kitchen")
+            self.assertEqual(second.scene_id, "scene_kitchen")
+
     def test_create_shot_after_specific_shot(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             project = project_manager.create_project(Path(tmp))
             a = shot_service.create_shot(project)
+            a.scene = "Kitchen"
+            a.scene_id = "scene_kitchen"
             c = shot_service.create_shot(project)
+            c.scene = "Garden"
+            c.scene_id = "scene_garden"
             b = shot_service.create_shot(project, after_shot_id=a.shot_id)
             ids = [s.shot_id for s in project.shots]
             self.assertEqual(ids, [a.shot_id, b.shot_id, c.shot_id])
+            self.assertEqual(b.scene, "Kitchen")
+            self.assertEqual(b.scene_id, "scene_kitchen")
 
     def test_create_shot_raises_when_after_shot_not_found(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

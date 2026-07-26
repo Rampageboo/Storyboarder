@@ -248,7 +248,7 @@ export function BoardStrip() {
       for (const id of alignRetryRef.current) window.cancelAnimationFrame(id)
       alignRetryRef.current = []
     }
-  }, [selectedShotId, shots.length, visualEpoch])
+  }, [selectedShotId, shots.length])
 
   useLayoutEffect(() => {
     if (!selectedShotId || selectedIndex < 0 || !viewportRef.current) return
@@ -275,6 +275,12 @@ export function BoardStrip() {
     let raf = 0
     let target = viewport.scrollLeft
     let animating = false
+    const stopAnimation = () => {
+      if (raf) cancelAnimationFrame(raf)
+      raf = 0
+      animating = false
+      target = viewport.scrollLeft
+    }
     const tick = () => {
       const diff = target - viewport.scrollLeft
       if (Math.abs(diff) < 0.5) {
@@ -289,7 +295,10 @@ export function BoardStrip() {
     const onWheel = (e: WheelEvent) => {
       if (viewport.scrollWidth <= viewport.clientWidth) return
       // Only intercept vertical-dominant events; horizontal (trackpad) scroll natively.
-      if (Math.abs(e.deltaX) >= Math.abs(e.deltaY)) return
+      if (Math.abs(e.deltaX) >= Math.abs(e.deltaY)) {
+        stopAnimation()
+        return
+      }
       const max = viewport.scrollWidth - viewport.clientWidth
       if (!animating) target = viewport.scrollLeft
       target = Math.max(0, Math.min(max, target + e.deltaY))
@@ -299,9 +308,13 @@ export function BoardStrip() {
       }
     }
     viewport.addEventListener('wheel', onWheel, { passive: true })
+    // Direct manipulation must win over a target left by wheel easing. Without
+    // this, dragging the native scrollbar can be overwritten on the next frame.
+    viewport.addEventListener('pointerdown', stopAnimation, { passive: true })
     return () => {
       viewport.removeEventListener('wheel', onWheel)
-      if (raf) cancelAnimationFrame(raf)
+      viewport.removeEventListener('pointerdown', stopAnimation)
+      stopAnimation()
     }
   }, [])
 

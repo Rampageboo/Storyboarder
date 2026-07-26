@@ -40,9 +40,9 @@ export function CanvasBoard() {
   const [previewZoom, setPreviewZoom] = useState(100)
   const [fitPreview, setFitPreview] = useState(true)
   const [layerVisibility, setLayerVisibility] = useState<Record<CanvasLayerId, boolean>>(ALL_LAYERS_VISIBLE)
-  // The queue is an on-demand inspector. Keeping it closed by default leaves the
-  // preview unobstructed, especially when a project has many queued shots.
-  const [layersPanelOpen, setLayersPanelOpen] = useState(false)
+  // Keep the inspector available by default, then preserve the user's explicit
+  // open/closed choice while they move between boards.
+  const [layersPanelOpen, setLayersPanelOpen] = useState(true)
   const imageInputRef = useRef<HTMLInputElement | null>(null)
   const sourceInputRef = useRef<HTMLInputElement | null>(null)
   const canvasBodyRef = useRef<HTMLDivElement | null>(null)
@@ -109,7 +109,6 @@ export function CanvasBoard() {
     setPrevShotId(selectedShotId)
     setNote('')
     setLayerVisibility(ALL_LAYERS_VISIBLE)
-    setLayersPanelOpen(false)
     setPreviewZoom(100)
     setFitPreview(true)
     const cur = project?.shots.find((s) => s.shot_id === selectedShotId)
