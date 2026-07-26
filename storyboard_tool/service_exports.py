@@ -5,7 +5,7 @@ from typing import Any
 
 from fastapi import HTTPException
 
-from . import app_state, export_service, project_manager
+from . import app_state, board_range, export_service, project_manager
 from .errors import AppErrorCode, app_error
 
 logger = logging.getLogger(__name__)
@@ -38,17 +38,50 @@ _FILENAMES: dict[str, str] = {
 class ExportServiceMixin:
     """Export generation, download lookups, and project file serving."""
 
-    def _export_scope(self, shot_id: str = ""):
-        """Resolve (project view, filename suffix) for a whole-board or single-board export."""
+    def _export_scope(self, boards: str = ""):
+        """Resolve (project view, filename suffix) for a whole or partial export.
+
+        ``boards`` is the range spec the export dialog collects, e.g. "1-5, 8";
+        empty means the whole storyboard.
+        """
         project = app_state._require_project(self.app)
         try:
-            scoped, suffix = export_service.scope_to_shot(project, shot_id)
+            scoped, suffix = export_service.scope_to_boards(project, boards)
         except ValueError as exc:
-            raise app_error(AppErrorCode.SHOT_NOT_FOUND, str(exc), status=404) from exc
+            raise app_error(AppErrorCode.INVALID_REQUEST, str(exc)) from exc
         return project, scoped, suffix
 
-    def method_export_pdf(self, layout: str = "two_per_page", shot_id: str = "") -> dict[str, str]:
-        project, scoped, suffix = self._export_scope(shot_id)
+    def method_resolve_board_range(self, boards: str = "") -> dict[str, Any]:
+        """Validate a range spec for the export dialog, without exporting anything.
+
+        Keeps the dialog's live feedback and the export itself on one parser
+        instead of a second copy in the frontend.
+        """
+        project = app_state._require_project(self.app)
+        total = len(project.shots)
+        if not str(boards or "").strip():
+            everything = list(range(total))
+            return {
+                "boards": [index + 1 for index in everything],
+                "count": total,
+                "label": board_range.describe(everything, total),
+                "suffix": "",
+                "error": "",
+            }
+        try:
+            indexes = board_range.parse(boards, total)
+        except ValueError as exc:
+            return {"boards": [], "count": 0, "label": "", "suffix": "", "error": str(exc)}
+        return {
+            "boards": [index + 1 for index in indexes],
+            "count": len(indexes),
+            "label": board_range.describe(indexes, total),
+            "suffix": board_range.filename_suffix(indexes, total),
+            "error": "",
+        }
+
+    def method_export_pdf(self, layout: str = "two_per_page", boards: str = "") -> dict[str, str]:
+        project, scoped, suffix = self._export_scope(boards)
         chosen = layout if layout in export_service.VALID_PDF_LAYOUTS else export_service.DEFAULT_PDF_LAYOUT
         try:
             output_path = export_service.export_pdf(scoped, chosen, suffix)
@@ -60,8 +93,8 @@ class ExportServiceMixin:
         project_manager.save_settings(project)
         return {"path": str(output_path), "download_url": _DOWNLOAD_URLS["pdf"]}
 
-    def method_export_shot_list(self, shot_id: str = "") -> dict[str, str]:
-        _, scoped, suffix = self._export_scope(shot_id)
+    def method_export_shot_list(self, boards: str = "") -> dict[str, str]:
+        _, scoped, suffix = self._export_scope(boards)
         try:
             output_path = export_service.export_shot_list(scoped, suffix)
         except Exception as exc:
@@ -69,8 +102,8 @@ class ExportServiceMixin:
             raise app_error(AppErrorCode.EXPORT_FAILED, str(exc), status=500) from exc
         return {"path": str(output_path), "download_url": _DOWNLOAD_URLS["shot_list"]}
 
-    def method_export_timing(self, shot_id: str = "") -> dict[str, str]:
-        _, scoped, suffix = self._export_scope(shot_id)
+    def method_export_timing(self, boards: str = "") -> dict[str, str]:
+        _, scoped, suffix = self._export_scope(boards)
         try:
             output_path = export_service.export_timing(scoped, suffix)
         except Exception as exc:
@@ -78,8 +111,8 @@ class ExportServiceMixin:
             raise app_error(AppErrorCode.EXPORT_FAILED, str(exc), status=500) from exc
         return {"path": str(output_path), "download_url": _DOWNLOAD_URLS["timing"]}
 
-    def method_export_contact_sheet(self, shot_id: str = "") -> dict[str, str]:
-        _, scoped, suffix = self._export_scope(shot_id)
+    def method_export_contact_sheet(self, boards: str = "") -> dict[str, str]:
+        _, scoped, suffix = self._export_scope(boards)
         try:
             output_path = export_service.export_contact_sheet(scoped, suffix)
         except Exception as exc:
@@ -93,9 +126,9 @@ class ExportServiceMixin:
         fps: int = 24,
         seconds_per_board: float | None = None,
         captions: bool = False,
-        shot_id: str = "",
+        boards: str = "",
     ) -> dict[str, str]:
-        _, scoped, suffix = self._export_scope(shot_id)
+        _, scoped, suffix = self._export_scope(boards)
         try:
             output_path = export_service.export_animatic(
                 scoped,
@@ -111,10 +144,10 @@ class ExportServiceMixin:
             raise app_error(AppErrorCode.EXPORT_FAILED, str(exc), status=500) from exc
         return {"path": str(output_path), "download_url": _DOWNLOAD_URLS["animatic"]}
 
-    def method_open_export(self, export_type: str, shot_id: str = "") -> dict[str, str]:
-        # The client sends back the same (type, shot_id) it exported with, so the
+    def method_open_export(self, export_type: str, boards: str = "") -> dict[str, str]:
+        # The client sends back the same (type, boards) it exported with, so the
         # path is recomputed here rather than accepted from the request.
-        _, scoped, suffix = self._export_scope(shot_id)
+        _, scoped, suffix = self._export_scope(boards)
         try:
             output_path = export_service.open_export(scoped, export_type, suffix)
         except FileNotFoundError as exc:
@@ -138,8 +171,8 @@ class ExportServiceMixin:
             "filename": _FILENAMES["animatic"],
         }
 
-    def method_export_image_sequence(self, shot_id: str = "") -> dict[str, str]:
-        _, scoped, suffix = self._export_scope(shot_id)
+    def method_export_image_sequence(self, boards: str = "") -> dict[str, str]:
+        _, scoped, suffix = self._export_scope(boards)
         try:
             output_dir = export_service.export_image_sequence(scoped, suffix)
         except Exception as exc:

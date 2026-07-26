@@ -1,4 +1,4 @@
-import { useCallback, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import {
   exportAnimatic,
   exportContactSheet,
@@ -7,8 +7,9 @@ import {
   exportShotList,
   exportTiming,
   openExport,
+  resolveBoardRange,
 } from '../api'
-import type { ExportResult, ExportScope, ExportType, PdfLayout } from '../api/export'
+import type { ExportResult, ExportScope, ExportType, PdfLayout, ResolvedRange } from '../api/export'
 import { useProject } from '../state/useProject'
 import './ExportModal.css'
 
@@ -17,19 +18,69 @@ interface ExportModalProps {
   onClose: () => void
 }
 
+type RangeMode = 'all' | 'current' | 'custom'
+
+const RANGE_DEBOUNCE_MS = 200
+
 export function ExportModal({ open, onClose }: ExportModalProps) {
   const { project, selectedShotId, flushDirtyShots, projectActionBusy, reportError } = useProject()
   const [busy, setBusy] = useState<ExportType | ''>('')
   // Keeps the scope each file was written with, so Open still finds it after the
-  // scope toggle moves.
+  // range moves.
   const [done, setDone] = useState<Partial<Record<ExportType, ExportScope>>>({})
   const [pdfLayout, setPdfLayout] = useState<PdfLayout>('one_per_page')
   const [fps, setFps] = useState(24)
   const [captions, setCaptions] = useState(false)
-  const [currentOnly, setCurrentOnly] = useState(false)
+  const [rangeMode, setRangeMode] = useState<RangeMode>('all')
+  const [customRange, setCustomRange] = useState('')
+  const [resolved, setResolved] = useState<ResolvedRange | null>(null)
 
-  // Applies to every export below. Empty means the whole storyboard.
-  const scope: ExportScope = currentOnly && selectedShotId ? { shot_id: selectedShotId } : {}
+  const totalBoards = project?.shots.length ?? 0
+  const selectedIndex = project ? project.shots.findIndex((shot) => shot.shot_id === selectedShotId) : -1
+  const selectedBoard = selectedIndex >= 0 ? selectedIndex + 1 : 0
+
+  // One spec drives every export below. Empty means the whole storyboard, so
+  // "current board" is just the shorthand for its own number.
+  const boards = rangeMode === 'custom' ? customRange : rangeMode === 'current' && selectedBoard ? String(selectedBoard) : ''
+  const scope: ExportScope = boards ? { boards } : {}
+
+  // Validate as the user types, on the backend's parser rather than a second
+  // copy of the grammar here.
+  const requestId = useRef(0)
+  const customIsBlank = rangeMode === 'custom' && customRange.trim() === ''
+
+  // A blank field means "not chosen yet", not "everything" — never resolve it,
+  // or an empty Range would silently export the whole storyboard.
+  const shouldResolve = open && rangeMode === 'custom' && !customIsBlank
+  useEffect(() => {
+    if (!shouldResolve) return
+    const id = ++requestId.current
+    const timer = window.setTimeout(() => {
+      void resolveBoardRange(customRange)
+        .then((result) => {
+          if (id === requestId.current) setResolved(result)
+        })
+        .catch(() => {
+          if (id === requestId.current) setResolved(null)
+        })
+    }, RANGE_DEBOUNCE_MS)
+    return () => window.clearTimeout(timer)
+  }, [shouldResolve, customRange])
+
+  // Stale feedback is cleared where the change happens, not from an effect.
+  const chooseRangeMode = useCallback((mode: RangeMode) => {
+    requestId.current += 1
+    setResolved(null)
+    setRangeMode(mode)
+  }, [])
+
+  const editCustomRange = useCallback((value: string) => {
+    requestId.current += 1
+    setResolved(null)
+    setCustomRange(value)
+  }, [])
+
+  const rangeInvalid = rangeMode === 'custom' && (customIsBlank || !resolved || !!resolved.error || resolved.count === 0)
 
   const run = useCallback(
     async (type: ExportType, usedScope: ExportScope, fn: () => Promise<ExportResult>) => {
@@ -60,9 +111,8 @@ export function ExportModal({ open, onClose }: ExportModalProps) {
 
   if (!open || !project) return null
 
-  const disabled = busy !== '' || projectActionBusy
-  const selectedIndex = project.shots.findIndex((shot) => shot.shot_id === selectedShotId)
-  const selectedLabel = selectedIndex >= 0 ? `Board ${selectedIndex + 1}` : 'the selected board'
+  const disabled = busy !== '' || projectActionBusy || rangeInvalid
+  const suffix = rangeMode === 'all' ? '' : rangeMode === 'current' ? `_board-${String(selectedBoard).padStart(3, '0')}` : resolved?.suffix ?? ''
 
   const openButton = (type: ExportType, label = 'Open') => {
     const usedScope = done[type]
@@ -92,30 +142,68 @@ export function ExportModal({ open, onClose }: ExportModalProps) {
           </button>
         </div>
 
-        <div className="export-scope" role="radiogroup" aria-label="Export range">
-          <button
-            type="button"
-            role="radio"
-            aria-checked={!currentOnly}
-            className={currentOnly ? '' : 'is-active'}
-            onClick={() => setCurrentOnly(false)}
-            disabled={disabled}
-          >
-            Whole storyboard
-            <small>{project.shots.length} boards</small>
-          </button>
-          <button
-            type="button"
-            role="radio"
-            aria-checked={currentOnly}
-            className={currentOnly ? 'is-active' : ''}
-            onClick={() => setCurrentOnly(true)}
-            disabled={disabled || !selectedShotId}
-            title={selectedShotId ? `Export only ${selectedLabel}` : 'Select a board first'}
-          >
-            Current board only
-            <small>{selectedShotId ? selectedLabel : 'none selected'}</small>
-          </button>
+        <div className="export-range">
+          <div className="export-range-modes" role="radiogroup" aria-label="Export range">
+            <button
+              type="button"
+              role="radio"
+              aria-checked={rangeMode === 'all'}
+              className={rangeMode === 'all' ? 'is-active' : ''}
+              onClick={() => chooseRangeMode('all')}
+              disabled={busy !== ''}
+            >
+              All boards
+              <small>{totalBoards} total</small>
+            </button>
+            <button
+              type="button"
+              role="radio"
+              aria-checked={rangeMode === 'current'}
+              className={rangeMode === 'current' ? 'is-active' : ''}
+              onClick={() => chooseRangeMode('current')}
+              disabled={busy !== '' || !selectedBoard}
+              title={selectedBoard ? `Export only board ${selectedBoard}` : 'Select a board first'}
+            >
+              Current board
+              <small>{selectedBoard ? `Board ${selectedBoard}` : 'none selected'}</small>
+            </button>
+            <button
+              type="button"
+              role="radio"
+              aria-checked={rangeMode === 'custom'}
+              className={rangeMode === 'custom' ? 'is-active' : ''}
+              onClick={() => chooseRangeMode('custom')}
+              disabled={busy !== ''}
+            >
+              Range
+              <small>e.g. 1-5, 8</small>
+            </button>
+          </div>
+
+          {rangeMode === 'custom' ? (
+            <div className="export-range-input">
+              <label htmlFor="export-range-field">Boards</label>
+              <input
+                id="export-range-field"
+                type="text"
+                value={customRange}
+                onChange={(event) => editCustomRange(event.target.value)}
+                placeholder={totalBoards > 1 ? `1-${totalBoards}, or 1-3, 6` : '1'}
+                spellCheck={false}
+                autoComplete="off"
+                disabled={busy !== ''}
+                aria-invalid={!!resolved?.error}
+                aria-describedby="export-range-status"
+              />
+              <span
+                id="export-range-status"
+                className={`export-range-status${resolved?.error ? ' is-error' : ''}`}
+                role={resolved?.error ? 'alert' : undefined}
+              >
+                {resolved?.error || resolved?.label || 'Enter a board range'}
+              </span>
+            </div>
+          ) : null}
         </div>
 
         <div className="export-modal-body">
@@ -190,7 +278,7 @@ export function ExportModal({ open, onClose }: ExportModalProps) {
                 onClick={() => void run('image_sequence', scope, () => exportImageSequence(scope))}
                 disabled={disabled}
               >
-                {busy === 'image_sequence' ? 'Rendering…' : currentOnly ? 'Board image (PNG)' : 'Image sequence'}
+                {busy === 'image_sequence' ? 'Rendering…' : rangeMode === 'current' ? 'Board image (PNG)' : 'Image sequence'}
               </button>
               {openButton('image_sequence', 'Open folder')}
             </div>
@@ -214,7 +302,7 @@ export function ExportModal({ open, onClose }: ExportModalProps) {
         <div className="export-modal-footer">
           <span className="export-note">
             Files are written to the project&rsquo;s <code>exports/</code> folder
-            {currentOnly && selectedShotId ? <>, named <code>…_board-{String(selectedIndex + 1).padStart(3, '0')}</code></> : null}.
+            {suffix ? <>, named <code>…{suffix}</code></> : null}.
           </span>
           <button type="button" onClick={onClose} disabled={busy !== ''}>
             Close

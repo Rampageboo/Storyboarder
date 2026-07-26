@@ -9,12 +9,33 @@ export interface ExportResult {
 }
 
 /**
- * Empty (or omitted) shot_id exports the whole storyboard. A shot_id narrows the
- * export to that one board and gives its output a `_board-NNN` suffix, so a
- * single-board export never overwrites the whole-storyboard one.
+ * Which boards an export covers, as the range spec the dialog collects —
+ * `3`, `1-5`, `8-`, `1-3, 6, 9-10`. Empty (or omitted) exports the whole
+ * storyboard. A partial export gets a `_board-NNN` / `_boards-NNN-MMM` suffix,
+ * so it never overwrites the whole-storyboard output.
  */
 export interface ExportScope {
-  shot_id?: string
+  boards?: string
+}
+
+export interface ResolvedRange {
+  /** 1-based board numbers, ascending. Empty when the spec is invalid. */
+  boards: number[]
+  count: number
+  /** Short summary for the dialog, e.g. "Boards 2-4 (3 of 10)". */
+  label: string
+  /** Filename suffix these boards produce; empty for a whole-storyboard export. */
+  suffix: string
+  /** User-facing problem with the spec, or '' when it is valid. */
+  error: string
+}
+
+/**
+ * Validate a range spec without exporting. Keeps the dialog's live feedback on
+ * the same parser the export itself uses, rather than a second copy here.
+ */
+export function resolveBoardRange(boards: string): Promise<ResolvedRange> {
+  return requestJson<ResolvedRange>('/api/export/resolve-range', { method: 'POST', body: { boards } })
 }
 
 export interface AnimaticOptions extends ExportScope {

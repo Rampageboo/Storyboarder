@@ -178,14 +178,19 @@
 }
 
 /* Export range: applies to every export in the dialog. */
-.export-scope {
+.export-range {
   display: grid;
-  grid-template-columns: 1fr 1fr;
   gap: 8px;
   padding: 12px 18px 0;
 }
 
-.export-scope button {
+.export-range-modes {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+}
+
+.export-range-modes button {
   display: grid;
   gap: 2px;
   padding: 9px 12px;
@@ -198,21 +203,54 @@
   cursor: pointer;
 }
 
-.export-scope button small {
+.export-range-modes button small {
   color: var(--color-muted);
   font-size: 10px;
 }
 
-.export-scope button:hover:not(:disabled) {
+.export-range-modes button:hover:not(:disabled) {
   background: var(--bg-hover);
 }
 
-.export-scope button.is-active {
+.export-range-modes button.is-active {
   border-color: var(--color-accent);
   background: color-mix(in srgb, var(--color-accent) 12%, transparent);
 }
 
-.export-scope button:disabled {
+.export-range-modes button:disabled {
   opacity: 0.5;
   cursor: default;
+}
+
+.export-range-input {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 8px 10px;
+}
+
+.export-range-input label {
+  font-size: 12px;
+  color: var(--color-muted);
+}
+
+.export-range-input input {
+  min-height: 30px;
+  padding: 0 10px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+
+.export-range-input input[aria-invalid='true'] {
+  border-color: var(--color-danger);
+}
+
+.export-range-status {
+  grid-column: 2;
+  font-size: 11px;
+  color: var(--color-muted);
+}
+
+.export-range-status.is-error {
+  color: var(--color-danger);
 }

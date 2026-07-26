@@ -67,23 +67,24 @@ class TestResolveOutputPath(unittest.TestCase):
             )
 
 
-class TestScopeToShot(unittest.TestCase):
-    def test_empty_shot_id_keeps_the_whole_storyboard(self) -> None:
+class TestScopeToBoards(unittest.TestCase):
+    def _project(self, tmp: str, count: int) -> Project:
+        project = _make_project(tmp)
+        for index in range(count):
+            _add_shot(project, chr(ord("a") + index))
+        return project
+
+    def test_empty_spec_keeps_the_whole_storyboard(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            project = _make_project(tmp)
-            _add_shot(project, "a")
-            _add_shot(project, "b")
-            scoped, suffix = export_service.scope_to_shot(project, "")
+            project = self._project(tmp, 2)
+            scoped, suffix = export_service.scope_to_boards(project, "")
             self.assertIs(scoped, project)
             self.assertEqual(suffix, "")
 
-    def test_scoping_keeps_only_that_board_and_names_it_by_position(self) -> None:
+    def test_single_board_keeps_only_that_board_and_names_it_by_position(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            project = _make_project(tmp)
-            _add_shot(project, "a")
-            _add_shot(project, "b")
-            _add_shot(project, "c")
-            scoped, suffix = export_service.scope_to_shot(project, "c")
+            project = self._project(tmp, 3)
+            scoped, suffix = export_service.scope_to_boards(project, "3")
             self.assertEqual([shot.shot_id for shot in scoped.shots], ["c"])
             self.assertEqual(suffix, "_board-003")
             # A view, not a copy: paths and settings still point at the real project.
@@ -92,12 +93,31 @@ class TestScopeToShot(unittest.TestCase):
             # The real project keeps every board.
             self.assertEqual(len(project.shots), 3)
 
-    def test_unknown_shot_id_raises_value_error(self) -> None:
+    def test_range_keeps_those_boards_in_storyboard_order(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            project = _make_project(tmp)
-            _add_shot(project, "a")
+            project = self._project(tmp, 6)
+            scoped, suffix = export_service.scope_to_boards(project, "2-4")
+            self.assertEqual([shot.shot_id for shot in scoped.shots], ["b", "c", "d"])
+            self.assertEqual(suffix, "_boards-002-004")
+
+    def test_gappy_spec_is_ordered_by_position_not_by_how_it_was_typed(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            project = self._project(tmp, 6)
+            scoped, _ = export_service.scope_to_boards(project, "5, 1-2")
+            self.assertEqual([shot.shot_id for shot in scoped.shots], ["a", "b", "e"])
+
+    def test_selecting_every_board_keeps_the_plain_filename(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            project = self._project(tmp, 3)
+            scoped, suffix = export_service.scope_to_boards(project, "1-3")
+            self.assertEqual(len(scoped.shots), 3)
+            self.assertEqual(suffix, "")
+
+    def test_out_of_range_spec_raises_value_error(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            project = self._project(tmp, 2)
             with self.assertRaises(ValueError):
-                export_service.scope_to_shot(project, "missing")
+                export_service.scope_to_boards(project, "9")
 
 
 class TestCheckExportExists(unittest.TestCase):
@@ -117,9 +137,9 @@ class TestCheckExportExists(unittest.TestCase):
 
 
 class TestExportScopeIsWiredEverywhere(unittest.TestCase):
-    """Every export the modal offers must accept a single-board scope.
+    """Every export the modal offers must accept a board range.
 
-    A generating export method that silently lacks `shot_id` shows up only when
+    A generating export method that silently lacks `boards` shows up only when
     the route is called, so pin the whole set here.
     """
 
@@ -131,42 +151,80 @@ class TestExportScopeIsWiredEverywhere(unittest.TestCase):
         "method_export_animatic",
         "method_export_image_sequence",
         "method_open_export",
+        "method_resolve_board_range",
     )
 
-    def test_every_export_method_accepts_shot_id(self) -> None:
+    def test_every_export_method_accepts_a_board_range(self) -> None:
         from storyboard_tool.service_exports import ExportServiceMixin
 
         for name in self.SCOPED_METHODS:
             with self.subTest(method=name):
                 parameters = inspect.signature(getattr(ExportServiceMixin, name)).parameters
-                self.assertIn("shot_id", parameters)
-                self.assertEqual(parameters["shot_id"].default, "")
+                self.assertIn("boards", parameters)
+                self.assertEqual(parameters["boards"].default, "")
 
-    def test_scoped_routes_write_board_suffixed_output(self) -> None:
+    def _client_with_boards(self, tmp: str, count: int) -> TestClient:
+        client = TestClient(api_module.create_app(Path(tmp)), raise_server_exceptions=False)
+        with contextlib.redirect_stderr(io.StringIO()):
+            created = client.post("/api/project/new", json={"path": str(Path(tmp) / "Scoped.sbd")})
+            self.assertEqual(created.status_code, 200)
+            for _ in range(count):
+                client.post("/api/shots", json={})
+        return client
+
+    def test_scoped_routes_write_range_suffixed_output(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            app = api_module.create_app(Path(tmp))
-            client = TestClient(app, raise_server_exceptions=False)
+            client = self._client_with_boards(tmp, 4)
             with contextlib.redirect_stderr(io.StringIO()):
-                created = client.post("/api/project/new", json={"path": str(Path(tmp) / "Scoped.sbd")})
-                self.assertEqual(created.status_code, 200)
-                for _ in range(2):
-                    client.post("/api/shots", json={})
-                shots = client.get("/api/project").json()["shots"]
-                self.assertGreaterEqual(len(shots), 2)
-                second = shots[1]["shot_id"]
-
-                for route, expected in (
-                    ("/api/export/shot-list", "shot_list_board-002.csv"),
-                    ("/api/export/timing", "timing_board-002.json"),
-                    ("/api/export/image-sequence", "image_sequence_board-002"),
+                for spec, route, expected in (
+                    ("2", "/api/export/shot-list", "shot_list_board-002.csv"),
+                    ("2-3", "/api/export/shot-list", "shot_list_boards-002-003.csv"),
+                    ("1,4", "/api/export/timing", "timing_boards-001+004.json"),
+                    ("2-3", "/api/export/image-sequence", "image_sequence_boards-002-003"),
+                    ("", "/api/export/shot-list", "shot_list.csv"),
                 ):
-                    with self.subTest(route=route):
-                        response = client.post(route, json={"shot_id": second})
+                    with self.subTest(spec=spec, route=route):
+                        response = client.post(route, json={"boards": spec})
                         self.assertEqual(response.status_code, 200, response.text)
                         self.assertEqual(Path(response.json()["path"]).name, expected)
 
-                unknown = client.post("/api/export/shot-list", json={"shot_id": "no-such-board"})
-                self.assertEqual(unknown.status_code, 404)
+    def test_range_export_contains_only_those_boards(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            client = self._client_with_boards(tmp, 5)
+            with contextlib.redirect_stderr(io.StringIO()):
+                response = client.post("/api/export/shot-list", json={"boards": "2-4"})
+            self.assertEqual(response.status_code, 200, response.text)
+            rows = Path(response.json()["path"]).read_text(encoding="utf-8").strip().splitlines()
+            self.assertEqual(len(rows) - 1, 3)  # header + three boards
+
+    def test_bad_range_is_rejected_with_a_readable_message(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            client = self._client_with_boards(tmp, 2)
+            with contextlib.redirect_stderr(io.StringIO()):
+                response = client.post("/api/export/shot-list", json={"boards": "9"})
+            self.assertEqual(response.status_code, 400)
+            self.assertIn("this storyboard has 2", response.json()["detail"])
+
+    def test_resolve_range_reports_selection_without_exporting(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            client = self._client_with_boards(tmp, 5)
+            with contextlib.redirect_stderr(io.StringIO()):
+                ok = client.post("/api/export/resolve-range", json={"boards": "2-4"}).json()
+                everything = client.post("/api/export/resolve-range", json={"boards": ""}).json()
+                bad = client.post("/api/export/resolve-range", json={"boards": "nope"}).json()
+
+            self.assertEqual(ok["boards"], [2, 3, 4])
+            self.assertEqual(ok["count"], 3)
+            self.assertEqual(ok["suffix"], "_boards-002-004")
+            self.assertEqual(ok["error"], "")
+
+            self.assertEqual(everything["count"], 5)
+            self.assertEqual(everything["suffix"], "")
+
+            self.assertEqual(bad["count"], 0)
+            self.assertIn("not a board number", bad["error"])
+            # A bad range is reported, not raised: the dialog validates as you type.
+            self.assertFalse((Path(tmp) / "exports").exists())
 
 
 class TestGetMissingMedia(unittest.TestCase):

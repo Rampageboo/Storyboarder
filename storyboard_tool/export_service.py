@@ -7,6 +7,7 @@ from dataclasses import replace
 from pathlib import Path
 from typing import Literal
 
+from . import board_range
 from .export_utils import (
     export_contact_sheet as _export_contact_sheet,
     export_image_sequence as _export_image_sequence,
@@ -29,20 +30,20 @@ _OUTPUT_PATHS: dict[str, str] = {
 }
 
 
-def scope_to_shot(project: Project, shot_id: str) -> tuple[Project, str]:
-    """Narrow an export to a single board.
+def scope_to_boards(project: Project, boards: str) -> tuple[Project, str]:
+    """Narrow an export to a board range, e.g. ``1-5, 8``.
 
-    Returns a read-only project view holding just that board plus the filename
-    suffix its outputs use, so a single-board export never overwrites the
-    whole-storyboard one. An empty ``shot_id`` means the whole storyboard.
+    Returns a read-only project view holding just those boards plus the filename
+    suffix their outputs use, so a partial export never overwrites the
+    whole-storyboard one. An empty spec means the whole storyboard.
     """
-    if not shot_id:
+    if not str(boards or "").strip():
         return project, ""
-    index = next((i for i, shot in enumerate(project.shots) if shot.shot_id == shot_id), -1)
-    if index < 0:
-        raise ValueError(f"Board not found: {shot_id}")
-    # Shallow view: same paths and settings, one board. Exporters only read.
-    return replace(project, shots=[project.shots[index]]), f"_board-{index + 1:03d}"
+    total = len(project.shots)
+    indexes = board_range.parse(boards, total)
+    # Shallow view: same paths and settings, fewer boards. Exporters only read.
+    selected = [project.shots[index] for index in indexes]
+    return replace(project, shots=selected), board_range.filename_suffix(indexes, total)
 
 
 def resolve_output_path(project: Project, export_type: str, suffix: str = "") -> Path:

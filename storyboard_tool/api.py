@@ -909,11 +909,11 @@ def create_app(base_dir: Path, bridge_port: int = 8000) -> FastAPI:
 
     @app.post("/api/export/pdf")
     def export_pdf(request: PdfExportRequest) -> dict[str, str]:
-        return _svc().method_export_pdf(request.layout, shot_id=request.shot_id)
+        return _svc().method_export_pdf(request.layout, boards=request.boards)
 
     @app.post("/api/export/shot-list")
     def export_shot_list(request: ExportScopeRequest = ExportScopeRequest()) -> dict[str, str]:
-        return _svc().method_export_shot_list(shot_id=request.shot_id)
+        return _svc().method_export_shot_list(boards=request.boards)
 
     @app.get("/api/export/shot-list")
     def download_shot_list() -> FileResponse:
@@ -921,7 +921,7 @@ def create_app(base_dir: Path, bridge_port: int = 8000) -> FastAPI:
 
     @app.post("/api/export/timing")
     def export_timing(request: ExportScopeRequest = ExportScopeRequest()) -> dict[str, str]:
-        return _svc().method_export_timing(shot_id=request.shot_id)
+        return _svc().method_export_timing(boards=request.boards)
 
     @app.get("/api/export/timing")
     def download_timing() -> FileResponse:
@@ -929,7 +929,7 @@ def create_app(base_dir: Path, bridge_port: int = 8000) -> FastAPI:
 
     @app.post("/api/export/contact-sheet")
     def export_contact(request: ExportScopeRequest = ExportScopeRequest()) -> dict[str, str]:
-        return _svc().method_export_contact_sheet(shot_id=request.shot_id)
+        return _svc().method_export_contact_sheet(boards=request.boards)
 
     @app.get("/api/export/contact-sheet")
     def download_contact() -> FileResponse:
@@ -937,7 +937,7 @@ def create_app(base_dir: Path, bridge_port: int = 8000) -> FastAPI:
 
     @app.post("/api/export/image-sequence")
     def export_sequence(request: ExportScopeRequest = ExportScopeRequest()) -> dict[str, str]:
-        return _svc().method_export_image_sequence(shot_id=request.shot_id)
+        return _svc().method_export_image_sequence(boards=request.boards)
 
     @app.get("/api/export/pdf")
     def download_pdf() -> FileResponse:
@@ -955,9 +955,13 @@ def create_app(base_dir: Path, bridge_port: int = 8000) -> FastAPI:
     def download_animatic() -> FileResponse:
         return _file_response_from_meta(_svc().method_download_animatic())
 
+    @app.post("/api/export/resolve-range")
+    def resolve_board_range(request: ExportScopeRequest = ExportScopeRequest()) -> dict[str, Any]:
+        return _svc().method_resolve_board_range(request.boards)
+
     @app.post("/api/export/open")
     def open_export(request: ExportOpenRequest) -> dict[str, str]:
-        return _svc().method_open_export(request.type, shot_id=request.shot_id)
+        return _svc().method_open_export(request.type, boards=request.boards)
 
     return app
 

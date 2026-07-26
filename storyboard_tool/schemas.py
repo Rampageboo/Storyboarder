@@ -176,9 +176,9 @@ class DrawingSaveRequest(BaseModel):
 
 
 class ExportScopeRequest(BaseModel):
-    """Empty shot_id exports the whole storyboard; otherwise only that board."""
+    """Board range spec, e.g. "1-5, 8". Empty exports the whole storyboard."""
 
-    shot_id: str = ""
+    boards: str = ""
 
 
 class PdfExportRequest(ExportScopeRequest):
