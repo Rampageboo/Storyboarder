@@ -221,6 +221,11 @@ class Project:
     shots: list[Shot] = field(default_factory=list)
     settings: dict[str, Any] = field(default_factory=dict)
     document_path: Path | None = None
+    # 1-based storyboard positions of `shots`. Empty for a whole project, where
+    # the positions are simply 1..N. A partial export narrows `shots` to a
+    # selection, and sets this so exported board numbers stay the ones the user
+    # sees in the strip instead of restarting at 1.
+    board_numbers: list[int] = field(default_factory=list)
 
     @property
     def json_path(self) -> Path:

@@ -14,6 +14,7 @@ from pathlib import Path
 
 from PIL import Image, ImageDraw, ImageFont
 
+from .export_utils import numbered_shots
 from .models import Project, Shot
 from .shot_assets import render_shot_composite_image
 
@@ -44,11 +45,11 @@ def export_animatic(
     height = max(2, height - (height % 2))
 
     frames: list[tuple[Image.Image, float]] = []
-    for index, shot in enumerate(shots, start=1):
+    for number, shot in numbered_shots(project):
         composite = render_shot_composite_image(project, shot)
         frame = _normalize_frame(composite, width, height)
         if captions:
-            _draw_caption(frame, index, len(shots), shot)
+            _draw_caption(frame, number, shot)
         if seconds_per_board and seconds_per_board > 0:
             duration = float(seconds_per_board)
         else:
@@ -78,10 +79,13 @@ def _normalize_frame(image: Image.Image | None, width: int, height: int) -> Imag
     return canvas
 
 
-def _draw_caption(frame: Image.Image, index: int, total: int, shot: Shot) -> None:
+def _draw_caption(frame: Image.Image, number: int, shot: Shot) -> None:
     draw = ImageDraw.Draw(frame)
     font = ImageFont.load_default()
-    label = f"{index}/{total}  {shot.title or shot.shot_id}"
+    # Board number, never the UUID — the caption is for a viewer, not a database.
+    label = f"Board {number:03d}"
+    if shot.title:
+        label = f"{label}  {shot.title}"
     if shot.dialogue:
         label = f"{label}  —  {shot.dialogue}"
     bar_top = frame.height - _CAPTION_BAR_HEIGHT

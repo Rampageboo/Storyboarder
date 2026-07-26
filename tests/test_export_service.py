@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import contextlib
+import csv
 import inspect
 import io
 import json
@@ -14,7 +15,7 @@ with warnings.catch_warnings():
     warnings.filterwarnings("ignore", message="Using `httpx` with `starlette.testclient` is deprecated")
     from fastapi.testclient import TestClient
 
-from storyboard_tool import api as api_module, export_service
+from storyboard_tool import api as api_module, export_service, export_utils
 from storyboard_tool.models import Project, Shot
 
 
@@ -340,3 +341,96 @@ class TestExportPdf(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestBoardNumbersNotUuids(unittest.TestCase):
+    """Exports identify a board by its position in the strip, never by its UUID.
+
+    The numbers must also be the ones the user sees: a range export narrows the
+    shot list, so counting that list would renumber boards 3-5 as 1-3.
+    """
+
+    def _client_with_boards(self, tmp: str, count: int) -> TestClient:
+        client = TestClient(api_module.create_app(Path(tmp)), raise_server_exceptions=False)
+        with contextlib.redirect_stderr(io.StringIO()):
+            self.assertEqual(client.post("/api/project/new", json={"path": str(Path(tmp) / "Numbered.sbd")}).status_code, 200)
+            for _ in range(count):
+                client.post("/api/shots", json={})
+        return client
+
+    def test_shot_list_leads_with_the_board_number(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            client = self._client_with_boards(tmp, 3)
+            with contextlib.redirect_stderr(io.StringIO()):
+                path = Path(client.post("/api/export/shot-list", json={}).json()["path"])
+            rows = list(csv.reader(path.read_text(encoding="utf-8").splitlines()))
+            self.assertEqual(rows[0][0], "board")
+            self.assertEqual([row[0] for row in rows[1:]], ["1", "2", "3"])
+
+    def test_range_export_keeps_the_real_board_numbers(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            client = self._client_with_boards(tmp, 6)
+            with contextlib.redirect_stderr(io.StringIO()):
+                path = Path(client.post("/api/export/shot-list", json={"boards": "3-5"}).json()["path"])
+            rows = list(csv.reader(path.read_text(encoding="utf-8").splitlines()))
+            # Not 1, 2, 3 — these are boards 3, 4, 5 of the storyboard.
+            self.assertEqual([row[0] for row in rows[1:]], ["3", "4", "5"])
+
+    def test_timing_json_is_keyed_by_board_number(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            client = self._client_with_boards(tmp, 4)
+            with contextlib.redirect_stderr(io.StringIO()):
+                path = Path(client.post("/api/export/timing", json={"boards": "2-3"}).json()["path"])
+            data = json.loads(path.read_text(encoding="utf-8"))
+            self.assertEqual([row["board"] for row in data["shots"]], [2, 3])
+
+    def test_image_sequence_filenames_use_board_numbers(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            client = self._client_with_boards(tmp, 5)
+            with contextlib.redirect_stderr(io.StringIO()):
+                whole = Path(client.post("/api/export/image-sequence", json={}).json()["path"])
+                partial = Path(client.post("/api/export/image-sequence", json={"boards": "4-5"}).json()["path"])
+            self.assertEqual(
+                sorted(p.name for p in whole.iterdir()),
+                ["board_0001.png", "board_0002.png", "board_0003.png", "board_0004.png", "board_0005.png"],
+            )
+            self.assertEqual(sorted(p.name for p in partial.iterdir()), ["board_0004.png", "board_0005.png"])
+
+    def test_no_uuid_appears_in_a_generated_filename(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            client = self._client_with_boards(tmp, 2)
+            with contextlib.redirect_stderr(io.StringIO()):
+                shot_ids = [shot["shot_id"] for shot in client.get("/api/project").json()["shots"]]
+                directory = Path(client.post("/api/export/image-sequence", json={}).json()["path"])
+            names = " ".join(p.name for p in directory.iterdir())
+            for shot_id in shot_ids:
+                self.assertNotIn(shot_id, names)
+
+
+class TestNumberedShots(unittest.TestCase):
+    def test_whole_project_numbers_from_one(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            project = _make_project(tmp)
+            _add_shot(project, "a")
+            _add_shot(project, "b")
+            self.assertEqual([number for number, _ in export_utils.numbered_shots(project)], [1, 2])
+
+    def test_scoped_view_uses_its_recorded_positions(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            project = _make_project(tmp)
+            for name in "abcdef":
+                _add_shot(project, name)
+            scoped, _ = export_service.scope_to_boards(project, "2, 5-6")
+            self.assertEqual(
+                [(number, shot.shot_id) for number, shot in export_utils.numbered_shots(scoped)],
+                [(2, "b"), (5, "e"), (6, "f")],
+            )
+
+    def test_mismatched_numbering_falls_back_to_counting(self) -> None:
+        # Defensive: a hand-built view must never crash an export.
+        with tempfile.TemporaryDirectory() as tmp:
+            project = _make_project(tmp)
+            _add_shot(project, "a")
+            _add_shot(project, "b")
+            project.board_numbers = [7]  # too short to describe both shots
+            self.assertEqual([number for number, _ in export_utils.numbered_shots(project)], [1, 2])

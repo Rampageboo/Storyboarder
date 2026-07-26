@@ -42,8 +42,11 @@ def scope_to_boards(project: Project, boards: str) -> tuple[Project, str]:
     total = len(project.shots)
     indexes = board_range.parse(boards, total)
     # Shallow view: same paths and settings, fewer boards. Exporters only read.
+    # board_numbers carries the real storyboard positions so a partial export
+    # still labels boards 5-7 as 5, 6, 7 rather than renumbering them 1, 2, 3.
     selected = [project.shots[index] for index in indexes]
-    return replace(project, shots=selected), board_range.filename_suffix(indexes, total)
+    view = replace(project, shots=selected, board_numbers=[index + 1 for index in indexes])
+    return view, board_range.filename_suffix(indexes, total)
 
 
 def resolve_output_path(project: Project, export_type: str, suffix: str = "") -> Path:

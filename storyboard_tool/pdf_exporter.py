@@ -17,6 +17,7 @@ from reportlab.platypus import (
     TableStyle,
 )
 
+from .export_utils import numbered_shots
 from .models import Project, Shot
 from .shot_assets import render_shot_composite_image
 
@@ -35,13 +36,14 @@ def export_storyboard_pdf(project: Project, output_path: Path, layout: str = "tw
     styles = getSampleStyleSheet()
     story = []
 
+    numbered = numbered_shots(project)
     if layout == "thumbnails":
-        for start in range(0, len(project.shots), 6):
-            story.append(_thumbnail_page(project, project.shots[start : start + 6], styles))
+        for start in range(0, len(numbered), 6):
+            story.append(_thumbnail_page(project, numbered[start : start + 6], styles))
             story.append(Spacer(1, 0.1 * inch))
     else:
-        for index, shot in enumerate(project.shots):
-            story.append(_shot_block(project, shot, styles, compact=(layout != "one_per_page")))
+        for index, (number, shot) in enumerate(numbered):
+            story.append(_shot_block(project, number, shot, styles, compact=(layout != "one_per_page")))
             if layout == "two_per_page" and index % 2 == 0:
                 story.append(Spacer(1, 0.18 * inch))
             elif layout == "one_per_page":
@@ -53,10 +55,11 @@ def export_storyboard_pdf(project: Project, output_path: Path, layout: str = "tw
     doc.build(story)
 
 
-def _shot_block(project: Project, shot: Shot, styles, compact: bool = True) -> KeepTogether:
+def _shot_block(project: Project, number: int, shot: Shot, styles, compact: bool = True) -> KeepTogether:
     image_cell = _image_flowable(project, shot)
     details = [
-        Paragraph(f"<b>{_escape(shot.shot_id)}</b>", styles["Heading4"]),
+        # Boards are identified by their number in the strip, never by their UUID.
+        Paragraph(f"<b>Board {number:03d}</b>", styles["Heading4"]),
         Paragraph(f"<b>Status:</b> {_escape(shot.status)}", styles["Normal"]),
         Paragraph(f"<b>Title:</b> {_escape(shot.title)}", styles["Normal"]),
         Paragraph(f"<b>Scene:</b> {_escape(shot.scene)}", styles["Normal"]),
@@ -96,13 +99,16 @@ def _shot_block(project: Project, shot: Shot, styles, compact: bool = True) -> K
     return KeepTogether(table)
 
 
-def _thumbnail_page(project: Project, shots: list[Shot], styles) -> Table:
+def _thumbnail_page(project: Project, numbered: list[tuple[int, Shot]], styles) -> Table:
     cells = []
-    for shot in shots:
+    for number, shot in numbered:
         cells.append(
             [
                 _image_flowable(project, shot, max_width=2.1 * inch, max_height=1.25 * inch),
-                Paragraph(f"<b>{_escape(shot.shot_id)}</b><br/>{_escape(shot.title)}<br/>{shot.duration_seconds:.1f}s", styles["Normal"]),
+                Paragraph(
+                    f"<b>Board {number:03d}</b><br/>{_escape(shot.title)}<br/>{shot.duration_seconds:.1f}s",
+                    styles["Normal"],
+                ),
             ]
         )
     while len(cells) < 6:

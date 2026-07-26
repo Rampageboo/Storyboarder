@@ -757,7 +757,7 @@ class TestGenerationRequests(unittest.TestCase):
             project_manager.open_project(self.project_root / "project.json"),
             self.project_root / "exports" / "layer-test",
         )
-        with Image.open(exported_dir / f"0001_{self.shot_id}.png") as composite:
+        with Image.open(exported_dir / "board_0001.png") as composite:
             center = composite.convert("RGB").getpixel((composite.width // 2, composite.height // 2))
         self.assertNotEqual(center, (10, 80, 180), "artist artwork must be composited above Codex")
         self.assertNotEqual(center, (220, 30, 40), "Codex must remain visible below translucent artwork")
