@@ -37,11 +37,13 @@ from .schemas import (
     OpenProjectRequest,
     AnimaticExportRequest,
     ExportOpenRequest,
+    ExportScopeRequest,
     PdfExportRequest,
     PluginHeartbeatRequest,
     PluginNextShotRequest,
     PluginShotEventRequest,
     ProjectPathRequest,
+    RecentForgetRequest,
     RefSegment3dCapture,
     RelinkRequest,
     RemoveReferenceRequest,
@@ -363,6 +365,18 @@ def create_app(base_dir: Path, bridge_port: int = 8000) -> FastAPI:
     @app.get("/api/app/bootstrap")
     def bootstrap() -> dict[str, Any]:
         return _svc().method_bootstrap()
+
+    @app.get("/api/app/recents")
+    def list_recents() -> dict[str, Any]:
+        return _svc().method_list_recents()
+
+    @app.post("/api/app/recents/forget")
+    def forget_recent(request: RecentForgetRequest) -> dict[str, Any]:
+        return _svc().method_forget_recent(request.path)
+
+    @app.post("/api/app/close-project")
+    def close_project() -> dict[str, Any]:
+        return _svc().method_close_project()
 
     @app.post("/api/app/ui-ready")
     def ui_ready() -> dict[str, Any]:
@@ -892,35 +906,35 @@ def create_app(base_dir: Path, bridge_port: int = 8000) -> FastAPI:
 
     @app.post("/api/export/pdf")
     def export_pdf(request: PdfExportRequest) -> dict[str, str]:
-        return _svc().method_export_pdf(request.layout)
+        return _svc().method_export_pdf(request.layout, shot_id=request.shot_id)
 
     @app.post("/api/export/shot-list")
-    def export_shot_list() -> dict[str, str]:
-        return _svc().method_export_shot_list()
+    def export_shot_list(request: ExportScopeRequest = ExportScopeRequest()) -> dict[str, str]:
+        return _svc().method_export_shot_list(shot_id=request.shot_id)
 
     @app.get("/api/export/shot-list")
     def download_shot_list() -> FileResponse:
         return _file_response_from_meta(_svc().method_download_shot_list())
 
     @app.post("/api/export/timing")
-    def export_timing() -> dict[str, str]:
-        return _svc().method_export_timing()
+    def export_timing(request: ExportScopeRequest = ExportScopeRequest()) -> dict[str, str]:
+        return _svc().method_export_timing(shot_id=request.shot_id)
 
     @app.get("/api/export/timing")
     def download_timing() -> FileResponse:
         return _file_response_from_meta(_svc().method_download_timing())
 
     @app.post("/api/export/contact-sheet")
-    def export_contact() -> dict[str, str]:
-        return _svc().method_export_contact_sheet()
+    def export_contact(request: ExportScopeRequest = ExportScopeRequest()) -> dict[str, str]:
+        return _svc().method_export_contact_sheet(shot_id=request.shot_id)
 
     @app.get("/api/export/contact-sheet")
     def download_contact() -> FileResponse:
         return _file_response_from_meta(_svc().method_download_contact_sheet())
 
     @app.post("/api/export/image-sequence")
-    def export_sequence() -> dict[str, str]:
-        return _svc().method_export_image_sequence()
+    def export_sequence(request: ExportScopeRequest = ExportScopeRequest()) -> dict[str, str]:
+        return _svc().method_export_image_sequence(shot_id=request.shot_id)
 
     @app.get("/api/export/pdf")
     def download_pdf() -> FileResponse:
@@ -940,7 +954,7 @@ def create_app(base_dir: Path, bridge_port: int = 8000) -> FastAPI:
 
     @app.post("/api/export/open")
     def open_export(request: ExportOpenRequest) -> dict[str, str]:
-        return _svc().method_open_export(request.type)
+        return _svc().method_open_export(request.type, shot_id=request.shot_id)
 
     return app
 

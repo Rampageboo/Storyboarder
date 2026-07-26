@@ -1,12 +1,20 @@
 from __future__ import annotations
 
+import contextlib
+import inspect
+import io
 import json
 import tempfile
 import unittest
+import warnings
 from pathlib import Path
 from unittest.mock import patch
 
-from storyboard_tool import export_service
+with warnings.catch_warnings():
+    warnings.filterwarnings("ignore", message="Using `httpx` with `starlette.testclient` is deprecated")
+    from fastapi.testclient import TestClient
+
+from storyboard_tool import api as api_module, export_service
 from storyboard_tool.models import Project, Shot
 
 
@@ -45,6 +53,52 @@ class TestResolveOutputPath(unittest.TestCase):
             with self.assertRaises(ValueError):
                 export_service.resolve_output_path(project, "nonexistent")
 
+    def test_suffix_is_inserted_before_the_extension(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            project = _make_project(tmp)
+            self.assertEqual(
+                export_service.resolve_output_path(project, "pdf", "_board-003"),
+                project.exports_dir / "storyboard_board-003.pdf",
+            )
+            # Extensionless outputs (a directory) still get the suffix.
+            self.assertEqual(
+                export_service.resolve_output_path(project, "image_sequence", "_board-003"),
+                project.exports_dir / "image_sequence_board-003",
+            )
+
+
+class TestScopeToShot(unittest.TestCase):
+    def test_empty_shot_id_keeps_the_whole_storyboard(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            project = _make_project(tmp)
+            _add_shot(project, "a")
+            _add_shot(project, "b")
+            scoped, suffix = export_service.scope_to_shot(project, "")
+            self.assertIs(scoped, project)
+            self.assertEqual(suffix, "")
+
+    def test_scoping_keeps_only_that_board_and_names_it_by_position(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            project = _make_project(tmp)
+            _add_shot(project, "a")
+            _add_shot(project, "b")
+            _add_shot(project, "c")
+            scoped, suffix = export_service.scope_to_shot(project, "c")
+            self.assertEqual([shot.shot_id for shot in scoped.shots], ["c"])
+            self.assertEqual(suffix, "_board-003")
+            # A view, not a copy: paths and settings still point at the real project.
+            self.assertEqual(scoped.root_path, project.root_path)
+            self.assertEqual(scoped.exports_dir, project.exports_dir)
+            # The real project keeps every board.
+            self.assertEqual(len(project.shots), 3)
+
+    def test_unknown_shot_id_raises_value_error(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            project = _make_project(tmp)
+            _add_shot(project, "a")
+            with self.assertRaises(ValueError):
+                export_service.scope_to_shot(project, "missing")
+
 
 class TestCheckExportExists(unittest.TestCase):
     def test_missing_file_raises_file_not_found(self) -> None:
@@ -60,6 +114,59 @@ class TestCheckExportExists(unittest.TestCase):
             output_path.write_text("{}", encoding="utf-8")
             result = export_service.check_export_exists(project, "timing")
             self.assertEqual(result, output_path)
+
+
+class TestExportScopeIsWiredEverywhere(unittest.TestCase):
+    """Every export the modal offers must accept a single-board scope.
+
+    A generating export method that silently lacks `shot_id` shows up only when
+    the route is called, so pin the whole set here.
+    """
+
+    SCOPED_METHODS = (
+        "method_export_pdf",
+        "method_export_shot_list",
+        "method_export_timing",
+        "method_export_contact_sheet",
+        "method_export_animatic",
+        "method_export_image_sequence",
+        "method_open_export",
+    )
+
+    def test_every_export_method_accepts_shot_id(self) -> None:
+        from storyboard_tool.service_exports import ExportServiceMixin
+
+        for name in self.SCOPED_METHODS:
+            with self.subTest(method=name):
+                parameters = inspect.signature(getattr(ExportServiceMixin, name)).parameters
+                self.assertIn("shot_id", parameters)
+                self.assertEqual(parameters["shot_id"].default, "")
+
+    def test_scoped_routes_write_board_suffixed_output(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            app = api_module.create_app(Path(tmp))
+            client = TestClient(app, raise_server_exceptions=False)
+            with contextlib.redirect_stderr(io.StringIO()):
+                created = client.post("/api/project/new", json={"path": str(Path(tmp) / "Scoped.sbd")})
+                self.assertEqual(created.status_code, 200)
+                for _ in range(2):
+                    client.post("/api/shots", json={})
+                shots = client.get("/api/project").json()["shots"]
+                self.assertGreaterEqual(len(shots), 2)
+                second = shots[1]["shot_id"]
+
+                for route, expected in (
+                    ("/api/export/shot-list", "shot_list_board-002.csv"),
+                    ("/api/export/timing", "timing_board-002.json"),
+                    ("/api/export/image-sequence", "image_sequence_board-002"),
+                ):
+                    with self.subTest(route=route):
+                        response = client.post(route, json={"shot_id": second})
+                        self.assertEqual(response.status_code, 200, response.text)
+                        self.assertEqual(Path(response.json()["path"]).name, expected)
+
+                unknown = client.post("/api/export/shot-list", json={"shot_id": "no-such-board"})
+                self.assertEqual(unknown.status_code, 404)
 
 
 class TestGetMissingMedia(unittest.TestCase):

@@ -52,8 +52,8 @@ class BootstrapTests(unittest.TestCase):
             self.assertEqual(body["project"]["project_json_path"], project_json)
             self.assertFalse(body["opened_last_project"])
 
-    def test_valid_last_project_path_opens_project(self) -> None:
-        """Bootstrap opens the project at last_project_json_path when no project is loaded."""
+    def test_valid_last_project_path_is_not_auto_opened(self) -> None:
+        """Startup lands on Home: a recorded last project is listed, never opened."""
         with tempfile.TemporaryDirectory() as tmp:
             # First client: create project and record session
             client1 = _make_client(tmp)
@@ -72,17 +72,17 @@ class BootstrapTests(unittest.TestCase):
                 resp = client2.get("/api/app/bootstrap")
             self.assertEqual(resp.status_code, 200)
             body = resp.json()
-            self.assertIsNotNone(body["project"])
-            self.assertEqual(body["project"]["project_json_path"], project_json)
-            self.assertTrue(body["opened_last_project"])
+            self.assertIsNone(body["project"])
+            self.assertFalse(body["opened_last_project"])
+            self.assertIsInstance(body["recents"], list)
 
-    def test_missing_last_project_path_returns_null_with_warning(self) -> None:
-        """Bootstrap with a missing/invalid last project path returns project: null non-fatally."""
+    def test_missing_last_project_path_is_reported_as_unavailable(self) -> None:
+        """A recent whose file is gone is still listed, flagged exists: false."""
         with tempfile.TemporaryDirectory() as tmp:
+            missing = str(Path(tmp) / "gone" / "Missing.sbd")
             client = _make_client(tmp)
-            # Write a last path that doesn't exist
             with contextlib.redirect_stderr(io.StringIO()):
-                client.put("/api/app/session", json={"last_project_json_path": "/nonexistent/project.json"})
+                client.put("/api/app/session", json={"recent_projects": [missing]})
 
             client2 = _make_client(tmp)
             with contextlib.redirect_stderr(io.StringIO()):
@@ -90,9 +90,52 @@ class BootstrapTests(unittest.TestCase):
             self.assertEqual(resp.status_code, 200)
             body = resp.json()
             self.assertIsNone(body["project"])
-            self.assertFalse(body["opened_last_project"])
-            # A non-fatal warning should be present
-            self.assertIn("warning", body)
+            entry = next(item for item in body["recents"] if item["path"] == missing)
+            self.assertFalse(entry["exists"])
+            self.assertEqual(entry["name"], "Missing")
+
+    def test_recents_endpoint_lists_documents(self) -> None:
+        """GET /api/app/recents describes documents without opening them."""
+        with tempfile.TemporaryDirectory() as tmp:
+            document = str(Path(tmp) / "Board.sbd")
+            client = _make_client(tmp)
+            with contextlib.redirect_stderr(io.StringIO()):
+                created = client.post("/api/project/new", json={"path": document})
+            self.assertEqual(created.status_code, 200)
+
+            with contextlib.redirect_stderr(io.StringIO()):
+                resp = client.get("/api/app/recents")
+            self.assertEqual(resp.status_code, 200)
+            entries = resp.json()["recents"]
+            entry = next(item for item in entries if item["path"] == document)
+            self.assertTrue(entry["exists"])
+            self.assertEqual(entry["kind"], "document")
+            self.assertEqual(entry["name"], "Board")
+            self.assertEqual(entry["open_path"], document)
+
+            with contextlib.redirect_stderr(io.StringIO()):
+                forgotten = client.post("/api/app/recents/forget", json={"path": document})
+            self.assertEqual(forgotten.status_code, 200)
+            self.assertNotIn(document, [item["path"] for item in forgotten.json()["recents"]])
+
+    def test_close_project_returns_to_home(self) -> None:
+        """Closing flushes the document and clears it from app state."""
+        with tempfile.TemporaryDirectory() as tmp:
+            document = str(Path(tmp) / "Closing.sbd")
+            client = _make_client(tmp)
+            with contextlib.redirect_stderr(io.StringIO()):
+                created = client.post("/api/project/new", json={"path": document})
+            self.assertEqual(created.status_code, 200)
+
+            with contextlib.redirect_stderr(io.StringIO()):
+                closed = client.post("/api/app/close-project")
+            self.assertEqual(closed.status_code, 200)
+            self.assertTrue(closed.json()["closed"])
+            self.assertTrue(Path(document).is_file())
+
+            with contextlib.redirect_stderr(io.StringIO()):
+                resp = client.get("/api/app/bootstrap")
+            self.assertIsNone(resp.json()["project"])
 
     def test_startup_timings_present(self) -> None:
         """Bootstrap always includes startup_timings with timing keys."""
@@ -104,7 +147,7 @@ class BootstrapTests(unittest.TestCase):
             timings = resp.json()["startup_timings"]
             self.assertIn("total_ms", timings)
             self.assertIn("session_load_ms", timings)
-            self.assertIn("project_load_ms", timings)
+            self.assertIn("recents_load_ms", timings)
             self.assertGreaterEqual(timings["total_ms"], 0)
 
 

@@ -38,40 +38,50 @@ _FILENAMES: dict[str, str] = {
 class ExportServiceMixin:
     """Export generation, download lookups, and project file serving."""
 
-    def method_export_pdf(self, layout: str = "two_per_page") -> dict[str, str]:
+    def _export_scope(self, shot_id: str = ""):
+        """Resolve (project view, filename suffix) for a whole-board or single-board export."""
         project = app_state._require_project(self.app)
+        try:
+            scoped, suffix = export_service.scope_to_shot(project, shot_id)
+        except ValueError as exc:
+            raise app_error(AppErrorCode.SHOT_NOT_FOUND, str(exc), status=404) from exc
+        return project, scoped, suffix
+
+    def method_export_pdf(self, layout: str = "two_per_page", shot_id: str = "") -> dict[str, str]:
+        project, scoped, suffix = self._export_scope(shot_id)
         chosen = layout if layout in export_service.VALID_PDF_LAYOUTS else export_service.DEFAULT_PDF_LAYOUT
         try:
-            output_path = export_service.export_pdf(project, chosen)
+            output_path = export_service.export_pdf(scoped, chosen, suffix)
         except Exception as exc:
             logger.exception("PDF export failed (layout=%s)", chosen)
             raise app_error(AppErrorCode.EXPORT_FAILED, str(exc), status=500) from exc
+        # Remember the layout on the real project, not the single-board view.
         project.settings["pdf_layout"] = chosen
         project_manager.save_settings(project)
         return {"path": str(output_path), "download_url": _DOWNLOAD_URLS["pdf"]}
 
-    def method_export_shot_list(self) -> dict[str, str]:
-        project = app_state._require_project(self.app)
+    def method_export_shot_list(self, shot_id: str = "") -> dict[str, str]:
+        _, scoped, suffix = self._export_scope(shot_id)
         try:
-            output_path = export_service.export_shot_list(project)
+            output_path = export_service.export_shot_list(scoped, suffix)
         except Exception as exc:
             logger.exception("Shot list export failed")
             raise app_error(AppErrorCode.EXPORT_FAILED, str(exc), status=500) from exc
         return {"path": str(output_path), "download_url": _DOWNLOAD_URLS["shot_list"]}
 
-    def method_export_timing(self) -> dict[str, str]:
-        project = app_state._require_project(self.app)
+    def method_export_timing(self, shot_id: str = "") -> dict[str, str]:
+        _, scoped, suffix = self._export_scope(shot_id)
         try:
-            output_path = export_service.export_timing(project)
+            output_path = export_service.export_timing(scoped, suffix)
         except Exception as exc:
             logger.exception("Timing export failed")
             raise app_error(AppErrorCode.EXPORT_FAILED, str(exc), status=500) from exc
         return {"path": str(output_path), "download_url": _DOWNLOAD_URLS["timing"]}
 
-    def method_export_contact_sheet(self) -> dict[str, str]:
-        project = app_state._require_project(self.app)
+    def method_export_contact_sheet(self, shot_id: str = "") -> dict[str, str]:
+        _, scoped, suffix = self._export_scope(shot_id)
         try:
-            output_path = export_service.export_contact_sheet(project)
+            output_path = export_service.export_contact_sheet(scoped, suffix)
         except Exception as exc:
             logger.exception("Contact sheet export failed")
             raise app_error(AppErrorCode.EXPORT_FAILED, str(exc), status=500) from exc
@@ -83,14 +93,16 @@ class ExportServiceMixin:
         fps: int = 24,
         seconds_per_board: float | None = None,
         captions: bool = False,
+        shot_id: str = "",
     ) -> dict[str, str]:
-        project = app_state._require_project(self.app)
+        _, scoped, suffix = self._export_scope(shot_id)
         try:
             output_path = export_service.export_animatic(
-                project,
+                scoped,
                 fps=fps,
                 seconds_per_board=seconds_per_board,
                 captions=captions,
+                suffix=suffix,
             )
         except ValueError as exc:
             raise app_error(AppErrorCode.EXPORT_FAILED, str(exc)) from exc
@@ -99,10 +111,12 @@ class ExportServiceMixin:
             raise app_error(AppErrorCode.EXPORT_FAILED, str(exc), status=500) from exc
         return {"path": str(output_path), "download_url": _DOWNLOAD_URLS["animatic"]}
 
-    def method_open_export(self, export_type: str) -> dict[str, str]:
-        project = app_state._require_project(self.app)
+    def method_open_export(self, export_type: str, shot_id: str = "") -> dict[str, str]:
+        # The client sends back the same (type, shot_id) it exported with, so the
+        # path is recomputed here rather than accepted from the request.
+        _, scoped, suffix = self._export_scope(shot_id)
         try:
-            output_path = export_service.open_export(project, export_type)
+            output_path = export_service.open_export(scoped, export_type, suffix)
         except FileNotFoundError as exc:
             raise app_error(AppErrorCode.EXPORT_FAILED, str(exc), status=404) from exc
         except ValueError as exc:
@@ -124,10 +138,10 @@ class ExportServiceMixin:
             "filename": _FILENAMES["animatic"],
         }
 
-    def method_export_image_sequence(self) -> dict[str, str]:
-        project = app_state._require_project(self.app)
+    def method_export_image_sequence(self, shot_id: str = "") -> dict[str, str]:
+        _, scoped, suffix = self._export_scope(shot_id)
         try:
-            output_dir = export_service.export_image_sequence(project)
+            output_dir = export_service.export_image_sequence(scoped, suffix)
         except Exception as exc:
             logger.exception("Image sequence export failed")
             raise app_error(AppErrorCode.EXPORT_FAILED, str(exc), status=500) from exc

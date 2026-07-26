@@ -175,19 +175,29 @@ class DrawingSaveRequest(BaseModel):
     image_data: str
 
 
-class PdfExportRequest(BaseModel):
+class ExportScopeRequest(BaseModel):
+    """Empty shot_id exports the whole storyboard; otherwise only that board."""
+
+    shot_id: str = ""
+
+
+class PdfExportRequest(ExportScopeRequest):
     layout: str = "two_per_page"
 
 
-class AnimaticExportRequest(BaseModel):
+class AnimaticExportRequest(ExportScopeRequest):
     fps: int = 24
     # None: hold each board for its own duration_seconds. Otherwise a global override.
     seconds_per_board: float | None = None
     captions: bool = False
 
 
-class ExportOpenRequest(BaseModel):
+class ExportOpenRequest(ExportScopeRequest):
     type: str
+
+
+class RecentForgetRequest(BaseModel):
+    path: str
 
 
 class SettingsUpdateRequest(BaseModel):

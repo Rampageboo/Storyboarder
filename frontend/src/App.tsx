@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState, type CSSProperties } from 'react'
 import { reportUiReady } from './api'
 import { Topbar } from './components/Topbar'
+import { HomePage } from './components/HomePage'
 import { ShotInspector } from './components/ShotInspector'
 import { BoardGrid } from './components/BoardGrid'
 import { BoardStrip } from './components/BoardStrip'
@@ -23,43 +24,6 @@ import './App.css'
 
 type WorkspaceMode = 'board' | 'scene2d' | 'scene3d'
 
-function WelcomePanel() {
-  const { newProject, openProjectFromDialog, projectActionBusy } = useProject()
-
-  const handleNew = useCallback(async () => {
-    try {
-      await newProject({ path: null, canvas_width: 1920, canvas_height: 1080 })
-    } catch {
-      // error surfaced via banner
-    }
-  }, [newProject])
-
-  const handleOpen = useCallback(async () => {
-    try {
-      await openProjectFromDialog()
-    } catch {
-      // error surfaced via banner
-    }
-  }, [openProjectFromDialog])
-
-  return (
-    <div className="welcome-panel">
-      <div className="welcome-card">
-        <h2>No project open</h2>
-        <p>Create or open a local Storyboarder document. Scenes, shots, and artwork stay together in one .sbd file.</p>
-        <div className="welcome-actions">
-          <button type="button" className="primary" onClick={() => void handleNew()} disabled={projectActionBusy}>
-            New project
-          </button>
-          <button type="button" onClick={() => void handleOpen()} disabled={projectActionBusy}>
-            Open document
-          </button>
-        </div>
-      </div>
-    </div>
-  )
-}
-
 function LeftRail({
   showNav,
   workspaceMode,
@@ -67,6 +31,8 @@ function LeftRail({
   onToggleRefs,
   onSetWorkspaceMode,
   onOpenSettings,
+  onGoHome,
+  homeBusy,
 }: {
   showNav: boolean
   workspaceMode: WorkspaceMode
@@ -74,6 +40,8 @@ function LeftRail({
   onToggleRefs: () => void
   onSetWorkspaceMode: (mode: WorkspaceMode) => void
   onOpenSettings: () => void
+  onGoHome: () => void
+  homeBusy: boolean
 }) {
   return (
     <nav className="left-rail" aria-label="Workspace navigation">
@@ -82,6 +50,18 @@ function LeftRail({
       </div>
       {showNav ? (
         <>
+          <div className="left-rail-group">
+            <button
+              type="button"
+              className="left-rail-item"
+              onClick={onGoHome}
+              disabled={homeBusy}
+              title="Save and close this document, back to Home"
+            >
+              <span className="left-rail-icon">&#8962;</span>
+              <span>Home</span>
+            </button>
+          </div>
           <div className="left-rail-group">
             <button
               type="button"
@@ -337,7 +317,8 @@ function RightRail({
 }
 
 function AppInner() {
-  const { project, initialLoading, lastError, clearError, reloadProject } = useProject()
+  const { project, initialLoading, lastError, clearError, reloadProject, closeProjectToHome, projectActionBusy } =
+    useProject()
   const [workspaceMode, setWorkspaceMode] = useState<WorkspaceMode>('board')
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [exportOpen, setExportOpen] = useState(false)
@@ -351,6 +332,15 @@ function AppInner() {
     '--thumb-empty-bg': project?.settings?.canvas_background_color || undefined,
     '--canvas-empty-bg': project?.settings?.canvas_background_color || undefined,
   } as CSSProperties
+
+  // Home always saves on the way out, so there is nothing to confirm here.
+  const handleGoHome = useCallback(async () => {
+    try {
+      await closeProjectToHome()
+    } catch {
+      // error surfaced via banner
+    }
+  }, [closeProjectToHome])
 
   useEffect(() => {
     void reloadProject()
@@ -382,6 +372,8 @@ function AppInner() {
         onToggleRefs={() => setRefsOpen((v) => !v)}
         onSetWorkspaceMode={setWorkspaceMode}
         onOpenSettings={() => setSettingsOpen(true)}
+        onGoHome={() => void handleGoHome()}
+        homeBusy={projectActionBusy}
       />
       <div className="app-main">
         <Topbar workspaceMode={workspaceMode} />
@@ -396,9 +388,9 @@ function AppInner() {
         <div className="workspace-shell">
           <div className={`workspace workspace-${workspaceMode}${inspectorCollapsed ? ' is-inspector-collapsed' : ''}`}>
             {initialLoading ? (
-              <div className="loading-panel">Loading project...</div>
+              <div className="loading-panel">Loading...</div>
             ) : !project ? (
-              <WelcomePanel />
+              <HomePage />
             ) : (
               <>
                 <ReferenceSidebar open={refsOpen} onOpenChange={setRefsOpen} />

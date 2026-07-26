@@ -19,6 +19,7 @@ from . import (
     generation_service,
     project_manager,
     project_transaction,
+    recents,
     reference_segments,
     runtime_state,
     scene2d,
@@ -206,58 +207,96 @@ class StoryboardBackendService(ExportServiceMixin):
 
     def method_bootstrap(self) -> dict[str, Any]:
         """
-        Single-round-trip startup: read session, open last project if needed.
+        Single-round-trip startup: read session and describe the recent documents.
 
-        Returns {session, project, opened_last_project, startup_timings}.
-        Never raises for a missing or invalid previous project path — returns project: null
-        with a non-fatal warning instead.
+        Startup never reopens the previous document — the app lands on Home and the
+        user picks. Extracting a `.sbd` is expensive and the previous document is
+        not always the one wanted next. `project` is non-null only when one is
+        already open (hot reload, or a second client attaching to a live backend).
+
+        Returns {session, project, recents, opened_last_project, startup_timings}.
         """
         t_start = time.perf_counter()
         session = session_store.read_session(self.app.state.base_dir)
         t_session = time.perf_counter()
-        opened_last = False
-        warning: str | None = None
         project_payload: dict[str, Any] | None = None
 
         if self.app.state.project is not None:
             # Project already open (hot-reload / multiple clients).
             project_payload = app_state._project_payload(self.app.state.project, self.app.state.dirty)
-        else:
-            last_path = session.get("last_project_json_path", "") or ""
-            if last_path:
-                try:
-                    app_state._track_project(
-                        self.app,
-                        project_manager.open_project(Path(last_path).expanduser()),
-                    )
-                    app_state._remember_recent(self.app.state.project)
-                    app_state._touch_live_bridge(self.app)
-                    self.app.state.dirty = False
-                    opened_last = True
-                    project_payload = app_state._project_payload(self.app.state.project, self.app.state.dirty)
-                except (FileNotFoundError, ValueError) as exc:
-                    warning = f"Previous project unavailable ({exc}); starting without a project."
-                    logger.info("Bootstrap: %s", warning)
-                    try:
-                        session_store.update_session(self.app.state.base_dir, last_project_json_path="")
-                    except Exception:
-                        logger.debug("Failed to clear stale last_project_json_path", exc_info=True)
 
+        recent_entries = self._recent_entries(session)
         t_project = time.perf_counter()
         timings = {
             "session_load_ms": round((t_session - t_start) * 1000, 1),
-            "project_load_ms": round((t_project - t_session) * 1000, 1),
+            "recents_load_ms": round((t_project - t_session) * 1000, 1),
             "total_ms": round((t_project - t_start) * 1000, 1),
         }
-        result: dict[str, Any] = {
+        return {
             "session": session,
             "project": project_payload,
-            "opened_last_project": opened_last,
+            "recents": recent_entries,
+            "opened_last_project": False,
             "startup_timings": timings,
         }
-        if warning:
-            result["warning"] = warning
-        return result
+
+    def _recent_entries(self, session: dict[str, Any] | None = None) -> list[dict[str, Any]]:
+        data = session if session is not None else session_store.read_session(self.app.state.base_dir)
+        stored = data.get("recent_projects")
+        paths = [str(item) for item in stored] if isinstance(stored, list) else []
+        last = str(data.get("last_project_json_path", "") or "")
+        # The most recent document is not always mirrored into recent_projects
+        # (older sessions predate the list), so make sure it leads the Home grid.
+        if last and last.lower().endswith(".sbd"):
+            paths = [last, *paths]
+        return recents.list_recents(paths)
+
+    def method_list_recents(self) -> dict[str, Any]:
+        return {"recents": self._recent_entries()}
+
+    def method_forget_recent(self, path: str) -> dict[str, Any]:
+        session = session_store.read_session(self.app.state.base_dir)
+        stored = session.get("recent_projects")
+        current = [str(item) for item in stored] if isinstance(stored, list) else []
+        remaining = recents.forget(current, path)
+        # The last-opened path also seeds the Home grid, so forgetting a document
+        # has to clear it there too or the card comes straight back.
+        last = str(session.get("last_project_json_path", "") or "")
+        session_store.update_session(
+            self.app.state.base_dir,
+            recent_projects=remaining,
+            last_project_json_path="" if recents.same_path(last, path) else None,
+        )
+        project = self.app.state.project
+        if project is not None:
+            project.settings["recent_projects"] = recents.forget(
+                [str(item) for item in project.settings.get("recent_projects", [])],
+                path,
+            )
+        return {"recents": self._recent_entries()}
+
+    def method_close_project(self) -> dict[str, Any]:
+        """Return to Home: flush the document, then drop it from app state.
+
+        The flush is synchronous and unconditional for a dirty document — leaving
+        a half-saved `.sbd` behind while the UI says "closed" would be a data-loss
+        path. Clears the working tree so no temp copy of the document survives.
+        """
+        project = self.app.state.project
+        if project is None:
+            return {"closed": False, "recents": self._recent_entries()}
+        try:
+            if self.app.state.dirty:
+                project_manager.save_project(project)
+        except Exception as exc:
+            logger.exception("Failed to save project while closing")
+            raise app_error(AppErrorCode.PROJECT_SAVE_FAILED, str(exc), status=500) from exc
+        self.app.state.dirty = False
+        self.app.state.project = None
+        self.app.state.project_disk_mtime = 0.0
+        project_manager.cleanup_document_working_root(project)
+        app_state._touch_live_bridge(self.app)
+        return {"closed": True, "recents": self._recent_entries()}
 
     def method_ui_ready(self) -> dict[str, Any]:
         """

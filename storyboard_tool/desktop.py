@@ -293,8 +293,53 @@ def open_desktop_window(app, title: str = "Storyboard Tool") -> int:
     def _on_loaded():
         _write_launch_ready_marker("pywebview loaded fallback")
 
+    finalized = threading.Event()
+
+    def _finalize(source: str) -> None:
+        """Write the document and drop the work tree. Runs exactly once.
+
+        Saving a `.sbd` re-zips the whole project, so doing it after the window is
+        gone leaves the process writing a file the user believes is closed. This
+        runs from the `closing` event instead — the window stays up, titled
+        "Saving...", until the document is actually on disk.
+        """
+        if finalized.is_set():
+            return
+        finalized.set()
+        project = app.state.project
+        started = time.perf_counter()
+        try:
+            project_manager.shutdown_reference_cleanup(
+                project,
+                save_if_dirty=bool(getattr(app.state, "dirty", False)),
+                dirty=bool(getattr(app.state, "dirty", False)),
+            )
+            app.state.dirty = False
+        except Exception as exc:
+            print(f"Reference cleanup failed: {exc}", file=sys.stderr)
+        project_manager.cleanup_document_working_root(project)
+        _log_stage(f"document finalized via {source} in {(time.perf_counter() - started) * 1000:.0f} ms")
+
+    def _on_closing():
+        # Window is still up here: save state, then flush the document before the
+        # close proceeds, so nothing touches the .sbd once the window disappears.
+        _save_window_state(window, maximized=_get_main_window_restore_state(app) == "maximized")
+        if getattr(app.state, "dirty", False):
+            try:
+                window.set_title(f"{title} - Saving...")
+            except Exception:
+                pass
+        _finalize("window closing")
+        return True
+
     window.events.shown += _on_shown
     window.events.shown += _mark_shown
+    try:
+        window.events.closing += _on_closing
+    except Exception:
+        # Older pywebview builds without a closing event fall back to the
+        # post-start() finalize below.
+        pass
     try:
         window.events.minimized += _mark_minimized
         window.events.maximized += _mark_maximized
@@ -316,18 +361,13 @@ def open_desktop_window(app, title: str = "Storyboard Tool") -> int:
         start_kwargs["icon"] = str(ICON_PATH.resolve())
     webview.start(**start_kwargs)
 
-    # webview.start() blocks until the window closes — save state now.
-    # Use restore_state (not current_state) so closing while minimized persists the
-    # correct pre-minimized geometry for the next launch.
-    _save_window_state(window, maximized=_get_main_window_restore_state(app) == "maximized")
-
-    try:
-        project_manager.shutdown_reference_cleanup(
-            app.state.project,
-            save_if_dirty=bool(getattr(app.state, "dirty", False)),
-            dirty=bool(getattr(app.state, "dirty", False)),
-        )
-    except Exception as exc:
-        print(f"Reference cleanup failed: {exc}")
-    project_manager.cleanup_document_working_root(app.state.project)
+    # webview.start() blocks until the window closes. The closing event above has
+    # normally already saved the window state and flushed the document; both steps
+    # are repeated here only as a safety net for a close path that skipped it
+    # (e.g. a pywebview build without a closing event).
+    if not finalized.is_set():
+        # Use restore_state (not current_state) so closing while minimized persists
+        # the correct pre-minimized geometry for the next launch.
+        _save_window_state(window, maximized=_get_main_window_restore_state(app) == "maximized")
+        _finalize("post-start fallback")
     return 0

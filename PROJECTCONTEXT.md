@@ -8,9 +8,9 @@
 ## Context metadata
 
 ```text
-Last updated: 2026-07-22
-Last verified branch: feat/generation-provider-mode
-Last verified commit: b446d3e
+Last updated: 2026-07-26
+Last verified branch: main (uncommitted working tree)
+Last verified commit: efae970
 Updated by: Claude
 Context confidence: current
 
@@ -34,7 +34,13 @@ Non-goals (do not add): browser mode, hosted server, cloud sync, audio, multi-wi
 ## 2. Current state
 
 ```text
-Current working area: board UX on branch feat/generation-provider-mode (pushed). Branch carries: generation provider/mode (backend+UI), periodic-autosave save model, .sbd pack perf fixes, export feature (video+UI), and now board Strip/Grid view + smooth wheel scroll. Preparing PR to main.
+Current working area (2026-07-26, owner-direct, UNCOMMITTED on main): three Owner-requested changes.
+1. HOME SCREEN. Startup no longer reopens the last document — method_bootstrap returns {session, project, recents, opened_last_project:false, startup_timings} and never calls open_project. Measured on the Owner's real 46.9 MB document: bootstrap 15 ms (was a full .sbd extract). New domain module `recents.py` describes recent documents WITHOUT opening them (reads shots.json + one _thumb.png member straight out of the zip; 4 entries incl. 2 real documents = 7-15 ms, ~22 KB thumbs). New routes GET /api/app/recents, POST /api/app/recents/forget, POST /api/app/close-project. New `HomePage.tsx/.css` (Photoshop-welcome layout: New file/Open sidebar + Recent thumbnail grid) replaces the old WelcomePanel. Left rail gained a Home button; Home == close the document (flushes first), so `!project` is the only Home condition — no extra view state. `_persist_app_session` now MERGES session recents with the document's own list (previously the newest document's list overwrote the app-level one, so Home would have shown almost nothing).
+2. EXPORT SCOPE. Every export accepts `shot_id`: empty = whole storyboard, set = that board only, output suffixed `_board-NNN` so a single-board export never overwrites the whole-storyboard file. `export_service.scope_to_shot()` returns a dataclasses.replace view (same paths/settings, one shot) so no exporter internals changed. ExportModal has a Whole storyboard / Current board only toggle that applies to all six export types; Open re-sends the scope the file was written with.
+3. SHUTDOWN. Save-on-close moved OFF the post-window-close path onto pywebview's `window.events.closing` (verified present in pywebview 6.2.1), so the 46.9 MB re-zip finishes while the window is still up (titled "Saving..."), not after it disappears. `_finalize()` is idempotent; the old post-start() path remains only as a fallback.
+Validation: pytest 738 passed / 1 skipped / 30 subtests; tsc+vite build passes; bundle rebuilt and committed-to-tree; eslint at the pre-existing baseline (9 errors, 2 warnings — proven identical with the changes stashed). Backend flows driven end-to-end against a real .sbd. Owner GUI click-test PENDING.
+
+Previous working area: board UX on branch feat/generation-provider-mode (pushed). Branch carries: generation provider/mode (backend+UI), periodic-autosave save model, .sbd pack perf fixes, export feature (video+UI), and board Strip/Grid view + smooth wheel scroll.
 Board view: BoardWorkspace now has a Strip/Grid toggle. Grid = BoardGrid.tsx (responsive tile grid of all boards, reuses ShotThumb; click selects -> same ShotInspector detail; trailing "Add board" tile). BoardStrip horizontal wheel scroll now eases toward an rAF target (was instant per-notch = stepped).
 Last completed task: EXPORT feature. NEW video animatic (storyboard -> .mp4, H.264 via ffmpeg / mp4v fallback, duration-driven, optional captions) in video_export.py. Discovered the backend already had a full export suite (PDF one_per_page/two_per_page/thumbnails, contact sheet, shot-list CSV, timing JSON, image sequence) but NO frontend UI exposed any of it. Built ExportModal (video + PDF layout picker + images + data) reached from the RightRail "More > Export…" menu; new api/export.ts; new POST /api/export/open opens a generated file in the OS default app (os.startfile). PDF one_per_page already IS the "shot detail" export (big image + all metadata).
 Current build/test status: full suite 726 passed, 1 skipped, 0 failed (the 2 previously-noted failures were fixed earlier this branch). Frontend tsc+vite build passes; lint at pre-existing baseline (8 errors, none new). GUI click-test by Owner pending.
@@ -80,6 +86,7 @@ Progress (2026-07-21):
 | `storyboard_tool/mcp_server.py` | Local STDIO MCP tools for Codex generation handoffs |
 | `storyboard_tool/project_transaction.py` | `mutate_project()` — in-memory snapshot/rollback for mutating operations |
 | `storyboard_tool/app_state.py` | Transport-agnostic project/app-state helpers (`_require_project`, `_autosave`, bridge payloads) |
+| `storyboard_tool/recents.py` | Home-screen recent documents: describes a `.sbd` (name, boards, first-board thumbnail) without extracting it |
 | `storyboard_tool/live_bridge.py`, `psd_recovery.py`, `image_utils.py`, `export_service.py` | Photoshop bridge, PSD rebuild, media, exports |
 | `frontend/src/` | React/TS source. State: `state/ProjectContext.tsx` (project payload) + `state/LiveBridgeContext.tsx` (bridge polling) |
 | `frontend/src/scene3d/` | 3D workspace TS source; `workspace/` compiles to a separate runtime bundle |
@@ -131,6 +138,10 @@ There is no CI; all validation is local. Python 3.11+, deps in `requirements.txt
 6. **TypeScript policy** (`docs/typescript_policy.md`): new UI code is TS/TSX in `frontend/src/**`. Do not convert `static/runtime/*.js` or vendor JS to TS. All 3D rendering is TypeScript-only — Python never drives Three.js.
 
 7. **Deletion semantics**: `delete_shot` removes only the metadata record; shot files stay on disk (undo depends on this). Do not "clean up" shot folders.
+
+8. **A `.sbd` save is a full re-zip, and there is no incremental path.** The Owner's real document is 46.9 MB packed (139.6 MB expanded: 93.3 MB PSD + 45.6 MB PNG), so every flush rewrites the whole file. Two consequences: (a) never move a flush somewhere the user cannot see it finish; (b) their documents live in `C:\Users\JieYin\OneDrive\...`, so each flush also makes OneDrive re-upload the entire file and `pack_document`'s staging `.tmp` (written in the document's own folder) gets synced too. Not fixed — Owner said OneDrive is not the concern; revisit only if asked.
+
+9. **Adding an export type or option means touching four layers**: `api.py` route → `service_exports.py` `method_export_*` → `export_service.py` → the exporter. A method missed in the middle layer only fails when the route is called; `tests/test_export_service.py::TestExportScopeIsWiredEverywhere` pins the whole set (added after `method_export_image_sequence` was in fact missed).
 
 ## 6. Workflow notes
 

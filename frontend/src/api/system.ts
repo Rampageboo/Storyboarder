@@ -21,9 +21,28 @@ export function updateAppSession(body: AppSession): Promise<AppSession> {
   return requestJson<AppSession>('/api/app/session', { method: 'PUT', body })
 }
 
+/** One Home-screen card. Described without opening the document. */
+export interface RecentProject {
+  /** User-visible path: the .sbd itself, or the project folder. */
+  path: string
+  /** What openProject needs — the folder variant points at project.json. */
+  open_path: string
+  name: string
+  kind: 'document' | 'folder'
+  location: string
+  exists: boolean
+  modified_ms: number
+  size_bytes: number
+  shot_count: number
+  /** Data URL of the first board, or '' when none could be read. */
+  thumbnail: string
+}
+
 export interface BootstrapPayload {
   session: AppSession
   project: ProjectPayload | null
+  recents: RecentProject[]
+  /** Always false: startup lands on Home and never reopens the last document. */
   opened_last_project: boolean
   startup_timings: Record<string, number>
   warning?: string
@@ -31,6 +50,19 @@ export interface BootstrapPayload {
 
 export function bootstrapApp(): Promise<BootstrapPayload> {
   return requestJson<BootstrapPayload>('/api/app/bootstrap')
+}
+
+export function listRecents(): Promise<{ recents: RecentProject[] }> {
+  return requestJson<{ recents: RecentProject[] }>('/api/app/recents')
+}
+
+export function forgetRecent(path: string): Promise<{ recents: RecentProject[] }> {
+  return requestJson<{ recents: RecentProject[] }>('/api/app/recents/forget', { method: 'POST', body: { path } })
+}
+
+/** Flush and close the open document, returning the app to Home. */
+export function closeProject(): Promise<{ closed: boolean; recents: RecentProject[] }> {
+  return requestJson<{ closed: boolean; recents: RecentProject[] }>('/api/app/close-project', { method: 'POST' })
 }
 
 export function reportUiReady(): Promise<{ ok: boolean }> {

@@ -109,8 +109,9 @@ class StoryboardSmokeTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             original_export = export_service_module.export_pdf
 
-            def fake_export(project, layout="two_per_page"):
+            def fake_export(project, layout="two_per_page", suffix=""):
                 self.assertEqual(layout, "two_per_page")
+                self.assertEqual(suffix, "")
                 output_path = project.exports_dir / "storyboard.pdf"
                 output_path.parent.mkdir(parents=True, exist_ok=True)
                 output_path.write_bytes(b"%PDF-1.4\n")

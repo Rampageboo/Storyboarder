@@ -15,7 +15,15 @@ from typing import Any
 
 from fastapi import FastAPI, HTTPException
 
-from . import live_bridge, preview_analysis_cache, project_manager, runtime_state, session_store, shot_service
+from . import (
+    live_bridge,
+    preview_analysis_cache,
+    project_manager,
+    recents,
+    runtime_state,
+    session_store,
+    shot_service,
+)
 from .errors import AppErrorCode, app_error
 from .models import Project, SHOT_STATUSES, Shot
 
@@ -400,11 +408,22 @@ def _persist_app_session(app: FastAPI, *, selected_shot_id: str | None = None) -
     project = app.state.project
     if project is None:
         return
+    # Recents are app-level, but each document also carries its own list. Merge
+    # both so Home keeps showing documents opened before this one, instead of
+    # being reset to whatever the newest document happened to remember.
+    previous = session_store.read_session(app.state.base_dir).get("recent_projects", [])
+    merged = recents.dedupe(
+        [
+            str(project.visible_path),
+            *[str(item) for item in project.settings.get("recent_projects", [])],
+            *[str(item) for item in previous if isinstance(item, (str, Path))],
+        ]
+    )
     session_store.update_session(
         app.state.base_dir,
         last_project_json_path=str(project.reopen_path),
         selected_shot_id=selected_shot_id,
-        recent_projects=[str(item) for item in project.settings.get("recent_projects", [])],
+        recent_projects=merged,
     )
 
 

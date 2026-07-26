@@ -8,7 +8,7 @@ import {
   exportTiming,
   openExport,
 } from '../api'
-import type { ExportResult, ExportType, PdfLayout } from '../api/export'
+import type { ExportResult, ExportScope, ExportType, PdfLayout } from '../api/export'
 import { useProject } from '../state/useProject'
 import './ExportModal.css'
 
@@ -18,20 +18,26 @@ interface ExportModalProps {
 }
 
 export function ExportModal({ open, onClose }: ExportModalProps) {
-  const { project, flushDirtyShots, projectActionBusy, reportError } = useProject()
+  const { project, selectedShotId, flushDirtyShots, projectActionBusy, reportError } = useProject()
   const [busy, setBusy] = useState<ExportType | ''>('')
-  const [done, setDone] = useState<Partial<Record<ExportType, string>>>({})
+  // Keeps the scope each file was written with, so Open still finds it after the
+  // scope toggle moves.
+  const [done, setDone] = useState<Partial<Record<ExportType, ExportScope>>>({})
   const [pdfLayout, setPdfLayout] = useState<PdfLayout>('one_per_page')
   const [fps, setFps] = useState(24)
   const [captions, setCaptions] = useState(false)
+  const [currentOnly, setCurrentOnly] = useState(false)
+
+  // Applies to every export below. Empty means the whole storyboard.
+  const scope: ExportScope = currentOnly && selectedShotId ? { shot_id: selectedShotId } : {}
 
   const run = useCallback(
-    async (type: ExportType, fn: () => Promise<ExportResult>) => {
+    async (type: ExportType, usedScope: ExportScope, fn: () => Promise<ExportResult>) => {
       setBusy(type)
       try {
         await flushDirtyShots()
-        const result = await fn()
-        setDone((prev) => ({ ...prev, [type]: result.path }))
+        await fn()
+        setDone((prev) => ({ ...prev, [type]: usedScope }))
       } catch (error) {
         reportError(error)
       } finally {
@@ -42,9 +48,9 @@ export function ExportModal({ open, onClose }: ExportModalProps) {
   )
 
   const reveal = useCallback(
-    async (type: ExportType) => {
+    async (type: ExportType, revealScope: ExportScope) => {
       try {
-        await openExport(type)
+        await openExport(type, revealScope)
       } catch (error) {
         reportError(error)
       }
@@ -55,13 +61,17 @@ export function ExportModal({ open, onClose }: ExportModalProps) {
   if (!open || !project) return null
 
   const disabled = busy !== '' || projectActionBusy
+  const selectedIndex = project.shots.findIndex((shot) => shot.shot_id === selectedShotId)
+  const selectedLabel = selectedIndex >= 0 ? `Board ${selectedIndex + 1}` : 'the selected board'
 
-  const openButton = (type: ExportType, label = 'Open') =>
-    done[type] ? (
-      <button type="button" className="export-open" onClick={() => void reveal(type)} disabled={disabled}>
+  const openButton = (type: ExportType, label = 'Open') => {
+    const usedScope = done[type]
+    return usedScope ? (
+      <button type="button" className="export-open" onClick={() => void reveal(type, usedScope)} disabled={disabled}>
         {label}
       </button>
     ) : null
+  }
 
   return (
     <div className="export-modal-backdrop" role="presentation" onMouseDown={onClose}>
@@ -79,6 +89,32 @@ export function ExportModal({ open, onClose }: ExportModalProps) {
           </div>
           <button type="button" className="export-modal-close" onClick={onClose} aria-label="Close export">
             x
+          </button>
+        </div>
+
+        <div className="export-scope" role="radiogroup" aria-label="Export range">
+          <button
+            type="button"
+            role="radio"
+            aria-checked={!currentOnly}
+            className={currentOnly ? '' : 'is-active'}
+            onClick={() => setCurrentOnly(false)}
+            disabled={disabled}
+          >
+            Whole storyboard
+            <small>{project.shots.length} boards</small>
+          </button>
+          <button
+            type="button"
+            role="radio"
+            aria-checked={currentOnly}
+            className={currentOnly ? 'is-active' : ''}
+            onClick={() => setCurrentOnly(true)}
+            disabled={disabled || !selectedShotId}
+            title={selectedShotId ? `Export only ${selectedLabel}` : 'Select a board first'}
+          >
+            Current board only
+            <small>{selectedShotId ? selectedLabel : 'none selected'}</small>
           </button>
         </div>
 
@@ -104,7 +140,7 @@ export function ExportModal({ open, onClose }: ExportModalProps) {
               <button
                 type="button"
                 className="primary"
-                onClick={() => void run('animatic', () => exportAnimatic({ fps, captions }))}
+                onClick={() => void run('animatic', scope, () => exportAnimatic({ fps, captions, ...scope }))}
                 disabled={disabled}
               >
                 {busy === 'animatic' ? 'Rendering…' : 'Export .mp4'}
@@ -126,7 +162,12 @@ export function ExportModal({ open, onClose }: ExportModalProps) {
               </label>
             </div>
             <div className="export-actions">
-              <button type="button" className="primary" onClick={() => void run('pdf', () => exportPdf(pdfLayout))} disabled={disabled}>
+              <button
+                type="button"
+                className="primary"
+                onClick={() => void run('pdf', scope, () => exportPdf(pdfLayout, scope))}
+                disabled={disabled}
+              >
                 {busy === 'pdf' ? 'Building…' : 'Export PDF'}
               </button>
               {openButton('pdf')}
@@ -136,12 +177,20 @@ export function ExportModal({ open, onClose }: ExportModalProps) {
           <section className="export-group">
             <h3>Images</h3>
             <div className="export-actions">
-              <button type="button" onClick={() => void run('contact_sheet', exportContactSheet)} disabled={disabled}>
+              <button
+                type="button"
+                onClick={() => void run('contact_sheet', scope, () => exportContactSheet(scope))}
+                disabled={disabled}
+              >
                 {busy === 'contact_sheet' ? 'Building…' : 'Contact sheet (PNG)'}
               </button>
               {openButton('contact_sheet')}
-              <button type="button" onClick={() => void run('image_sequence', exportImageSequence)} disabled={disabled}>
-                {busy === 'image_sequence' ? 'Rendering…' : 'Image sequence'}
+              <button
+                type="button"
+                onClick={() => void run('image_sequence', scope, () => exportImageSequence(scope))}
+                disabled={disabled}
+              >
+                {busy === 'image_sequence' ? 'Rendering…' : currentOnly ? 'Board image (PNG)' : 'Image sequence'}
               </button>
               {openButton('image_sequence', 'Open folder')}
             </div>
@@ -150,11 +199,11 @@ export function ExportModal({ open, onClose }: ExportModalProps) {
           <section className="export-group">
             <h3>Data</h3>
             <div className="export-actions">
-              <button type="button" onClick={() => void run('shot_list', exportShotList)} disabled={disabled}>
+              <button type="button" onClick={() => void run('shot_list', scope, () => exportShotList(scope))} disabled={disabled}>
                 {busy === 'shot_list' ? 'Writing…' : 'Shot list (CSV)'}
               </button>
               {openButton('shot_list')}
-              <button type="button" onClick={() => void run('timing', exportTiming)} disabled={disabled}>
+              <button type="button" onClick={() => void run('timing', scope, () => exportTiming(scope))} disabled={disabled}>
                 {busy === 'timing' ? 'Writing…' : 'Timing (JSON)'}
               </button>
               {openButton('timing')}
@@ -163,7 +212,10 @@ export function ExportModal({ open, onClose }: ExportModalProps) {
         </div>
 
         <div className="export-modal-footer">
-          <span className="export-note">Files are written to the project&rsquo;s <code>exports/</code> folder.</span>
+          <span className="export-note">
+            Files are written to the project&rsquo;s <code>exports/</code> folder
+            {currentOnly && selectedShotId ? <>, named <code>…_board-{String(selectedIndex + 1).padStart(3, '0')}</code></> : null}.
+          </span>
           <button type="button" onClick={onClose} disabled={busy !== ''}>
             Close
           </button>

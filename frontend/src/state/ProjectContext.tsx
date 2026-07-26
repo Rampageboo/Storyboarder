@@ -30,7 +30,14 @@ import {
   updateSettings,
   updateShot,
 } from '../api'
-import { bootstrapApp, browseProjectJson, browseProjectSave, refreshPreviewAnalysis, updateAppSession } from '../api'
+import {
+  bootstrapApp,
+  browseProjectJson,
+  browseProjectSave,
+  closeProject,
+  refreshPreviewAnalysis,
+  updateAppSession,
+} from '../api'
 import type { MissingFileRow, ProjectPathRequest, ProjectPayload, SettingsUpdate, ShotUpdate } from '../types'
 import { shotToUpdate } from '../utils/shotUpdate'
 import { ProjectContext } from './useProject'
@@ -46,6 +53,10 @@ export interface ProjectContextValue {
   reloadProject: () => Promise<void>
   newProject: (body?: ProjectPathRequest) => Promise<void>
   openProjectFromDialog: () => Promise<void>
+  /** Open a document by path — the Home screen's recent cards. */
+  openProjectPath: (path: string) => Promise<void>
+  /** Save and close the open document, returning the app to Home. */
+  closeProjectToHome: () => Promise<void>
   saveProject: () => Promise<void>
   addShotAfterSelection: () => Promise<void>
   insertShotAtIndex: (index: number) => Promise<void>
@@ -551,6 +562,42 @@ export function ProjectProvider({ children }: PropsWithChildren) {
     }
   }, [flushDirtyShots, openPayload])
 
+  const openProjectPath = useCallback(
+    async (path: string) => {
+      setProjectActionBusy(true)
+      try {
+        await flushDirtyShots()
+        const payload = await openProject({ project_json_path: path })
+        openPayload(payload, payload.shots[0]?.shot_id ?? null)
+      } catch (error) {
+        setLastError(error instanceof Error ? error.message : String(error))
+        throw error
+      } finally {
+        setProjectActionBusy(false)
+      }
+    },
+    [flushDirtyShots, openPayload],
+  )
+
+  const closeProjectToHome = useCallback(async () => {
+    setProjectActionBusy(true)
+    try {
+      // Push pending board edits down first: the backend flush only writes what
+      // it already holds, so an unsaved inspector field would be lost here.
+      await flushDirtyShots()
+      await closeProject()
+      resetEditState()
+      setProject(null)
+      setSelectedShotId(null)
+      setLastError(null)
+    } catch (error) {
+      setLastError(error instanceof Error ? error.message : String(error))
+      throw error
+    } finally {
+      setProjectActionBusy(false)
+    }
+  }, [flushDirtyShots, resetEditState])
+
   const saveProjectAction = useCallback(async () => {
     setProjectActionBusy(true)
     try {
@@ -795,6 +842,8 @@ export function ProjectProvider({ children }: PropsWithChildren) {
       reloadProject,
       newProject: newProjectAction,
       openProjectFromDialog,
+      openProjectPath,
+      closeProjectToHome,
       saveProject: saveProjectAction,
       addShotAfterSelection,
       insertShotAtIndex,
@@ -844,7 +893,7 @@ export function ProjectProvider({ children }: PropsWithChildren) {
       refreshMissingFiles,
       refreshPreviewFields,
     }),
-    [project, selectedShotId, replaceProject, refreshProjectFromBridge, refreshProjectFromGeneration, reloadProject, newProjectAction, openProjectFromDialog, saveProjectAction, addShotAfterSelection, insertShotAtIndex, deleteSelectedShot, moveSelectedShot, reorderBoards, deleteActiveRefSegment, deleteRefSegmentUndoable, recordRefApply, undo, redo, undoStack, redoStack, syncSelectedShot, openSelectedShotSource, initialLoading, projectActionBusy, getDraft, editShotField, isShotDirty, dirtyShotIds, savingShots, saveShot, flushDirtyShots, visualEpoch, segmentRange, setSegmentAnchor, setSegmentEnd, pickSegmentShot, clearSegmentRange, activeAppliedSegmentId, setActiveAppliedSegmentId, clearActiveAppliedSegment, refSegmentInspectOpen, openRefSegmentInspect, closeRefSegmentInspect, dismissRefSegmentUi, refApplyUndoToken, lastError, clearError, reportError, missingFiles, missingFilesLoading, refreshMissingFiles, refreshPreviewFields],
+    [project, selectedShotId, replaceProject, refreshProjectFromBridge, refreshProjectFromGeneration, reloadProject, newProjectAction, openProjectFromDialog, openProjectPath, closeProjectToHome, saveProjectAction, addShotAfterSelection, insertShotAtIndex, deleteSelectedShot, moveSelectedShot, reorderBoards, deleteActiveRefSegment, deleteRefSegmentUndoable, recordRefApply, undo, redo, undoStack, redoStack, syncSelectedShot, openSelectedShotSource, initialLoading, projectActionBusy, getDraft, editShotField, isShotDirty, dirtyShotIds, savingShots, saveShot, flushDirtyShots, visualEpoch, segmentRange, setSegmentAnchor, setSegmentEnd, pickSegmentShot, clearSegmentRange, activeAppliedSegmentId, setActiveAppliedSegmentId, clearActiveAppliedSegment, refSegmentInspectOpen, openRefSegmentInspect, closeRefSegmentInspect, dismissRefSegmentUi, refApplyUndoToken, lastError, clearError, reportError, missingFiles, missingFilesLoading, refreshMissingFiles, refreshPreviewFields],
   )
 
   return <ProjectContext.Provider value={value}>{children}</ProjectContext.Provider>
