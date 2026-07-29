@@ -15,8 +15,21 @@ import stat
 import sys
 import tempfile
 import time
+import uuid
 import zipfile
+from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
+from typing import Any
+
+from .project_layout import (
+    LAYOUT_2,
+    MAX_STORAGE_REVISION,
+    ProjectPathError,
+    ensure_no_casefold_collisions,
+    parse_project_manifest,
+    resolve_root_child,
+    validate_project_relative_posix,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -45,6 +58,710 @@ _PACK_COMPRESS_LEVEL = 1
 # local, write-only recovery snapshot set (the app never reads it back); packing
 # it bloats the document and slows every save.
 _UNPACKED_DIRS = frozenset({"backups"})
+
+# Layout 2 keeps durable JSON work state beside the portable assets. Its .sbd
+# is a small metadata snapshot, never an expanded binary project tree.
+LAYOUT2_STATE_VERSION = 1
+LAYOUT2_COVER_MAX_BYTES = 65_536
+LAYOUT2_JSON_MEMBER_MAX_BYTES = 16 * 1024 * 1024
+LAYOUT2_ARCHIVE_MAX_UNCOMPRESSED_BYTES = 64 * 1024 * 1024
+LAYOUT2_ARCHIVE_MAX_MEMBERS = 10_000
+_LAYOUT2_REQUIRED_MEMBERS = frozenset({"project.json", "settings.json", "shots.json"})
+_LAYOUT2_JSON_PREFIXES = frozenset({"annotations", "notes", "scenes2d", "scenes3d"})
+_LAYOUT2_GENERATION_GROUPS = frozenset({"requests", "state", "results"})
+_LAYOUT2_COVER_MEMBER = "cover.png"
+_LAYOUT2_STATE_MEMBER = "state.json"
+
+
+class Layout2DocumentError(ValueError):
+    """A Layout 2 metadata archive or work-state contract was violated."""
+
+
+class Layout2RevisionConflict(Layout2DocumentError):
+    """Revision evidence cannot be reconciled without risking newer work."""
+
+
+@dataclass(frozen=True)
+class Layout2DocumentSnapshot:
+    project_id: str
+    revision: int
+    commit_id: str
+    members: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class Layout2RecoveryResult:
+    source: str
+    project_id: str
+    work_revision: int
+    committed_revision: int
+    commit_id: str
+    work_root: Path
+
+
+def _layout2_document_path(project_root: Path, document_path: Path | None = None) -> Path:
+    root = Path(project_root).expanduser().resolve()
+    document = (
+        resolve_root_child(root, f"{root.name}{DOCUMENT_SUFFIX}")
+        if document_path is None
+        else Path(document_path).expanduser().resolve()
+    )
+    if document.parent != root or document.name != f"{root.name}{DOCUMENT_SUFFIX}":
+        raise Layout2DocumentError(
+            "Layout 2 metadata document must be the project-root child named "
+            f"{root.name}{DOCUMENT_SUFFIX}."
+        )
+    return document
+
+
+def layout2_work_root(project_root: Path) -> Path:
+    return resolve_root_child(Path(project_root).expanduser().resolve(), ".storyboarder", "work")
+
+
+def layout2_state_path(project_root: Path) -> Path:
+    return resolve_root_child(
+        Path(project_root).expanduser().resolve(),
+        ".storyboarder",
+        _LAYOUT2_STATE_MEMBER,
+    )
+
+
+def _layout2_member_kind(name: str) -> str:
+    try:
+        relative = validate_project_relative_posix(name, field_name="Layout 2 archive member")
+    except ProjectPathError as exc:
+        raise Layout2DocumentError(str(exc)) from exc
+    parts = relative.parts
+    if name in _LAYOUT2_REQUIRED_MEMBERS:
+        return "json"
+    if name == _LAYOUT2_COVER_MEMBER:
+        return "cover"
+    if relative.suffix.lower() != ".json":
+        raise Layout2DocumentError(f"Layout 2 archive member is not allowlisted: {name}.")
+    if len(parts) >= 2 and parts[0] in _LAYOUT2_JSON_PREFIXES:
+        return "json"
+    if (
+        len(parts) >= 3
+        and parts[0] == "generation"
+        and parts[1] in _LAYOUT2_GENERATION_GROUPS
+    ):
+        return "json"
+    raise Layout2DocumentError(f"Layout 2 archive member is not allowlisted: {name}.")
+
+
+def _validated_commit_id(value: Any) -> str:
+    if not isinstance(value, str) or not value:
+        raise Layout2DocumentError("Layout 2 project.json requires a commit_id.")
+    try:
+        parsed = uuid.UUID(value)
+    except (ValueError, AttributeError) as exc:
+        raise Layout2DocumentError("Layout 2 commit_id must be a UUID.") from exc
+    canonical = str(parsed)
+    if value != canonical:
+        raise Layout2DocumentError("Layout 2 commit_id must use canonical UUID text.")
+    return canonical
+
+
+def _read_json_bytes(raw: bytes, *, member: str) -> Any:
+    try:
+        return json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise Layout2DocumentError(f"Layout 2 JSON member is invalid: {member}.") from exc
+
+
+def inspect_document_layout(document_path: Path):
+    """Read only project.json to identify a document before any extraction."""
+    document = Path(document_path).expanduser().resolve()
+    if not document.is_file():
+        raise FileNotFoundError(f"Storyboard document not found: {document}")
+    if document.suffix.lower() != DOCUMENT_SUFFIX:
+        raise ValueError(f"Storyboard documents must use the {DOCUMENT_SUFFIX} extension.")
+    try:
+        with zipfile.ZipFile(document, "r") as archive:
+            try:
+                info = archive.getinfo(_REQUIRED_MEMBER)
+            except KeyError as exc:
+                raise ValueError(
+                    "Invalid Storyboarder document: project.json is missing."
+                ) from exc
+            if info.file_size > LAYOUT2_JSON_MEMBER_MAX_BYTES:
+                raise ValueError("Invalid Storyboarder document: project.json is too large.")
+            payload = _read_json_bytes(archive.read(info), member=_REQUIRED_MEMBER)
+            return parse_project_manifest(payload)
+    except zipfile.BadZipFile as exc:
+        raise ValueError(f"Invalid Storyboarder document: {exc}") from exc
+
+
+def validate_layout2_document(document_path: Path) -> Layout2DocumentSnapshot:
+    """Validate a metadata-only Layout 2 archive without extracting it."""
+    document = Path(document_path).expanduser().resolve()
+    if not document.is_file():
+        raise FileNotFoundError(f"Storyboard document not found: {document}")
+    if document.suffix.lower() != DOCUMENT_SUFFIX:
+        raise Layout2DocumentError(
+            f"Storyboard documents must use the {DOCUMENT_SUFFIX} extension."
+        )
+    try:
+        with zipfile.ZipFile(document, "r") as archive:
+            all_infos = archive.infolist()
+            if any(info.is_dir() for info in all_infos):
+                raise Layout2DocumentError(
+                    "Layout 2 archives must not contain directory entries."
+                )
+            infos = list(all_infos)
+            if len(infos) > LAYOUT2_ARCHIVE_MAX_MEMBERS:
+                raise Layout2DocumentError("Layout 2 archive has too many members.")
+            names = [info.filename for info in infos]
+            if len(names) != len(set(names)):
+                raise Layout2DocumentError("Layout 2 archive contains duplicate members.")
+            try:
+                ensure_no_casefold_collisions(names, field_name="Layout 2 archive members")
+            except ProjectPathError as exc:
+                raise Layout2DocumentError(str(exc)) from exc
+
+            total_size = 0
+            project_payload: Any = None
+            for info in infos:
+                kind = _layout2_member_kind(info.filename)
+                mode = (info.external_attr >> 16) & 0xFFFF
+                if stat.S_ISLNK(mode):
+                    raise Layout2DocumentError(
+                        f"Layout 2 archive contains a symbolic link: {info.filename}."
+                    )
+                if info.flag_bits & 0x1:
+                    raise Layout2DocumentError("Encrypted Layout 2 archives are unsupported.")
+                cap = (
+                    LAYOUT2_COVER_MAX_BYTES
+                    if kind == "cover"
+                    else LAYOUT2_JSON_MEMBER_MAX_BYTES
+                )
+                if info.file_size > cap:
+                    raise Layout2DocumentError(
+                        f"Layout 2 archive member exceeds its size cap: {info.filename}."
+                    )
+                total_size += info.file_size
+                if total_size > LAYOUT2_ARCHIVE_MAX_UNCOMPRESSED_BYTES:
+                    raise Layout2DocumentError(
+                        "Layout 2 archive exceeds the uncompressed metadata size cap."
+                    )
+                raw = archive.read(info)
+                if len(raw) != info.file_size:
+                    raise Layout2DocumentError(
+                        f"Layout 2 archive member has an invalid size: {info.filename}."
+                    )
+                if kind == "cover":
+                    if not raw.startswith(b"\x89PNG\r\n\x1a\n"):
+                        raise Layout2DocumentError("Layout 2 cover.png is not a PNG.")
+                    continue
+                payload = _read_json_bytes(raw, member=info.filename)
+                if info.filename == _REQUIRED_MEMBER:
+                    project_payload = payload
+
+            missing = sorted(_LAYOUT2_REQUIRED_MEMBERS.difference(names))
+            if missing:
+                raise Layout2DocumentError(
+                    f"Layout 2 archive is missing required members: {', '.join(missing)}."
+                )
+            spec = parse_project_manifest(project_payload)
+            if spec.layout != LAYOUT_2:
+                raise Layout2DocumentError("Metadata-only archives require Layout 2.")
+            commit_id = _validated_commit_id(project_payload.get("commit_id"))
+            return Layout2DocumentSnapshot(
+                project_id=spec.project_id,
+                revision=spec.storage_revision,
+                commit_id=commit_id,
+                members=tuple(sorted(names)),
+            )
+    except zipfile.BadZipFile as exc:
+        raise Layout2DocumentError(f"Invalid Storyboarder document: {exc}") from exc
+
+
+def _validate_layout2_work_tree(
+    work_root: Path,
+) -> tuple[dict[str, Path], str, int]:
+    root = Path(work_root).resolve()
+    if not root.is_dir():
+        raise Layout2DocumentError(f"Layout 2 work root is missing: {root}.")
+    files: dict[str, Path] = {}
+    total_size = 0
+    for path in sorted(root.rglob("*")):
+        if path.is_symlink():
+            raise Layout2DocumentError(f"Layout 2 work state contains a link: {path}.")
+        if not path.is_file():
+            continue
+        name = path.relative_to(root).as_posix()
+        if _layout2_member_kind(name) != "json":
+            raise Layout2DocumentError(
+                f"Layout 2 work state may contain JSON metadata only: {name}."
+            )
+        size = path.stat().st_size
+        if size > LAYOUT2_JSON_MEMBER_MAX_BYTES:
+            raise Layout2DocumentError(
+                f"Layout 2 work-state member exceeds its size cap: {name}."
+            )
+        total_size += size
+        if total_size > LAYOUT2_ARCHIVE_MAX_UNCOMPRESSED_BYTES:
+            raise Layout2DocumentError(
+                "Layout 2 work state exceeds the uncompressed metadata size cap."
+            )
+        _read_json_bytes(path.read_bytes(), member=name)
+        files[name] = path
+        if len(files) > LAYOUT2_ARCHIVE_MAX_MEMBERS:
+            raise Layout2DocumentError("Layout 2 work state has too many members.")
+    try:
+        ensure_no_casefold_collisions(files, field_name="Layout 2 work-state paths")
+    except ProjectPathError as exc:
+        raise Layout2DocumentError(str(exc)) from exc
+    missing = sorted(_LAYOUT2_REQUIRED_MEMBERS.difference(files))
+    if missing:
+        raise Layout2DocumentError(
+            f"Layout 2 work state is missing required members: {', '.join(missing)}."
+        )
+    project_payload = _read_json_bytes(files[_REQUIRED_MEMBER].read_bytes(), member=_REQUIRED_MEMBER)
+    spec = parse_project_manifest(project_payload)
+    if spec.layout != LAYOUT_2:
+        raise Layout2DocumentError("Layout 2 work state requires a Layout 2 project.json.")
+    return files, spec.project_id, spec.storage_revision
+
+
+def _atomic_write_json(path: Path, payload: Any) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    descriptor, temporary_name = tempfile.mkstemp(
+        prefix=f".{path.name}.",
+        suffix=".tmp",
+        dir=str(path.parent),
+    )
+    temporary = Path(temporary_name)
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8", newline="\n") as stream:
+            json.dump(payload, stream, ensure_ascii=False, indent=2)
+            stream.write("\n")
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary, path)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def _read_layout2_state(project_root: Path) -> dict[str, Any] | None:
+    path = layout2_state_path(project_root)
+    if not path.is_file():
+        return None
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise Layout2RevisionConflict("Layout 2 state.json is unreadable.") from exc
+    if not isinstance(payload, dict) or payload.get("version") != LAYOUT2_STATE_VERSION:
+        raise Layout2RevisionConflict("Layout 2 state.json has an unsupported schema.")
+    project_id = payload.get("project_id")
+    global_revision = payload.get("global_revision")
+    committed_revision = payload.get("committed_revision")
+    commit_id = payload.get("commit_id")
+    if not isinstance(project_id, str) or not project_id:
+        raise Layout2RevisionConflict("Layout 2 state.json has an invalid project_id.")
+    for field_name, value in (
+        ("global_revision", global_revision),
+        ("committed_revision", committed_revision),
+    ):
+        if (
+            isinstance(value, bool)
+            or not isinstance(value, int)
+            or value < 0
+            or value > MAX_STORAGE_REVISION
+        ):
+            raise Layout2RevisionConflict(
+                f"Layout 2 state.json has an invalid {field_name}."
+            )
+    if commit_id:
+        try:
+            _validated_commit_id(commit_id)
+        except Layout2DocumentError as exc:
+            raise Layout2RevisionConflict(str(exc)) from exc
+    elif committed_revision:
+        raise Layout2RevisionConflict(
+            "Layout 2 state.json requires commit_id for a committed revision."
+        )
+    if committed_revision > global_revision:
+        raise Layout2RevisionConflict(
+            "Layout 2 committed revision exceeds global revision."
+        )
+    return payload
+
+
+def _write_layout2_state(
+    project_root: Path,
+    *,
+    project_id: str,
+    global_revision: int,
+    committed_revision: int,
+    commit_id: str,
+) -> None:
+    _atomic_write_json(
+        layout2_state_path(project_root),
+        {
+            "version": LAYOUT2_STATE_VERSION,
+            "project_id": project_id,
+            "global_revision": global_revision,
+            "committed_revision": committed_revision,
+            "commit_id": commit_id,
+        },
+    )
+
+
+def _cover_bytes(cover_path: Path | None) -> bytes | None:
+    if cover_path is None:
+        return None
+    path = Path(cover_path)
+    if path.is_symlink() or not path.is_file():
+        raise Layout2DocumentError("Layout 2 cover source must be a regular file.")
+    if path.stat().st_size > LAYOUT2_COVER_MAX_BYTES:
+        raise Layout2DocumentError("Layout 2 cover.png exceeds 65,536 bytes.")
+    raw = path.read_bytes()
+    if not raw.startswith(b"\x89PNG\r\n\x1a\n"):
+        raise Layout2DocumentError("Layout 2 cover source is not a PNG.")
+    return raw
+
+
+def _existing_cover(document: Path) -> bytes | None:
+    if not document.is_file():
+        return None
+    with zipfile.ZipFile(document, "r") as archive:
+        try:
+            return archive.read(_LAYOUT2_COVER_MEMBER)
+        except KeyError:
+            return None
+
+
+def _archive_matches_work(document: Path, files: dict[str, Path]) -> bool:
+    with zipfile.ZipFile(document, "r") as archive:
+        archived_json = {
+            info.filename
+            for info in archive.infolist()
+            if not info.is_dir() and info.filename != _LAYOUT2_COVER_MEMBER
+        }
+        if archived_json != set(files):
+            return False
+        for name, path in files.items():
+            archived = _read_json_bytes(archive.read(name), member=name)
+            working = _read_json_bytes(path.read_bytes(), member=name)
+            if name == _REQUIRED_MEMBER and isinstance(archived, dict):
+                archived = dict(archived)
+                archived.pop("commit_id", None)
+            if name == _REQUIRED_MEMBER and isinstance(working, dict):
+                working = dict(working)
+                working.pop("commit_id", None)
+            if archived != working:
+                return False
+    return True
+
+
+def commit_layout2_document(
+    project_root: Path,
+    *,
+    document_path: Path | None = None,
+    cover_path: Path | None = None,
+) -> Layout2DocumentSnapshot:
+    """Atomically commit the JSON-only work tree to a metadata-only .sbd."""
+    root = Path(project_root).expanduser().resolve()
+    work_root = layout2_work_root(root)
+    document = _layout2_document_path(root, document_path)
+    files, project_id, revision = _validate_layout2_work_tree(work_root)
+    supplied_cover = _cover_bytes(cover_path)
+    state = _read_layout2_state(root)
+    if state is not None:
+        if state["project_id"] != project_id:
+            raise Layout2RevisionConflict(
+                "Layout 2 state.json project_id differs from the work state."
+            )
+        if int(state["global_revision"]) > revision:
+            raise Layout2RevisionConflict(
+                "Layout 2 state.json claims a missing work revision."
+            )
+        if int(state["committed_revision"]) > revision:
+            raise Layout2RevisionConflict(
+                "Committed Layout 2 revision cannot exceed the work revision."
+            )
+
+    existing: Layout2DocumentSnapshot | None = None
+    if document.is_file():
+        existing = validate_layout2_document(document)
+        if existing.project_id != project_id:
+            raise Layout2RevisionConflict("Layout 2 document and work state project_id differ.")
+        if existing.revision > revision:
+            raise Layout2RevisionConflict(
+                "Layout 2 document revision is newer than the work state."
+            )
+        if state is not None:
+            if int(state["committed_revision"]) > existing.revision:
+                raise Layout2RevisionConflict(
+                    "Layout 2 state.json claims a missing committed revision."
+                )
+            if (
+                int(state["committed_revision"]) == existing.revision
+                and state["commit_id"] != existing.commit_id
+            ):
+                raise Layout2RevisionConflict(
+                    "Layout 2 commit_id conflicts at the same committed revision."
+                )
+        if existing.revision == revision:
+            if not _archive_matches_work(document, files):
+                raise Layout2RevisionConflict(
+                    "Layout 2 work metadata changed without advancing its revision."
+                )
+            archived_cover = _existing_cover(document)
+            if supplied_cover is not None and supplied_cover != archived_cover:
+                raise Layout2RevisionConflict(
+                    "Layout 2 cover changed without advancing the work revision."
+                )
+            global_revision = max(
+                revision,
+                int(state["global_revision"]) if state is not None else revision,
+            )
+            _write_layout2_state(
+                root,
+                project_id=project_id,
+                global_revision=global_revision,
+                committed_revision=revision,
+                commit_id=existing.commit_id,
+            )
+            return existing
+
+    cover = supplied_cover
+    if cover is None and existing is not None:
+        cover = _existing_cover(document)
+    commit_id = str(uuid.uuid4())
+    document.parent.mkdir(parents=True, exist_ok=True)
+    descriptor, temporary_name = tempfile.mkstemp(
+        prefix=f".{document.name}.",
+        suffix=".tmp.sbd",
+        dir=str(document.parent),
+    )
+    os.close(descriptor)
+    temporary = Path(temporary_name)
+    try:
+        with zipfile.ZipFile(
+            temporary,
+            "w",
+            compression=zipfile.ZIP_DEFLATED,
+            compresslevel=_PACK_COMPRESS_LEVEL,
+        ) as archive:
+            for name, path in sorted(files.items()):
+                raw = path.read_bytes()
+                if name == _REQUIRED_MEMBER:
+                    payload = _read_json_bytes(raw, member=name)
+                    if not isinstance(payload, dict):
+                        raise Layout2DocumentError("Layout 2 project.json must be an object.")
+                    payload = dict(payload)
+                    payload["commit_id"] = commit_id
+                    raw = (
+                        json.dumps(payload, ensure_ascii=False, indent=2).encode("utf-8")
+                        + b"\n"
+                    )
+                archive.writestr(name, raw, compress_type=zipfile.ZIP_DEFLATED)
+            if cover is not None:
+                archive.writestr(
+                    _LAYOUT2_COVER_MEMBER,
+                    cover,
+                    compress_type=zipfile.ZIP_STORED,
+                )
+        snapshot = validate_layout2_document(temporary)
+        with temporary.open("r+b") as stream:
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary, document)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+    global_revision = max(
+        revision,
+        int(state["global_revision"]) if state is not None else revision,
+    )
+    _write_layout2_state(
+        root,
+        project_id=project_id,
+        global_revision=global_revision,
+        committed_revision=revision,
+        commit_id=snapshot.commit_id,
+    )
+    return snapshot
+
+
+def advance_layout2_work_revision(
+    project_root: Path,
+    *,
+    expected_revision: int | None = None,
+) -> int:
+    """Advance the one authoritative work revision after accepted metadata writes."""
+    root = Path(project_root).expanduser().resolve()
+    work_root = layout2_work_root(root)
+    files, project_id, revision = _validate_layout2_work_tree(work_root)
+    if expected_revision is not None and revision != expected_revision:
+        raise Layout2RevisionConflict(
+            f"Expected Layout 2 revision {expected_revision}, found {revision}."
+        )
+    if revision >= MAX_STORAGE_REVISION:
+        raise Layout2RevisionConflict("Layout 2 revision counter is exhausted.")
+    next_revision = revision + 1
+    state = _read_layout2_state(root)
+    if state is not None:
+        if state["project_id"] != project_id:
+            raise Layout2RevisionConflict(
+                "Layout 2 state.json project_id differs from the work state."
+            )
+        if int(state["global_revision"]) > revision:
+            raise Layout2RevisionConflict(
+                "Layout 2 state.json claims a missing work revision."
+            )
+        if int(state["committed_revision"]) > revision:
+            raise Layout2RevisionConflict(
+                "Committed Layout 2 revision cannot exceed the work revision."
+            )
+    project_payload = _read_json_bytes(
+        files[_REQUIRED_MEMBER].read_bytes(),
+        member=_REQUIRED_MEMBER,
+    )
+    project_payload = dict(project_payload)
+    project_payload["storage_revision"] = next_revision
+    project_payload.pop("commit_id", None)
+    _atomic_write_json(files[_REQUIRED_MEMBER], project_payload)
+
+    committed_revision = int(state["committed_revision"]) if state is not None else 0
+    commit_id = str(state["commit_id"]) if state is not None else ""
+    if committed_revision > next_revision:
+        raise Layout2RevisionConflict(
+            "Committed Layout 2 revision cannot exceed the work revision."
+        )
+    _write_layout2_state(
+        root,
+        project_id=project_id,
+        global_revision=next_revision,
+        committed_revision=committed_revision,
+        commit_id=commit_id,
+    )
+    return next_revision
+
+
+def _extract_layout2_json(document: Path, destination: Path) -> None:
+    destination.mkdir(parents=True, exist_ok=False)
+    try:
+        with zipfile.ZipFile(document, "r") as archive:
+            for info in archive.infolist():
+                if info.is_dir() or info.filename == _LAYOUT2_COVER_MEMBER:
+                    continue
+                if _layout2_member_kind(info.filename) != "json":
+                    raise Layout2DocumentError(
+                        f"Layout 2 archive member is not JSON metadata: {info.filename}."
+                    )
+                relative = validate_project_relative_posix(
+                    info.filename,
+                    field_name="Layout 2 archive member",
+                )
+                target = resolve_root_child(destination, *relative.parts)
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_bytes(archive.read(info))
+    except BaseException:
+        shutil.rmtree(destination, ignore_errors=True)
+        raise
+
+
+def _replace_layout2_work_from_document(
+    project_root: Path,
+    document: Path,
+    work_root: Path,
+) -> None:
+    recovery_root = resolve_root_child(project_root, ".storyboarder", "recovery")
+    recovery_root.mkdir(parents=True, exist_ok=True)
+    token = uuid.uuid4().hex
+    staged = resolve_root_child(recovery_root, f"work-{token}")
+    previous = resolve_root_child(recovery_root, f"previous-{token}")
+    _extract_layout2_json(document, staged)
+    if work_root.exists():
+        os.replace(work_root, previous)
+    try:
+        os.replace(staged, work_root)
+    except BaseException:
+        if previous.exists() and not work_root.exists():
+            os.replace(previous, work_root)
+        raise
+    shutil.rmtree(previous, ignore_errors=True)
+
+
+def recover_layout2_work(
+    project_root: Path,
+    *,
+    document_path: Path | None = None,
+) -> Layout2RecoveryResult:
+    """Recover newer JSON work, otherwise restore the committed archive."""
+    root = Path(project_root).expanduser().resolve()
+    document = _layout2_document_path(root, document_path)
+    snapshot = validate_layout2_document(document)
+    work_root = layout2_work_root(root)
+    state = _read_layout2_state(root)
+
+    work_exists = work_root.is_dir()
+    if work_exists:
+        _files, work_project_id, work_revision = _validate_layout2_work_tree(work_root)
+        if work_project_id != snapshot.project_id:
+            raise Layout2RevisionConflict(
+                "Layout 2 document and work state project_id differ."
+            )
+        if snapshot.revision > work_revision:
+            raise Layout2RevisionConflict(
+                "Layout 2 document revision exceeds the work revision invariant."
+            )
+    else:
+        work_revision = snapshot.revision
+
+    if state is not None:
+        if state["project_id"] != snapshot.project_id:
+            raise Layout2RevisionConflict(
+                "Layout 2 state.json project_id differs from the document."
+            )
+        state_global = int(state["global_revision"])
+        state_committed = int(state["committed_revision"])
+        if state_committed > state_global:
+            raise Layout2RevisionConflict(
+                "Layout 2 committed revision exceeds global revision."
+            )
+        if state_committed > snapshot.revision:
+            raise Layout2RevisionConflict(
+                "Layout 2 state.json claims a missing committed revision."
+            )
+        if state_global > work_revision:
+            raise Layout2RevisionConflict(
+                "Layout 2 state.json claims a missing work revision."
+            )
+        if (
+            state_committed == snapshot.revision
+            and state["commit_id"] != snapshot.commit_id
+        ):
+            raise Layout2RevisionConflict(
+                "Layout 2 commit_id conflicts at the same committed revision."
+            )
+
+    if work_exists and work_revision > snapshot.revision:
+        source = "work"
+        final_work_revision = work_revision
+    else:
+        _replace_layout2_work_from_document(root, document, work_root)
+        source = "document"
+        final_work_revision = snapshot.revision
+
+    _write_layout2_state(
+        root,
+        project_id=snapshot.project_id,
+        global_revision=final_work_revision,
+        committed_revision=snapshot.revision,
+        commit_id=snapshot.commit_id,
+    )
+    return Layout2RecoveryResult(
+        source=source,
+        project_id=snapshot.project_id,
+        work_revision=final_work_revision,
+        committed_revision=snapshot.revision,
+        commit_id=snapshot.commit_id,
+        work_root=work_root,
+    )
 
 
 def create_working_root(document_path: Path) -> Path:
@@ -196,6 +913,11 @@ def extract_document(document_path: Path) -> Path:
         raise FileNotFoundError(f"Storyboard document not found: {document}")
     if document.suffix.lower() != DOCUMENT_SUFFIX:
         raise ValueError(f"Storyboard documents must use the {DOCUMENT_SUFFIX} extension.")
+    if inspect_document_layout(document).layout == LAYOUT_2:
+        raise Layout2DocumentError(
+            "Layout 2 documents must recover into .storyboarder/work; "
+            "temporary expanded project trees are forbidden."
+        )
 
     working_root = create_working_root(document)
     try:

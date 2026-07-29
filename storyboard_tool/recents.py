@@ -17,7 +17,7 @@ import zipfile
 from pathlib import Path
 from typing import Any
 
-from .project_document import DOCUMENT_SUFFIX
+from .project_document import DOCUMENT_SUFFIX, LAYOUT2_COVER_MAX_BYTES
 
 logger = logging.getLogger(__name__)
 
@@ -85,9 +85,23 @@ def _document_thumbnail(document: Path) -> tuple[str, int]:
             payload = json.loads(archive.read(_SHOTS_MEMBER))
         except KeyError:
             return "", 0
+        try:
+            project_payload = json.loads(archive.read("project.json"))
+        except KeyError:
+            project_payload = {}
         members = _shot_image_members(payload)
         names = set(archive.namelist())
         shot_count = len(payload.get("shots", [])) if isinstance(payload, dict) else len(members)
+        if isinstance(project_payload, dict) and project_payload.get("layout") == 2:
+            if "cover.png" not in names:
+                return "", shot_count
+            info = archive.getinfo("cover.png")
+            if info.file_size > LAYOUT2_COVER_MAX_BYTES:
+                return "", shot_count
+            raw = archive.read("cover.png")
+            if not raw.startswith(b"\x89PNG\r\n\x1a\n"):
+                return "", shot_count
+            return _data_url(raw, ".png"), shot_count
         for member in members:
             if member not in names:
                 continue

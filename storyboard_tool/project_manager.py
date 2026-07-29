@@ -52,6 +52,7 @@ from .linked_sync import linked_mtime, sync_shot_from_linked_files
 from .models import Project, Shot
 from . import project_document
 from .project_layout import (
+    LAYOUT_2,
     ensure_layout_enabled,
     layout1_project_root,
     parse_project_manifest,
@@ -188,6 +189,23 @@ def reload_project_if_changed(project: Project, loaded_mtime: float) -> tuple[Pr
 def open_project(project_json_path: Path) -> Project:
     if project_json_path.suffix.lower() == project_document.DOCUMENT_SUFFIX:
         document_path = project_json_path.expanduser().resolve()
+        layout_spec = project_document.inspect_document_layout(document_path)
+        if layout_spec.layout == LAYOUT_2:
+            project_document.validate_layout2_document(document_path)
+            # The feature gate is deliberately checked before recovery creates
+            # or rewrites .storyboarder/work.
+            ensure_layout_enabled(layout_spec.layout)
+            project_root = document_path.parent
+            recovered = project_document.recover_layout2_work(
+                project_root,
+                document_path=document_path,
+            )
+            project = _open_expanded_project(
+                resolve_root_child(recovered.work_root, "project.json"),
+                project_root_path=project_root,
+            )
+            project.document_path = document_path
+            return project
         working_root = project_document.extract_document(document_path)
         try:
             project = _open_expanded_project(resolve_root_child(working_root, "project.json"))
@@ -199,7 +217,11 @@ def open_project(project_json_path: Path) -> Project:
     return _open_expanded_project(project_json_path)
 
 
-def _open_expanded_project(project_json_path: Path) -> Project:
+def _open_expanded_project(
+    project_json_path: Path,
+    *,
+    project_root_path: Path | None = None,
+) -> Project:
     if not project_json_path.exists():
         raise FileNotFoundError(f"Project file not found: {project_json_path}")
 
@@ -215,6 +237,7 @@ def _open_expanded_project(project_json_path: Path) -> Project:
         layout=layout_spec.layout,
         project_id=layout_spec.project_id,
         storage_revision=layout_spec.storage_revision,
+        project_root_path=project_root_path,
     )
     _ensure_project_dirs(project.metadata_root)
     project.settings = _load_settings(project)
