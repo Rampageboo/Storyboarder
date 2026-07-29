@@ -24,6 +24,7 @@ from . import (
     bpy_viewport,
     live_bridge,
     preview_analysis_cache,
+    project_document,
     project_manager,
     recents,
     runtime_state,
@@ -490,9 +491,30 @@ def _autosave(app: FastAPI) -> None:
     already the durable save and the project is not left dirty.
     """
     project = _require_project(app)
+    revision = int(project.storage_revision)
     project_manager.save_project(project, flush_document=False)
+    if project.layout == LAYOUT_2:
+        project.storage_revision = project_document.advance_layout2_work_revision(
+            project.project_root,
+            expected_revision=revision,
+        )
+        try:
+            blender_bridge.publish_context(app, project)
+        except (OSError, ValueError):
+            logger.warning(
+                "Could not invalidate the external Blender context after mutation."
+            )
     app.state.project_disk_mtime = project_manager.project_disk_mtime(project)
     app.state.dirty = bool(project.document_path)
+
+
+def persist_project_mutation(app: FastAPI) -> None:
+    """Persist one accepted mutation at exactly one Layout 2 revision."""
+    project = _require_project(app)
+    _autosave(app)
+    if project.layout != LAYOUT_2:
+        project_manager.sync_document(project)
+        app.state.dirty = False
 
 
 def _dialog_initial_dir(app: FastAPI, kind: str) -> str:

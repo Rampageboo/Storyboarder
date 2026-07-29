@@ -311,10 +311,16 @@ def save_project(project: Project, *, flush_document: bool = True) -> None:
         # Canonical shots.json + regenerated readable shots.csv compatibility snapshot.
         # Serialize a snapshot (list copy) so both files describe the same shot ordering
         # even if another thread mutates project.shots between the two writes.
-        save_shots(project.metadata_root, list(project.shots))
+        if project.layout == LAYOUT_2:
+            save_shots_json(project.metadata_root, list(project.shots))
+        else:
+            save_shots(project.metadata_root, list(project.shots))
         save_settings(project)
         if flush_document and project.document_path:
-            project_document.pack_document(project.metadata_root, project.document_path)
+            if project.layout == LAYOUT_2:
+                project_document.commit_layout2_document(project.project_root)
+            else:
+                project_document.pack_document(project.metadata_root, project.document_path)
 
 
 def validate_transition_candidate(project: Project) -> None:
@@ -340,7 +346,10 @@ def sync_document(project: Project) -> None:
     if not project.document_path:
         return
     with PROJECT_LOCK:
-        project_document.pack_document(project.metadata_root, project.document_path)
+        if project.layout == LAYOUT_2:
+            project_document.commit_layout2_document(project.project_root)
+        else:
+            project_document.pack_document(project.metadata_root, project.document_path)
 
 
 def save_project_as(project: Project, document_path: Path) -> Project:
@@ -351,6 +360,10 @@ def save_project_as(project: Project, document_path: Path) -> Project:
     longer mutate the original folder after Save As switches documents.
     """
     document = document_path.expanduser().resolve()
+    if project.layout == LAYOUT_2:
+        raise ValueError(
+            "Layout 2 Save As requires the transactional folder coordinator."
+        )
     if document.suffix.lower() != project_document.DOCUMENT_SUFFIX:
         document = document.with_suffix(project_document.DOCUMENT_SUFFIX)
     root = project.metadata_root.resolve()

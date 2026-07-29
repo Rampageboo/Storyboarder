@@ -8,7 +8,8 @@ from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import Response
 from pydantic import BaseModel, Field
 
-from . import app_state, blender_bridge, bpy_viewport
+from . import app_state, blender_bridge, bpy_viewport, scene3d
+from .project_layout import LAYOUT_2
 
 
 class BpyCameraPathRequest(BaseModel):
@@ -72,6 +73,11 @@ def register_bpy_viewport_routes(app: FastAPI) -> None:
         try:
             current = project()
             viewport = manager()
+            if current.layout == LAYOUT_2:
+                scenes_before = scene3d.list_scenes(current)
+                bpy_viewport.project_blend_path(current)
+                if scene3d.list_scenes(current) != scenes_before:
+                    app_state.persist_project_mutation(app)
             if callable(getattr(viewport, "bind_context", None)):
                 result = viewport.start(
                     current,

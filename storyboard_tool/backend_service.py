@@ -1333,11 +1333,9 @@ class StoryboardBackendService(ExportServiceMixin):
         )
         if character_bible_changed:
             generation_service.mark_all_generated_shots_stale(project)
-            app_state._autosave(self.app)
-        else:
-            project_manager.save_settings(project)
+        project_manager.save_settings(project)
         project_manager.write_bridge_file(project)
-        project_manager.sync_document(project)
+        app_state.persist_project_mutation(self.app)
         app_state._touch_live_bridge(self.app)
         return app_state._project_payload(project, self.app.state.dirty)
 
@@ -1521,6 +1519,7 @@ class StoryboardBackendService(ExportServiceMixin):
                 str(active_scene["id"]),
                 blend_path,
             )
+            app_state.persist_project_mutation(self.app)
             session = blender_bridge.begin_session(
                 self.app,
                 project,
@@ -1577,7 +1576,7 @@ class StoryboardBackendService(ExportServiceMixin):
             )
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-        project_manager.sync_document(project)
+        app_state.persist_project_mutation(self.app)
         return payload
 
     def method_update_scene3d(self, scene3d_id: str, data: dict[str, Any]) -> dict[str, Any]:
@@ -1597,17 +1596,14 @@ class StoryboardBackendService(ExportServiceMixin):
             key in data and before_scene.get(key) != payload["scene"].get(key)
             for key in semantic_keys
         )
-        stale_ids = generation_service.mark_generated_shots_for_asset_keywords_stale(
+        generation_service.mark_generated_shots_for_asset_keywords_stale(
             project,
             [
                 *generation_service.semantic_asset_keywords(before_scene),
                 *generation_service.semantic_asset_keywords(payload["scene"]),
             ],
         ) if scene_changed else []
-        if stale_ids:
-            app_state._autosave(self.app)
-        else:
-            project_manager.sync_document(project)
+        app_state.persist_project_mutation(self.app)
         return payload
 
     def method_delete_scene3d(self, scene3d_id: str) -> dict[str, Any]:
@@ -1622,7 +1618,7 @@ class StoryboardBackendService(ExportServiceMixin):
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-        project_manager.sync_document(project)
+        app_state.persist_project_mutation(self.app)
         return payload
 
     def method_set_active_scene3d(self, scene3d_id: str) -> dict[str, Any]:
@@ -1637,7 +1633,7 @@ class StoryboardBackendService(ExportServiceMixin):
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-        project_manager.sync_document(project)
+        app_state.persist_project_mutation(self.app)
         return payload
 
     def method_import_scene3d_to_scene(self, scene3d_id: str, filename: str, data: list[int] | bytes | bytearray) -> dict[str, Any]:
@@ -1655,17 +1651,14 @@ class StoryboardBackendService(ExportServiceMixin):
         except (FileNotFoundError, ValueError) as exc:
             logger.exception("Failed to import Scene3D file: %s", filename)
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-        stale_ids = generation_service.mark_generated_shots_for_asset_keywords_stale(
+        generation_service.mark_generated_shots_for_asset_keywords_stale(
             project,
             [
                 *generation_service.semantic_asset_keywords(before_scene),
                 *generation_service.semantic_asset_keywords(payload["scene"]),
             ],
         )
-        if stale_ids:
-            app_state._autosave(self.app)
-        else:
-            project_manager.sync_document(project)
+        app_state.persist_project_mutation(self.app)
         return payload
 
     def method_get_scene3d_file(self, scene3d_id: str | None = None) -> dict[str, str]:
@@ -1699,7 +1692,7 @@ class StoryboardBackendService(ExportServiceMixin):
         except (FileNotFoundError, ValueError) as exc:
             logger.exception("Failed to create Scene 2D")
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-        project_manager.sync_document(project)
+        app_state.persist_project_mutation(self.app)
         app_state._touch_live_bridge(self.app)
         return {"scene": scene, "scenes": scenes}
 
@@ -1715,7 +1708,6 @@ class StoryboardBackendService(ExportServiceMixin):
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-        shots_changed = False
         context_keys = {"title", "description", "location", "time_of_day", "environment_prompt", "consistency_anchors"}
         scene_context_changed = before_scene is None or any(
             key in data and before_scene.get(key) != scene.get(key)
@@ -1726,14 +1718,9 @@ class StoryboardBackendService(ExportServiceMixin):
                 continue
             if "title" in data and shot.scene != scene["title"]:
                 shot.scene = scene["title"]
-                shots_changed = True
             if scene_context_changed and generation_service.has_generation_activity(shot):
                 shot.generation_state["freshness_status"] = "stale"
-                shots_changed = True
-        if shots_changed:
-            app_state._autosave(self.app)
-        else:
-            project_manager.sync_document(project)
+        app_state.persist_project_mutation(self.app)
         app_state._touch_live_bridge(self.app)
         return {"scene": scene, "scenes": scenes}
 
@@ -1749,7 +1736,6 @@ class StoryboardBackendService(ExportServiceMixin):
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-        unlinked = False
         for shot in project.shots:
             if shot.scene_id != scene_id:
                 continue
@@ -1758,11 +1744,7 @@ class StoryboardBackendService(ExportServiceMixin):
                 shot.scene = str(existing_scene.get("title") or "")
             if generation_service.has_generation_activity(shot):
                 shot.generation_state["freshness_status"] = "stale"
-            unlinked = True
-        if unlinked:
-            app_state._autosave(self.app)
-        else:
-            project_manager.sync_document(project)
+        app_state.persist_project_mutation(self.app)
         app_state._touch_live_bridge(self.app)
         return {"scenes": scenes}
 
@@ -1786,7 +1768,7 @@ class StoryboardBackendService(ExportServiceMixin):
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-        project_manager.sync_document(project)
+        app_state.persist_project_mutation(self.app)
         return {"scene": scene, "preview_exists": preview_exists, "message": message}
 
     def method_add_scene2d_to_references(self, scene_id: str) -> dict[str, Any]:
@@ -1797,7 +1779,7 @@ class StoryboardBackendService(ExportServiceMixin):
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-        project_manager.sync_document(project)
+        app_state.persist_project_mutation(self.app)
         app_state._touch_live_bridge(self.app)
         return {"reference": reference, "scene": scene, "project": app_state._project_payload(project, self.app.state.dirty)}
 
@@ -1835,7 +1817,7 @@ class StoryboardBackendService(ExportServiceMixin):
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-        project_manager.sync_document(project)
+        app_state.persist_project_mutation(self.app)
         return {"scene": scene, "perspective": perspective, "scenes": scenes}
 
     def method_duplicate_scene2d_perspective(self, scene_id: str, perspective_id: str) -> dict[str, Any]:
@@ -1846,7 +1828,7 @@ class StoryboardBackendService(ExportServiceMixin):
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-        project_manager.sync_document(project)
+        app_state.persist_project_mutation(self.app)
         return {"scene": scene, "perspective": perspective, "scenes": scenes}
 
     def method_reorder_scene2d_perspectives(self, scene_id: str, perspective_ids: list[str]) -> dict[str, Any]:
@@ -1857,7 +1839,7 @@ class StoryboardBackendService(ExportServiceMixin):
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-        project_manager.sync_document(project)
+        app_state.persist_project_mutation(self.app)
         return {"scene": scene, "scenes": scenes}
 
     def method_import_scene2d_perspective(
@@ -1882,7 +1864,7 @@ class StoryboardBackendService(ExportServiceMixin):
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-        project_manager.sync_document(project)
+        app_state.persist_project_mutation(self.app)
         return {"scene": scene, "perspective": perspective, "scenes": scenes}
 
     def method_update_scene2d_perspective(self, scene_id: str, perspective_id: str, data: dict[str, Any]) -> dict[str, Any]:
@@ -1893,7 +1875,7 @@ class StoryboardBackendService(ExportServiceMixin):
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-        project_manager.sync_document(project)
+        app_state.persist_project_mutation(self.app)
         return {"scene": scene, "perspective": perspective, "scenes": scenes}
 
     def method_delete_scene2d_perspective(self, scene_id: str, perspective_id: str) -> dict[str, Any]:
@@ -1904,7 +1886,7 @@ class StoryboardBackendService(ExportServiceMixin):
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-        project_manager.sync_document(project)
+        app_state.persist_project_mutation(self.app)
         return {"scene": scene, "scenes": scenes}
 
     def method_open_scene2d_perspective(self, scene_id: str, perspective_id: str) -> dict[str, Any]:
@@ -1925,14 +1907,16 @@ class StoryboardBackendService(ExportServiceMixin):
             raise HTTPException(status_code=400, detail="Only PSD Perspectives can be opened for editing.")
 
         source_rel = str(perspective.get("source_file_path") or "")
-        expected_source_rel = scene2d._source_rel(scene_id, perspective_id)
-        if source_rel != expected_source_rel:
-            raise HTTPException(status_code=400, detail="Perspective source path is not canonical.")
-        source_path = (
-            project_manager.resolve_project_path(project, source_rel) if source_rel else None
-        )
+        if Path(source_rel).suffix.lower() != ".psd":
+            raise HTTPException(status_code=400, detail="Perspective source must be a PSD.")
+        try:
+            source_path = project_manager.resolve_project_path(project, source_rel)
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=400, detail="Perspective source path is invalid."
+            ) from exc
 
-        if not source_path or not source_path.is_file():
+        if not source_path.is_file():
             raise HTTPException(status_code=400, detail=f"Source PSD not found: {source_rel}")
         opened = str(source_path)
         relative_path = source_rel
@@ -2029,7 +2013,7 @@ class StoryboardBackendService(ExportServiceMixin):
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-        project_manager.sync_document(project)
+        app_state.persist_project_mutation(self.app)
         return {
             "scene": scene,
             "perspective": perspective,
@@ -2045,7 +2029,7 @@ class StoryboardBackendService(ExportServiceMixin):
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-        project_manager.sync_document(project)
+        app_state.persist_project_mutation(self.app)
         return {"scene": scene, "scenes": scenes}
 
     def method_move_scene2d_perspective(self, scene_id: str, perspective_id: str, target_scene_id: str) -> dict[str, Any]:
@@ -2061,7 +2045,7 @@ class StoryboardBackendService(ExportServiceMixin):
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-        project_manager.sync_document(project)
+        app_state.persist_project_mutation(self.app)
         return {
             "source_scene": source_scene,
             "target_scene": target_scene,
@@ -2078,7 +2062,7 @@ class StoryboardBackendService(ExportServiceMixin):
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-        project_manager.sync_document(project)
+        app_state.persist_project_mutation(self.app)
         return {"reference": reference, "scene": scene, "project": app_state._project_payload(project, self.app.state.dirty)}
 
     def method_get_scene2d_perspective_preview(self, scene_id: str, perspective_id: str) -> dict[str, str]:

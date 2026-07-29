@@ -17,7 +17,7 @@ from typing import Any
 
 from .external_tools import ensure_project_blend_file
 from .models import Project
-from .project_layout import LAYOUT_2, resolve_project_path, resolve_scene3d_asset
+from .project_layout import LAYOUT_2, resolve_project_path
 from .system_utils import detect_blender_paths, resolve_blender_executable
 
 
@@ -51,10 +51,6 @@ def project_blend_path(project: Project) -> Path:
         candidate = resolve_project_path(project, relative)
     except ValueError as exc:
         raise BpyViewportError("Blender scene path must stay inside the project.") from exc
-    if project.layout == LAYOUT_2:
-        expected = resolve_scene3d_asset(project, active["id"], ".blend")
-        if candidate != expected:
-            raise BpyViewportError("Layout 2 Blender scene path is not canonical.")
     if candidate.suffix.lower() != ".blend":
         raise BpyViewportError("The active built-in Blender scene must be a .blend file.")
     if not candidate.is_file():

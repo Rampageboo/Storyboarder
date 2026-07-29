@@ -1,6 +1,7 @@
 """Project-level Scene 3D collection storage."""
 from __future__ import annotations
 
+import copy
 import json
 import os
 import re
@@ -12,6 +13,7 @@ from pathlib import Path
 from typing import Any
 
 from . import project_manager
+from .file_transactions import quarantined_deletions, rollback_paths
 from .models import Project
 from . import scene2d
 from .project_layout import (
@@ -171,29 +173,73 @@ def _legacy_scene(project: Project) -> dict[str, Any] | None:
 def _read_index(project: Project) -> tuple[str, list[dict[str, Any]]] | None:
     index = _index_path(project)
     if not index.is_file():
+        if project.layout == LAYOUT_2:
+            raise FileNotFoundError("Layout 2 Scene 3D index is missing.")
         return None
     try:
         data = json.loads(index.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
+    except (OSError, json.JSONDecodeError) as exc:
+        if project.layout == LAYOUT_2:
+            raise ValueError("Layout 2 Scene 3D index is unreadable.") from exc
         return None
+    if project.layout == LAYOUT_2 and not isinstance(data, dict):
+        raise ValueError("Layout 2 Scene 3D index must be an object.")
     raw_scenes = data.get("scenes") if isinstance(data, dict) else []
     if not isinstance(raw_scenes, list):
+        if project.layout == LAYOUT_2:
+            raise ValueError("Layout 2 Scene 3D scenes must be a list.")
         raw_scenes = []
     scenes: list[dict[str, Any]] = []
     seen: set[str] = set()
     for item in raw_scenes:
         if not isinstance(item, dict):
+            if project.layout == LAYOUT_2:
+                raise ValueError("Layout 2 Scene 3D index contains an invalid entry.")
             continue
         try:
             scene = _normalize_scene(item)
-        except ValueError:
+        except ValueError as exc:
+            if project.layout == LAYOUT_2:
+                raise ValueError("Layout 2 Scene 3D index contains an invalid scene.") from exc
             continue
         if scene["id"] in seen:
+            if project.layout == LAYOUT_2:
+                raise ValueError("Layout 2 Scene 3D index contains duplicate scene IDs.")
             continue
+        if project.layout == LAYOUT_2:
+            for field_name, suffixes in (
+                ("file_path", SCENE3D_EXTENSIONS),
+                ("blend_file_path", {".blend"}),
+            ):
+                raw_relative = item.get(field_name)
+                if raw_relative in (None, ""):
+                    continue
+                if not isinstance(raw_relative, str):
+                    raise ValueError(
+                        f"Layout 2 Scene 3D {field_name} must be a string."
+                    )
+                resolved = _safe_rel_path(project, raw_relative)
+                if resolved.suffix.lower() not in suffixes:
+                    raise ValueError(
+                        f"Layout 2 Scene 3D {field_name} has an invalid file type."
+                    )
+                relative = str(scene.get(field_name) or "")
+                if not relative:
+                    continue
+                resolved = _safe_rel_path(project, relative)
+                if resolved.suffix.lower() not in suffixes:
+                    raise ValueError(
+                        f"Layout 2 Scene 3D {field_name} has an invalid file type."
+                    )
         seen.add(scene["id"])
         scenes.append(scene)
     active_id = str(data.get("active_scene3d_id") or "").strip() if isinstance(data, dict) else ""
-    if active_id not in {scene["id"] for scene in scenes}:
+    scene_ids = {scene["id"] for scene in scenes}
+    if project.layout == LAYOUT_2 and (
+        (bool(scenes) and active_id not in scene_ids) or (not scenes and bool(active_id))
+    ):
+        raise ValueError("Layout 2 Scene 3D active scene is invalid.")
+    if active_id not in scene_ids:
         active_id = scenes[0]["id"] if scenes else ""
     return active_id, sorted(scenes, key=lambda scene: scene["id"])
 
@@ -224,7 +270,11 @@ def _mirror_active_to_settings(project: Project, scene: dict[str, Any] | None) -
     project_manager.save_settings(project)
 
 
-def _save(project: Project, active_scene3d_id: str, scenes: list[dict[str, Any]]) -> None:
+def _save_unchecked(
+    project: Project,
+    active_scene3d_id: str,
+    scenes: list[dict[str, Any]],
+) -> None:
     root = _root_dir(project)
     root.mkdir(parents=True, exist_ok=True)
     normalized = sorted([_normalize_scene(scene) for scene in scenes], key=lambda scene: scene["id"])
@@ -238,6 +288,29 @@ def _save(project: Project, active_scene3d_id: str, scenes: list[dict[str, Any]]
         project_manager._atomic_write_json(_meta_path(project, scene["id"]), scene)
     active = next((scene for scene in normalized if scene["id"] == active_scene3d_id), None)
     _mirror_active_to_settings(project, active)
+
+
+def _save(project: Project, active_scene3d_id: str, scenes: list[dict[str, Any]]) -> None:
+    if project.layout != LAYOUT_2:
+        _save_unchecked(project, active_scene3d_id, scenes)
+        return
+    settings_before = copy.deepcopy(project.settings)
+    try:
+        with rollback_paths((_root_dir(project), project.settings_path)):
+            _save_unchecked(project, active_scene3d_id, scenes)
+    except BaseException:
+        project.settings = settings_before
+        raise
+
+
+def initialize_layout2_metadata(project: Project) -> None:
+    """Create the canonical empty Scene 3D index during Layout 2 initialization."""
+    if project.layout != LAYOUT_2:
+        raise ValueError("Scene 3D Layout 2 initialization requires Layout 2.")
+    if _index_path(project).exists():
+        _read_index(project)
+        return
+    _save(project, "", [])
 
 
 def list_scenes(project: Project) -> dict[str, Any]:
@@ -324,19 +397,38 @@ def update_scene(project: Project, scene_id: str, changes: dict[str, Any]) -> di
     return {"scene": scene, **list_scenes(project)}
 
 
-def delete_scene(project: Project, scene_id: str) -> dict[str, Any]:
+def _delete_scene_layout2(project: Project, scene_id: str) -> dict[str, Any]:
     active_id, scene, scenes = _find_scene(project, scene_id)
-    layout2_assets: set[Path] = set()
+    assets = {
+        _safe_rel_path(project, relative)
+        for relative in (
+            str(scene.get("file_path") or ""),
+            str(scene.get("blend_file_path") or ""),
+        )
+        if relative
+    }
+    assets.update((preview_file_path(project, scene["id"]), _scene_dir(project, scene["id"])))
+    scenes = [item for item in scenes if item["id"] != scene["id"]]
+    if active_id == scene["id"]:
+        active_id = scenes[0]["id"] if scenes else ""
+    settings_before = copy.deepcopy(project.settings)
+    try:
+        with rollback_paths(
+            (_root_dir(project), scene2d._root_dir(project), project.settings_path)
+        ):
+            with quarantined_deletions(project.project_root, assets):
+                scene2d.clear_scene3d_links(project, scene["id"])
+                _save(project, active_id, scenes)
+    except BaseException:
+        project.settings = settings_before
+        raise
+    return list_scenes(project)
+
+
+def delete_scene(project: Project, scene_id: str) -> dict[str, Any]:
     if project.layout == LAYOUT_2:
-        layout2_assets = {
-            _safe_rel_path(project, relative)
-            for relative in (
-                str(scene.get("file_path") or ""),
-                str(scene.get("blend_file_path") or ""),
-            )
-            if relative
-        }
-        layout2_assets.add(preview_file_path(project, scene["id"]))
+        return _delete_scene_layout2(project, scene_id)
+    active_id, scene, scenes = _find_scene(project, scene_id)
     scenes = [item for item in scenes if item["id"] != scene["id"]]
     if active_id == scene["id"]:
         active_id = scenes[0]["id"] if scenes else ""
@@ -344,8 +436,6 @@ def delete_scene(project: Project, scene_id: str) -> dict[str, Any]:
     scene_dir = _scene_dir(project, scene["id"])
     if scene_dir.is_dir():
         shutil.rmtree(scene_dir)
-    for asset in layout2_assets:
-        asset.unlink(missing_ok=True)
     _save(project, active_id, scenes)
     return list_scenes(project)
 
@@ -378,9 +468,16 @@ def configure_blend_preview(
     blend_relative = project_manager.project_relative_posix(project, blend_path)
     resolved_blend = project_manager.resolve_project_path(project, blend_relative)
     if project.layout == LAYOUT_2:
-        expected = resolve_scene3d_asset(project, scene_id, ".blend")
+        stored = str(scene.get("blend_file_path") or "")
+        expected = (
+            _safe_rel_path(project, stored)
+            if stored
+            else resolve_scene3d_asset(project, scene_id, ".blend")
+        )
         if resolved_blend != expected:
-            raise ValueError("Layout 2 Blender scene path is not canonical.")
+            raise ValueError("Blender scene path differs from its persisted target.")
+        if resolved_blend.suffix.lower() != ".blend" or not resolved_blend.is_file():
+            raise FileNotFoundError(f"Blender scene not found: {blend_relative}")
     preview_relative = project_manager.project_relative_posix(
         project, preview_file_path(project, scene_id)
     )

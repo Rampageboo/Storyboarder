@@ -60,6 +60,12 @@ def _context_allows_write() -> bool:
         return False
     if CONTEXT.get("path_mode") != "explicit-assets":
         return True
+    lease_expires_at = CONTEXT.get("lease_expires_at")
+    lease_is_fresh = (
+        isinstance(lease_expires_at, (int, float))
+        and not isinstance(lease_expires_at, bool)
+        and time.time() <= float(lease_expires_at)
+    )
     return (
         CONTEXT.get("version") == 2
         and bool(str(CONTEXT.get("project_session_id") or ""))
@@ -67,6 +73,7 @@ def _context_allows_write() -> bool:
         and CONTEXT.get("context_revision") >= 0
         and CONTEXT.get("offline_write_allowed") is False
         and CONTEXT.get("write_enabled") is True
+        and lease_is_fresh
     )
 
 
@@ -130,6 +137,18 @@ def _queue_preview_export(*, delay: float = 0.35) -> None:
     PREVIEW_EXPORT_PENDING = True
     if not bpy.app.timers.is_registered(_preview_export_timer):
         bpy.app.timers.register(_preview_export_timer, first_interval=delay)
+
+
+@persistent
+def _on_save_pre(_unused: Any) -> None:
+    global CONTEXT
+    CONTEXT = _read_context()
+    if CONTEXT.get("path_mode") == "explicit-assets" and (
+        not _context_allows_write() or not _current_blend_matches_context()
+    ):
+        raise RuntimeError(
+            "Storyboarder blocked this save because its online write lease is stale."
+        )
 
 
 @persistent
@@ -246,6 +265,8 @@ def register() -> None:
         REGISTERED = True
     if not bpy.app.timers.is_registered(_heartbeat):
         bpy.app.timers.register(_heartbeat, first_interval=0.25, persistent=True)
+    if _on_save_pre not in bpy.app.handlers.save_pre:
+        bpy.app.handlers.save_pre.append(_on_save_pre)
     if _on_save_post not in bpy.app.handlers.save_post:
         bpy.app.handlers.save_post.append(_on_save_post)
     _queue_preview_export(delay=0.75)
@@ -257,6 +278,8 @@ def unregister() -> None:
         bpy.app.timers.unregister(_heartbeat)
     if bpy.app.timers.is_registered(_preview_export_timer):
         bpy.app.timers.unregister(_preview_export_timer)
+    if _on_save_pre in bpy.app.handlers.save_pre:
+        bpy.app.handlers.save_pre.remove(_on_save_pre)
     if _on_save_post in bpy.app.handlers.save_post:
         bpy.app.handlers.save_post.remove(_on_save_post)
     if REGISTERED:

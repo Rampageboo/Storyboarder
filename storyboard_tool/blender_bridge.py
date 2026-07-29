@@ -14,7 +14,7 @@ from fastapi import FastAPI
 
 from . import live_bridge, runtime_state, scene3d
 from .models import Project
-from .project_layout import LAYOUT_2, resolve_scene3d_asset
+from .project_layout import LAYOUT_2
 
 
 BRIDGE_FILENAME = "storyboard_blender_bridge.json"
@@ -78,12 +78,16 @@ def begin_session(
     resolved_blend = blend_path.resolve()
     scene_id = str(scene.get("id") or "")
     if project.layout == LAYOUT_2:
-        expected = resolve_scene3d_asset(project, scene_id, ".blend").resolve()
         stored = str(scene.get("blend_file_path") or "")
-        if not stored or resolved_blend != expected:
-            raise ValueError("Layout 2 external Blender path is not canonical.")
-        if scene3d._safe_rel_path(project, stored).resolve() != expected:
-            raise ValueError("Layout 2 Scene 3D metadata has a stale Blender path.")
+        if not stored:
+            raise ValueError("Layout 2 Scene 3D metadata has no Blender path.")
+        stored_path = scene3d._safe_rel_path(project, stored).resolve()
+        if stored_path.suffix.lower() != ".blend":
+            raise ValueError("Layout 2 Scene 3D Blender path must be a .blend file.")
+        if not stored_path.is_file():
+            raise FileNotFoundError(f"Layout 2 Blender scene not found: {stored}.")
+        if resolved_blend != stored_path:
+            raise ValueError("External Blender must use the persisted Scene 3D path.")
     project_session_id = str(
         getattr(app.state, "project_session_id", "") or ""
     )
@@ -113,6 +117,22 @@ def attach_process(app: FastAPI, process: subprocess.Popen[Any]) -> None:
 
 
 def cancel_session(app: FastAPI) -> None:
+    session_id = str(getattr(app.state, "external_blender_session_id", "") or "")
+    if session_id:
+        try:
+            context = _read_json(bridge_file_path())
+            if str(context.get("session_id") or "") == session_id:
+                context.update(
+                    {
+                        "session_id": "",
+                        "write_enabled": False,
+                        "lease_expires_at": 0.0,
+                        "updated_at": time.time(),
+                    }
+                )
+                _write_json(bridge_file_path(), context)
+        except OSError:
+            pass
     app.state.external_blender_session_id = ""
     app.state.external_blender_blend_path = ""
     app.state.external_blender_scene3d_id = ""
@@ -142,6 +162,7 @@ def publish_context(app: FastAPI, project: Project) -> dict[str, Any]:
     from .external_tools import blender_portable_reference
 
     blend = Path(blend_path)
+    published_at = time.time()
     for link in project.settings.get("reference_links") or []:
         if not isinstance(link, dict):
             continue
@@ -172,6 +193,8 @@ def publish_context(app: FastAPI, project: Project) -> dict[str, Any]:
         ),
         "path_mode": "explicit-assets" if project.layout == LAYOUT_2 else "legacy",
         "offline_write_allowed": project.layout != LAYOUT_2,
+        "lease_expires_at": published_at + HEARTBEAT_MAX_AGE_SECONDS,
+        "lease_duration_seconds": HEARTBEAT_MAX_AGE_SECONDS,
         "session_id": session_id,
         "project_name": project.name,
         "project_root": str(project.project_root.resolve()),
@@ -185,7 +208,7 @@ def publish_context(app: FastAPI, project: Project) -> dict[str, Any]:
         "selected_shot_id": runtime_state.live_selected_shot_id(app),
         "shots": _shot_links(project),
         "portable_references": portable_references,
-        "updated_at": time.time(),
+        "updated_at": published_at,
     }
     _write_json(bridge_file_path(), payload)
     return payload
@@ -239,6 +262,14 @@ def _adopt_fresh_session(app: FastAPI, project: Project) -> None:
     heartbeat = _read_json(heartbeat_file_path())
     session_id = str(context.get("session_id") or "")
     if not session_id or str(heartbeat.get("session_id") or "") != session_id:
+        return
+    lease_expires_at = context.get("lease_expires_at")
+    if (
+        context.get("write_enabled") is not True
+        or isinstance(lease_expires_at, bool)
+        or not isinstance(lease_expires_at, (int, float))
+        or time.time() > float(lease_expires_at)
+    ):
         return
     try:
         age = max(0.0, time.time() - heartbeat_file_path().stat().st_mtime)

@@ -1,21 +1,28 @@
 from __future__ import annotations
 
+import copy
 import io
 import json
 import uuid
 from pathlib import Path
 
 import pytest
+from fastapi import HTTPException
 
 from storyboard_tool import (
+    app_state,
     blender_bridge,
     external_tools,
+    file_transactions,
+    project_document,
+    project_layout,
     project_manager,
     reference_segments,
     scene2d,
     scene3d,
 )
 from storyboard_tool.api import create_app
+from storyboard_tool.backend_service import StoryboardBackendService
 from storyboard_tool.bpy_viewport import (
     BpyViewportError,
     BpyViewportManager,
@@ -29,7 +36,7 @@ def _project(tmp_path: Path) -> Project:
     root = tmp_path / "Portable"
     work = root / ".storyboarder" / "work"
     work.mkdir(parents=True)
-    return Project(
+    project = Project(
         root_path=work,
         project_root_path=root,
         document_path=root / "Portable.sbd",
@@ -39,6 +46,8 @@ def _project(tmp_path: Path) -> Project:
         settings=dict(project_manager.DEFAULT_SETTINGS),
     )
 
+    scene3d.initialize_layout2_metadata(project)
+    return project
 
 def test_layout2_scene2d_assets_are_flat_and_metadata_stays_in_work(
     tmp_path: Path,
@@ -331,7 +340,7 @@ def test_layout2_builtin_blender_rejects_stale_writer_context(tmp_path: Path) ->
         )
 
 
-def test_layout2_builtin_blender_rejects_noncanonical_stored_path(
+def test_layout2_builtin_blender_uses_valid_persisted_path(
     tmp_path: Path,
 ) -> None:
     project = _project(tmp_path)
@@ -342,8 +351,9 @@ def test_layout2_builtin_blender_rejects_noncanonical_stored_path(
     scene["blend_file_path"] = "Blender/stale.blend"
     scene3d._save(project, scene["id"], [scene])
 
-    with pytest.raises(BpyViewportError, match="not canonical"):
-        project_blend_path(project)
+    configured = scene3d.configure_blend_preview(project, scene["id"], stale)
+    assert configured["blend_file_path"] == "Blender/stale.blend"
+    assert project_blend_path(project) == stale.resolve()
 
 
 def test_blender_addon_guards_explicit_asset_writes() -> None:
@@ -359,3 +369,311 @@ def test_blender_addon_guards_explicit_asset_writes() -> None:
     assert 'CONTEXT.get("write_enabled") is True' in source
     assert '"project_session_id"' in source
     assert '"context_revision"' in source
+    assert 'CONTEXT.get("lease_expires_at")' in source
+    assert "def _on_save_pre" in source
+    assert "bpy.app.handlers.save_pre.append(_on_save_pre)" in source
+
+
+def _tree_bytes(root: Path) -> dict[str, bytes]:
+    return {
+        path.relative_to(root).as_posix(): path.read_bytes()
+        for path in sorted(root.rglob("*"))
+        if path.is_file()
+    }
+
+
+def test_layout2_scene_mutation_advances_once_and_invalidates_blender_lease(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(project_layout, "LAYOUT_2_ENABLED", True)
+    project = _project(tmp_path)
+    project.settings["backup_on_save"] = False
+    scene = scene3d.create_scene(project, title="Leased")["scene"]
+    blend = project.project_root / "Blender" / "preserved-name.blend"
+    blend.parent.mkdir(parents=True, exist_ok=True)
+    blend.write_bytes(b"blend")
+    scene["blend_file_path"] = "Blender/preserved-name.blend"
+    scene3d._save(project, scene["id"], [scene])
+    project_manager.save_project(project, flush_document=False)
+    project_document.commit_layout2_document(project.project_root)
+
+    bridge_path = tmp_path / "bridge.json"
+    heartbeat_path = tmp_path / "heartbeat.json"
+    monkeypatch.setattr(blender_bridge, "bridge_file_path", lambda: bridge_path)
+    monkeypatch.setattr(blender_bridge, "heartbeat_file_path", lambda: heartbeat_path)
+    app_root = tmp_path / "app"
+    app_root.mkdir()
+    app = create_app(app_root)
+    app.state.project = project
+    service = StoryboardBackendService(app)
+    before = project.storage_revision
+    blender_bridge.begin_session(app, project, scene, blend)
+
+    service.method_update_scene3d(scene["id"], {"title": "Revision changed"})
+
+    assert project.storage_revision == before + 1
+    manifest = project_manager.parse_project_manifest(
+        json.loads(project.json_path.read_text(encoding="utf-8"))
+    )
+    assert manifest.storage_revision == before + 1
+    state = json.loads(
+        (project.project_root / ".storyboarder" / "state.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert state["global_revision"] == before + 1
+    assert state["committed_revision"] == before
+    assert project_document.validate_layout2_document(project.document_path).revision == before
+    context = json.loads(bridge_path.read_text(encoding="utf-8"))
+    assert context["write_enabled"] is False
+    assert context["lease_expires_at"] > context["updated_at"]
+
+    project_manager.sync_document(project)
+
+    assert project_document.validate_layout2_document(project.document_path).revision == before + 1
+    assert not (project.metadata_root / "shots.csv").exists()
+    blender_bridge.cancel_session(app)
+    cancelled = json.loads(bridge_path.read_text(encoding="utf-8"))
+    assert cancelled["write_enabled"] is False
+    assert cancelled["session_id"] == ""
+    assert cancelled["lease_expires_at"] == 0.0
+
+
+def test_layout2_scene2d_open_uses_persisted_psd_path(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    project = _project(tmp_path)
+    scene, _scenes = scene2d.create_scene(project, "Stored path")
+    perspective = scene["perspectives"][0]
+    custom_relative = "PSD/Scene2D/user-preserved.psd"
+    custom = project.project_root / custom_relative
+    custom.write_bytes(b"custom")
+    perspective["source_file_path"] = custom_relative
+    scene2d._save_scenes(project, [scene])
+    app_root = tmp_path / "app-open"
+    app_root.mkdir()
+    app = create_app(app_root)
+    app.state.project = project
+    work_key = f"scene2d:{scene['id']}:{perspective['id']}"
+    monkeypatch.setattr(
+        app_state,
+        "plugin_work_key_state",
+        lambda _app: (work_key, {work_key}),
+    )
+    monkeypatch.setattr(app_state, "_touch_live_bridge", lambda *_args, **_kwargs: {})
+
+    payload = StoryboardBackendService(app).method_open_scene2d_perspective(
+        scene["id"], perspective["id"]
+    )
+
+    assert payload["relative_path"] == custom_relative
+    custom.unlink()
+    with pytest.raises(HTTPException, match="Source PSD not found"):
+        StoryboardBackendService(app).method_open_scene2d_perspective(
+            scene["id"], perspective["id"]
+        )
+    assert not custom.exists()
+
+
+@pytest.mark.parametrize("fault_stage", ["metadata", "settings", "rename"])
+def test_layout2_scene2d_delete_rolls_back_every_fault(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    fault_stage: str,
+) -> None:
+    project = _project(tmp_path)
+    scene, _scenes = scene2d.create_scene(project, "Delete rollback")
+    perspective = scene["perspectives"][0]
+    preview = project.project_root / perspective["preview_image_path"]
+    preview.parent.mkdir(parents=True, exist_ok=True)
+    preview.write_bytes(b"preview")
+    scene2d.add_perspective_to_references(
+        project, scene["id"], perspective["id"]
+    )
+    before_files = _tree_bytes(project.project_root)
+    before_settings = copy.deepcopy(project.settings)
+
+    if fault_stage == "metadata":
+        monkeypatch.setattr(
+            scene2d,
+            "_save_scenes",
+            lambda *_args, **_kwargs: (_ for _ in ()).throw(
+                OSError("injected Scene2D metadata fault")
+            ),
+        )
+    elif fault_stage == "settings":
+        monkeypatch.setattr(
+            project_manager,
+            "save_settings",
+            lambda *_args, **_kwargs: (_ for _ in ()).throw(
+                OSError("injected Scene2D settings fault")
+            ),
+        )
+    else:
+        real_replace = file_transactions.os.replace
+        move_count = 0
+
+        def fail_second_quarantine_move(source, destination):
+            nonlocal move_count
+            destination_path = Path(destination)
+            if "transactions" in destination_path.parts:
+                move_count += 1
+                if move_count == 2:
+                    raise OSError("injected Scene2D rename fault")
+            return real_replace(source, destination)
+
+        monkeypatch.setattr(file_transactions.os, "replace", fail_second_quarantine_move)
+
+    with pytest.raises(OSError, match="injected Scene2D"):
+        scene2d.delete_perspective(project, scene["id"], perspective["id"])
+
+    assert _tree_bytes(project.project_root) == before_files
+    assert project.settings == before_settings
+    transactions = project.project_root / ".storyboarder" / "transactions"
+    assert not transactions.exists() or not any(transactions.rglob("*"))
+
+
+@pytest.mark.parametrize("fault_stage", ["metadata", "settings", "rename"])
+def test_layout2_scene3d_delete_rolls_back_every_fault(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    fault_stage: str,
+) -> None:
+    project = _project(tmp_path)
+    target = scene3d.create_scene(project, title="Delete target")["scene"]
+    scene3d.create_scene(project, title="Survivor")
+    target = scene3d.import_scene_file(
+        project, target["id"], "target.glb", b"glb"
+    )["scene"]
+    preview = scene3d.preview_file_path(project, target["id"])
+    preview.parent.mkdir(parents=True, exist_ok=True)
+    preview.write_bytes(b"preview")
+    linked, _scenes = scene2d.create_scene(project, "Linked")
+    scene2d.update_scene(
+        project, linked["id"], {"linked_scene3d_id": target["id"]}
+    )
+    before_files = _tree_bytes(project.project_root)
+    before_settings = copy.deepcopy(project.settings)
+
+    if fault_stage == "metadata":
+        monkeypatch.setattr(
+            scene3d,
+            "_save",
+            lambda *_args, **_kwargs: (_ for _ in ()).throw(
+                OSError("injected Scene3D metadata fault")
+            ),
+        )
+    elif fault_stage == "settings":
+        monkeypatch.setattr(
+            project_manager,
+            "save_settings",
+            lambda *_args, **_kwargs: (_ for _ in ()).throw(
+                OSError("injected Scene3D settings fault")
+            ),
+        )
+    else:
+        real_replace = file_transactions.os.replace
+        move_count = 0
+
+        def fail_second_quarantine_move(source, destination):
+            nonlocal move_count
+            destination_path = Path(destination)
+            if "transactions" in destination_path.parts:
+                move_count += 1
+                if move_count == 2:
+                    raise OSError("injected Scene3D rename fault")
+            return real_replace(source, destination)
+
+        monkeypatch.setattr(file_transactions.os, "replace", fail_second_quarantine_move)
+
+    with pytest.raises(OSError, match="injected Scene3D"):
+        scene3d.delete_scene(project, target["id"])
+
+    assert _tree_bytes(project.project_root) == before_files
+    assert project.settings == before_settings
+    reloaded = scene3d.list_scenes(project)
+    assert target["id"] in {scene["id"] for scene in reloaded["scenes"]}
+    restored_scene = next(
+        scene for scene in scene2d.list_scenes(project) if scene["id"] == linked["id"]
+    )
+    assert restored_scene["linked_scene3d_id"] == target["id"]
+
+
+def test_layout2_scene3d_index_corruption_never_uses_settings_mirror(
+    tmp_path: Path,
+) -> None:
+    project = _project(tmp_path)
+    scene = scene3d.create_scene(project, title="Canonical")["scene"]
+    index = project.metadata_root / "scenes3d" / "scenes3d.json"
+    canonical = index.read_bytes()
+    project.settings["scene3d"] = {"id": scene["id"], "title": "Mirror only"}
+
+    index.unlink()
+    with pytest.raises(FileNotFoundError, match="index is missing"):
+        scene3d.list_scenes(project)
+    assert not index.exists()
+
+    index.write_bytes(b"{broken")
+    with pytest.raises(ValueError, match="unreadable"):
+        scene3d.list_scenes(project)
+
+    index.write_bytes(canonical)
+    payload = json.loads(canonical)
+    payload["scenes"].append(dict(payload["scenes"][0]))
+    index.write_text(json.dumps(payload), encoding="utf-8")
+    with pytest.raises(ValueError, match="duplicate"):
+        scene3d.list_scenes(project)
+
+    payload = json.loads(canonical)
+    payload["scenes"][0]["blend_file_path"] = "Blender\\invalid.blend"
+    index.write_text(json.dumps(payload), encoding="utf-8")
+    with pytest.raises(ValueError, match="POSIX"):
+        scene3d.list_scenes(project)
+
+
+def test_layout2_transactional_deletes_commit_assets_and_metadata(
+    tmp_path: Path,
+) -> None:
+    project = _project(tmp_path)
+    scene, _scenes = scene2d.create_scene(project, "Delete success")
+    perspective = scene["perspectives"][0]
+    perspective_assets = {
+        project.project_root / perspective["source_file_path"],
+        project.project_root / perspective["preview_image_path"],
+    }
+    preview = project.project_root / perspective["preview_image_path"]
+    preview.parent.mkdir(parents=True, exist_ok=True)
+    preview.write_bytes(b"preview")
+
+    scene2d.delete_perspective(project, scene["id"], perspective["id"])
+
+    assert not any(path.exists() for path in perspective_assets)
+    reloaded_scene = next(
+        item for item in scene2d.list_scenes(project) if item["id"] == scene["id"]
+    )
+    assert perspective["id"] not in {
+        item["id"] for item in reloaded_scene["perspectives"]
+    }
+
+    target = scene3d.create_scene(project, title="Delete target")["scene"]
+    survivor = scene3d.create_scene(project, title="Survivor")["scene"]
+    target = scene3d.import_scene_file(
+        project, target["id"], "target.glb", b"glb"
+    )["scene"]
+    target_assets = {
+        project.project_root / target["file_path"],
+        scene3d.preview_file_path(project, target["id"]),
+    }
+    target_preview = scene3d.preview_file_path(project, target["id"])
+    target_preview.parent.mkdir(parents=True, exist_ok=True)
+    target_preview.write_bytes(b"preview")
+
+    scene3d.delete_scene(project, target["id"])
+
+    assert not any(path.exists() for path in target_assets)
+    remaining = scene3d.list_scenes(project)
+    assert {item["id"] for item in remaining["scenes"]} == {survivor["id"]}
+    transactions = project.project_root / ".storyboarder" / "transactions"
+    assert not transactions.exists() or not any(transactions.rglob("*"))

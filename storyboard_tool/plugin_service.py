@@ -836,19 +836,27 @@ class PluginBridgeService:
             raise HTTPException(status_code=400, detail="Perspective is not a PSD — export not allowed.")
 
         source_rel = str(perspective.get("source_file_path") or "")
-        canonical_source_rel = scene2d._source_rel(scene_id, perspective_id)
-        if source_rel != canonical_source_rel:
-            raise HTTPException(status_code=400, detail="Perspective source path is not canonical.")
+        if project.layout == LAYOUT_2:
+            if Path(source_rel).suffix.lower() != ".psd":
+                raise HTTPException(status_code=400, detail="Perspective source must be a PSD.")
+        else:
+            canonical_source_rel = scene2d._source_rel(scene_id, perspective_id)
+            if source_rel != canonical_source_rel:
+                raise HTTPException(status_code=400, detail="Perspective source path is not canonical.")
         source_path = project_manager.resolve_project_path(project, source_rel)
         if not source_path.is_file():
             raise HTTPException(status_code=400, detail=f"Source PSD not found: {source_rel}")
 
-        preview_rel = perspective.get("preview_image_path", "")
+        preview_rel = str(perspective.get("preview_image_path") or "")
         if not preview_rel:
             raise HTTPException(status_code=400, detail="Perspective has no preview_image_path.")
-        canonical_preview_rel = scene2d._preview_rel(scene_id, perspective_id)
-        if preview_rel != canonical_preview_rel:
-            raise HTTPException(status_code=400, detail="Perspective preview path is not canonical.")
+        if project.layout == LAYOUT_2:
+            if Path(preview_rel).suffix.lower() != ".png":
+                raise HTTPException(status_code=400, detail="Perspective preview must be a PNG.")
+        else:
+            canonical_preview_rel = scene2d._preview_rel(scene_id, perspective_id)
+            if preview_rel != canonical_preview_rel:
+                raise HTTPException(status_code=400, detail="Perspective preview path is not canonical.")
 
         try:
             preview_path = project_manager.resolve_project_path(project, preview_rel)
@@ -864,7 +872,7 @@ class PluginBridgeService:
         sc["updated_at"] = timestamp
         updated_scenes = scene2d._replace_scene(scenes, scene2d._with_legacy_aliases(sc))
         scene2d._save_scenes(project, updated_scenes)
-        project_manager.sync_document(project)
+        app_state.persist_project_mutation(self.app)
 
         runtime_state.mark_scene2d_changed(self.app, scene_id, perspective_id)
         app_state._touch_live_bridge(self.app)
@@ -916,7 +924,7 @@ class PluginBridgeService:
         sc["updated_at"] = timestamp
         updated_scenes = scene2d._replace_scene(scenes, scene2d._with_legacy_aliases(sc))
         scene2d._save_scenes(project, updated_scenes)
-        project_manager.sync_document(project)
+        app_state.persist_project_mutation(self.app)
 
         work_ctx = runtime_state.active_work_context(self.app)
         return {"work_context": work_ctx, "scene": scene2d._with_legacy_aliases(sc), "perspective": perspective}

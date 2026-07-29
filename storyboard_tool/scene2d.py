@@ -16,7 +16,11 @@ from pathlib import Path
 from typing import Any
 
 from . import project_manager
-from .file_transactions import atomic_copy_file
+from .file_transactions import (
+    atomic_copy_file,
+    quarantined_deletions,
+    rollback_paths,
+)
 from .image_utils import create_blank_psd
 from .models import Project
 from .project_layout import (
@@ -1710,14 +1714,61 @@ def update_perspective(
     return _with_legacy_aliases(scene), perspective, scenes
 
 
-def delete_perspective(project: Project, scene_id: str, perspective_id: str) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+def _delete_perspective_layout2(
+    project: Project,
+    scene_id: str,
+    perspective_id: str,
+) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     scene, scenes = _find_scene(project, scene_id)
     perspective = _find_perspective(scene, perspective_id)
-    layout2_assets = {
+    assets = {
         _safe_rel_path(project, relative)
-        for relative in (perspective["source_file_path"], perspective["preview_image_path"])
+        for relative in (
+            str(perspective.get("source_file_path") or ""),
+            str(perspective.get("preview_image_path") or ""),
+        )
         if relative
-    } if project.layout == LAYOUT_2 else set()
+    }
+    scene["perspectives"] = [
+        item for item in scene["perspectives"] if item["id"] != perspective["id"]
+    ]
+    if scene.get("primary_perspective_id") == perspective["id"]:
+        scene["primary_perspective_id"] = (
+            scene["perspectives"][0]["id"] if scene["perspectives"] else ""
+        )
+    scene["updated_at"] = _now_iso()
+    scenes = _replace_scene(scenes, _with_legacy_aliases(scene))
+    links = project_manager.normalize_reference_links(
+        project.settings.get("reference_links")
+    )
+    filtered = [
+        link
+        for link in links
+        if not (
+            str(link.get("source_scene2d_id") or "") == scene["id"]
+            and str(link.get("source_scene2d_perspective_id") or "")
+            == perspective["id"]
+        )
+    ]
+    settings_before = copy.deepcopy(project.settings)
+    try:
+        with rollback_paths((_root_dir(project), project.settings_path)):
+            with quarantined_deletions(project.project_root, assets):
+                _save_scenes(project, scenes)
+                if filtered != links:
+                    project.settings["reference_links"] = filtered
+                    project_manager.save_settings(project)
+    except BaseException:
+        project.settings = settings_before
+        raise
+    return _with_legacy_aliases(scene), scenes
+
+
+def delete_perspective(project: Project, scene_id: str, perspective_id: str) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    if project.layout == LAYOUT_2:
+        return _delete_perspective_layout2(project, scene_id, perspective_id)
+    scene, scenes = _find_scene(project, scene_id)
+    perspective = _find_perspective(scene, perspective_id)
     scene["perspectives"] = [item for item in scene["perspectives"] if item["id"] != perspective["id"]]
     if scene.get("primary_perspective_id") == perspective["id"]:
         scene["primary_perspective_id"] = scene["perspectives"][0]["id"] if scene["perspectives"] else ""
@@ -1727,8 +1778,6 @@ def delete_perspective(project: Project, scene_id: str, perspective_id: str) -> 
     scene_root = _scene_dir(project, scene["id"]).resolve()
     if perspective_dir.is_dir() and scene_root in perspective_dir.resolve().parents:
         shutil.rmtree(perspective_dir)
-    for asset in layout2_assets:
-        asset.unlink(missing_ok=True)
     links = project_manager.normalize_reference_links(project.settings.get("reference_links"))
     filtered = [
         link
