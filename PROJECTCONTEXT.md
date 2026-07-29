@@ -315,9 +315,12 @@ asset links as `//` paths.
     Gate: full backend/frontend/UXP/Blender suite, real conversion fixtures, and
     Windows/OneDrive/locked-file manual smoke before changing the default.
 
-Each slice is a separate reviewable commit. Do not start a later slice while an
-earlier gate is red. Layout 2 remains behind a disabled feature flag through
-Slice 9.
+The same execution task is authorized to complete Slices 0–10 sequentially.
+Each slice remains a separate reviewable commit. The agent must run and pass the
+slice gate before continuing, diagnose and repair ordinary failures, and must
+not skip, combine, or reorder slices merely to keep moving. A red gate pauses
+later slices until repaired. Layout 2 remains behind a disabled feature flag
+through Slice 9.
 
 Other-computer handoff:
 
@@ -330,10 +333,15 @@ git status --short
 git log -2 --oneline
 ```
 
-Then read AGENTS.md and this section in full. Create a fresh implementation
-branch from this baseline (for example `codex/layout2-slice0`) and implement
-Slice 0 only. Before editing, re-run the baseline tests. Do not pop or recreate
-the original machine's stash; it is intentionally not part of this handoff.
+Then read AGENTS.md and this section in full. Create one fresh implementation
+branch from this baseline (for example `codex/layout2-storage-migration`) and
+complete Slices 0–10 in order on that branch. Before editing, re-run the baseline
+tests. After every slice, run its gate, review the actual diff, and create a
+separate commit before proceeding. Continue autonomously through ordinary
+implementation and test repairs. Stop only for a material architecture,
+persistence-contract, destructive-migration, or user-visible product decision
+not already resolved here. Do not pop or recreate the original machine's stash;
+it is intentionally not part of this handoff.
 
 ## 3. Generation handoff decision / next fork
 
@@ -344,7 +352,7 @@ Workflow meaning:
 - `backend=codex`: Codex directly handles image generation.
 - `backend=stable_diffusion`: Codex MUST prepare prompt/reference/size/seed settings and operate Stable Diffusion to generate the image. The selected backend is an execution constraint, not a preference; prior conversation context must not override it and OpenAI imagegen/DALL-E/other generators are forbidden for that request.
 Status/detail strategy: generation precision should follow shot/status/mode. Draft should favor speed with proportional downscale, low resolution, possible upscale back to panel size, and rough/line-art storyboard output. Cleaner/final statuses can increase resolution, steps, refinement, and polish.
-Next fork: implement Layout 2 Slice 0 (the durable project-transition gate) from the final execution decision in §2. Do not enable Layout 2 yet.
+Next fork: complete Layout 2 Slices 0–10 sequentially from the final execution decision in §2. Keep Layout 2 disabled through Slice 9 and preserve one commit plus one passing gate per slice.
 Owner input needed: no for the above semantics; yes only for later SD-specific runtime/configuration choices.
 
 Progress (2026-07-21):
@@ -357,7 +365,7 @@ Progress (2026-07-21):
 - PERF: `.sbd` save = full re-zip of the whole working root on EVERY autosave (add-board etc.) via project_document.pack_document → cost scales with project size ("long wait"). Measured: 48 MB incompressible artwork = 1244 ms at DEFLATE-6. Fix shipped: STORE already-compressed imports (png/jpg/mp4…) + DEFLATE level 1 for the rest (PSD canvases stay compressible → ~1 MB not 91 MB). ~2x faster, negligible size change, backward compatible. STRUCTURAL FIX SHIPPED (Owner-approved 2026-07-23): interactive `_autosave` now writes metadata to the working tree but DEFERS the .sbd pack (`save_project(flush_document=False)`); Add board dropped 200-1200 ms → ~8 ms. The pack now runs on periodic autosave (frontend useAutosave hook, interval `autosave_interval_minutes` setting = 3/5/10, default 5), manual save (Ctrl+S / menu, already existed), and save-on-close (shutdown_reference_cleanup save_if_dirty). Folder projects unchanged (metadata write is already durable; not left dirty). .sbd projects are left dirty after edits until a flush. `backups/` is now EXCLUDED from the .sbd pack (project_document._UNPACKED_DIRS) — it is a local, write-only recovery snapshot set the app never reads back, so embedding it only bloated the document and slowed saves; for .sbd it now lives only in the temp working tree (session-local).
 - DONE: dispatch does not immediately clear staged queue entries. The send popup records `clear_queue_on_result`; only successful result submission clears the matching staged queue entry when that option is enabled. If disabled, the queue remains available after results return.
 - DONE (UI, revised per Owner): Queue offers Current, Queued, and All send scopes through a shared popup. The popup selects Codex or Stable Diffusion, controls clear-after-result, and exposes Modify only as a disabled/coming-soon placeholder. Precision follows shot Status; frontend sends no explicit mode. Layers and Queue are separate floating islands. The far-right More rail auto-hides at the edge; Shot Inspector remains visible. PENDING: Owner GUI click-test.
-- NEXT FORK: implement §2 Slice 0 only. The architecture review is complete; Layout 2 must remain disabled until the ordered gates pass.
+- NEXT FORK: complete §2 Slices 0–10 sequentially. The architecture review is complete; the execution task may continue autonomously after each passing gate, while Layout 2 remains disabled through Slice 9.
 - Validation for the latest generation-backend constraint change: 42 focused tests passed. The broader staged feature set previously passed 803 tests with 1 skipped and 33 subtests; frontend TypeScript/Vite build passed. Lint remains at the known baseline (9 errors, 2 warnings). Owner GUI click-test remains pending.
 ```
 
