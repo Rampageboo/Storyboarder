@@ -35,6 +35,12 @@ _LAYOUT_1_PROJECT_PATHS = {
     "scripts_dir": "scripts",
     "backups_dir": "backups",
 }
+_LAYOUT_2_PROJECT_PATHS = {
+    "images_dir": "Images",
+    "references_dir": "Images/References",
+    "exports_dir": "Exports",
+    "backups_dir": ".storyboarder/backups",
+}
 _METADATA_PATHS = {
     "manifest": "project.json",
     "settings": "settings.json",
@@ -427,16 +433,153 @@ def resolve_metadata_path(
 def project_path_for(project: ProjectPathContext, role: str) -> Path:
     """Return a canonical layout-owned project path for a static role."""
     layout = getattr(project, "layout", LAYOUT_1)
-    if layout != LAYOUT_1:
-        raise LayoutDisabledError(f"Path role {role!r} is not enabled for Layout {layout}.")
+    if layout not in SUPPORTED_LAYOUTS:
+        raise ProjectSchemaError(f"Unsupported project layout: {layout!r}.")
+    paths = _LAYOUT_1_PROJECT_PATHS if layout == LAYOUT_1 else _LAYOUT_2_PROJECT_PATHS
     try:
-        relative = _LAYOUT_1_PROJECT_PATHS[role]
+        relative = paths[role]
     except KeyError as exc:
+        if layout == LAYOUT_2 and role in _LAYOUT_1_PROJECT_PATHS:
+            raise ProjectPathError(f"Path role {role!r} has no Layout 2 directory alias.")
         raise ProjectSchemaError(f"Unknown project path role: {role!r}.") from exc
     return _resolve_generated_child(
         project.project_root,
         relative,
         field_name=f"{role} path",
+    )
+
+
+def _validated_component(value: str, field_name: str) -> str:
+    component = validate_project_relative_posix(str(value), field_name=field_name).as_posix()
+    if "/" in component:
+        raise ProjectPathError(f"{field_name} must be a single path component.")
+    return component
+
+
+def shot_asset_relative(project: ProjectPathContext, shot_id: str, role: str) -> str:
+    """Return the exact project-relative path for one persisted shot asset."""
+    shot_id = _validated_component(shot_id, "shot id")
+    layout = getattr(project, "layout", LAYOUT_1)
+    if layout == LAYOUT_1:
+        paths = {
+            "source_psd": f"shots/{shot_id}/{shot_id}.psd",
+            "preview": f"shots/{shot_id}/{shot_id}_preview.png",
+            "board_background": f"shots/{shot_id}/{shot_id}_background.png",
+            "codex": f"shots/{shot_id}/{shot_id}_codex.png",
+            "thumbnail": f"shots/{shot_id}/{shot_id}_thumb.png",
+        }
+    elif layout == LAYOUT_2:
+        paths = {
+            "source_psd": f"PSD/Shots/{shot_id}.psd",
+            "preview": f"Images/Shots/{shot_id}_preview.png",
+            "board_background": f"Images/Shots/{shot_id}_background.png",
+            "codex": f"Images/Shots/{shot_id}_codex.png",
+            "thumbnail": f".storyboarder/cache/thumbnails/{shot_id}.png",
+        }
+    else:
+        raise ProjectSchemaError(f"Unsupported project layout: {layout!r}.")
+    try:
+        return paths[role]
+    except KeyError as exc:
+        raise ProjectSchemaError(f"Unknown shot asset role: {role!r}.") from exc
+
+
+def resolve_shot_asset(project: ProjectPathContext, shot_id: str, role: str) -> Path:
+    """Resolve an exact layout-owned shot asset role."""
+    return resolve_project_path(project, shot_asset_relative(project, shot_id, role))
+
+
+def shot_metadata_relative(project: ProjectPathContext, shot_id: str, role: str) -> str:
+    """Return the metadata-root-relative path for per-shot JSON."""
+    shot_id = _validated_component(shot_id, "shot id")
+    try:
+        directory, filename = {
+            "annotations": ("annotations", f"{shot_id}.json"),
+            "notes": ("notes", f"{shot_id}.json"),
+        }[role]
+    except KeyError as exc:
+        raise ProjectSchemaError(f"Unknown shot metadata role: {role!r}.") from exc
+    layout = getattr(project, "layout", LAYOUT_1)
+    if layout == LAYOUT_1:
+        return f"shots/{shot_id}/{shot_id}_{role}.json"
+    if layout == LAYOUT_2:
+        return f"{directory}/{filename}"
+    raise ProjectSchemaError(f"Unsupported project layout: {layout!r}.")
+
+
+def resolve_shot_metadata(project: ProjectPathContext, shot_id: str, role: str) -> Path:
+    """Resolve per-shot JSON below the layout's metadata root."""
+    relative = shot_metadata_relative(project, shot_id, role)
+    if getattr(project, "layout", LAYOUT_1) == LAYOUT_1:
+        return resolve_project_path(project, relative)
+    return resolve_metadata_path(project, relative)
+
+
+def reference_asset_relative(project: ProjectPathContext, asset_id: str, suffix: str) -> str:
+    """Return the canonical path for an immutable reference asset id."""
+    asset_id = _validated_component(asset_id, "reference asset id")
+    extension = str(suffix or "").lower()
+    if not extension.startswith(".") or "/" in extension or "\\" in extension:
+        raise ProjectPathError("reference asset extension is invalid.")
+    layout = getattr(project, "layout", LAYOUT_1)
+    if layout == LAYOUT_2:
+        return f"Images/References/{asset_id}{extension}"
+    if layout == LAYOUT_1:
+        return f"references/ref_{asset_id}{extension}"
+    raise ProjectSchemaError(f"Unsupported project layout: {layout!r}.")
+
+
+def resolve_reference_asset(project: ProjectPathContext, asset_id: str, suffix: str) -> Path:
+    """Resolve a canonical project reference asset."""
+    return resolve_project_path(project, reference_asset_relative(project, asset_id, suffix))
+
+
+def generation_metadata_path(project: ProjectPathContext, *parts: str) -> Path:
+    """Resolve generation JSON/state under metadata for Layout 2."""
+    relative = "/".join(("generation", *parts))
+    layout = getattr(project, "layout", LAYOUT_1)
+    if layout == LAYOUT_2:
+        return resolve_metadata_path(project, relative)
+    if layout == LAYOUT_1:
+        return resolve_project_child(project, relative)
+    raise ProjectSchemaError(f"Unsupported project layout: {layout!r}.")
+
+
+def generation_asset_relative(
+    project: ProjectPathContext,
+    request_id: str,
+    output_id: str,
+    suffix: str,
+    *,
+    index: int,
+) -> str:
+    """Return the canonical path for a generated image artifact."""
+    request_id = _validated_component(request_id, "request id")
+    output_id = _validated_component(output_id, "output id")
+    extension = str(suffix or "").lower()
+    if not extension.startswith(".") or "/" in extension or "\\" in extension:
+        raise ProjectPathError("generation artifact extension is invalid.")
+    layout = getattr(project, "layout", LAYOUT_1)
+    if layout == LAYOUT_2:
+        ordinal = "" if index == 1 else f"_{index:03d}"
+        return f"Images/Generated/{request_id}_{output_id}{ordinal}{extension}"
+    if layout == LAYOUT_1:
+        return f"generation/candidates/{request_id}/{output_id}/candidate_{index:03d}{extension}"
+    raise ProjectSchemaError(f"Unsupported project layout: {layout!r}.")
+
+
+def resolve_generation_asset(
+    project: ProjectPathContext,
+    request_id: str,
+    output_id: str,
+    suffix: str,
+    *,
+    index: int,
+) -> Path:
+    """Resolve a canonical generated image artifact."""
+    return resolve_project_path(
+        project,
+        generation_asset_relative(project, request_id, output_id, suffix, index=index),
     )
 
 

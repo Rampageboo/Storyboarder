@@ -6,9 +6,8 @@ from .image_utils import create_thumbnail, export_psd_composite_to_png, is_psd_p
 from .models import Project, Shot
 from .project_layout import (
     project_relative_posix,
-    resolve_project_child,
     resolve_project_path,
-    resolve_project_sibling,
+    resolve_shot_asset,
 )
 
 
@@ -21,9 +20,8 @@ def linked_mtime(project: Project, shot: Shot) -> float:
         path = resolve_project_path(project, rel_path)
         if path.is_file():
             latest = max(latest, path.stat().st_mtime)
-    shot_dir = resolve_project_child(project, "shots", shot.shot_id)
-    for file_name in (f"{shot.shot_id}.psd", f"{shot.shot_id}_preview.png"):
-        path = resolve_project_child(project, "shots", shot.shot_id, file_name)
+    for role in ("source_psd", "preview"):
+        path = resolve_shot_asset(project, shot.shot_id, role)
         if path.is_file():
             latest = max(latest, path.stat().st_mtime)
     return latest
@@ -69,7 +67,7 @@ def sync_shot_from_linked_files(project: Project, shot: Shot, force: bool = Fals
     shot.image_path = shot.preview_image_path
     thumb_path = create_thumbnail(
         preview_path,
-        resolve_project_sibling(project, preview_path, f"{shot.shot_id}_thumb.png"),
+        resolve_shot_asset(project, shot.shot_id, "thumbnail"),
     )
     shot.thumbnail_path = project_relative_posix(project, thumb_path)
     shot.source_sync_mtime = linked_mtime(project, shot)
@@ -97,7 +95,7 @@ def _linked_psd_path(project: Project, shot: Shot) -> Path | None:
         candidate = resolve_project_path(project, shot.source_file_path)
         if candidate.is_file() and is_psd_path(candidate):
             return candidate
-    fallback = resolve_project_child(project, "shots", shot.shot_id, f"{shot.shot_id}.psd")
+    fallback = resolve_shot_asset(project, shot.shot_id, "source_psd")
     if fallback.is_file() and is_psd_path(fallback):
         return fallback
     return None
@@ -106,9 +104,4 @@ def _linked_psd_path(project: Project, shot: Shot) -> Path | None:
 def _preview_path(project: Project, shot: Shot) -> Path:
     if shot.preview_image_path:
         return resolve_project_path(project, shot.preview_image_path)
-    return resolve_project_child(
-        project,
-        "shots",
-        shot.shot_id,
-        f"{shot.shot_id}_preview.png",
-    )
+    return resolve_shot_asset(project, shot.shot_id, "preview")

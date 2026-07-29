@@ -4,7 +4,6 @@ import json
 from pathlib import Path
 
 from .image_utils import (
-    board_background_filename,
     create_blank_psd,
     create_solid_preview_png,
     create_thumbnail,
@@ -113,18 +112,8 @@ def _sync_shot_canvas_color_assets(project: Project, shot: Shot, color: str) -> 
 
     shot_dir = _pm().get_shot_dir(project, shot)
     shot_dir.mkdir(parents=True, exist_ok=True)
-    preview_path = _pm().resolve_project_child(
-        project,
-        "shots",
-        shot.shot_id,
-        f"{shot.shot_id}_preview.png",
-    )
-    thumb_path = _pm().resolve_project_child(
-        project,
-        "shots",
-        shot.shot_id,
-        f"{shot.shot_id}_thumb.png",
-    )
+    preview_path = _pm().resolve_shot_asset(project, shot.shot_id, "preview")
+    thumb_path = _pm().resolve_shot_asset(project, shot.shot_id, "thumbnail")
 
     if not shot_has_artwork_preview(shot):
         # Do not generate per-shot default preview/thumbnail files. If old solid
@@ -165,6 +154,12 @@ def write_canvas_color_files(project: Project, color: str, shot: Shot | None = N
     }
     payload_text = json.dumps(payload, indent=2)
     color_text = f"{normalized}\n"
+
+    if project.layout == _pm().LAYOUT_2:
+        color_path = _pm().resolve_project_child(project, ".storyboarder", "canvas_color.txt")
+        color_path.parent.mkdir(parents=True, exist_ok=True)
+        _pm()._atomic_write_text(color_path, color_text)
+        return
 
     targets = [
         (
@@ -214,24 +209,14 @@ def create_canvas_for_shot(
     )
     background_path = _pm().get_shot_board_background_path(project, shot)
     psd_path = create_blank_psd(
-        _pm().resolve_project_child(
-            project,
-            "shots",
-            shot.shot_id,
-            f"{shot.shot_id}.psd",
-        ),
+        _pm().resolve_shot_asset(project, shot.shot_id, "source_psd"),
         canvas_width,
         canvas_height,
         background_color=color,
     )
     _pm().sync_psd_board_background(project, shot, psd_path)
     if background_path is not None:
-        bg_dest = _pm().resolve_project_child(
-            project,
-            "shots",
-            shot.shot_id,
-            board_background_filename(shot.shot_id),
-        )
+        bg_dest = _pm().resolve_shot_asset(project, shot.shot_id, "board_background")
         _pm()._save_board_background_copy(background_path, bg_dest)
     else:
         # No per-shot default background PNG; the canvas background is a UI backdrop.
@@ -253,12 +238,7 @@ def _set_shot_canvas_thumbnail(project: Project, shot: Shot, preview_path: Path)
     """Keep the in-app canvas on the configured color until Photoshop sync adds artwork."""
     thumbnail_path = create_thumbnail(
         preview_path,
-        _pm().resolve_project_child(
-            project,
-            "shots",
-            shot.shot_id,
-            f"{shot.shot_id}_thumb.png",
-        ),
+        _pm().resolve_shot_asset(project, shot.shot_id, "thumbnail"),
     )
     shot.thumbnail_path = _pm().project_relative_posix(project, thumbnail_path)
     shot.preview_image_path = ""

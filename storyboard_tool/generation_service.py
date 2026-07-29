@@ -24,9 +24,12 @@ from PIL import Image
 from . import shot_assets
 from .models import Project, Shot
 from .project_layout import (
+    LAYOUT_2,
     ProjectPathError,
+    generation_metadata_path,
     project_relative_posix,
     resolve_project_child,
+    resolve_generation_asset,
 )
 from .project_storage import atomic_write_json
 from .shot_files import resolve_project_relative_path
@@ -145,22 +148,24 @@ def _new_id(prefix: str) -> str:
 
 
 def _generation_root(project: Project) -> Path:
-    return resolve_project_child(project, "generation")
+    return generation_metadata_path(project)
 
 
 def _requests_dir(project: Project) -> Path:
-    return resolve_project_child(project, "generation", "requests")
+    return generation_metadata_path(project, "requests")
 
 
 def _results_dir(project: Project) -> Path:
-    return resolve_project_child(project, "generation", "results")
+    return generation_metadata_path(project, "results")
 
 
 def _state_dir(project: Project) -> Path:
-    return resolve_project_child(project, "generation", "state")
+    return generation_metadata_path(project, "state")
 
 
 def _candidates_dir(project: Project) -> Path:
+    if project.layout == LAYOUT_2:
+        return resolve_project_child(project, "Images", "Generated")
     return resolve_project_child(project, "generation", "candidates")
 
 
@@ -182,20 +187,14 @@ def _read_json_object(path: Path) -> dict[str, Any]:
 
 
 def _request_path(project: Project, request_id: str) -> Path:
-    return resolve_project_child(
-        project,
-        "generation",
-        "requests",
-        f"{_validate_id(request_id, 'request id')}.json",
+    return generation_metadata_path(
+        project, "requests", f"{_validate_id(request_id, 'request id')}.json"
     )
 
 
 def _state_path(project: Project, request_id: str) -> Path:
-    return resolve_project_child(
-        project,
-        "generation",
-        "state",
-        f"{_validate_id(request_id, 'request id')}.json",
+    return generation_metadata_path(
+        project, "state", f"{_validate_id(request_id, 'request id')}.json"
     )
 
 
@@ -788,11 +787,8 @@ def list_requests(
 
 
 def _result_request_dir(project: Project, request_id: str) -> Path:
-    return resolve_project_child(
-        project,
-        "generation",
-        "results",
-        _validate_id(request_id, "request id"),
+    return generation_metadata_path(
+        project, "results", _validate_id(request_id, "request id")
     )
 
 
@@ -869,28 +865,24 @@ def submit_result(
         raise ValueError(f"Provide between 1 and {MAX_ARTIFACTS} image artifacts.")
 
     result_id = _new_id("out")
-    candidate_dir = resolve_project_child(
-        project,
-        "generation",
-        "candidates",
-        request_id,
-        result_id,
+    candidate_dir = (
+        resolve_project_child(project, "generation", "candidates", request_id, result_id)
+        if project.layout != LAYOUT_2
+        else None
     )
     artifacts: list[dict[str, Any]] = []
+    created_targets: list[Path] = []
     try:
         for index, source in enumerate(paths, start=1):
             suffix = source.suffix.lower()
-            target = resolve_project_child(
-                project,
-                "generation",
-                "candidates",
-                request_id,
-                result_id,
-                f"candidate_{index:03d}{suffix}",
+            target = resolve_generation_asset(
+                project, request_id, result_id, suffix, index=index
             )
             _copy_image_artifact(source, target)
+            created_targets.append(target)
             artifacts.append({
                 "name": target.name,
+                "output_id": result_id if index == 1 else f"{result_id}_{index:03d}",
                 "project_relative_path": project_relative_posix(project, target),
                 "absolute_path": str(target.resolve()),
                 "media_type": suffix.lstrip("."),
@@ -905,17 +897,16 @@ def submit_result(
             "artifacts": artifacts,
         }
         atomic_write_json(
-            resolve_project_child(
-                project,
-                "generation",
-                "results",
-                request_id,
-                f"{result_id}.json",
+            generation_metadata_path(
+                project, "results", request_id, f"{result_id}.json"
             ),
             result,
         )
     except BaseException:
-        shutil.rmtree(candidate_dir, ignore_errors=True)
+        for target in created_targets:
+            target.unlink(missing_ok=True)
+        if candidate_dir is not None:
+            shutil.rmtree(candidate_dir, ignore_errors=True)
         raise
     if bool(request.get("clear_queue_on_result", True)):
         clear_pending_queue_requests(project, str(request.get("shot_id") or ""))
@@ -1018,14 +1009,19 @@ def accept_candidate_as_codex_layer(
     if artifact is None:
         raise ValueError("Generation artifact not found in this result.")
     source = resolve_project_relative_path(project, cleaned_path)
-    candidate_root = resolve_project_child(
-        project,
-        "generation",
-        "candidates",
-        _validate_id(request_id, "request id"),
-        result_id,
-    )
-    if candidate_root not in source.parents:
+    if project.layout == LAYOUT_2:
+        output_id = _validate_id(str(artifact.get("output_id") or ""), "output id")
+        expected = resolve_generation_asset(
+            project, request_id, output_id, source.suffix.lower(), index=1
+        )
+        valid_location = source == expected
+    else:
+        candidate_root = resolve_project_child(
+            project, "generation", "candidates",
+            _validate_id(request_id, "request id"), result_id,
+        )
+        valid_location = candidate_root in source.parents
+    if not valid_location:
         raise ValueError("Generation artifact is outside its candidate folder.")
     destination = shot_assets.save_codex_layer_from_path(project, shot, source)
     now = _utc_now()

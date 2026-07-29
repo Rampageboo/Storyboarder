@@ -35,11 +35,12 @@ import os
 import shutil
 import tempfile
 import threading
+import uuid
 from pathlib import Path
 from typing import Any, BinaryIO
 
+from .file_transactions import atomic_copy_file
 from .image_utils import (
-    board_background_filename,
     compose_image_to_canvas,
     copy_and_convert_image,
     copy_and_convert_image_stream,
@@ -60,7 +61,10 @@ from .project_layout import (
     project_manifest,
     resolve_project_child,
     resolve_project_path,
+    resolve_reference_asset,
     resolve_root_child,
+    resolve_shot_asset,
+    resolve_shot_metadata,
 )
 from .shot_store import (
     load_shots_csv,
@@ -476,21 +480,11 @@ def move_shot_down(project: Project, index: int) -> int:
 
 
 def import_image_for_shot(project: Project, shot: Shot, source_path: Path) -> Path:
-    destination = resolve_project_child(
-        project,
-        "shots",
-        shot.shot_id,
-        f"{shot.shot_id}_preview.png",
-    )
+    destination = resolve_shot_asset(project, shot.shot_id, "preview")
     copied_path = copy_and_convert_image(source_path, destination)
     _save_board_background_copy(
         copied_path,
-        resolve_project_child(
-            project,
-            "shots",
-            shot.shot_id,
-            board_background_filename(shot.shot_id),
-        ),
+        resolve_shot_asset(project, shot.shot_id, "board_background"),
     )
     _set_shot_preview_paths(project, shot, copied_path)
     return copied_path
@@ -502,33 +496,20 @@ def import_image_stream_for_shot(
     source_stream: BinaryIO,
     source_suffix: str,
 ) -> Path:
-    destination = resolve_project_child(
-        project,
-        "shots",
-        shot.shot_id,
-        f"{shot.shot_id}_preview.png",
-    )
+    destination = resolve_shot_asset(project, shot.shot_id, "preview")
     copied_path = copy_and_convert_image_stream(source_stream, source_suffix, destination)
     _save_board_background_copy(
         copied_path,
-        resolve_project_child(
-            project,
-            "shots",
-            shot.shot_id,
-            board_background_filename(shot.shot_id),
-        ),
+        resolve_shot_asset(project, shot.shot_id, "board_background"),
     )
     _set_shot_preview_paths(project, shot, copied_path)
     return copied_path
 
 
 def remove_image_for_shot(project: Project, shot: Shot) -> None:
-    resolve_project_child(
-        project,
-        "shots",
-        shot.shot_id,
-        board_background_filename(shot.shot_id),
-    ).unlink(missing_ok=True)
+    resolve_shot_asset(project, shot.shot_id, "board_background").unlink(
+        missing_ok=True
+    )
     shot.image_path = ""
     shot.preview_image_path = ""
     shot.thumbnail_path = ""
@@ -573,16 +554,19 @@ def recover_shot_source_psd(project: Project, shot: Shot, *, preserve_layers: bo
     if not psd_recovery.can_open_with_psd_tools(source):
         raise ValueError("The PSD is too damaged to read — it cannot be rebuilt.")
 
-    history = resolve_project_child(project, "shots", shot.shot_id, "_history")
+    if project.layout == LAYOUT_2:
+        history = resolve_root_child(project.backups_dir, "psd_recovery")
+        backup = resolve_root_child(
+            history, f"{shot.shot_id}.broken-{int(time.time())}.psd"
+        )
+    else:
+        history = resolve_project_child(project, "shots", shot.shot_id, "_history")
+        backup = resolve_project_child(
+            project, "shots", shot.shot_id, "_history",
+            f"{shot.shot_id}.broken-{int(time.time())}.psd",
+        )
     history.mkdir(parents=True, exist_ok=True)
-    backup = resolve_project_child(
-        project,
-        "shots",
-        shot.shot_id,
-        "_history",
-        f"{shot.shot_id}.broken-{int(time.time())}.psd",
-    )
-    shutil.copy2(source, backup)
+    atomic_copy_file(source, backup)
     # PSD recovery is now rare (the old plugin's forced-save corruption that required it
     # is fixed), so keep only the most recent few broken-PSD backups. Best-effort.
     try:
@@ -598,21 +582,17 @@ def recover_shot_source_psd(project: Project, shot: Shot, *, preserve_layers: bo
 
     # Rebuild to a temp file first, then atomically swap it over the source so a
     # failed rebuild never destroys the (still backed-up) original.
-    temp = resolve_project_child(
-        project,
-        "shots",
-        shot.shot_id,
-        f"{shot.shot_id}.rebuilt.psd",
+    temp = resolve_project_path(
+        project, project_relative_posix(project, source.with_name(f".{shot.shot_id}.rebuilt.psd"))
     )
-    info = psd_recovery.rebuild_psd(source, temp, preserve_layers=preserve_layers)
-    os.replace(temp, source)
+    try:
+        info = psd_recovery.rebuild_psd(source, temp, preserve_layers=preserve_layers)
+        os.replace(temp, source)
+    except BaseException:
+        temp.unlink(missing_ok=True)
+        raise
 
-    preview_path = resolve_project_child(
-        project,
-        "shots",
-        shot.shot_id,
-        f"{shot.shot_id}_preview.png",
-    )
+    preview_path = resolve_shot_asset(project, shot.shot_id, "preview")
     export_psd_composite_to_png(source, preview_path)
     _set_shot_preview_paths(project, shot, preview_path)
     shot.source_sync_mtime = linked_mtime(project, shot)
@@ -645,12 +625,7 @@ def _apply_reference_frame_to_shot(
 
     width, height = get_canvas_size(project)
     bg_color = get_canvas_color(project)
-    background_path = resolve_project_child(
-        project,
-        "shots",
-        shot.shot_id,
-        board_background_filename(shot.shot_id),
-    )
+    background_path = resolve_shot_asset(project, shot.shot_id, "board_background")
     background_path.parent.mkdir(parents=True, exist_ok=True)
     tmp_path = background_path.with_suffix(".tmp.png")
     try:
@@ -684,12 +659,7 @@ def _apply_model_capture_to_shot(
     from PIL import Image
 
     width, height = get_canvas_size(project)
-    background_path = resolve_project_child(
-        project,
-        "shots",
-        shot.shot_id,
-        board_background_filename(shot.shot_id),
-    )
+    background_path = resolve_shot_asset(project, shot.shot_id, "board_background")
     mode = normalize_reference_fit_mode(fit_mode)
     background_path.parent.mkdir(parents=True, exist_ok=True)
     tmp_path = background_path.with_suffix(".tmp.png")
@@ -718,14 +688,17 @@ def add_reference_image_stream(
     source_stream: BinaryIO,
     source_suffix: str,
 ) -> Path:
-    next_number = len(shot.reference_image_paths) + 1
-    destination = resolve_project_child(
-        project,
-        "shots",
-        shot.shot_id,
-        "references",
-        f"{shot.shot_id}_ref_{next_number:03d}.png",
-    )
+    if project.layout == LAYOUT_2:
+        destination = resolve_reference_asset(project, str(uuid.uuid4()), ".png")
+    else:
+        next_number = len(shot.reference_image_paths) + 1
+        destination = resolve_project_child(
+            project,
+            "shots",
+            shot.shot_id,
+            "references",
+            f"{shot.shot_id}_ref_{next_number:03d}.png",
+        )
     copied_path = copy_and_convert_image_stream(source_stream, source_suffix, destination)
     shot.reference_image_paths.append(project_relative_posix(project, copied_path))
     return copied_path
@@ -742,6 +715,10 @@ def collect_reference_image_paths(project: Project) -> set[str]:
             normalized = _normalize_rel_path(rel_path)
             if normalized:
                 referenced.add(normalized)
+    for link in project.settings.get("reference_links") or []:
+        normalized = _normalize_rel_path(link.get("path", "")) if isinstance(link, dict) else ""
+        if normalized:
+            referenced.add(normalized)
     return referenced
 
 
@@ -766,10 +743,14 @@ def set_reference_image_paths(project: Project, shot: Shot, paths: list[str]) ->
 def cleanup_orphan_reference_images(project: Project) -> list[str]:
     referenced = collect_reference_image_paths(project)
     deleted: list[str] = []
-    shots_dir = project.shots_dir
-    if not shots_dir.is_dir():
-        return deleted
-    for ref_dir in shots_dir.glob("*/references"):
+    if project.layout == LAYOUT_2:
+        ref_dirs = [project.references_dir]
+    else:
+        shots_dir = project.shots_dir
+        if not shots_dir.is_dir():
+            return deleted
+        ref_dirs = list(shots_dir.glob("*/references"))
+    for ref_dir in ref_dirs:
         if not ref_dir.is_dir():
             continue
         for file_path in ref_dir.iterdir():
@@ -801,12 +782,14 @@ def import_source_file_stream(
     filename: str,
 ) -> Path:
     suffix = Path(filename).suffix or ".psd"
-    destination = resolve_project_child(
-        project,
-        "shots",
-        shot.shot_id,
-        f"{shot.shot_id}{suffix}",
+    if project.layout == LAYOUT_2 and suffix.lower() != ".psd":
+        raise ValueError("Layout 2 shot sources must be PSD files.")
+    destination = (
+        resolve_shot_asset(project, shot.shot_id, "source_psd")
+        if project.layout == LAYOUT_2
+        else resolve_project_child(project, "shots", shot.shot_id, f"{shot.shot_id}{suffix}")
     )
+    destination.parent.mkdir(parents=True, exist_ok=True)
     tmp = destination.with_suffix(suffix + ".tmp")
     try:
         with tmp.open("wb") as file:
@@ -819,12 +802,7 @@ def import_source_file_stream(
     if is_psd_path(destination):
         preview_path = export_psd_composite_to_png(
             destination,
-            resolve_project_child(
-                project,
-                "shots",
-                shot.shot_id,
-                f"{shot.shot_id}_preview.png",
-            ),
+            resolve_shot_asset(project, shot.shot_id, "preview"),
         )
         _set_shot_preview_paths(project, shot, preview_path)
     shot.source_sync_mtime = linked_mtime(project, shot)
@@ -834,12 +812,7 @@ def import_source_file_stream(
 def save_drawing_for_shot(project: Project, shot: Shot, data_url: str) -> Path:
     preview_path = save_png_data_url(
         data_url,
-        resolve_project_child(
-            project,
-            "shots",
-            shot.shot_id,
-            f"{shot.shot_id}_preview.png",
-        ),
+        resolve_shot_asset(project, shot.shot_id, "preview"),
     )
     _set_shot_preview_paths(project, shot, preview_path)
     return preview_path
@@ -857,25 +830,18 @@ def _require_index(project: Project, index: int) -> None:
 def _ensure_shot_files(project: Project, shot: Shot) -> None:
     shot_dir = get_shot_dir(project, shot)
     shot_dir.mkdir(parents=True, exist_ok=True)
-    resolve_project_child(project, "shots", shot.shot_id, "references").mkdir(exist_ok=True)
+    if project.layout != LAYOUT_2:
+        resolve_project_child(project, "shots", shot.shot_id, "references").mkdir(exist_ok=True)
     if not shot.annotation_path:
-        annotation_path = resolve_project_child(
-            project,
-            "shots",
-            shot.shot_id,
-            f"{shot.shot_id}_annotations.json",
-        )
+        annotation_path = resolve_shot_metadata(project, shot.shot_id, "annotations")
+        annotation_path.parent.mkdir(parents=True, exist_ok=True)
         if not annotation_path.exists():
             _atomic_write_text(annotation_path, "[]")
         shot.annotation_path = project_relative_posix(project, annotation_path)
-    notes_path = resolve_project_child(
-        project,
-        "shots",
-        shot.shot_id,
-        f"{shot.shot_id}_notes.json",
-    )
+    notes_path = resolve_shot_metadata(project, shot.shot_id, "notes")
+    notes_path.parent.mkdir(parents=True, exist_ok=True)
     if not notes_path.exists():
-        notes_path.write_text(json.dumps(shot.to_dict(), indent=2), encoding="utf-8")
+        _atomic_write_text(notes_path, json.dumps(shot.to_dict(), indent=2))
     relink_shot_preview_from_disk(project, shot)
 
 

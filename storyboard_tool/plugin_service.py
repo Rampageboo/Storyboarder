@@ -14,7 +14,7 @@ from fastapi import FastAPI, HTTPException
 from . import app_state, project_manager, runtime_state, scene2d, shot_service
 from .errors import AppErrorCode, app_error
 from .models import Shot
-from .project_layout import LAYOUT_2, resolve_metadata_path
+from .project_layout import LAYOUT_2, resolve_metadata_path, shot_asset_relative
 
 
 PLUGIN_PROTOCOL_VERSION = 2
@@ -184,10 +184,10 @@ class PluginBridgeService:
                 raise HTTPException(status_code=404, detail="Plugin work item not found.")
             if project.layout == LAYOUT_2:
                 relative = {
-                    "source_psd": f"PSD/Shots/{shot_id}.psd",
-                    "preview": f"Images/Shots/{shot_id}_preview.png",
-                    "thumbnail": f".storyboarder/cache/thumbnails/{shot_id}.png",
-                    "board_background": f"Images/Shots/{shot_id}_background.png",
+                    role: shot_asset_relative(project, shot_id, role)
+                    for role in (
+                        "source_psd", "preview", "thumbnail", "board_background"
+                    )
                 }
             else:
                 relative = {
@@ -780,12 +780,7 @@ class PluginBridgeService:
                 project_manager.resolve_project_path(project, shot.source_file_path)
             )
         candidates.append(
-            project_manager.resolve_project_child(
-                project,
-                "shots",
-                shot.shot_id,
-                f"{shot.shot_id}.psd",
-            )
+            project_manager.resolve_shot_asset(project, shot.shot_id, "source_psd")
         )
         for candidate in candidates:
             if candidate.is_file():

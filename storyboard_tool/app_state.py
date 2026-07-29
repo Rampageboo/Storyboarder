@@ -747,13 +747,8 @@ def _persist_app_session(app: FastAPI, *, selected_shot_id: str | None = None) -
 
 def _annotation_path(project: Project, shot: Shot) -> Path:
     if not shot.annotation_path:
-        project_manager.get_shot_dir(project, shot).mkdir(parents=True, exist_ok=True)
-        path = project_manager.resolve_project_child(
-            project,
-            "shots",
-            shot.shot_id,
-            f"{shot.shot_id}_annotations.json",
-        )
+        path = project_manager.resolve_shot_metadata(project, shot.shot_id, "annotations")
+        path.parent.mkdir(parents=True, exist_ok=True)
         project_manager._atomic_write_text(path, "[]")
         shot.annotation_path = project_manager.project_relative_posix(project, path)
         project_manager.save_project(project)

@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Literal
 
 from . import board_range
+from .file_transactions import atomic_output_directory, atomic_output_file
 from .export_utils import (
     export_contact_sheet as _export_contact_sheet,
     export_image_sequence as _export_image_sequence,
@@ -16,7 +17,7 @@ from .export_utils import (
     missing_files,
 )
 from .models import Project
-from .project_layout import resolve_project_child
+from .project_layout import resolve_root_child
 
 VALID_PDF_LAYOUTS: frozenset[str] = frozenset({"one_per_page", "two_per_page", "thumbnails"})
 DEFAULT_PDF_LAYOUT: str = "two_per_page"
@@ -57,7 +58,7 @@ def resolve_output_path(project: Project, export_type: str, suffix: str = "") ->
     if suffix:
         stem, dot, extension = filename.partition(".")
         filename = f"{stem}{suffix}{dot}{extension}"
-    return resolve_project_child(project, "exports", filename)
+    return resolve_root_child(project.exports_dir, filename)
 
 
 def check_export_exists(project: Project, export_type: str, suffix: str = "") -> Path:
@@ -88,28 +89,37 @@ def export_pdf(project: Project, layout: str = DEFAULT_PDF_LAYOUT, suffix: str =
 
     chosen = layout if layout in VALID_PDF_LAYOUTS else DEFAULT_PDF_LAYOUT
     output_path = resolve_output_path(project, "pdf", suffix)
-    export_storyboard_pdf(project, output_path, layout=chosen)
+    with atomic_output_file(output_path) as staged:
+        export_storyboard_pdf(project, staged, layout=chosen)
     return output_path
 
 
 def export_shot_list(project: Project, suffix: str = "") -> Path:
     output_path = resolve_output_path(project, "shot_list", suffix)
-    return export_shot_list_csv(project, output_path)
+    with atomic_output_file(output_path) as staged:
+        export_shot_list_csv(project, staged)
+    return output_path
 
 
 def export_timing(project: Project, suffix: str = "") -> Path:
     output_path = resolve_output_path(project, "timing", suffix)
-    return export_timing_json(project, output_path)
+    with atomic_output_file(output_path) as staged:
+        export_timing_json(project, staged)
+    return output_path
 
 
 def export_contact_sheet(project: Project, suffix: str = "") -> Path:
     output_path = resolve_output_path(project, "contact_sheet", suffix)
-    return _export_contact_sheet(project, output_path)
+    with atomic_output_file(output_path) as staged:
+        _export_contact_sheet(project, staged)
+    return output_path
 
 
 def export_image_sequence(project: Project, suffix: str = "") -> Path:
     output_dir = resolve_output_path(project, "image_sequence", suffix)
-    return _export_image_sequence(project, output_dir)
+    with atomic_output_directory(output_dir) as staged:
+        _export_image_sequence(project, staged)
+    return output_dir
 
 
 def export_animatic(
@@ -123,10 +133,12 @@ def export_animatic(
     from .video_export import export_animatic as _export_animatic
 
     output_path = resolve_output_path(project, "animatic", suffix)
-    return _export_animatic(
-        project,
-        output_path,
-        fps=fps,
-        seconds_per_board=seconds_per_board,
-        captions=captions,
-    )
+    with atomic_output_file(output_path) as staged:
+        _export_animatic(
+            project,
+            staged,
+            fps=fps,
+            seconds_per_board=seconds_per_board,
+            captions=captions,
+        )
+    return output_path

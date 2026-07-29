@@ -15,12 +15,12 @@ from pathlib import Path
 
 from .image_utils import is_psd_path
 from .models import Project, Shot
-from .project_layout import resolve_project_child, resolve_project_path
+from .project_layout import resolve_project_path, resolve_shot_asset
 
 
 def get_shot_dir(project: Project, shot: Shot) -> Path:
-    """Return the canonical directory for a shot's files."""
-    return resolve_project_child(project, "shots", shot.shot_id)
+    """Return the canonical shot-assets parent (shared in Layout 2)."""
+    return resolve_shot_asset(project, shot.shot_id, "preview").parent
 
 
 def shot_has_psd_canvas(project: Project, shot: Shot) -> bool:
@@ -29,7 +29,7 @@ def shot_has_psd_canvas(project: Project, shot: Shot) -> bool:
         path = resolve_project_path(project, shot.source_file_path)
         if path.is_file() and is_psd_path(path):
             return True
-    fallback = resolve_project_child(project, "shots", shot.shot_id, f"{shot.shot_id}.psd")
+    fallback = resolve_shot_asset(project, shot.shot_id, "source_psd")
     return fallback.is_file() and is_psd_path(fallback)
 
 

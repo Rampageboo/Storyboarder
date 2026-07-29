@@ -1,10 +1,10 @@
 from __future__ import annotations
 
-import shutil
 from datetime import datetime
 
+from .file_transactions import atomic_copy_file
 from .models import Project
-from .project_layout import resolve_project_child
+from .project_layout import resolve_root_child
 from .shot_store import shots_csv_path, shots_json_path
 
 # Keep the most recent N timestamped backup sets.
@@ -38,7 +38,7 @@ def _prune_old_backups(project: Project, *, keep: int = MAX_BACKUP_SETS) -> None
         return
     for stamp in _backup_stamps(backups_dir)[keep:]:
         for filename in _backup_filenames(stamp):
-            path = resolve_project_child(project, "backups", filename)
+            path = resolve_root_child(backups_dir, filename)
             if path.is_file():
                 path.unlink()
 
@@ -47,27 +47,27 @@ def _write_backup(project: Project) -> None:
     project.backups_dir.mkdir(exist_ok=True)
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
     if project.json_path.is_file():
-        shutil.copy2(
+        atomic_copy_file(
             project.json_path,
-            resolve_project_child(project, "backups", f"project_{stamp}.json"),
+            resolve_root_child(project.backups_dir, f"project_{stamp}.json"),
         )
     # Canonical shot storage.
     json_path = shots_json_path(project.metadata_root)
     if json_path.is_file():
-        shutil.copy2(
+        atomic_copy_file(
             json_path,
-            resolve_project_child(project, "backups", f"shots_{stamp}.json"),
+            resolve_root_child(project.backups_dir, f"shots_{stamp}.json"),
         )
     # Readable compatibility snapshot (kept alongside the canonical JSON).
     csv_path = shots_csv_path(project.metadata_root)
     if csv_path.is_file():
-        shutil.copy2(
+        atomic_copy_file(
             csv_path,
-            resolve_project_child(project, "backups", f"shots_{stamp}.csv"),
+            resolve_root_child(project.backups_dir, f"shots_{stamp}.csv"),
         )
     if project.settings_path.is_file():
-        shutil.copy2(
+        atomic_copy_file(
             project.settings_path,
-            resolve_project_child(project, "backups", f"settings_{stamp}.json"),
+            resolve_root_child(project.backups_dir, f"settings_{stamp}.json"),
         )
     _prune_old_backups(project)
