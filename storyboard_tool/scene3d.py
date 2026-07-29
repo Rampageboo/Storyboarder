@@ -14,6 +14,13 @@ from typing import Any
 from . import project_manager
 from .models import Project
 from . import scene2d
+from .project_layout import (
+    LAYOUT_2,
+    resolve_scene3d_asset,
+    scene3d_asset_relative,
+    scene3d_metadata_path,
+    scene3d_preview_path,
+)
 
 SCENE3D_ROOT = "scenes3d"
 SCENE3D_INDEX = "scenes3d.json"
@@ -27,16 +34,16 @@ def _now_iso() -> str:
 
 
 def _root_dir(project: Project) -> Path:
-    return project_manager.resolve_project_child(project, SCENE3D_ROOT)
+    return scene3d_metadata_path(project)
 
 
 def _index_path(project: Project) -> Path:
-    return project_manager.resolve_project_child(project, SCENE3D_ROOT, SCENE3D_INDEX)
+    return scene3d_metadata_path(project, SCENE3D_INDEX)
 
 
 def _scene_dir(project: Project, scene_id: str) -> Path:
     _validate_scene_id(scene_id)
-    return project_manager.resolve_project_child(project, SCENE3D_ROOT, scene_id)
+    return scene3d_metadata_path(project, scene_id)
 
 
 def preview_relative_path(scene_id: str) -> str:
@@ -45,16 +52,11 @@ def preview_relative_path(scene_id: str) -> str:
 
 
 def preview_file_path(project: Project, scene_id: str) -> Path:
-    return _safe_rel_path(project, preview_relative_path(scene_id))
+    return scene3d_preview_path(project, _validate_scene_id(scene_id))
 
 
 def _meta_path(project: Project, scene_id: str) -> Path:
-    return project_manager.resolve_project_child(
-        project,
-        SCENE3D_ROOT,
-        scene_id,
-        f"{scene_id}_meta.json",
-    )
+    return scene3d_metadata_path(project, scene_id, f"{scene_id}_meta.json")
 
 
 def _validate_scene_id(scene_id: str) -> str:
@@ -324,6 +326,17 @@ def update_scene(project: Project, scene_id: str, changes: dict[str, Any]) -> di
 
 def delete_scene(project: Project, scene_id: str) -> dict[str, Any]:
     active_id, scene, scenes = _find_scene(project, scene_id)
+    layout2_assets: set[Path] = set()
+    if project.layout == LAYOUT_2:
+        layout2_assets = {
+            _safe_rel_path(project, relative)
+            for relative in (
+                str(scene.get("file_path") or ""),
+                str(scene.get("blend_file_path") or ""),
+            )
+            if relative
+        }
+        layout2_assets.add(preview_file_path(project, scene["id"]))
     scenes = [item for item in scenes if item["id"] != scene["id"]]
     if active_id == scene["id"]:
         active_id = scenes[0]["id"] if scenes else ""
@@ -331,6 +344,8 @@ def delete_scene(project: Project, scene_id: str) -> dict[str, Any]:
     scene_dir = _scene_dir(project, scene["id"])
     if scene_dir.is_dir():
         shutil.rmtree(scene_dir)
+    for asset in layout2_assets:
+        asset.unlink(missing_ok=True)
     _save(project, active_id, scenes)
     return list_scenes(project)
 
@@ -362,10 +377,17 @@ def configure_blend_preview(
     active_id, scene, scenes = _find_scene(project, scene_id)
     blend_relative = project_manager.project_relative_posix(project, blend_path)
     resolved_blend = project_manager.resolve_project_path(project, blend_relative)
+    if project.layout == LAYOUT_2:
+        expected = resolve_scene3d_asset(project, scene_id, ".blend")
+        if resolved_blend != expected:
+            raise ValueError("Layout 2 Blender scene path is not canonical.")
+    preview_relative = project_manager.project_relative_posix(
+        project, preview_file_path(project, scene_id)
+    )
     scene.update(
         {
             "source_type": "blender",
-            "file_path": preview_relative_path(scene_id),
+            "file_path": preview_relative,
             "file_name": PREVIEW_FILENAME,
             "blend_file_path": blend_relative,
             "updated_at": _now_iso(),
@@ -381,7 +403,11 @@ def import_scene_file(project: Project, scene_id: str, filename: str, data: byte
     if suffix not in SCENE3D_EXTENSIONS:
         raise ValueError("Only .blend, .glb, and .gltf Scene 3D files are supported.")
     stem = _slug(Path(filename or "").stem) or scene["id"]
-    destination_rel = f"{SCENE3D_ROOT}/{scene['id']}/{stem}{suffix}"
+    destination_rel = (
+        scene3d_asset_relative(project, scene["id"], suffix)
+        if project.layout == LAYOUT_2
+        else f"{SCENE3D_ROOT}/{scene['id']}/{stem}{suffix}"
+    )
     _write_binary_atomic(_safe_rel_path(project, destination_rel), bytes(data))
     keywords = _normalize_keywords([*(scene.get("keywords") or []), Path(filename or "").stem])
     if suffix == ".blend":
@@ -436,7 +462,7 @@ def open_blender_scene(
             script_args=script_args,
             on_launch=on_launch,
         )
-    blend_path = project_manager.ensure_project_blend_file(project)
+    blend_path = project_manager.ensure_project_blend_file(project, scene_id=scene["id"])
     if blend_path.exists():
         payload = update_scene(project, scene["id"], {"display_settings": scene.get("display_settings") or {}})
         updated = next(item for item in payload["scenes"] if item["id"] == scene["id"])
@@ -445,8 +471,14 @@ def open_blender_scene(
             blend_path,
         )
         _save(project, payload["active_scene3d_id"], payload["scenes"])
+    relative = (
+        project_manager.project_relative_posix(project, blend_path)
+        if project.layout == LAYOUT_2
+        else ""
+    )
     return project_manager.open_blender_scene(
         project,
+        relative,
         python_script=python_script,
         script_args=script_args,
         on_launch=on_launch,

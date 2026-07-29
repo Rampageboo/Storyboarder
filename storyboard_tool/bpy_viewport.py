@@ -17,7 +17,7 @@ from typing import Any
 
 from .external_tools import ensure_project_blend_file
 from .models import Project
-from .project_layout import resolve_project_path
+from .project_layout import LAYOUT_2, resolve_project_path, resolve_scene3d_asset
 from .system_utils import detect_blender_paths, resolve_blender_executable
 
 
@@ -42,11 +42,19 @@ def project_blend_path(project: Project) -> Path:
     active = scene3d.active_scene(project)
     relative = str((active or {}).get("blend_file_path") or "").strip()
     if not relative:
-        return ensure_project_blend_file(project).resolve()
+        scene = active or scene3d.ensure_active_scene(project)
+        created = ensure_project_blend_file(project, scene_id=scene["id"])
+        if project.layout == LAYOUT_2 and created.is_file():
+            scene3d.configure_blend_preview(project, scene["id"], created)
+        return created.resolve()
     try:
         candidate = resolve_project_path(project, relative)
     except ValueError as exc:
         raise BpyViewportError("Blender scene path must stay inside the project.") from exc
+    if project.layout == LAYOUT_2:
+        expected = resolve_scene3d_asset(project, active["id"], ".blend")
+        if candidate != expected:
+            raise BpyViewportError("Layout 2 Blender scene path is not canonical.")
     if candidate.suffix.lower() != ".blend":
         raise BpyViewportError("The active built-in Blender scene must be a .blend file.")
     if not candidate.is_file():
@@ -63,6 +71,9 @@ class BpyViewportManager:
         self._blend_path: Path | None = None
         self._port = 0
         self._token = ""
+        self._project_root = ""
+        self._project_session_id = ""
+        self._context_revision = -1
 
     @property
     def running(self) -> bool:
@@ -77,12 +88,62 @@ class BpyViewportManager:
                 "engine": "bpy",
             }
 
-    def start(self, project: Project) -> dict[str, Any]:
+    def bind_context(
+        self,
+        project: Project,
+        *,
+        project_session_id: str,
+        context_revision: int,
+    ) -> None:
+        """Bind the built-in writer to one current Layout 2 context."""
+        if project.layout != LAYOUT_2:
+            return
+        self._project_root = str(project.project_root.resolve())
+        self._project_session_id = str(project_session_id or "")
+        self._context_revision = int(context_revision)
+        if not self._project_session_id:
+            raise BpyViewportError("Built-in Blender project session is missing.")
+
+    def require_context(
+        self,
+        project: Project,
+        *,
+        project_session_id: str,
+        context_revision: int,
+    ) -> None:
+        if project.layout != LAYOUT_2:
+            return
+        if (
+            self._project_root != str(project.project_root.resolve())
+            or self._project_session_id != str(project_session_id or "")
+            or self._context_revision != int(context_revision)
+        ):
+            raise BpyViewportError(
+                "Built-in Blender context is stale. Restart the viewport before writing."
+            )
+
+    def start(
+        self,
+        project: Project,
+        *,
+        project_session_id: str = "",
+        context_revision: int = 0,
+    ) -> dict[str, Any]:
         with self._lock:
             blend_path = project_blend_path(project)
             if self.running and self._blend_path == blend_path:
+                self.bind_context(
+                    project,
+                    project_session_id=project_session_id,
+                    context_revision=context_revision,
+                )
                 return self.status()
             self.stop()
+            self.bind_context(
+                project,
+                project_session_id=project_session_id,
+                context_revision=context_revision,
+            )
 
             configured = str(project.settings.get("blender_path", "")).strip()
             if not configured:
@@ -263,6 +324,9 @@ class BpyViewportManager:
         self._blend_path = None
         self._port = 0
         self._token = ""
+        self._project_root = ""
+        self._project_session_id = ""
+        self._context_revision = -1
 
 
 def manager_for_app(app: Any) -> BpyViewportManager:
@@ -279,11 +343,29 @@ def stop_worker(app: Any) -> None:
         manager.stop()
 
 
+def require_current_context(app: Any) -> None:
+    """Fail closed when a running built-in writer is bound to stale state."""
+    manager = getattr(app.state, "bpy_viewport_manager", None)
+    project = getattr(app.state, "project", None)
+    if manager is None or project is None or not bool(getattr(manager, "running", False)):
+        return
+    checker = getattr(manager, "require_context", None)
+    if callable(checker):
+        checker(
+            project,
+            project_session_id=str(
+                getattr(app.state, "project_session_id", "") or ""
+            ),
+            context_revision=int(getattr(project, "storage_revision", 0) or 0),
+        )
+
+
 def save_and_stop_worker(app: Any) -> dict[str, Any] | None:
     """Save/release the active built-in Blender writer, if one exists."""
     manager = getattr(app.state, "bpy_viewport_manager", None)
     if manager is None:
         return None
+    require_current_context(app)
     save_and_stop = getattr(manager, "save_and_stop", None)
     if callable(save_and_stop):
         return save_and_stop()

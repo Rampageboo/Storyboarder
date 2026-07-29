@@ -287,7 +287,8 @@ def _open_expanded_project(
     color = get_canvas_color(project)
     write_canvas_color_files(project, color)
     sync_canvas_color_to_shots(project, color)
-    ensure_project_blend_file(project)
+    if project.layout != LAYOUT_2:
+        ensure_project_blend_file(project)
     return project
 
 

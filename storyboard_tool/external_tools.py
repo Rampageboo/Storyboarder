@@ -9,8 +9,10 @@ from pathlib import Path
 from typing import Any, BinaryIO, Callable
 
 from . import project_manager as pm
+from .file_transactions import atomic_copy_file, atomic_copy_stream
 from .image_utils import is_psd_path
 from .models import Project, Shot
+from .project_layout import LAYOUT_2, resolve_scene3d_asset
 
 BLEND_TEMPLATE_PATH = Path(__file__).resolve().parent / "assets" / "scene_template.blend"
 SCENE3D_EXTENSIONS = {".glb", ".gltf"}
@@ -20,19 +22,41 @@ def blend_template_path() -> Path:
     return BLEND_TEMPLATE_PATH
 
 
-def get_project_blend_path(project: Project) -> Path:
+def get_project_blend_path(project: Project, scene_id: str | None = None) -> Path:
+    if project.layout == LAYOUT_2:
+        if not scene_id:
+            from . import scene3d
+
+            scene_id = scene3d.ensure_active_scene(project)["id"]
+        return resolve_scene3d_asset(project, scene_id, ".blend")
     return pm.resolve_project_child(project, "scene3d", "scene.blend")
 
 
-def ensure_project_blend_file(project: Project) -> Path:
-    """Copy bundled scene_template.blend into the project when scene.blend is missing."""
-    scene_dir = pm.resolve_project_child(project, "scene3d")
+def blender_portable_reference(
+    project: Project,
+    blend_path: Path,
+    asset_path: Path,
+) -> str:
+    """Return Blender's portable ``//`` form for a project-contained asset."""
+    blend = pm.resolve_project_path(project, pm.project_relative_posix(project, blend_path))
+    asset = pm.resolve_project_path(project, pm.project_relative_posix(project, asset_path))
+    relative = os.path.relpath(asset, start=blend.parent).replace("\\", "/")
+    return f"//{relative}"
+
+
+def ensure_project_blend_file(
+    project: Project,
+    *,
+    scene_id: str | None = None,
+) -> Path:
+    """Lazily copy the bundled template to the active layout-owned Blend path."""
+    blend_path = get_project_blend_path(project, scene_id)
+    scene_dir = blend_path.parent
     scene_dir.mkdir(parents=True, exist_ok=True)
-    blend_path = get_project_blend_path(project)
     if not blend_path.exists():
         template = blend_template_path()
         if template.is_file():
-            shutil.copy2(template, blend_path)
+            atomic_copy_file(template, blend_path)
     scene_settings = dict(project.settings.get("scene3d") or {})
     if blend_path.exists():
         scene_settings["blend_file_path"] = pm.project_relative_posix(project, blend_path)
@@ -63,7 +87,13 @@ def open_blender_scene(
         if not blend_path.is_file():
             raise FileNotFoundError(f"Blender file not found: {cleaned_path}")
     else:
-        blend_path = ensure_project_blend_file(project)
+        if project.layout == LAYOUT_2:
+            from . import scene3d
+
+            scene_id = scene3d.ensure_active_scene(project)["id"]
+            blend_path = ensure_project_blend_file(project, scene_id=scene_id)
+        else:
+            blend_path = ensure_project_blend_file(project)
     if not blend_path.exists():
         template = blend_template_path()
         if not template.is_file():
@@ -135,21 +165,29 @@ def import_scene3d_stream(project: Project, source_stream: BinaryIO, filename: s
     suffix = Path(filename).suffix.lower()
     if suffix not in SCENE3D_EXTENSIONS:
         raise ValueError("Only .glb and .gltf Blender exports are supported.")
-    scene_dir = pm.resolve_project_child(project, "scene3d")
-    scene_dir.mkdir(exist_ok=True)
-    destination = pm.resolve_project_child(project, "scene3d", f"scene{suffix}")
-    fd, tmp_name = tempfile.mkstemp(dir=str(scene_dir), prefix=f"{destination.name}.", suffix=".tmp")
-    try:
-        with os.fdopen(fd, "wb") as file:
-            shutil.copyfileobj(source_stream, file)
-        os.replace(tmp_name, destination)
-    except BaseException:
+    if project.layout == LAYOUT_2:
+        from . import scene3d
+
+        active = scene3d.ensure_active_scene(project)
+        destination = resolve_scene3d_asset(project, active["id"], suffix)
+        atomic_copy_stream(source_stream, destination)
+        relative_path = pm.project_relative_posix(project, destination)
+    else:
+        scene_dir = pm.resolve_project_child(project, "scene3d")
+        scene_dir.mkdir(exist_ok=True)
+        destination = pm.resolve_project_child(project, "scene3d", f"scene{suffix}")
+        fd, tmp_name = tempfile.mkstemp(dir=str(scene_dir), prefix=f"{destination.name}.", suffix=".tmp")
         try:
-            os.unlink(tmp_name)
-        except OSError:
-            pass
-        raise
-    relative_path = pm.project_relative_posix(project, destination)
+            with os.fdopen(fd, "wb") as file:
+                shutil.copyfileobj(source_stream, file)
+            os.replace(tmp_name, destination)
+        except BaseException:
+            try:
+                os.unlink(tmp_name)
+            except OSError:
+                pass
+            raise
+        relative_path = pm.project_relative_posix(project, destination)
     scene_settings = dict(project.settings.get("scene3d") or {})
     scene_settings.update(
         {

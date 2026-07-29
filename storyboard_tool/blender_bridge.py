@@ -14,6 +14,7 @@ from fastapi import FastAPI
 
 from . import live_bridge, runtime_state, scene3d
 from .models import Project
+from .project_layout import LAYOUT_2, resolve_scene3d_asset
 
 
 BRIDGE_FILENAME = "storyboard_blender_bridge.json"
@@ -75,9 +76,24 @@ def begin_session(
 ) -> dict[str, Any]:
     session_id = secrets.token_urlsafe(24)
     resolved_blend = blend_path.resolve()
+    scene_id = str(scene.get("id") or "")
+    if project.layout == LAYOUT_2:
+        expected = resolve_scene3d_asset(project, scene_id, ".blend").resolve()
+        stored = str(scene.get("blend_file_path") or "")
+        if not stored or resolved_blend != expected:
+            raise ValueError("Layout 2 external Blender path is not canonical.")
+        if scene3d._safe_rel_path(project, stored).resolve() != expected:
+            raise ValueError("Layout 2 Scene 3D metadata has a stale Blender path.")
+    project_session_id = str(
+        getattr(app.state, "project_session_id", "") or ""
+    )
+    if project.layout == LAYOUT_2 and not project_session_id:
+        raise ValueError("Layout 2 Blender project session is missing.")
     app.state.external_blender_session_id = session_id
     app.state.external_blender_blend_path = str(resolved_blend)
-    app.state.external_blender_scene3d_id = str(scene.get("id") or "")
+    app.state.external_blender_scene3d_id = scene_id
+    app.state.external_blender_project_session_id = project_session_id
+    app.state.external_blender_context_revision = int(project.storage_revision)
     app.state.external_blender_launched_at = time.time()
     app.state.external_blender_process = None
     app.state.external_blender_initial_mtime_ns = (
@@ -100,6 +116,8 @@ def cancel_session(app: FastAPI) -> None:
     app.state.external_blender_session_id = ""
     app.state.external_blender_blend_path = ""
     app.state.external_blender_scene3d_id = ""
+    app.state.external_blender_project_session_id = ""
+    app.state.external_blender_context_revision = -1
     app.state.external_blender_launched_at = 0.0
     app.state.external_blender_process = None
     app.state.external_blender_initial_mtime_ns = 0
@@ -109,11 +127,7 @@ def cancel_session(app: FastAPI) -> None:
 def publish_context(app: FastAPI, project: Project) -> dict[str, Any]:
     session_id = str(getattr(app.state, "external_blender_session_id", "") or "")
     blend_path = str(getattr(app.state, "external_blender_blend_path", "") or "")
-    scene_id = (
-        str(getattr(app.state, "external_blender_scene3d_id", "") or "")
-        if owns_scene
-        else ""
-    )
+    scene_id = str(getattr(app.state, "external_blender_scene3d_id", "") or "")
     if not session_id or not blend_path:
         return {}
     scene_payload = next(
@@ -124,8 +138,40 @@ def publish_context(app: FastAPI, project: Project) -> dict[str, Any]:
         ),
         {},
     )
+    portable_references: list[dict[str, str]] = []
+    from .external_tools import blender_portable_reference
+
+    blend = Path(blend_path)
+    for link in project.settings.get("reference_links") or []:
+        if not isinstance(link, dict):
+            continue
+        relative = str(link.get("path") or "")
+        if Path(relative).suffix.lower() not in {".blend", ".glb", ".gltf"}:
+            continue
+        try:
+            asset = scene3d._safe_rel_path(project, relative)
+            portable = blender_portable_reference(project, blend, asset)
+        except (OSError, ValueError):
+            continue
+        portable_references.append(
+            {"id": str(link.get("id") or ""), "path": portable}
+        )
     payload = {
-        "version": 1,
+        "write_enabled": project.layout != LAYOUT_2 or (
+            str(getattr(app.state, "external_blender_project_session_id", "") or "")
+            == str(getattr(app.state, "project_session_id", "") or "")
+            and int(getattr(app.state, "external_blender_context_revision", -1))
+            == int(project.storage_revision)
+        ),
+        "version": 2 if project.layout == LAYOUT_2 else 1,
+        "project_session_id": str(
+            getattr(app.state, "external_blender_project_session_id", "") or ""
+        ),
+        "context_revision": int(
+            getattr(app.state, "external_blender_context_revision", -1)
+        ),
+        "path_mode": "explicit-assets" if project.layout == LAYOUT_2 else "legacy",
+        "offline_write_allowed": project.layout != LAYOUT_2,
         "session_id": session_id,
         "project_name": project.name,
         "project_root": str(project.project_root.resolve()),
@@ -138,6 +184,7 @@ def publish_context(app: FastAPI, project: Project) -> dict[str, Any]:
         ),
         "selected_shot_id": runtime_state.live_selected_shot_id(app),
         "shots": _shot_links(project),
+        "portable_references": portable_references,
         "updated_at": time.time(),
     }
     _write_json(bridge_file_path(), payload)
@@ -154,7 +201,10 @@ def _process_running(app: FastAPI) -> bool:
         return False
 
 
-def _validated_heartbeat(app: FastAPI) -> tuple[dict[str, Any], float | None]:
+def _validated_heartbeat(
+    app: FastAPI,
+    project: Project | None,
+) -> tuple[dict[str, Any], float | None]:
     heartbeat_path = heartbeat_file_path()
     heartbeat = _read_json(heartbeat_path)
     try:
@@ -164,6 +214,21 @@ def _validated_heartbeat(app: FastAPI) -> tuple[dict[str, Any], float | None]:
     expected_session = str(getattr(app.state, "external_blender_session_id", "") or "")
     if not expected_session or str(heartbeat.get("session_id") or "") != expected_session:
         return {}, age
+    if project is not None and project.layout == LAYOUT_2:
+        expected_project_session = str(
+            getattr(app.state, "external_blender_project_session_id", "") or ""
+        )
+        expected_revision = int(
+            getattr(app.state, "external_blender_context_revision", -1)
+        )
+        if (
+            expected_project_session
+            != str(getattr(app.state, "project_session_id", "") or "")
+            or expected_revision != int(project.storage_revision)
+            or heartbeat.get("project_session_id") != expected_project_session
+            or heartbeat.get("context_revision") != expected_revision
+        ):
+            return {}, age
     return heartbeat, age
 
 
@@ -183,6 +248,14 @@ def _adopt_fresh_session(app: FastAPI, project: Project) -> None:
     except (OSError, ValueError):
         return
     project_root = project.project_root.resolve()
+    if project.layout == LAYOUT_2 and (
+        context.get("project_session_id")
+        != str(getattr(app.state, "project_session_id", "") or "")
+        or context.get("context_revision") != int(project.storage_revision)
+        or heartbeat.get("project_session_id") != context.get("project_session_id")
+        or heartbeat.get("context_revision") != context.get("context_revision")
+    ):
+        return
     if (
         age > HEARTBEAT_MAX_AGE_SECONDS
         or context_root != project_root
@@ -195,6 +268,12 @@ def _adopt_fresh_session(app: FastAPI, project: Project) -> None:
     app.state.external_blender_session_id = session_id
     app.state.external_blender_blend_path = str(blend_path)
     app.state.external_blender_scene3d_id = str(context.get("scene3d_id") or "")
+    app.state.external_blender_project_session_id = str(
+        context.get("project_session_id") or ""
+    )
+    app.state.external_blender_context_revision = int(
+        context.get("context_revision") or 0
+    )
     app.state.external_blender_launched_at = float(context.get("updated_at") or time.time())
     app.state.external_blender_process = None
     try:
@@ -216,7 +295,7 @@ def status(app: FastAPI, *, refresh_context: bool = True) -> dict[str, Any]:
             pass
 
     expected_path = str(getattr(app.state, "external_blender_blend_path", "") or "")
-    heartbeat, age = _validated_heartbeat(app)
+    heartbeat, age = _validated_heartbeat(app, project)
     heartbeat_fresh = bool(heartbeat) and age is not None and age <= HEARTBEAT_MAX_AGE_SECONDS
     heartbeat_path = str(heartbeat.get("blend_path") or "").strip()
     same_file = False

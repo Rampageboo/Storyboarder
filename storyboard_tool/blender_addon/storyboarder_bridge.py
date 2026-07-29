@@ -55,6 +55,21 @@ def _write_heartbeat(payload: dict[str, Any]) -> None:
     os.replace(temporary, HEARTBEAT_PATH)
 
 
+def _context_allows_write() -> bool:
+    if not CONTEXT or str(CONTEXT.get("session_id") or "") != SESSION_ID:
+        return False
+    if CONTEXT.get("path_mode") != "explicit-assets":
+        return True
+    return (
+        CONTEXT.get("version") == 2
+        and bool(str(CONTEXT.get("project_session_id") or ""))
+        and isinstance(CONTEXT.get("context_revision"), int)
+        and CONTEXT.get("context_revision") >= 0
+        and CONTEXT.get("offline_write_allowed") is False
+        and CONTEXT.get("write_enabled") is True
+    )
+
+
 def _current_blend_matches_context() -> bool:
     current = str(bpy.data.filepath or "").strip()
     expected = str(CONTEXT.get("blend_path") or "").strip()
@@ -69,7 +84,7 @@ def _current_blend_matches_context() -> bool:
 def _export_preview() -> None:
     global PREVIEW_EXPORTING, PREVIEW_ERROR, PREVIEW_REVISION
     preview_value = str(CONTEXT.get("preview_path") or "").strip()
-    if not preview_value or not _current_blend_matches_context():
+    if not preview_value or not _context_allows_write() or not _current_blend_matches_context():
         return
     preview_path = Path(preview_value).expanduser()
     preview_path.parent.mkdir(parents=True, exist_ok=True)
@@ -136,6 +151,8 @@ def _heartbeat() -> float:
             {
                 "version": 1,
                 "session_id": SESSION_ID,
+                "project_session_id": str(CONTEXT.get("project_session_id") or ""),
+                "context_revision": CONTEXT.get("context_revision"),
                 "blend_path": str(Path(filepath).resolve()) if filepath else "",
                 "scene3d_id": str(CONTEXT.get("scene3d_id") or ""),
                 "active_camera": active_camera.name if active_camera is not None else "",

@@ -4,7 +4,13 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
-from .project_layout import metadata_path_for, project_path_for
+from .project_layout import (
+    LAYOUT_2,
+    metadata_path_for,
+    project_path_for,
+    scene2d_metadata_path,
+    scene3d_metadata_path,
+)
 
 
 SHOT_STATUSES = ("Draft", "In Progress", "Review", "Approved", "Final")
@@ -261,10 +267,14 @@ class Project:
 
     @property
     def scenes2d_dir(self) -> Path:
+        if self.layout == LAYOUT_2:
+            return scene2d_metadata_path(self)
         return project_path_for(self, "scenes2d_dir")
 
     @property
     def scenes3d_dir(self) -> Path:
+        if self.layout == LAYOUT_2:
+            return scene3d_metadata_path(self)
         return project_path_for(self, "scenes3d_dir")
 
     @property

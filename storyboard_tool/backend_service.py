@@ -517,7 +517,9 @@ class StoryboardBackendService(ExportServiceMixin):
         project = app_state._require_project(self.app)
         try:
             blender_bridge.status(self.app)
-            bpy_viewport.manager_for_app(self.app).save_if_running()
+            manager = bpy_viewport.manager_for_app(self.app)
+            bpy_viewport.require_current_context(self.app)
+            manager.save_if_running()
             project_manager.save_project(project)
         except Exception as exc:
             logger.exception("Failed to save project")
@@ -1501,6 +1503,7 @@ class StoryboardBackendService(ExportServiceMixin):
             }
         manager = bpy_viewport.manager_for_app(self.app)
         try:
+            bpy_viewport.require_current_context(self.app)
             manager.save_if_running()
             bpy_viewport.stop_worker(self.app)
             active_scene = scene3d.ensure_active_scene(project)
@@ -1508,7 +1511,10 @@ class StoryboardBackendService(ExportServiceMixin):
             blend_path = (
                 project_manager.resolve_project_path(project, attached)
                 if attached
-                else project_manager.ensure_project_blend_file(project).resolve()
+                else project_manager.ensure_project_blend_file(
+                    project,
+                    scene_id=str(active_scene["id"]),
+                ).resolve()
             )
             active_scene = scene3d.configure_blend_preview(
                 project,

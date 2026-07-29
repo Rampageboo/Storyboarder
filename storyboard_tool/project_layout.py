@@ -523,6 +523,10 @@ def reference_asset_relative(project: ProjectPathContext, asset_id: str, suffix:
         raise ProjectPathError("reference asset extension is invalid.")
     layout = getattr(project, "layout", LAYOUT_1)
     if layout == LAYOUT_2:
+        if extension in {".blend", ".glb", ".gltf"}:
+            return f"Blender/References/{asset_id}{extension}"
+        if extension in {".mp4", ".mov", ".webm", ".mkv", ".avi", ".m4v"}:
+            return f".storyboarder/media/references/{asset_id}{extension}"
         return f"Images/References/{asset_id}{extension}"
     if layout == LAYOUT_1:
         return f"references/ref_{asset_id}{extension}"
@@ -532,6 +536,107 @@ def reference_asset_relative(project: ProjectPathContext, asset_id: str, suffix:
 def resolve_reference_asset(project: ProjectPathContext, asset_id: str, suffix: str) -> Path:
     """Resolve a canonical project reference asset."""
     return resolve_project_path(project, reference_asset_relative(project, asset_id, suffix))
+
+
+def _validated_extension(suffix: str, field_name: str) -> str:
+    extension = str(suffix or "").lower()
+    if (
+        not extension.startswith(".")
+        or len(extension) < 2
+        or "/" in extension
+        or "\\" in extension
+    ):
+        raise ProjectPathError(f"{field_name} is invalid.")
+    return extension
+
+
+def scene2d_metadata_path(project: ProjectPathContext, *parts: str) -> Path:
+    """Resolve Scene 2D JSON below metadata in Layout 2."""
+    relative = "/".join(("scenes2d", *parts))
+    if getattr(project, "layout", LAYOUT_1) == LAYOUT_2:
+        return resolve_metadata_path(project, relative)
+    return resolve_project_child(project, relative)
+
+
+def scene2d_asset_relative(
+    project: ProjectPathContext,
+    scene_id: str,
+    perspective_id: str,
+    role: str,
+    suffix: str = "",
+) -> str:
+    """Return the canonical path for a Scene 2D perspective asset."""
+    scene_id = _validated_component(scene_id, "Scene 2D id")
+    perspective_id = _validated_component(perspective_id, "Scene 2D perspective id")
+    layout = getattr(project, "layout", LAYOUT_1)
+    if role == "source_psd":
+        if layout == LAYOUT_2:
+            return f"PSD/Scene2D/{perspective_id}.psd"
+        return f"scenes2d/{scene_id}/perspectives/{perspective_id}/source.psd"
+    if role == "source_image":
+        extension = _validated_extension(suffix, "Scene 2D image extension")
+        if layout == LAYOUT_2:
+            return f"Images/Scene2D/{perspective_id}{extension}"
+        return f"scenes2d/{scene_id}/perspectives/{perspective_id}/source{extension}"
+    if role == "preview":
+        if layout == LAYOUT_2:
+            return f"Images/Scene2D/{perspective_id}_preview.png"
+        return f"scenes2d/{scene_id}/perspectives/{perspective_id}/preview.png"
+    raise ProjectSchemaError(f"Unknown Scene 2D asset role: {role!r}.")
+
+
+def resolve_scene2d_asset(
+    project: ProjectPathContext,
+    scene_id: str,
+    perspective_id: str,
+    role: str,
+    suffix: str = "",
+) -> Path:
+    return resolve_project_path(
+        project,
+        scene2d_asset_relative(project, scene_id, perspective_id, role, suffix),
+    )
+
+
+def scene3d_metadata_path(project: ProjectPathContext, *parts: str) -> Path:
+    """Resolve Scene 3D JSON below metadata in Layout 2."""
+    relative = "/".join(("scenes3d", *parts))
+    if getattr(project, "layout", LAYOUT_1) == LAYOUT_2:
+        return resolve_metadata_path(project, relative)
+    return resolve_project_child(project, relative)
+
+
+def scene3d_asset_relative(
+    project: ProjectPathContext,
+    scene_id: str,
+    suffix: str,
+) -> str:
+    """Return the canonical project-relative Scene 3D asset path."""
+    scene_id = _validated_component(scene_id, "Scene 3D id")
+    extension = _validated_extension(suffix, "Scene 3D asset extension")
+    if extension not in {".blend", ".glb", ".gltf"}:
+        raise ProjectPathError("Scene 3D assets must be .blend, .glb, or .gltf files.")
+    if getattr(project, "layout", LAYOUT_1) == LAYOUT_2:
+        return f"Blender/{scene_id}{extension}"
+    return f"scenes3d/{scene_id}/{scene_id}{extension}"
+
+
+def resolve_scene3d_asset(
+    project: ProjectPathContext,
+    scene_id: str,
+    suffix: str,
+) -> Path:
+    return resolve_project_path(project, scene3d_asset_relative(project, scene_id, suffix))
+
+
+def scene3d_preview_path(project: ProjectPathContext, scene_id: str) -> Path:
+    """Resolve the disposable GLB preview for a Scene 3D record."""
+    scene_id = _validated_component(scene_id, "Scene 3D id")
+    if getattr(project, "layout", LAYOUT_1) == LAYOUT_2:
+        relative = f".storyboarder/cache/scene3d/{scene_id}/storyboarder_preview.glb"
+    else:
+        relative = f"scenes3d/{scene_id}/.preview/storyboarder_preview.glb"
+    return resolve_project_path(project, relative)
 
 
 def generation_metadata_path(project: ProjectPathContext, *parts: str) -> Path:

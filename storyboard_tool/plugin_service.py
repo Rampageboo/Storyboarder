@@ -14,7 +14,12 @@ from fastapi import FastAPI, HTTPException
 from . import app_state, project_manager, runtime_state, scene2d, shot_service
 from .errors import AppErrorCode, app_error
 from .models import Shot
-from .project_layout import LAYOUT_2, resolve_metadata_path, shot_asset_relative
+from .project_layout import (
+    LAYOUT_2,
+    resolve_metadata_path,
+    scene2d_asset_relative,
+    shot_asset_relative,
+)
 
 
 PLUGIN_PROTOCOL_VERSION = 2
@@ -184,10 +189,15 @@ class PluginBridgeService:
                 raise HTTPException(status_code=404, detail="Plugin work item not found.")
             if project.layout == LAYOUT_2:
                 relative = {
-                    role: shot_asset_relative(project, shot_id, role)
-                    for role in (
-                        "source_psd", "preview", "thumbnail", "board_background"
-                    )
+                    "source_psd": shot.source_file_path
+                    or shot_asset_relative(project, shot_id, "source_psd"),
+                    "preview": shot.preview_image_path
+                    or shot_asset_relative(project, shot_id, "preview"),
+                    "thumbnail": shot.thumbnail_path
+                    or shot_asset_relative(project, shot_id, "thumbnail"),
+                    "board_background": shot_asset_relative(
+                        project, shot_id, "board_background"
+                    ),
                 }
             else:
                 relative = {
@@ -209,8 +219,14 @@ class PluginBridgeService:
                 raise HTTPException(status_code=404, detail="Plugin work item not found.")
             if project.layout == LAYOUT_2:
                 relative = {
-                    "source_psd": f"PSD/Scene2D/{perspective_id}.psd",
-                    "preview": f"Images/Scene2D/{perspective_id}_preview.png",
+                    "source_psd": str(perspective.get("source_file_path") or "")
+                    or scene2d_asset_relative(
+                        project, scene_id, perspective_id, "source_psd"
+                    ),
+                    "preview": str(perspective.get("preview_image_path") or "")
+                    or scene2d_asset_relative(
+                        project, scene_id, perspective_id, "preview"
+                    ),
                 }
             else:
                 relative = {

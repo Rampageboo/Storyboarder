@@ -35,6 +35,8 @@ def init_bridge_state(app: FastAPI, bridge_port: int) -> None:
     app.state.external_blender_session_id = ""
     app.state.external_blender_blend_path = ""
     app.state.external_blender_scene3d_id = ""
+    app.state.external_blender_project_session_id = ""
+    app.state.external_blender_context_revision = -1
     app.state.external_blender_launched_at = 0.0
     app.state.external_blender_process = None
     app.state.external_blender_initial_mtime_ns = 0

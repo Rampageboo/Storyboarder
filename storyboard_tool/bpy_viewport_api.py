@@ -29,6 +29,21 @@ def register_bpy_viewport_routes(app: FastAPI) -> None:
     def project():
         return app_state._require_project(app)
 
+    def context_revision(current) -> int:
+        return int(getattr(current, "storage_revision", 0) or 0)
+
+    def require_writer_context() -> None:
+        current = project()
+        checker = getattr(manager(), "require_context", None)
+        if callable(checker):
+            checker(
+                current,
+                project_session_id=str(
+                    getattr(app.state, "project_session_id", "") or ""
+                ),
+                context_revision=context_revision(current),
+            )
+
     def translate_error(exc: bpy_viewport.BpyViewportError) -> HTTPException:
         return HTTPException(status_code=400, detail=str(exc))
 
@@ -55,7 +70,18 @@ def register_bpy_viewport_routes(app: FastAPI) -> None:
                 ),
             )
         try:
-            result = manager().start(project())
+            current = project()
+            viewport = manager()
+            if callable(getattr(viewport, "bind_context", None)):
+                result = viewport.start(
+                    current,
+                    project_session_id=str(
+                        getattr(app.state, "project_session_id", "") or ""
+                    ),
+                    context_revision=context_revision(current),
+                )
+            else:
+                result = viewport.start(current)
             return {
                 **result,
                 **blender_bridge.status(app),
@@ -110,6 +136,7 @@ def register_bpy_viewport_routes(app: FastAPI) -> None:
         if len(request.points) < 2:
             raise HTTPException(status_code=400, detail="Draw at least two camera-path points.")
         try:
+            require_writer_context()
             result = manager().create_camera_path(request.model_dump())
         except bpy_viewport.BpyViewportError as exc:
             raise translate_error(exc) from exc
@@ -119,6 +146,7 @@ def register_bpy_viewport_routes(app: FastAPI) -> None:
     @app.post("/api/project/bpy-viewport/save")
     def save_bpy_scene() -> dict[str, Any]:
         try:
+            require_writer_context()
             result = manager().save()
         except bpy_viewport.BpyViewportError as exc:
             raise translate_error(exc) from exc
