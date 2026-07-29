@@ -5,8 +5,6 @@ const app = photoshop.app;
 const DEFAULT_CANVAS_COLOR = "#E8E8E8";
 const DEFAULT_CANVAS_WIDTH = 1920;
 const DEFAULT_CANVAS_HEIGHT = 1080;
-const SHARED_BRIDGE_PATH = "C:/Users/Public/StoryboardTool/storyboard_live_bridge.json";
-const SHARED_HEARTBEAT_PATH = "C:/Users/Public/StoryboardTool/storyboard_plugin_heartbeat.json";
 const SB_POLL_MS = 1500;
 const BRIDGE_CACHE_FILE = "storyboard_bridge_cache.json";
 const PLUGIN_SETTINGS_FILE = "storyboard_plugin_settings.json";
@@ -61,6 +59,7 @@ let focusSwitchInFlight = false;
 let lastPluginContext = null;
 let workContextSyncInFlight = false;
 let workContextSyncPending = false;
+let pluginManagedSaveInFlight = false;
 let focusStoryboardAfterPreviewExport = false;
 let autoAddAtEnd = true;
 const boardBackgroundSigByShot = new Map();
@@ -266,6 +265,7 @@ async function runPanelAction(action) {
 }
 
 async function chooseProjectFolder() {
+  requireOfflineWriteAllowed(lastPluginContext, "switch this project to manual mode");
   const folder = await fs.getFolder();
   try {
     await folder.getEntry("project.json");
@@ -297,6 +297,7 @@ async function chooseProjectFolder() {
 }
 
 async function chooseShotFolder() {
+  requireOfflineWriteAllowed(lastPluginContext, "switch this project to manual mode");
   shotFolder = await fs.getFolder();
   const folderLabelEl = $("folderLabel");
   if (folderLabelEl) folderLabelEl.textContent = `Folder: ${shotFolder.nativePath || shotFolder.name}`;
@@ -404,10 +405,10 @@ async function findOpenDocumentForWorkItem(workItemOrContext) {
   for (const doc of Array.from(app.documents || [])) {
     const nativePath = await documentNativePath(doc);
     if (!nativePath) continue;
-    if (
-      sameNativePath(nativePath, item.source_native_path) ||
-      sameNativePath(nativePath, projectRelativeNativePath(lastPluginContext, item.source_file_path, linkedProjectRootPath))
-    ) {
+    if (sameNativePath(
+      nativePath,
+      sourceNativePathForWorkItem(item, lastPluginContext, linkedProjectRootPath),
+    )) {
       return doc;
     }
   }
@@ -419,6 +420,20 @@ async function resolveFolderEntry(nativePath) {
   if (!path) return null;
   try {
     return await fs.getEntryWithUrl(pathToFileUrl(path));
+  } catch {
+    return null;
+  }
+}
+
+function workItemForShotId(shotId, context = lastPluginContext) {
+  return findWorkItemByKey(`shot:${String(shotId || "")}`, context);
+}
+
+async function resolveAssetEntryForWorkItem(item, role) {
+  const nativePath = assetNativePathForRole(item, role);
+  if (!nativePath) return null;
+  try {
+    return await fs.getEntryWithUrl(pathToFileUrl(nativePath));
   } catch {
     return null;
   }
@@ -471,7 +486,6 @@ async function fetchLiveBridgeHttp(seedLive) {
 async function fetchLiveBridgeFiles() {
   const cache = await loadBridgeCache();
   const candidates = [
-    SHARED_BRIDGE_PATH,
     cache?.shared_bridge_path,
     cache?.global_bridge_path,
     cache?.project_bridge_path,
@@ -584,7 +598,7 @@ async function cacheBridgeEndpoints(live, sourceUrl) {
       bridge_url: live.bridge_url || sourceUrl,
       port: live.port || 0,
       api_token: live.api_token || "",
-      shared_bridge_path: live.shared_bridge_path || SHARED_BRIDGE_PATH,
+      shared_bridge_path: live.shared_bridge_path || "",
       global_bridge_path: live.global_bridge_path || "",
       project_bridge_path: live.project_root
         ? `${String(live.project_root).replace(/\\/g, "/")}/storyboard_live_bridge.json`
@@ -594,15 +608,6 @@ async function cacheBridgeEndpoints(live, sourceUrl) {
     await writeEntryText(file, JSON.stringify(payload, null, 2));
   } catch {
     // Cache is optional.
-  }
-}
-
-async function ensureSharedBridgeDir() {
-  try {
-    return await fs.getEntryWithUrl(pathToFileUrl("C:/Users/Public/StoryboardTool"));
-  } catch {
-    const publicRoot = await fs.getEntryWithUrl(pathToFileUrl("C:/Users/Public"));
-    return publicRoot.createFolder("StoryboardTool");
   }
 }
 
@@ -628,56 +633,16 @@ async function sendPluginHeartbeat(live) {
   const activeItem = await detectWorkItemFromDocument(app.activeDocument, lastPluginContext);
   const activeWorkKey = activeItem?.key || "";
   const selectedShotId = activeItem?.kind === "shot" ? activeItem.shot_id : "";
-  const payload = JSON.stringify({
-    at: new Date().toISOString(),
-    plugin: "storyboard-bridge",
-    project_root: live?.project_root || "",
-    selected_shot_id: selectedShotId,
-    open_shot_ids: openShotIds,
-    active_work_key: activeWorkKey,
-    open_work_keys: openWorkKeys,
-  });
-  try {
-    const dir = await ensureSharedBridgeDir();
-    const file = await dir.createFile("storyboard_plugin_heartbeat.json", { overwrite: true });
-    await writeEntryText(file, payload);
-    return;
-  } catch {
-    // Fall back to HTTP heartbeat when available.
-  }
-  const port = Number(live?.port || 0);
-  const urls = [];
-  if (port > 0) {
-    urls.push(`http://127.0.0.1:${port}/api/plugin/heartbeat`);
-    urls.push(`http://localhost:${port}/api/plugin/heartbeat`);
-    urls.push(`http://127.0.0.1:${port}/api/bridge/plugin-heartbeat`);
-    urls.push(`http://localhost:${port}/api/bridge/plugin-heartbeat`);
-  }
   const body = JSON.stringify({
     open_shot_ids: openShotIds,
     selected_shot_id: selectedShotId,
     active_work_key: activeWorkKey,
     open_work_keys: openWorkKeys,
   });
-  const token =
-    typeof storyboardApiToken === "function" ? await storyboardApiToken() : "";
-  const heartbeatHeaders = { "Content-Type": "application/json" };
-  if (token) {
-    heartbeatHeaders["X-Storyboarder-Token"] = token;
-  }
-  for (const url of urls) {
-    try {
-      await fetch(url, {
-        method: "POST",
-        cache: "no-store",
-        headers: heartbeatHeaders,
-        body,
-      });
-      return;
-    } catch {
-      // Try the next endpoint.
-    }
-  }
+  await requestStoryboardApi("/api/plugin/heartbeat", {
+    method: "POST",
+    body,
+  });
 }
 
 async function reconnectStoryboardBridge() {
@@ -733,6 +698,7 @@ async function pollStoryboardBridge() {
 
 async function applyLiveBridge(live) {
   const context = await requestPluginContext();
+  const explicitAssets = isExplicitAssetContext(context);
   const signature = [
     live.updated_at,
     live.project_root,
@@ -741,12 +707,14 @@ async function applyLiveBridge(live) {
     live.canvas_width,
     live.canvas_height,
     live.shot_count,
+    context?.project_session_id,
+    context?.context_revision,
   ].join("|");
   const isSame = signature === lastBridgeSignature;
   lastBridgeSignature = signature;
 
-  const root = await resolveFolderEntry(live.project_root);
-  if (!root) {
+  const root = explicitAssets ? null : await resolveFolderEntry(live.project_root);
+  if (!explicitAssets && !root) {
     renderFolderAccessErrorState("Folder access failed");
     canvasColor = normalizeHexColor(live.canvas_background_color);
     const fallbackSize = normalizeCanvasSize(live.canvas_width, live.canvas_height);
@@ -760,8 +728,8 @@ async function applyLiveBridge(live) {
   linkedFromStoryboard = true;
   setLinkedUi(true);
 
-  if (!isSame || linkedProjectRootPath !== live.project_root) {
-    linkedProjectRootPath = live.project_root;
+  if (!isSame || linkedProjectRootPath !== live.project_root || explicitAssets) {
+    linkedProjectRootPath = explicitAssets ? "" : live.project_root;
     projectRoot = root;
     if (context) {
       applyPluginContext(context);
@@ -789,7 +757,7 @@ async function applyLiveBridge(live) {
   }
   if (shotId) {
     setSelectedShotId(shotId);
-    shotFolder = await getShotFolderEntry(shotId);
+    shotFolder = explicitAssets ? null : await getShotFolderEntry(shotId);
   }
 
   const nextColor = normalizeHexColor(context?.canvas?.background_color || live.canvas_background_color);
@@ -1674,6 +1642,11 @@ function getOpenShotIds() {
 }
 
 async function getShotFolderEntry(shotId) {
+  if (isExplicitAssetContext(lastPluginContext)) {
+    throw new Error(
+      "Layout 2 has no shot folder. Use the exact backend asset role instead.",
+    );
+  }
   if (projectRoot) {
     const shotsDir = await projectRoot.getEntry("shots");
     try {
@@ -1689,6 +1662,10 @@ async function getShotFolderEntry(shotId) {
 }
 
 async function ensureShotStructure(shotId) {
+  if (isExplicitAssetContext(lastPluginContext)) {
+    throw new Error("Layout 2 shot folders are unsupported.");
+  }
+  requireOfflineWriteAllowed(lastPluginContext, "prepare a shot");
   const folder = await getShotFolderEntry(shotId);
   try {
     await folder.getEntry("references");
@@ -1863,6 +1840,14 @@ async function syncWorkContextFromActiveDocument(context = lastPluginContext) {
 }
 
 async function resolveShotImageEntry(shot) {
+  if (isExplicitAssetContext(lastPluginContext)) {
+    const item = workItemForShotId(shot.shot_id);
+    return (
+      await resolveAssetEntryForWorkItem(item, "preview")
+    ) || (
+      await resolveAssetEntryForWorkItem(item, "source_psd")
+    );
+  }
   const folder = await getShotFolderEntry(shot.shot_id);
   const candidates = [`${shot.shot_id}_preview.png`, `${shot.shot_id}.psd`];
   for (const name of candidates) {
@@ -1882,16 +1867,49 @@ async function resolveShotImageEntry(shot) {
 
 
 function registerDocumentBackgroundListeners() {
-  const events = ["open", "select", "close"];
+  const events = ["open", "select", "close", "save"];
   try {
     photoshop.action.addNotificationListener(events, (eventName) => {
       syncWorkContextFromActiveDocument().catch(() => updateCurrentShotIndicator());
       if (eventName === "open" || eventName === "select") {
         scheduleBackgroundSyncForActiveDocument();
       }
+      if (eventName === "save") {
+        validateCanonicalPsdAfterNativeSave().catch((error) => {
+          setStatus(error.message || String(error));
+        });
+      }
     });
   } catch {
     // Notification listeners are optional.
+  }
+}
+
+async function validateCanonicalPsdAfterNativeSave() {
+  if (pluginManagedSaveInFlight) {
+    return;
+  }
+  if (!linkedFromStoryboard || !isExplicitAssetContext(lastPluginContext)) {
+    return;
+  }
+  const doc = app.activeDocument;
+  const nativePath = await documentNativePath(doc);
+  const item = findWorkItemByNativePath(nativePath, lastPluginContext, "");
+  if (!item?.key) {
+    throw new Error(
+      "Saved PSD is not at a canonical Storyboarder asset path; project metadata was not changed.",
+    );
+  }
+  const canonicalPath = sourceNativePathForWorkItem(item, lastPluginContext, "");
+  if (!sameNativePath(nativePath, canonicalPath)) {
+    throw new Error(
+      "Saved PSD path does not match Storyboarder's canonical source role.",
+    );
+  }
+  const intent = await requestPluginWriteIntent(item.key, "source_psd");
+  const payload = await notifyPluginPsdSaved(workContextFromItem(item), intent);
+  if (payload) {
+    setStatus("PSD saved and validated by Storyboarder.");
   }
 }
 
@@ -2008,7 +2026,10 @@ async function syncActiveDocumentBackground() {
   if (!shotId || !app.activeDocument) {
     return;
   }
-  if (!projectRoot && !shotFolder) {
+  if (
+    !isExplicitAssetContext(lastPluginContext) &&
+    !projectRoot && !shotFolder
+  ) {
     return;
   }
   if (backgroundSyncInFlight) {
@@ -2258,12 +2279,28 @@ async function savePsdInModal(folder, shotId) {
   if (existing) {
     return existing;
   }
-  const file = await folder.createFile(`${shotId}.psd`, { overwrite: true });
-  await app.activeDocument.saveAs.psd(file, {}, false);
+  const item = workItemForShotId(shotId);
+  const intent = pluginRequiresScopedWrites()
+    ? await requestPluginWriteIntent(item?.key || `shot:${shotId}`, "source_psd")
+    : null;
+  const file = isExplicitAssetContext(lastPluginContext)
+    ? await createFileAtNativePath(
+      intent?.write_path || assetNativePathForRole(item, "source_psd"),
+    )
+    : await folder.createFile(`${shotId}.psd`, { overwrite: true });
+  pluginManagedSaveInFlight = true;
+  try {
+    await app.activeDocument.saveAs.psd(file, {}, false);
+  } finally {
+    pluginManagedSaveInFlight = false;
+  }
   if ((await psdFileSize(file)) === 0) {
     throw new Error(
       `Creating ${shotId}.psd produced an empty file. Your work is still open in Photoshop — try again.`,
     );
+  }
+  if (isExplicitAssetContext(lastPluginContext) && linkedFromStoryboard) {
+    await notifyPluginPsdSaved(workContextFromItem(item), intent);
   }
   return file;
 }
@@ -2305,7 +2342,27 @@ async function createCanvasDocumentInModal(shotId) {
 }
 
 async function saveActiveDocumentToFolder(folder, shotId) {
-  const previewFile = await exportPreviewInModal(folder, shotId);
+  if (
+    isExplicitAssetContext(lastPluginContext) &&
+    !(await getShotPsdEntry(folder, shotId))
+  ) {
+    // PSD validation can advance context_revision, so it precedes preview intent.
+    await savePsdInModal(folder, shotId);
+  }
+  let previewFile;
+  if (isExplicitAssetContext(lastPluginContext)) {
+    const item = workItemForShotId(shotId);
+    const target = assetPathForRole(item, "preview");
+    const intent = await requestPluginWriteIntent(item?.key || `shot:${shotId}`, "preview");
+    previewFile = await createFileAtNativePath(intent?.write_path || target?.native_path);
+    await exportPreviewToFileInModal(previewFile);
+    _pendingPreviewIntents.set(item?.key || `shot:${shotId}`, intent || {
+      work_key: item?.key || `shot:${shotId}`,
+      asset_role: "preview",
+    });
+  } else {
+    previewFile = await exportPreviewInModal(folder, shotId);
+  }
   const existingPsd = await getShotPsdEntry(folder, shotId);
   let psdFile = existingPsd;
   if (!existingPsd) {
@@ -2317,6 +2374,9 @@ async function saveActiveDocumentToFolder(folder, shotId) {
 
 
 async function getShotPsdEntry(folder, shotId) {
+  if (isExplicitAssetContext(lastPluginContext)) {
+    return resolveAssetEntryForWorkItem(workItemForShotId(shotId), "source_psd");
+  }
   try {
     return await folder.getEntry(`${shotId}.psd`);
   } catch {
@@ -2428,6 +2488,9 @@ async function finishShotSwitch(previousDoc, nextDoc, { closePrevious = true } =
 
 
 async function saveAndGoNext() {
+  if (isExplicitAssetContext(lastPluginContext)) {
+    return saveAndGoNextExplicitAssets();
+  }
   const shotId = activeShotId();
   setSelectedShotId(shotId);
   const currentFolder = await ensureShotStructure(shotId);
@@ -2441,16 +2504,26 @@ async function saveAndGoNext() {
   if (nextShot) {
     nextFolder = await ensureShotStructure(nextShot.shot_id);
     nextColor = await readProjectCanvasColor(nextFolder);
-    try {
-      nextPsdEntry = await nextFolder.getEntry(`${nextShot.shot_id}.psd`);
-    } catch {
-      nextPsdEntry = null;
-    }
+    nextPsdEntry = await getShotPsdEntry(nextFolder, nextShot.shot_id);
   }
 
   await runModal("Save & next shot", async () => {
     const previousDoc = app.activeDocument;
-    await exportPreviewInModal(currentFolder, shotId);
+    if (isExplicitAssetContext(lastPluginContext)) {
+      const item = workItemForShotId(shotId);
+      const target = assetPathForRole(item, "preview");
+      const intent = await requestPluginWriteIntent(item?.key || `shot:${shotId}`, "preview");
+      const previewFile = await createFileAtNativePath(
+        intent?.write_path || target?.native_path,
+      );
+      await exportPreviewToFileInModal(previewFile);
+      _pendingPreviewIntents.set(item?.key || `shot:${shotId}`, intent || {
+        work_key: item?.key || `shot:${shotId}`,
+        asset_role: "preview",
+      });
+    } else {
+      await exportPreviewInModal(currentFolder, shotId);
+    }
     // Do NOT save or close the current shot — its tab stays open so unsaved
     // strokes are never discarded. The artist saves the PSD with Ctrl+S.
 
@@ -2492,7 +2565,7 @@ async function saveAndGoNext() {
   }
 
   setSelectedShotId(nextShot.shot_id);
-  shotFolder = nextFolder;
+  shotFolder = isExplicitAssetContext(lastPluginContext) ? null : nextFolder;
   canvasColor = nextColor;
   updateColorSwatch();
   await notifyBackendShotFocus(nextShot.shot_id);
@@ -2508,6 +2581,30 @@ async function saveAndGoNext() {
   focusStoryboardAfterPreviewExportIfEnabled();
 }
 
+async function saveAndGoNextExplicitAssets() {
+  const shotId = activeShotId();
+  setSelectedShotId(shotId);
+  await exportDrawingPreview();
+  await updateProjectAfterSave(shotId);
+
+  const nextShot = await resolveNextShot(shotId);
+  const exportedLabel = shotDisplayLabel(shotId, null, null);
+  if (!nextShot) {
+    focusStoryboardAfterPreviewExportIfEnabled();
+    setStatus(
+      `Preview exported for ${exportedLabel || "Shot"}. No more shots in the project. Press Ctrl+S to save the PSD.`,
+    );
+    return;
+  }
+
+  await switchToShot(nextShot.shot_id);
+  const nextLabel = shotDisplayLabel(nextShot.shot_id, null, nextShot.title);
+  setStatus(
+    `Exported ${exportedLabel || "Shot"}. Now on ${nextLabel || "next shot"}. Tab stays open; Ctrl+S saves its PSD.`,
+  );
+  focusStoryboardAfterPreviewExportIfEnabled();
+}
+
 async function switchToSelectedShot() {
   // Read the dropdown directly — currentShotId() prefers the hidden #shotId
   // field, which lags behind the dropdown and would switch back to the old shot.
@@ -2518,13 +2615,112 @@ async function switchToSelectedShot() {
   await switchToShot(shotId);
 }
 
-// Report a Photoshop "could not open / program error" for the selected shot and
-// ask Storyboard Tool to rebuild its PSD (keeping the original layers when it can),
-// then re-open it.
+// Layout 2 work-item flows resolve each asset role directly; no folder alias exists.
+async function switchToShotExplicitAssets(shotId) {
+  if (!linkedFromStoryboard) {
+    requireOfflineWriteAllowed(lastPluginContext, "open a shot");
+    throw new Error("Reconnect to Storyboarder before opening this shot.");
+  }
+  const item = workItemForShotId(shotId);
+  if (!item) {
+    throw new Error("Storyboarder did not provide this shot work item.");
+  }
+
+  const openDocument = await findOpenDocumentForWorkItem(item);
+  if (openDocument) {
+    activateDocument(openDocument);
+    setSelectedShotId(shotId);
+    shotFolder = null;
+    await notifyBackendShotFocus(shotId);
+    await syncWorkContextFromActiveDocument(lastPluginContext);
+    return openDocument;
+  }
+
+  const psdEntry = await resolveAssetEntryForWorkItem(item, "source_psd");
+  if (psdEntry && !(await psdEntryLooksOpenable(psdEntry))) {
+    throw new Error(
+      "The canonical PSD is damaged. Use Recover broken PSD before opening it.",
+    );
+  }
+
+  let createdNew = false;
+  let openedDocument = null;
+  await runModal("Open Storyboarder shot", async () => {
+    const previousDoc = app.activeDocument;
+    if (psdEntry) {
+      openedDocument = await openPsdEntry(psdEntry);
+      if (!openedDocument) {
+        throw new Error("Photoshop could not open the canonical PSD.");
+      }
+    } else {
+      openedDocument = await createCanvasDocumentInModal(shotId);
+      await applyCanvasBackgroundInModal();
+      await ensureDrawingLayerInModal(app.activeDocument);
+      await saveActiveDocumentToFolder(null, shotId);
+      createdNew = true;
+    }
+    await syncBoardBackgroundFromDisk(shotId, true);
+    await ensureBoardBackgroundStackOrderInModal(app.activeDocument);
+    await ensureDrawingLayerInModal(app.activeDocument);
+    await finishShotSwitch(previousDoc, app.activeDocument || openedDocument, {
+      closePrevious: false,
+    });
+  });
+
+  setSelectedShotId(shotId);
+  shotFolder = null;
+  if (createdNew) {
+    await updateProjectAfterSave(shotId);
+  }
+  await notifyBackendShotFocus(shotId);
+  setStatus(createdNew ? "Created canonical shot canvas." : "Opened canonical shot PSD.");
+  return openedDocument;
+}
+
+async function recoverCurrentShotPsdExplicitAssets(shotId) {
+  if (!linkedFromStoryboard) {
+    requireOfflineWriteAllowed(lastPluginContext, "recover a PSD");
+    throw new Error("Reconnect to Storyboarder before recovering this PSD.");
+  }
+  const item = workItemForShotId(shotId);
+  if (!item) {
+    throw new Error("Storyboarder did not provide this shot work item.");
+  }
+  let rebuilt = null;
+  for (const preserveLayers of [true, false]) {
+    rebuilt = await requestPsdRecovery(shotId, preserveLayers);
+    if (rebuilt) break;
+  }
+  if (!rebuilt) {
+    throw new Error("Storyboarder could not rebuild the canonical PSD.");
+  }
+  const entry = await resolveAssetEntryForWorkItem(item, "source_psd");
+  if (!entry || !(await psdEntryLooksOpenable(entry))) {
+    throw new Error("The rebuilt canonical PSD is still unreadable.");
+  }
+  let opened = null;
+  await runModal("Open recovered Storyboarder PSD", async () => {
+    const previousDoc = app.activeDocument;
+    opened = await openPsdEntry(entry);
+    if (!opened) {
+      throw new Error("Photoshop could not open the rebuilt canonical PSD.");
+    }
+    await finishShotSwitch(previousDoc, opened, { closePrevious: false });
+  });
+  setSelectedShotId(shotId);
+  shotFolder = null;
+  await notifyBackendShotFocus(shotId);
+  setStatus("Recovered and opened the canonical PSD.");
+  return opened;
+}
+
 async function recoverCurrentShotPsd() {
   const shotId = String($("shotSelect")?.value || "").trim().toLowerCase() || currentShotId();
   if (!isValidShotId(shotId)) {
     throw new Error("Pick a shot from the list first.");
+  }
+  if (isExplicitAssetContext(lastPluginContext)) {
+    return recoverCurrentShotPsdExplicitAssets(shotId);
   }
   const folder = await ensureShotStructure(shotId);
   const recoverLabel = humanReadableShotLabel(shotId, projectData?.shots);
@@ -2544,17 +2740,21 @@ async function recoverCurrentShotPsd() {
     );
   }
   setSelectedShotId(shotId);
-  shotFolder = folder;
+  shotFolder = isExplicitAssetContext(lastPluginContext) ? null : folder;
   const layers = recovered.rebuilt?.layers_recovered ?? "?";
   const how = recovered.rebuilt?.method === "flatten" ? "flattened" : "with layers preserved";
   setStatus(`Recovered ${recoverLabel} ${how}: ${layers} layer(s). Broken original kept in ${SHOT_HISTORY_FOLDER}/.`);
 }
 
 async function switchToShot(shotId) {
+  if (isExplicitAssetContext(lastPluginContext)) {
+    return switchToShotExplicitAssets(shotId);
+  }
   const shotLabel = humanReadableShotLabel(shotId, projectData?.shots);
   if (detectShotFromDocument() === shotId && app.activeDocument) {
     setSelectedShotId(shotId);
-    shotFolder = await ensureShotStructure(shotId);
+    const currentFolder = await ensureShotStructure(shotId);
+    shotFolder = isExplicitAssetContext(lastPluginContext) ? null : currentFolder;
     let synced = false;
     await runModal("Sync board background", async () => {
       synced = await syncBoardBackgroundFromDisk(shotId);
@@ -2575,11 +2775,7 @@ async function switchToShot(shotId) {
   let recoveredBroken = false;
   let rebuiltInfo = null;
 
-  try {
-    psdEntry = await folder.getEntry(psdName);
-  } catch {
-    psdEntry = null;
-  }
+  psdEntry = await getShotPsdEntry(folder, shotId);
 
   await runModal(`Open ${shotLabel}`, async () => {
     const previousDoc = app.activeDocument;
@@ -2610,9 +2806,13 @@ async function switchToShot(shotId) {
   });
 
   setSelectedShotId(shotId);
-  shotFolder = folder;
+  shotFolder = isExplicitAssetContext(lastPluginContext) ? null : folder;
   const switchFolderLabel = $("folderLabel");
-  if (switchFolderLabel) switchFolderLabel.textContent = `Folder: ${shotFolder.nativePath || shotFolder.name}`;
+  if (switchFolderLabel) {
+    switchFolderLabel.textContent = shotFolder
+      ? `Folder: ${shotFolder.nativePath || shotFolder.name}`
+      : "Paths managed by Storyboarder";
+  }
   canvasColor = nextColor;
   updateColorSwatch();
   await notifyBackendShotFocus(shotId);
@@ -2638,6 +2838,9 @@ async function switchToShot(shotId) {
 }
 
 async function createCanvasForShot(shotId) {
+  if (isExplicitAssetContext(lastPluginContext)) {
+    return switchToShotExplicitAssets(shotId);
+  }
   const folder = await ensureShotStructure(shotId);
   let createdNew = false;
   const createLabel = humanReadableShotLabel(shotId, projectData?.shots);
@@ -2835,6 +3038,19 @@ async function readProjectCanvasColor(folder) {
 }
 
 async function readProjectCanvasSettings(folder) {
+  if (isExplicitAssetContext(lastPluginContext)) {
+    const size = normalizeCanvasSize(
+      lastPluginContext?.canvas?.width || canvasWidth,
+      lastPluginContext?.canvas?.height || canvasHeight,
+    );
+    return {
+      color: normalizeHexColor(
+        lastPluginContext?.canvas?.background_color || canvasColor,
+      ),
+      width: size.width,
+      height: size.height,
+    };
+  }
   let color = DEFAULT_CANVAS_COLOR;
   let width = DEFAULT_CANVAS_WIDTH;
   let height = DEFAULT_CANVAS_HEIGHT;

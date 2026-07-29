@@ -379,7 +379,7 @@ def test_layout2_native_psd_reconnect_validates_canonical_role_and_hash(
             json={"work_key": key, "asset_role": "source_psd"},
         ).json()
         canonical = Path(issued["canonical_path"])
-        canonical.parent.mkdir(parents=True)
+        assert canonical.parent.is_dir()
         raw = b"8BPS" + b"\0" * 64
         canonical.write_bytes(raw)
         response = client.post(

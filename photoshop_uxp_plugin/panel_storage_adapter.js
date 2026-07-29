@@ -89,6 +89,15 @@
     }
   }
 
+  function assertStandaloneProjectWriteAllowed(action) {
+    if (typeof requireOfflineWriteAllowed === "function") {
+      requireOfflineWriteAllowed(
+        typeof lastPluginContext === "undefined" ? null : lastPluginContext,
+        action,
+      );
+    }
+  }
+
   async function refreshProjectDataFromBackendIfAvailable() {
     try {
       if (typeof refreshProjectDataFromBackend === "function") {
@@ -118,6 +127,7 @@
   }
 
   async function writeTextFile(folder, fileName, text) {
+    assertStandaloneProjectWriteAllowed(`write ${fileName}`);
     const entry = await folder.createFile(fileName, { overwrite: true });
     await writeEntryText(entry, text);
     return entry;
@@ -243,6 +253,7 @@
         await refreshProjectDataFromBackendIfAvailable();
         return;
       }
+      assertStandaloneProjectWriteAllowed("write shots.csv");
       return saveShotsCsvFallback(shots);
     };
   }
@@ -257,6 +268,7 @@
         await refreshProjectDataFromBackendIfAvailable();
         return;
       }
+      assertStandaloneProjectWriteAllowed("write project metadata");
       requireProjectRoot();
       const shots = await saveShotsJson((projectData?.shots || []).map(normalizeShotRecord));
       if (projectData) {
@@ -333,6 +345,7 @@
       }
 
       // FALLBACK-OFFLINE-ONLY: standalone mode — backend is not connected.
+      assertStandaloneProjectWriteAllowed("add a shot");
       requireProjectRoot();
       const shot = createEmptyShot(nextShotId());
       projectData.shots.push(shot);

@@ -11,6 +11,11 @@ const {
   normalizeNativePath,
   sameNativePath,
   findWorkItemByNativePath,
+  findWorkItemByKey,
+  projectRelativeNativePath,
+  assetNativePathForRole,
+  assetProjectRelativePathForRole,
+  requireOfflineWriteAllowed,
   deriveActiveWorkKey,
   filterKnownOpenWorkKeys,
   displayPerspectiveIndex,
@@ -99,6 +104,56 @@ test("falls back to project root plus source_file_path when native path is absen
     findWorkItemByNativePath("C:/Project/scenes2d/scene-a/perspectives/persp-a/source.psd", contextWithoutNative)?.key,
     "scene2d:scene-a:persp-a",
   );
+});
+
+test("explicit asset mode uses exact role paths and never concatenates project roots", () => {
+  const explicitContext = {
+    path_mode: "explicit-assets",
+    project_root: "C:/must-not-be-used",
+    offline_write_allowed: false,
+    work_items: [
+      {
+        kind: "shot",
+        key: "shot:exact",
+        shot_id: "exact",
+        source_file_path: "../../attacker.psd",
+        source_native_path: "",
+        asset_paths: {
+          source_psd: {
+            native_path: "D:/Portable/PSD/Shots/exact.psd",
+            project_relative_path: "PSD/Shots/exact.psd",
+          },
+          preview: {
+            native_path: "D:/Portable/Images/Shots/exact_preview.png",
+            project_relative_path: "Images/Shots/exact_preview.png",
+          },
+        },
+      },
+    ],
+  };
+  const item = findWorkItemByKey("shot:exact", explicitContext);
+  assert.equal(assetNativePathForRole(item, "source_psd"), "D:/Portable/PSD/Shots/exact.psd");
+  assert.equal(assetProjectRelativePathForRole(item, "preview"), "Images/Shots/exact_preview.png");
+  assert.equal(projectRelativeNativePath(explicitContext, "shots/exact/exact.psd"), "");
+  assert.equal(
+    findWorkItemByNativePath("D:/Portable/PSD/Shots/exact.psd", explicitContext)?.key,
+    "shot:exact",
+  );
+  assert.equal(
+    findWorkItemByNativePath("C:/must-not-be-used/../../attacker.psd", explicitContext),
+    null,
+  );
+});
+
+test("Layout 2 offline writes fail closed", () => {
+  assert.throws(
+    () => requireOfflineWriteAllowed(
+      { path_mode: "explicit-assets", offline_write_allowed: false },
+      "export a preview",
+    ),
+    /Reconnect to refresh the project session/,
+  );
+  assert.doesNotThrow(() => requireOfflineWriteAllowed({ offline_write_allowed: true }));
 });
 
 test("derives and filters work keys without accepting stale keys", () => {

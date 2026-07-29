@@ -7,7 +7,22 @@
 //   fileUnixMtime, writeEntryText, linkedFromStoryboard, projectData,
 //   canvasColor, canvasWidth, canvasHeight, projectRoot.
 
-async function exportPreviewInModal(folder, shotId) {
+const _pendingPreviewIntents = new Map();
+
+async function createFileAtNativePath(nativePath) {
+  const normalized = normalizeNativePath(nativePath);
+  const separator = normalized.lastIndexOf("/");
+  if (separator <= 0 || separator === normalized.length - 1) {
+    throw new Error("Storyboarder returned an invalid asset path.");
+  }
+  const folder = await resolveFolderEntry(normalized.slice(0, separator));
+  if (!folder) {
+    throw new Error("Storyboarder asset folder is not accessible.");
+  }
+  return folder.createFile(normalized.slice(separator + 1), { overwrite: true });
+}
+
+async function exportPreviewToFileInModal(file) {
   const doc = app.activeDocument;
   // Export only the artist's strokes on transparency. Hide the canvas-color fill
   // (Background), the board background reference (SB bg), and onion-skin overlays
@@ -21,7 +36,6 @@ async function exportPreviewInModal(folder, shotId) {
     }
   }
   try {
-    const file = await folder.createFile(`${shotId}_preview.png`, { overwrite: true });
     await app.activeDocument.saveAs.png(file, {}, true);
     return file;
   } finally {
@@ -30,6 +44,11 @@ async function exportPreviewInModal(folder, shotId) {
     }
     restoreActiveLayersByIds(doc, previousActiveIds);
   }
+}
+
+async function exportPreviewInModal(folder, shotId) {
+  const file = await folder.createFile(`${shotId}_preview.png`, { overwrite: true });
+  return exportPreviewToFileInModal(file);
 }
 
 async function exportDrawingPreview() {
@@ -41,6 +60,30 @@ async function exportDrawingPreview() {
     throw new Error("The active Photoshop document does not match the selected shot.");
   }
   setSelectedShotId(shotId);
+  if (isExplicitAssetContext(lastPluginContext)) {
+    if (!linkedFromStoryboard) {
+      requireOfflineWriteAllowed(lastPluginContext, "export a preview");
+      throw new Error("Reconnect to Storyboarder before exporting this preview.");
+    }
+    const workKey = ctx?.key || `shot:${shotId}`;
+    const item = findWorkItemByKey(workKey, lastPluginContext);
+    const target = assetPathForRole(item, "preview");
+    if (!target?.native_path) {
+      throw new Error("Storyboarder did not provide an exact preview path.");
+    }
+    const intent = await requestPluginWriteIntent(workKey, "preview");
+    const file = await createFileAtNativePath(intent?.write_path || target.native_path);
+    await runModal("Export drawing", async () => {
+      await exportPreviewToFileInModal(file);
+    });
+    _pendingPreviewIntents.set(workKey, intent || {
+      work_key: workKey,
+      asset_role: "preview",
+      project_relative_path: target.project_relative_path || "",
+    });
+    return shotId;
+  }
+  requireOfflineWriteAllowed(lastPluginContext, "export a preview");
   const folder = await ensureShotStructure(shotId);
   await runModal("Export drawing", async () => {
     await exportPreviewInModal(folder, shotId);
@@ -93,6 +136,37 @@ async function saveCurrentShot() {
 }
 
 async function updateProjectAfterSave(shotId = currentShotId(), folder = null) {
+  if (isExplicitAssetContext(lastPluginContext)) {
+    if (!linkedFromStoryboard) {
+      requireOfflineWriteAllowed(lastPluginContext, "commit a preview");
+      throw new Error("Reconnect to Storyboarder before committing this preview.");
+    }
+    const workKey = `shot:${shotId}`;
+    const item = findWorkItemByKey(workKey, lastPluginContext);
+    const intent = _pendingPreviewIntents.get(workKey);
+    if (!item || !intent) {
+      throw new Error("No authorized preview export is pending for this shot.");
+    }
+    const payload = await requestStoryboardApi(
+      `/api/plugin/shots/${encodeURIComponent(shotId)}/export-preview`,
+      {
+        method: "POST",
+        headers: pluginWriteHeaders(workKey, "preview", intent.token || ""),
+        body: JSON.stringify({
+          source_file_path: assetProjectRelativePathForRole(item, "source_psd"),
+          preview_image_path: assetProjectRelativePathForRole(item, "preview"),
+        }),
+      },
+    );
+    _pendingPreviewIntents.delete(workKey);
+    if (payload?.context) {
+      applyPluginContext(payload.context);
+    } else {
+      await refreshProjectDataFromBackend();
+    }
+    return;
+  }
+  requireOfflineWriteAllowed(lastPluginContext, "write project metadata");
   const resolvedFolder = folder || (await ensureShotStructure(shotId));
   const psdFile = await getShotPsdEntry(resolvedFolder, shotId);
   let previewFile = null;
@@ -147,7 +221,7 @@ async function updateProjectAfterSave(shotId = currentShotId(), folder = null) {
 // Unlike shot export, Scene 2D preserves ALL user layers (background, artwork,
 // any reference). Only plugin-owned overlay layers (SB ref:) are hidden.
 
-async function exportScene2DCompositeInModal(folder, perspectiveId) {
+async function exportScene2DCompositeToFileInModal(file) {
   const doc = app.activeDocument;
   const previousActiveIds = captureActiveLayerIds(doc);
   const hiddenLayers = [];
@@ -160,7 +234,6 @@ async function exportScene2DCompositeInModal(folder, perspectiveId) {
     }
   }
   try {
-    const file = await folder.createFile(`preview.png`, { overwrite: true });
     await app.activeDocument.saveAs.png(file, {}, true);
     return file;
   } finally {
@@ -169,6 +242,11 @@ async function exportScene2DCompositeInModal(folder, perspectiveId) {
     }
     restoreActiveLayersByIds(doc, previousActiveIds);
   }
+}
+
+async function exportScene2DCompositeInModal(folder, perspectiveId) {
+  const file = await folder.createFile(`preview.png`, { overwrite: true });
+  return exportScene2DCompositeToFileInModal(file);
 }
 
 async function exportScene2DPerspectivePreview() {
@@ -183,22 +261,41 @@ async function exportScene2DPerspectivePreview() {
     throw new Error("No active Photoshop document.");
   }
   const activePath = await documentNativePath(app.activeDocument);
-  if (!activePath || !sameNativePath(activePath, ctx.source_native_path)) {
+  if (!activePath || !sameNativePath(
+    activePath,
+    sourceNativePathForWorkItem(ctx, lastPluginContext, linkedProjectRootPath),
+  )) {
     throw new Error(
       "The active Photoshop document does not match this Scene 2D Perspective. Activate the correct source.psd tab before exporting.",
     );
   }
   const { scene_id, perspective_id } = ctx;
 
-  // Resolve the perspective folder via UXP filesystem
-  const perspFolder = await resolvePerspectiveFolder(scene_id, perspective_id);
-  if (!perspFolder) {
-    throw new Error("Could not resolve the perspective folder. Is the project folder accessible?");
+  let intent = null;
+  if (isExplicitAssetContext(lastPluginContext)) {
+    if (!linkedFromStoryboard) {
+      requireOfflineWriteAllowed(lastPluginContext, "export a Scene 2D preview");
+      throw new Error("Reconnect to Storyboarder before exporting this preview.");
+    }
+    const target = assetPathForRole(ctx, "preview");
+    if (!target?.native_path) {
+      throw new Error("Storyboarder did not provide an exact Scene 2D preview path.");
+    }
+    intent = await requestPluginWriteIntent(ctx.key, "preview");
+    const file = await createFileAtNativePath(intent?.write_path || target.native_path);
+    await runModal("Export Scene 2D preview", async () => {
+      await exportScene2DCompositeToFileInModal(file);
+    });
+  } else {
+    requireOfflineWriteAllowed(lastPluginContext, "export a Scene 2D preview");
+    const perspFolder = await resolvePerspectiveFolder(scene_id, perspective_id);
+    if (!perspFolder) {
+      throw new Error("Could not resolve the perspective folder. Is the project folder accessible?");
+    }
+    await runModal("Export Scene 2D preview", async () => {
+      await exportScene2DCompositeInModal(perspFolder, perspective_id);
+    });
   }
-
-  await runModal("Export Scene 2D preview", async () => {
-    await exportScene2DCompositeInModal(perspFolder, perspective_id);
-  });
 
   if (!linkedFromStoryboard) {
     setStatus(`Preview exported for ${scene_id}/${perspective_id}.`);
@@ -207,7 +304,10 @@ async function exportScene2DPerspectivePreview() {
 
   const payload = await requestStoryboardApi(
     `/api/plugin/scenes2d/${encodeURIComponent(scene_id)}/perspectives/${encodeURIComponent(perspective_id)}/export-preview`,
-    { method: "POST" }
+    {
+      method: "POST",
+      headers: pluginWriteHeaders(ctx.key, "preview", intent?.token || ""),
+    }
   );
   if (payload?.work_context) {
     applyWorkContext(payload.work_context);
@@ -221,6 +321,9 @@ async function exportScene2DPerspectivePreview() {
 }
 
 async function resolvePerspectiveFolder(sceneId, perspectiveId) {
+  if (isExplicitAssetContext(lastPluginContext)) {
+    return null;
+  }
   if (!projectRoot) return null;
   try {
     const scenes2dDir = await projectRoot.getEntry("scenes2d");
@@ -312,6 +415,13 @@ function applySavedPaths(shot, shotId, mtime, hasPsd = true) {
 }
 
 async function writeBridgeFiles(shotId, sourcePath, folder = null) {
+  if (isExplicitAssetContext(lastPluginContext)) {
+    if (!linkedFromStoryboard) {
+      requireOfflineWriteAllowed(lastPluginContext, "write plugin bridge files");
+    }
+    return;
+  }
+  requireOfflineWriteAllowed(lastPluginContext, "write plugin bridge files");
   const resolvedFolder = folder || (await ensureShotStructure(shotId));
   const payload = {
     canvas_background_color: canvasColor,

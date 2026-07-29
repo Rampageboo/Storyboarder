@@ -262,6 +262,8 @@ class PluginBridgeService:
                 target.name,
             )
             inbox_path.parent.mkdir(parents=True, exist_ok=False)
+        else:
+            target.parent.mkdir(parents=True, exist_ok=True)
         intents = getattr(self.app.state, "plugin_write_intents", None)
         if not isinstance(intents, dict):
             intents = {}
