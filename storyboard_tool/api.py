@@ -53,6 +53,7 @@ from .schemas import (
     PluginHeartbeatRequest,
     PluginNextShotRequest,
     PluginShotEventRequest,
+    PluginWriteIntentRequest,
     ProjectPathRequest,
     RecentForgetRequest,
     RefSegment3dCapture,
@@ -144,6 +145,39 @@ def _react_index_response(react_dist: Path, token: str = "") -> FileResponse | H
 
 def _model_captures_payload(captures: list[RefSegment3dCapture]) -> list[dict[str, Any]]:
     return [capture.model_dump() for capture in captures]
+
+
+def _plugin_protocol_headers(request: Request) -> dict[str, Any]:
+    raw_version = request.headers.get("x-storyboarder-protocol", "").strip()
+    raw_revision = request.headers.get("x-storyboarder-context-revision", "").strip()
+    try:
+        version = int(raw_version)
+    except ValueError:
+        version = None
+    try:
+        context_revision = int(raw_revision)
+    except ValueError:
+        context_revision = None
+    capabilities = [
+        item.strip()
+        for item in request.headers.get("x-storyboarder-capabilities", "").split(",")
+        if item.strip()
+    ]
+    return {
+        "version": version,
+        "capabilities": capabilities,
+        "project_session_id": request.headers.get(
+            "x-storyboarder-project-session",
+            "",
+        ).strip(),
+        "context_revision": context_revision,
+        "work_key": request.headers.get("x-storyboarder-work-key", "").strip(),
+        "asset_role": request.headers.get("x-storyboarder-asset-role", "").strip(),
+        "write_intent": request.headers.get(
+            "x-storyboarder-write-intent",
+            "",
+        ).strip(),
+    }
 
 
 async def _read_upload(file: UploadFile, fallback_name: str) -> tuple[str, bytes]:
@@ -469,40 +503,101 @@ def create_app(base_dir: Path, bridge_port: int = 8000) -> FastAPI:
         return _svc().method_plugin_heartbeat(payload.model_dump() if payload is not None else {})
 
     @app.get("/api/plugin/context")
-    def plugin_context() -> dict[str, Any]:
-        return _svc().method_plugin_context()
+    def plugin_context(request: Request) -> dict[str, Any]:
+        return _svc().method_plugin_context(_plugin_protocol_headers(request))
+
+    @app.post("/api/plugin/write-intents")
+    def plugin_write_intent(
+        request: PluginWriteIntentRequest,
+        http_request: Request,
+    ) -> dict[str, Any]:
+        return _svc().method_plugin_write_intent(
+            request.work_key,
+            request.asset_role,
+            _plugin_protocol_headers(http_request),
+        )
 
     @app.post("/api/plugin/heartbeat")
     def plugin_api_heartbeat(payload: PluginHeartbeatRequest | None = None) -> dict[str, str]:
         return _svc().method_plugin_heartbeat(payload.model_dump() if payload is not None else {})
 
     @app.post("/api/plugin/shots/{shot_id}/export-preview")
-    def plugin_export_preview(shot_id: str, request: PluginShotEventRequest | None = None) -> dict[str, Any]:
-        return _svc().method_plugin_export_preview(shot_id, request.model_dump() if request is not None else {})
+    def plugin_export_preview(
+        shot_id: str,
+        http_request: Request,
+        request: PluginShotEventRequest | None = None,
+    ) -> dict[str, Any]:
+        return _svc().method_plugin_export_preview(
+            shot_id,
+            request.model_dump() if request is not None else {},
+            _plugin_protocol_headers(http_request),
+        )
 
     @app.post("/api/plugin/shots/{shot_id}/psd-saved")
-    def plugin_psd_saved(shot_id: str, request: PluginShotEventRequest | None = None) -> dict[str, Any]:
-        return _svc().method_plugin_psd_saved(shot_id, request.model_dump() if request is not None else {})
+    def plugin_psd_saved(
+        shot_id: str,
+        http_request: Request,
+        request: PluginShotEventRequest | None = None,
+    ) -> dict[str, Any]:
+        return _svc().method_plugin_psd_saved(
+            shot_id,
+            request.model_dump() if request is not None else {},
+            _plugin_protocol_headers(http_request),
+        )
 
     @app.post("/api/plugin/shots/{shot_id}/focus")
-    def plugin_focus_shot(shot_id: str) -> dict[str, Any]:
-        return _svc().method_plugin_focus_shot(shot_id)
+    def plugin_focus_shot(shot_id: str, request: Request) -> dict[str, Any]:
+        return _svc().method_plugin_focus_shot(
+            shot_id,
+            _plugin_protocol_headers(request),
+        )
 
     @app.post("/api/plugin/shots/next")
-    def plugin_next_shot(request: PluginNextShotRequest) -> dict[str, Any]:
-        return _svc().method_plugin_next_shot(request.current_shot_id, request.auto_add)
+    def plugin_next_shot(
+        request: PluginNextShotRequest,
+        http_request: Request,
+    ) -> dict[str, Any]:
+        return _svc().method_plugin_next_shot(
+            request.current_shot_id,
+            request.auto_add,
+            _plugin_protocol_headers(http_request),
+        )
 
     @app.post("/api/plugin/scenes2d/{scene_id}/perspectives/{perspective_id}/export-preview")
-    def plugin_scene2d_export_preview(scene_id: str, perspective_id: str) -> dict[str, Any]:
-        return _svc().method_plugin_scene2d_export_preview(scene_id, perspective_id)
+    def plugin_scene2d_export_preview(
+        scene_id: str,
+        perspective_id: str,
+        request: Request,
+    ) -> dict[str, Any]:
+        return _svc().method_plugin_scene2d_export_preview(
+            scene_id,
+            perspective_id,
+            _plugin_protocol_headers(request),
+        )
 
     @app.post("/api/plugin/scenes2d/{scene_id}/perspectives/{perspective_id}/psd-saved")
-    def plugin_scene2d_psd_saved(scene_id: str, perspective_id: str) -> dict[str, Any]:
-        return _svc().method_plugin_scene2d_psd_saved(scene_id, perspective_id)
+    def plugin_scene2d_psd_saved(
+        scene_id: str,
+        perspective_id: str,
+        request: Request,
+    ) -> dict[str, Any]:
+        return _svc().method_plugin_scene2d_psd_saved(
+            scene_id,
+            perspective_id,
+            _plugin_protocol_headers(request),
+        )
 
     @app.post("/api/plugin/scenes2d/{scene_id}/perspectives/{perspective_id}/next-perspective")
-    def plugin_scene2d_next_perspective(scene_id: str, perspective_id: str) -> dict[str, Any]:
-        return _svc().method_plugin_scene2d_next_perspective(scene_id, perspective_id)
+    def plugin_scene2d_next_perspective(
+        scene_id: str,
+        perspective_id: str,
+        request: Request,
+    ) -> dict[str, Any]:
+        return _svc().method_plugin_scene2d_next_perspective(
+            scene_id,
+            perspective_id,
+            _plugin_protocol_headers(request),
+        )
 
     @app.get("/api/project/missing-files")
     def missing_project_files() -> dict[str, Any]:

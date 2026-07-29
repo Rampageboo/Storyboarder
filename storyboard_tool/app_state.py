@@ -32,6 +32,7 @@ from . import (
 )
 from .errors import AppErrorCode, app_error
 from .models import Project, SHOT_STATUSES, Shot
+from .project_layout import LAYOUT_2
 
 logger = logging.getLogger(__name__)
 
@@ -683,6 +684,10 @@ def plugin_work_key_state(app: FastAPI) -> tuple[str, list[str]]:
 def _bridge_status_payload(app: FastAPI) -> dict[str, Any]:
     live = _touch_live_bridge(app)
     project = app.state.project
+    work_context = dict(runtime_state.active_work_context(app))
+    if project is not None and project.layout == LAYOUT_2:
+        work_context.pop("source_file_path", None)
+        work_context.pop("source_native_path", None)
     http_seen = runtime_state.plugin_last_seen(app)
     file_seen = live_bridge.read_plugin_heartbeat_mtime()
     plugin_linked, age, open_shot_ids = _plugin_link_state(app)
@@ -699,7 +704,7 @@ def _bridge_status_payload(app: FastAPI) -> dict[str, Any]:
         "plugin_project_revision": runtime_state.plugin_project_revision(app),
         "generation_result_revision": runtime_state.generation_result_revision(app),
         # Generic work context fields
-        "work_context": runtime_state.active_work_context(app),
+        "work_context": work_context,
         "plugin_active_work_key": active_work_key,
         "plugin_open_work_keys": open_work_keys,
         "plugin_change": runtime_state.plugin_change_payload(app),
@@ -710,7 +715,7 @@ def _bridge_status_payload(app: FastAPI) -> dict[str, Any]:
         "server_port": int(app.state.bridge_port),
         "live": live,
     }
-    if project is not None:
+    if project is not None and project.layout != LAYOUT_2:
         pa = runtime_state.preview_analysis_status_for_project(app, str(project.project_root))
         if pa is not None:
             result["preview_analysis"] = pa

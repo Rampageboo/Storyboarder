@@ -27,6 +27,7 @@ def init_bridge_state(app: FastAPI, bridge_port: int) -> None:
     app.state.plugin_active_work_key = ""
     app.state.plugin_open_work_keys = []
     app.state.plugin_change = {}
+    app.state.plugin_write_intents = {}
     app.state.generation_result_revision = 0
     app.state.generation_result_condition = threading.Condition()
 
@@ -62,6 +63,7 @@ def rotate_project_session(app: FastAPI) -> str:
     app.state.plugin_active_work_key = ""
     app.state.plugin_open_work_keys = []
     app.state.plugin_change = {}
+    app.state.plugin_write_intents = {}
     app.state.generation_result_revision = 0
     app.state.preview_analysis_jobs = {}
     return session_id

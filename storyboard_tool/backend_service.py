@@ -572,23 +572,65 @@ class StoryboardBackendService(ExportServiceMixin):
     def method_plugin_heartbeat(self, payload: dict[str, Any] | None = None) -> dict[str, str]:
         return self._plugin_service().heartbeat(payload)
 
-    def method_plugin_context(self) -> dict[str, Any]:
-        return self._plugin_service().context()
+    def method_plugin_context(
+        self,
+        protocol: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        return self._plugin_service().context(protocol)
 
-    def _plugin_context_payload(self, project) -> dict[str, Any]:
-        return self._plugin_service().context_payload(project)
+    def _plugin_context_payload(
+        self,
+        project,
+        protocol: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        return self._plugin_service().context_payload(project, protocol)
 
-    def method_plugin_export_preview(self, shot_id: str, payload: dict[str, Any] | None = None) -> dict[str, Any]:
-        return self._plugin_service().export_preview(shot_id, payload)
+    def method_plugin_write_intent(
+        self,
+        work_key: str,
+        asset_role: str,
+        protocol: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        return self._plugin_service().issue_write_intent(
+            work_key,
+            asset_role,
+            protocol,
+        )
 
-    def method_plugin_psd_saved(self, shot_id: str, payload: dict[str, Any] | None = None) -> dict[str, Any]:
-        return self._plugin_service().psd_saved(shot_id, payload)
+    def method_plugin_export_preview(
+        self,
+        shot_id: str,
+        payload: dict[str, Any] | None = None,
+        protocol: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        return self._plugin_service().export_preview(shot_id, payload, protocol)
 
-    def method_plugin_focus_shot(self, shot_id: str) -> dict[str, Any]:
-        return self._plugin_service().focus_shot(shot_id)
+    def method_plugin_psd_saved(
+        self,
+        shot_id: str,
+        payload: dict[str, Any] | None = None,
+        protocol: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        return self._plugin_service().psd_saved(shot_id, payload, protocol)
 
-    def method_plugin_next_shot(self, current_shot_id: str | None = None, auto_add: bool = False) -> dict[str, Any]:
-        return self._plugin_service().next_shot(current_shot_id, auto_add)
+    def method_plugin_focus_shot(
+        self,
+        shot_id: str,
+        protocol: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        return self._plugin_service().focus_shot(shot_id, protocol)
+
+    def method_plugin_next_shot(
+        self,
+        current_shot_id: str | None = None,
+        auto_add: bool = False,
+        protocol: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        return self._plugin_service().next_shot(
+            current_shot_id,
+            auto_add,
+            protocol,
+        )
 
     def _plugin_shot_payload(self, project, shot) -> dict[str, Any]:
         return self._plugin_service().shot_payload(project, shot)
@@ -1931,14 +1973,41 @@ class StoryboardBackendService(ExportServiceMixin):
             "work_context": runtime_state.active_work_context(self.app),
         }
 
-    def method_plugin_scene2d_export_preview(self, scene_id: str, perspective_id: str) -> dict[str, Any]:
-        return self._plugin_service().scene2d_export_preview(scene_id, perspective_id)
+    def method_plugin_scene2d_export_preview(
+        self,
+        scene_id: str,
+        perspective_id: str,
+        protocol: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        return self._plugin_service().scene2d_export_preview(
+            scene_id,
+            perspective_id,
+            protocol,
+        )
 
-    def method_plugin_scene2d_psd_saved(self, scene_id: str, perspective_id: str) -> dict[str, Any]:
-        return self._plugin_service().scene2d_psd_saved(scene_id, perspective_id)
+    def method_plugin_scene2d_psd_saved(
+        self,
+        scene_id: str,
+        perspective_id: str,
+        protocol: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        return self._plugin_service().scene2d_psd_saved(
+            scene_id,
+            perspective_id,
+            protocol,
+        )
 
-    def method_plugin_scene2d_next_perspective(self, scene_id: str, perspective_id: str) -> dict[str, Any]:
-        return self._plugin_service().scene2d_next_perspective(scene_id, perspective_id)
+    def method_plugin_scene2d_next_perspective(
+        self,
+        scene_id: str,
+        perspective_id: str,
+        protocol: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        return self._plugin_service().scene2d_next_perspective(
+            scene_id,
+            perspective_id,
+            protocol,
+        )
 
     def method_refresh_scene2d_perspective_preview(self, scene_id: str, perspective_id: str) -> dict[str, Any]:
         project = app_state._require_project(self.app)
@@ -2267,7 +2336,9 @@ _MUTATING_METHODS = (
     "method_set_primary_scene2d_perspective", "method_move_scene2d_perspective",
     "method_open_scene2d_perspective", "method_add_scene2d_perspective_to_references",
     # Plugin-driven state updates
-    "method_plugin_psd_saved", "method_plugin_next_shot", "method_plugin_scene2d_psd_saved",
+    "method_plugin_write_intent", "method_plugin_export_preview", "method_plugin_psd_saved",
+    "method_plugin_focus_shot", "method_plugin_next_shot",
+    "method_plugin_scene2d_export_preview", "method_plugin_scene2d_psd_saved",
     "method_plugin_scene2d_next_perspective",
 )
 
