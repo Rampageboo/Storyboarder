@@ -496,6 +496,7 @@ def build_request_snapshot(
     *,
     provider: str = "codex",
     mode: str = "",
+    clear_queue_on_result: bool = True,
 ) -> dict[str, Any]:
     destination = str(destination or "").strip().lower()
     if destination not in DESTINATIONS:
@@ -572,6 +573,12 @@ def build_request_snapshot(
         "destination": destination,
         "provider": provider,
         "mode": mode,
+        "execution_constraints": {
+            "required_backend": provider,
+            "backend_is_mandatory": True,
+            "forbid_alternative_image_generators": provider == "stable_diffusion",
+        },
+        "clear_queue_on_result": bool(clear_queue_on_result),
         "generation_plan": generation_plan,
         "status": "queued",
         "created_at": created_at,
@@ -618,8 +625,16 @@ def create_request(
     *,
     provider: str = "codex",
     mode: str = "",
+    clear_queue_on_result: bool = True,
 ) -> dict[str, Any]:
-    request = build_request_snapshot(project, shot, destination, provider=provider, mode=mode)
+    request = build_request_snapshot(
+        project,
+        shot,
+        destination,
+        provider=provider,
+        mode=mode,
+        clear_queue_on_result=clear_queue_on_result,
+    )
     if request["destination"] == "queue":
         queued = [
             row for row in list_requests(project, shot_id=shot.shot_id, destination="queue")
@@ -649,11 +664,21 @@ def clear_pending_queue_requests(project: Project, shot_id: str) -> list[str]:
     return removed
 
 
-def codex_batch_handoff_prompt(request_ids: list[str]) -> str:
+def codex_batch_handoff_prompt(request_ids: list[str], *, provider: str = "codex") -> str:
     cleaned_ids = [_validate_id(request_id, "request id") for request_id in request_ids]
     if not cleaned_ids:
         raise ValueError("No Codex generation requests were created.")
+    provider = str(provider or "").strip().lower()
+    backend_rule = (
+        "BACKEND REQUIREMENT: every request in this batch explicitly requires Stable Diffusion. "
+        "You MUST operate Stable Diffusion for image generation. Do NOT use OpenAI imagegen, "
+        "DALL-E, or any other image generator, even if earlier conversation context suggests one. "
+        "The request provider is an execution constraint, not a preference. "
+        if provider == "stable_diffusion"
+        else ""
+    )
     return (
+        backend_rule +
         "Use the Storyboarder MCP tools to fetch and generate one storyboard image for every request ID below. "
         "For each request, inspect every matched keyword asset before generating, then submit its image with "
         "storyboard_submit_generation_result. Do not edit shots.json directly.\n\n"
@@ -847,10 +872,12 @@ def submit_result(
             "artifacts": artifacts,
         }
         atomic_write_json(_result_request_dir(project, request_id) / f"{result_id}.json", result)
-        return result
     except BaseException:
         shutil.rmtree(candidate_dir, ignore_errors=True)
         raise
+    if bool(request.get("clear_queue_on_result", True)):
+        clear_pending_queue_requests(project, str(request.get("shot_id") or ""))
+    return result
 
 
 def reconcile_results(project: Project) -> dict[str, Any]:
@@ -981,6 +1008,10 @@ def codex_handoff_prompt(request_id: str, *, provider: str = "codex", mode: str 
     mode_label = mode if mode in MODES else "the request's"
     if provider == "stable_diffusion":
         return (
+            "BACKEND REQUIREMENT: this request explicitly requires Stable Diffusion. "
+            "You MUST operate Stable Diffusion for image generation. Do NOT use OpenAI imagegen, DALL-E, or any "
+            "other image generator, even if earlier conversation context suggests one. The request provider is an "
+            "execution constraint, not a preference. "
             "Use the Storyboarder MCP tools to fetch generation request "
             f"{request_id}. This request targets the Stable Diffusion provider in {mode_label} mode: operate "
             "Stable Diffusion to render the storyboard image rather than generating it directly. Follow the "

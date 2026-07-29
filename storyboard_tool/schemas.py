@@ -106,6 +106,10 @@ class OpenProjectRequest(BaseModel):
     project_json_path: str
 
 
+class SaveProjectAsRequest(BaseModel):
+    path: str
+
+
 class ShotUpdateRequest(BaseModel):
     title: str = ""
     scene: str = ""
@@ -133,6 +137,13 @@ class GenerationRequestCreateRequest(BaseModel):
     destination: str = "queue"
     provider: str = "codex"
     mode: str = ""
+    clear_queue_on_result: bool = True
+
+
+class GenerationBatchDispatchRequest(BaseModel):
+    provider: str = "codex"
+    clear_queue_on_result: bool = True
+    scope: str = "auto"
 
 
 class GenerationCandidateAcceptRequest(BaseModel):
@@ -299,6 +310,32 @@ class AppSessionUpdateRequest(BaseModel):
 class RestoreShotRequest(BaseModel):
     shot: dict[str, Any]
     index: int = 0
+
+
+class ShotBatchUpdateItem(BaseModel):
+    shot_id: str
+    changes: dict[str, Any] = Field(default_factory=dict)
+
+
+class ShotBatchUpdateRequest(BaseModel):
+    updates: list[ShotBatchUpdateItem] = Field(default_factory=list)
+
+
+class ShotBatchDeleteRequest(BaseModel):
+    shot_ids: list[str] = Field(default_factory=list)
+
+
+class ShotBatchRestoreItem(BaseModel):
+    shot: dict[str, Any]
+    index: int = 0
+
+
+class ShotBatchRestoreRequest(BaseModel):
+    items: list[ShotBatchRestoreItem] = Field(default_factory=list)
+
+
+class GenerationBatchQueueRequest(BaseModel):
+    shot_ids: list[str] = Field(default_factory=list)
 
 
 class ReorderShotsRequest(BaseModel):

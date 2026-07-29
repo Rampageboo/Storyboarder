@@ -56,6 +56,56 @@ def test_document_save_replaces_previous_archive(tmp_path: Path, monkeypatch: py
     assert project_manager.open_project(document).shots[0].title == "Replacement"
 
 
+def test_save_as_switches_document_and_preserves_original(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(project_document.tempfile, "tempdir", str(tmp_path))
+    original = tmp_path / "Original.sbd"
+    copied = tmp_path / "Copy.sbd"
+    app_dir = tmp_path / "app"
+    app_dir.mkdir()
+    client = TestClient(api_module.create_app(app_dir))
+    assert client.post("/api/project/new", json={"path": str(original)}).status_code == 200
+    added = client.post("/api/shots", json={})
+    shot_id = added.json()["shot"]["shot_id"]
+    assert client.post("/api/project/save").status_code == 200
+    original_bytes = original.read_bytes()
+
+    saved_as = client.post("/api/project/save-as", json={"path": str(copied)})
+    assert saved_as.status_code == 200, saved_as.text
+    assert saved_as.json()["project_path"] == str(copied.resolve())
+    assert original.read_bytes() == original_bytes
+
+    updated = client.patch(f"/api/shots/{shot_id}", json={"title": "Only in copy"})
+    assert updated.status_code == 200, updated.text
+    assert client.post("/api/project/save").status_code == 200
+    assert project_manager.open_project(original).shots[0].title == ""
+    assert project_manager.open_project(copied).shots[0].title == "Only in copy"
+
+
+def test_save_as_converts_folder_project_without_future_writes_to_source(tmp_path: Path) -> None:
+    source_parent = tmp_path / "legacy"
+    source_parent.mkdir()
+    app_dir = tmp_path / "app"
+    app_dir.mkdir()
+    destination = tmp_path / "Converted.sbd"
+    client = TestClient(api_module.create_app(app_dir))
+    assert client.post("/api/project/new", json={"path": str(source_parent)}).status_code == 200
+    added = client.post("/api/shots", json={})
+    shot_id = added.json()["shot"]["shot_id"]
+    original_project_json = source_parent / "Storyboard_Project" / "project.json"
+
+    saved_as = client.post("/api/project/save-as", json={"path": str(destination)})
+    assert saved_as.status_code == 200, saved_as.text
+    assert saved_as.json()["project_json_path"] == str(destination.resolve())
+    assert client.patch(f"/api/shots/{shot_id}", json={"title": "Converted"}).status_code == 200
+    assert client.post("/api/project/save").status_code == 200
+
+    assert project_manager.open_project(original_project_json).shots[0].title == ""
+    assert project_manager.open_project(destination).shots[0].title == "Converted"
+
+
 def test_rejects_unsafe_document_member(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(project_document.tempfile, "tempdir", str(tmp_path))
     document = tmp_path / "Unsafe.sbd"

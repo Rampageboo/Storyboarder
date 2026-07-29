@@ -43,6 +43,7 @@ export function CanvasBoard() {
   // Keep the inspector available by default, then preserve the user's explicit
   // open/closed choice while they move between boards.
   const [layersPanelOpen, setLayersPanelOpen] = useState(true)
+  const [queuePanelOpen, setQueuePanelOpen] = useState(true)
   const imageInputRef = useRef<HTMLInputElement | null>(null)
   const sourceInputRef = useRef<HTMLInputElement | null>(null)
   const canvasBodyRef = useRef<HTMLDivElement | null>(null)
@@ -368,12 +369,22 @@ export function CanvasBoard() {
           <button
             type="button"
             className={`canvas-link-pill ${linkedCount === linkedTotal ? 'ok' : 'partial'}`}
-            title={`${layersPanelOpen ? 'Close' : 'Open'} Layers and Queue\n${linkedTitle}`}
+            title={`${layersPanelOpen ? 'Close' : 'Open'} Layers\n${linkedTitle}`}
             aria-label={linkedTitle}
             aria-pressed={layersPanelOpen}
             onClick={() => setLayersPanelOpen((open) => !open)}
           >
             {linkedLabel}
+          </button>
+          <button
+            type="button"
+            className="canvas-link-pill"
+            title={`${queuePanelOpen ? 'Close' : 'Open'} Queue`}
+            aria-label="Generation Queue"
+            aria-pressed={queuePanelOpen}
+            onClick={() => setQueuePanelOpen((open) => !open)}
+          >
+            Queue
           </button>
           <details className="canvas-more">
             <summary aria-label="More preview actions">More</summary>
@@ -599,7 +610,7 @@ export function CanvasBoard() {
           </div>
         )}
       </div>
-      {layersPanelOpen ? (
+      {layersPanelOpen || queuePanelOpen ? (
         <FloatingLayersPanel
           key={`${project.project_json_path}:${shot.shot_id}`}
           shot={shot}
@@ -608,9 +619,12 @@ export function CanvasBoard() {
           hasCodexLayer={hasCodexLayer}
           hasBackground={hasBoardBg}
           disabled={disabled}
+          showLayers={layersPanelOpen}
+          showQueue={queuePanelOpen}
           onToggleLayer={toggleLayer}
           onRemoveLayer={handleRemoveLayer}
-          onClose={() => setLayersPanelOpen(false)}
+          onCloseLayers={() => setLayersPanelOpen(false)}
+          onCloseQueue={() => setQueuePanelOpen(false)}
         />
       ) : null}
     </div>

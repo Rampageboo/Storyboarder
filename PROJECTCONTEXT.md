@@ -8,14 +8,14 @@
 ## Context metadata
 
 ```text
-Last updated: 2026-07-26
+Last updated: 2026-07-28
 Last verified branch: main (uncommitted working tree)
-Last verified commit: efae970
-Updated by: Claude
-Context confidence: current
+Last verified commit: d257c37
+Updated by: Codex (explicitly delegated by Owner in owner-direct mode)
+Context confidence: partially stale — durable decisions below are current; historical working-state snapshots may predate the latest staged changes
 
 Git execution environments:
-- Windows 11 / VSCode Claude Code extension | codex-user MCP | mode: unverified — verify before Git ops | Last verified: —
+- Windows 11 / Codex desktop | local shell | mode: codex-git | Last verified: 2026-07-28
 ```
 
 ## 1. What this project is
@@ -27,7 +27,8 @@ Storyboarder is a **Windows desktop-only** storyboard planning app:
 - **Frontend**: React 19 + TypeScript, built with Vite from `frontend/src/` into `storyboard_tool/web/dist/`. The prebuilt bundle is **committed** (required for Node-less `pip install` + `python main.py`). It had briefly been gitignored; re-tracked 2026-07-22 (commit f48c99c). Rebuild with `cd frontend && npm run build` after editing `frontend/src/**`.
 - **3D**: Three.js (pinned vendor copy) + a separately compiled Scene3D workspace bundle
 - **Photoshop integration**: a UXP plugin in `photoshop_uxp_plugin/` talks to `/api/plugin/*` and `/api/bridge/*`
-- **Storage**: projects are folders on disk (`project.json`, `settings.json`, `shots.json`, per-shot PNG/PSD files). No database, no cloud, no network features.
+- **Storage (current implementation)**: `.sbd` documents expand to a temporary working tree and are packed back into one archive. No database, no cloud, no network features.
+- **Storage (Owner-approved target, implementation pending)**: keep a portable project folder containing `MyProject.sbd`, `Images/`, and `PSD/`. Images and PSDs live beside—not inside—the `.sbd`; avoid one directory per shot.
 
 Non-goals (do not add): browser mode, hosted server, cloud sync, audio, multi-window.
 
@@ -46,6 +47,24 @@ Last completed task: EXPORT feature. NEW video animatic (storyboard -> .mp4, H.2
 Current build/test status: full suite 726 passed, 1 skipped, 0 failed (the 2 previously-noted failures were fixed earlier this branch). Frontend tsc+vite build passes; lint at pre-existing baseline (8 errors, none new). GUI click-test by Owner pending.
 ```
 
+### Owner-approved storage direction (2026-07-28)
+
+```text
+Target project layout:
+MyProject/
+├─ MyProject.sbd
+├─ Images/
+└─ PSD/
+
+The .sbd should remain the lightweight project-data document. Rendered/imported images belong in Images/ and Photoshop documents belong in PSD/, using stable shot-based filenames rather than one folder per shot.
+
+The project folder—not the .sbd alone—is the portable backup/copy unit once this layout is implemented.
+
+Migration safety requirement: new projects may use the new layout directly; existing .sbd documents must not be destructively or silently migrated when opened. Upgrade legacy documents only through an explicit Convert or Save As flow, retain the original .sbd as rollback, and remove nothing until copied assets and rewritten references have been verified.
+
+Implementation status: NOT IMPLEMENTED. This changes persistence paths, document portability, packaging, Save As, Photoshop/plugin paths, and migration behavior, so it requires a Claude architecture decision before implementation.
+```
+
 ## 3. Generation handoff decision / next fork
 
 ```text
@@ -53,22 +72,23 @@ Decision: "Send to Codex" remains the single handoff to the Codex agent. Stable 
 Backend choices: explicit only - `codex` or `stable_diffusion`. Do not add `auto`.
 Workflow meaning:
 - `backend=codex`: Codex directly handles image generation.
-- `backend=stable_diffusion`: Codex prepares prompt/reference/size/seed settings and operates SD to generate the image.
+- `backend=stable_diffusion`: Codex MUST prepare prompt/reference/size/seed settings and operate Stable Diffusion to generate the image. The selected backend is an execution constraint, not a preference; prior conversation context must not override it and OpenAI imagegen/DALL-E/other generators are forbidden for that request.
 Status/detail strategy: generation precision should follow shot/status/mode. Draft should favor speed with proportional downscale, low resolution, possible upscale back to panel size, and rough/line-art storyboard output. Cleaner/final statuses can increase resolution, steps, refinement, and polish.
-Next fork: implement provider/mode fields in the generation request payload and UI selector while preserving the user-facing "Send to Codex" handoff semantics.
+Next fork: implement the external `Images/` + `PSD/` storage layout after Claude resolves the persistence and legacy-migration architecture.
 Owner input needed: no for the above semantics; yes only for later SD-specific runtime/configuration choices.
 
 Progress (2026-07-21):
 - DONE: `provider` field on the request snapshot (generation_service PROVIDERS={codex,stable_diffusion}, default codex, validated before any FS write). Backend Spark-authored slice, kept.
 - DONE: `provider` threaded end-to-end — GenerationRequestCreateRequest.provider, api create-generation-request route, method_create_generation_request(shot_id, destination, provider). Default codex, backward compatible.
-- DONE: codex_handoff_prompt(request_id, *, provider="codex", mode="") is provider+mode-aware; stable_diffusion variant instructs Codex to OPERATE Stable Diffusion per the request's generation_plan (build prompt from compiled_prompt, apply negative_prompt+references, preserve aspect, upscale back to panel) instead of generating directly.
+- DONE: single and batch Codex handoff prompts are provider-aware. The stable_diffusion variant states a mandatory backend requirement at the start, instructs Codex to OPERATE Stable Diffusion per the request's generation_plan, and explicitly forbids OpenAI imagegen, DALL-E, or any alternative image generator. Request snapshots also carry machine-readable `execution_constraints` with `required_backend`, `backend_is_mandatory`, and `forbid_alternative_image_generators`.
 - DONE: `mode` field (draft/clean/final) + per-mode `generation_plan` block. Owner spec 2026-07-21. Default mode derives from shot.status (Draft->draft, In Progress/Review->clean, Approved/Final->final); explicit `mode` overrides. Chosen default profile numbers (tunable, in generation_service._MODE_PROFILES): draft = longest-edge 768, steps 12, cfg 5.0, upscale_to_panel, overwrite_final False; clean = longest-edge 1024, steps 22, cfg 6.5, use_prior_frame_as_reference; final = full panel size, steps 32, cfg 7.0, overwrite_final True. generation_plan carries target_width/height, panel_width/height, steps, cfg_scale, style_hint, use_prior_frame_as_reference, output_policy{preserve_aspect_ratio, upscale_to_panel, overwrite_final}. These are ADVISORY payload guidance — no engine executes them yet.
 - Field mapping (Owner payload -> existing snapshot): target->destination, backend->provider; new: mode, generation_plan, generation_plan.output_policy. Existing snake_case field names NOT renamed.
 - DONE: generation_plan.prior_frame — for clean/final (use_prior_frame_as_reference), the request now carries the shot's accepted Codex layer (_codex.png) as {source, project_relative_path, absolute_path, exists}; null in draft or when no layer exists. SD handoff prompt says to use prior_frame as the img2img base. Advisory: the actual img2img/upscale/overwrite-final execution is still Codex/SD-operator side, not built here.
 - PERF: `.sbd` save = full re-zip of the whole working root on EVERY autosave (add-board etc.) via project_document.pack_document → cost scales with project size ("long wait"). Measured: 48 MB incompressible artwork = 1244 ms at DEFLATE-6. Fix shipped: STORE already-compressed imports (png/jpg/mp4…) + DEFLATE level 1 for the rest (PSD canvases stay compressible → ~1 MB not 91 MB). ~2x faster, negligible size change, backward compatible. STRUCTURAL FIX SHIPPED (Owner-approved 2026-07-23): interactive `_autosave` now writes metadata to the working tree but DEFERS the .sbd pack (`save_project(flush_document=False)`); Add board dropped 200-1200 ms → ~8 ms. The pack now runs on periodic autosave (frontend useAutosave hook, interval `autosave_interval_minutes` setting = 3/5/10, default 5), manual save (Ctrl+S / menu, already existed), and save-on-close (shutdown_reference_cleanup save_if_dirty). Folder projects unchanged (metadata write is already durable; not left dirty). .sbd projects are left dirty after edits until a flush. `backups/` is now EXCLUDED from the .sbd pack (project_document._UNPACKED_DIRS) — it is a local, write-only recovery snapshot set the app never reads back, so embedding it only bloated the document and slowed saves; for .sbd it now lives only in the temp working tree (session-local).
-- DONE: dispatching a shot to Codex clears its pending queue (staging) entry — generation_service.clear_pending_queue_requests, called by single Send to Codex and Send All to Codex (batch). Codex-destination requests stay (they track handoff + results). Fixes the duplicate Queue+Codex rows. Backend-only; the panel reloads after dispatch.
-- DONE (UI, revised per Owner): standalone Mode selector REMOVED — precision follows shot Status (backend derives; frontend `generationModeForStatus` mirrors it for display), no 'auto'. "Send to Codex" opens a confirmation popup with the Backend (Codex/Stable Diffusion) choice + shows Status→mode. Send to Queue sends provider=codex; Send All to Codex unchanged. Frontend sends no explicit mode (backend derives from status). tsc+vite build pass. PENDING: Owner GUI click-test.
-- Two pre-existing UNRELATED test failures on this branch (not from this work; proven via stash baseline): blender smoke mock arity; project_document .sbd missing shot .psd. Fix separately if desired.
+- DONE: dispatch does not immediately clear staged queue entries. The send popup records `clear_queue_on_result`; only successful result submission clears the matching staged queue entry when that option is enabled. If disabled, the queue remains available after results return.
+- DONE (UI, revised per Owner): Queue offers Current, Queued, and All send scopes through a shared popup. The popup selects Codex or Stable Diffusion, controls clear-after-result, and exposes Modify only as a disabled/coming-soon placeholder. Precision follows shot Status; frontend sends no explicit mode. Layers and Queue are separate floating islands. The far-right More rail auto-hides at the edge; Shot Inspector remains visible. PENDING: Owner GUI click-test.
+- NEXT FORK: route the Owner-approved external `Images/` + `PSD/` layout and safe legacy conversion through Claude for a persistence/migration architecture decision, then implement it as a separate atomic change.
+- Validation for the latest generation-backend constraint change: 42 focused tests passed. The broader staged feature set previously passed 803 tests with 1 skipped and 33 subtests; frontend TypeScript/Vite build passed. Lint remains at the known baseline (9 errors, 2 warnings). Owner GUI click-test remains pending.
 ```
 
 ## 4. What's built — module map
@@ -153,14 +173,14 @@ Current execution target: Codex (codex-user MCP) available; integration into pro
 Codex MCP status: codex-user MCP tools present in session; see docs/codex-debug-solution.md for this env's verified quirks
 Current Codex thread ID: —
 Current configured effort: unknown — verify per docs/ai-workflow/codex-mcp-effort.md before relying on it
-Current task coordination mode: claude-routed
+Current task coordination mode: owner-direct
 Current capability policy:
 - Sub-agents: allowed
 - Delegation autonomy: bounded
-Active host/environment: Windows 11 / VSCode Claude Code extension
-Active MCP client: codex-user
-Active Git execution mode: unverified — verify before any Git operation
-Git mode last verified: —
+Active host/environment: Windows 11 / Codex desktop
+Active MCP client: local Codex tools
+Active Git execution mode: codex-git
+Git mode last verified: 2026-07-28
 Review mode: report-only
 ```
 

@@ -1,10 +1,23 @@
-.floating-layers-panel {
+.floating-panel-stack {
   position: absolute;
   z-index: 24;
   top: 72px;
   right: 14px;
-  width: min(340px, calc(100% - 28px));
-  max-height: calc(100% - 88px);
+  width: min(370px, calc(100% - 28px));
+  height: calc(100% - 88px);
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  align-items: start;
+  gap: 10px;
+}
+
+.floating-panel-stack.is-split {
+  width: min(700px, calc(100% - 28px));
+  grid-template-columns: minmax(260px, 0.9fr) minmax(320px, 1.1fr);
+}
+
+.floating-island {
+  min-height: 0;
   display: flex;
   flex-direction: column;
   overflow: hidden;
@@ -13,6 +26,14 @@
   color: var(--color-text);
   background: color-mix(in srgb, var(--color-surface) 96%, #090a0d);
   box-shadow: 0 18px 48px rgba(0, 0, 0, 0.48), 0 1px 0 rgba(255, 255, 255, 0.04) inset;
+}
+
+.floating-layers-island {
+  flex: 0 0 auto;
+}
+
+.floating-queue-island {
+  height: 100%;
 }
 
 .floating-panel-header {
@@ -50,7 +71,8 @@
 .floating-section-heading button,
 .floating-layer-eye,
 .floating-layer-remove,
-.floating-queue-actions button,
+.floating-action-group > button,
+.floating-generate-actions button,
 .floating-artifact-row button {
   border: 1px solid var(--color-border);
   color: var(--color-text);
@@ -186,6 +208,7 @@
   display: flex;
   flex: 1 1 auto;
   flex-direction: column;
+  overflow: hidden;
 }
 
 .floating-section-heading button {
@@ -196,23 +219,10 @@
   font-size: 8px;
 }
 
-.floating-codex-confirm {
+.floating-heading-actions {
   display: flex;
-  flex-direction: column;
-  gap: 7px;
-  margin-bottom: 7px;
-  padding: 8px;
-  border: 1px solid color-mix(in srgb, var(--color-accent) 45%, var(--color-border));
-  border-radius: 7px;
-  background: color-mix(in srgb, var(--color-accent) 7%, var(--bg-elevated));
-}
-
-.floating-codex-confirm-title {
-  font-size: 10px;
-  font-weight: 800;
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-  color: var(--color-text);
+  align-items: center;
+  gap: 4px;
 }
 
 .floating-codex-field {
@@ -255,56 +265,214 @@
   text-transform: capitalize;
 }
 
-.floating-codex-confirm-actions {
+.floating-action-group {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 8px;
+  padding: 8px;
+  border: 1px solid color-mix(in srgb, var(--color-border) 66%, transparent);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--bg-elevated) 48%, transparent);
+}
+
+.floating-generate-group {
+  border-color: color-mix(in srgb, var(--color-accent) 38%, var(--color-border));
+  background: color-mix(in srgb, var(--color-accent) 5%, var(--bg-elevated));
+}
+
+.floating-action-title {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.floating-action-title span {
+  font-size: 9px;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.floating-action-title small {
+  color: var(--color-muted);
+  font-size: 8px;
+  text-align: right;
+}
+
+.floating-action-group > button,
+.floating-generate-actions button {
+  min-height: 30px;
+  border-radius: 6px;
+  font-size: 9px;
+  font-weight: 700;
+}
+
+.floating-action-group .queue-primary,
+.floating-generate-actions .queue-primary {
+  border-color: color-mix(in srgb, var(--color-accent) 60%, var(--color-border));
+  color: #120d05;
+  background: var(--color-accent);
+}
+
+.floating-generate-actions {
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 6px;
 }
 
-.floating-codex-confirm-actions button {
-  min-height: 30px;
-  border: 1px solid var(--color-border);
-  border-radius: 6px;
+.floating-generate-actions .floating-send-all {
+  grid-column: 1 / -1;
+}
+
+.floating-generation-dialog-backdrop {
+  position: fixed;
+  z-index: 80;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: rgba(4, 6, 10, 0.7);
+  backdrop-filter: blur(3px);
+}
+
+.floating-generation-dialog {
+  width: min(390px, calc(100vw - 32px));
+  overflow: hidden;
+  border: 1px solid color-mix(in srgb, var(--color-accent) 45%, var(--color-border));
+  border-radius: 12px;
   color: var(--color-text);
-  background: color-mix(in srgb, var(--bg-elevated) 78%, transparent);
+  background: color-mix(in srgb, var(--color-surface) 97%, #06070a);
+  box-shadow: 0 28px 80px rgba(0, 0, 0, 0.64);
+}
+
+.floating-generation-dialog > header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--color-border);
+  background: linear-gradient(180deg, color-mix(in srgb, var(--color-accent) 8%, transparent), transparent);
+}
+
+.floating-generation-dialog > header > div,
+.floating-generation-dialog-body,
+.floating-operation-field label span,
+.floating-clear-queue-field span {
+  display: grid;
+  gap: 3px;
+}
+
+.floating-generation-dialog > header span,
+.floating-operation-field legend {
+  color: var(--color-muted);
   font-size: 9px;
   font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.floating-generation-dialog > header strong {
+  font-size: 14px;
+}
+
+.floating-generation-dialog > header button {
+  border-color: transparent;
+  color: var(--color-muted);
+  background: transparent;
+}
+
+.floating-generation-dialog-body {
+  gap: 12px;
+  padding: 16px;
+}
+
+.floating-operation-field {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 7px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.floating-operation-field legend {
+  grid-column: 1 / -1;
+  margin-bottom: 3px;
+}
+
+.floating-operation-field label {
+  display: flex;
+  align-items: flex-start;
+  gap: 7px;
+  min-height: 64px;
+  padding: 9px;
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--bg-elevated) 64%, transparent);
   cursor: pointer;
 }
 
-.floating-codex-confirm-actions .queue-primary {
-  border-color: color-mix(in srgb, var(--color-accent) 60%, var(--color-border));
-  color: #120d05;
-  background: var(--color-accent);
+.floating-operation-field label.is-selected {
+  border-color: color-mix(in srgb, var(--color-accent) 72%, var(--color-border));
+  background: color-mix(in srgb, var(--color-accent) 9%, var(--bg-elevated));
 }
 
-.floating-codex-confirm-actions button:disabled {
+.floating-operation-field label.is-disabled {
   cursor: default;
-  opacity: 0.6;
+  opacity: 0.48;
 }
 
-.floating-queue-actions {
+.floating-operation-field input,
+.floating-clear-queue-field input {
+  accent-color: var(--color-accent);
+}
+
+.floating-operation-field strong,
+.floating-clear-queue-field strong {
+  font-size: 10px;
+}
+
+.floating-operation-field small,
+.floating-clear-queue-field small {
+  color: var(--color-muted);
+  font-size: 8px;
+  line-height: 1.35;
+}
+
+.floating-clear-queue-field {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid color-mix(in srgb, var(--color-border) 70%, transparent);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--bg-elevated) 44%, transparent);
+  cursor: pointer;
+}
+
+.floating-generation-dialog > footer {
   display: grid;
   grid-template-columns: 1fr 1fr;
-  gap: 6px;
-  padding-bottom: 7px;
+  gap: 8px;
+  padding: 12px 16px 16px;
 }
 
-.floating-queue-actions button {
-  min-height: 30px;
-  border-radius: 6px;
-  font-size: 9px;
-  font-weight: 700;
+.floating-generation-dialog button {
+  min-height: 32px;
+  border: 1px solid var(--color-border);
+  border-radius: 7px;
+  color: var(--color-text);
+  background: color-mix(in srgb, var(--bg-elevated) 78%, transparent);
 }
 
-.floating-queue-actions .queue-primary {
+.floating-generation-dialog button.queue-primary {
   border-color: color-mix(in srgb, var(--color-accent) 60%, var(--color-border));
   color: #120d05;
   background: var(--color-accent);
-}
-
-.floating-queue-actions .queue-batch-codex {
-  grid-column: 1 / -1;
+  font-weight: 700;
 }
 
 .floating-queue-notice {
@@ -319,7 +487,8 @@
 }
 
 .floating-queue-list {
-  min-height: 76px;
+  flex: 1 1 auto;
+  min-height: 32px;
   display: grid;
   gap: 4px;
   overflow-y: auto;
@@ -459,7 +628,7 @@
 
 .floating-queue-empty {
   display: grid;
-  min-height: 76px;
+  min-height: 32px;
   place-items: center;
   border: 1px dashed color-mix(in srgb, var(--color-border) 72%, transparent);
   border-radius: 6px;
@@ -467,16 +636,21 @@
   font-size: 9px;
 }
 
-.floating-layers-panel button:disabled {
+.floating-panel-stack button:disabled {
   cursor: default;
   opacity: 0.45;
 }
 
 @media (max-width: 900px) {
-  .floating-layers-panel {
+  .floating-panel-stack {
     top: 64px;
     right: 8px;
-    width: min(320px, calc(100% - 16px));
-    max-height: calc(100% - 76px);
+    width: min(370px, calc(100% - 16px));
+    height: calc(100% - 76px);
+  }
+
+  .floating-panel-stack.is-split {
+    width: calc(100% - 16px);
+    grid-template-columns: minmax(220px, 0.85fr) minmax(280px, 1.15fr);
   }
 }

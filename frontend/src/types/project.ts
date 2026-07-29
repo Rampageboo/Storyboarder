@@ -22,6 +22,10 @@ export interface OpenProjectRequest {
   project_json_path: string
 }
 
+export interface SaveProjectAsRequest {
+  path: string
+}
+
 export interface MissingFileRow {
   shot_id: string
   field: string

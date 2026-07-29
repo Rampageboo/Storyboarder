@@ -277,6 +277,57 @@ def sync_document(project: Project) -> None:
         project_document.pack_document(project.root_path, project.document_path)
 
 
+def save_project_as(project: Project, document_path: Path) -> Project:
+    """Save to a new `.sbd` and make that document the active project.
+
+    Existing document projects can keep their private expanded work tree. Legacy
+    folder projects are copied into a private work tree first so later saves no
+    longer mutate the original folder after Save As switches documents.
+    """
+    document = document_path.expanduser().resolve()
+    if document.suffix.lower() != project_document.DOCUMENT_SUFFIX:
+        document = document.with_suffix(project_document.DOCUMENT_SUFFIX)
+    root = project.root_path.resolve()
+    try:
+        document.relative_to(root)
+    except ValueError:
+        pass
+    else:
+        raise ValueError("Save As destination cannot be inside the active project folder.")
+
+    with PROJECT_LOCK:
+        save_project(project, flush_document=False)
+        if project.document_path:
+            project_document.pack_document(root, document)
+            project.document_path = document
+            project_document.write_session_marker(root, document)
+            return project
+
+        working_root = project_document.create_working_root(document)
+        try:
+            def ignore_unpacked(_directory: str, names: list[str]) -> set[str]:
+                return {
+                    name
+                    for name in names
+                    if name in {"backups", project_document.SESSION_MARKER}
+                }
+
+            shutil.copytree(
+                root,
+                working_root,
+                dirs_exist_ok=True,
+                ignore=ignore_unpacked,
+            )
+            saved_project = _open_expanded_project(working_root / "project.json")
+            saved_project.document_path = document
+            project_document.pack_document(working_root, document)
+            project_document.write_session_marker(working_root, document)
+            return saved_project
+        except BaseException:
+            project_document.remove_working_root(working_root)
+            raise
+
+
 def cleanup_document_working_root(project: Project | None) -> bool:
     """Best-effort removal of a private expanded `.sbd` work tree."""
     if project is None or not project.document_path:

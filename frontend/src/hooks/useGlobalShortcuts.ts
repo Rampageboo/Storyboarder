@@ -21,6 +21,7 @@ export function useGlobalShortcuts() {
   const {
     project,
     selectedShotId,
+    selectedShotIds,
     setSelectedShotId,
     saveProject,
     flushDirtyShots,
@@ -38,9 +39,9 @@ export function useGlobalShortcuts() {
   } = useProject()
 
   const runningRef = useRef(false)
-  const stateRef = useRef({ project, selectedShotId, projectActionBusy, activeAppliedSegmentId })
+  const stateRef = useRef({ project, selectedShotId, selectedShotIds, projectActionBusy, activeAppliedSegmentId })
   useLayoutEffect(() => {
-    stateRef.current = { project, selectedShotId, projectActionBusy, activeAppliedSegmentId }
+    stateRef.current = { project, selectedShotId, selectedShotIds, projectActionBusy, activeAppliedSegmentId }
   })
 
   useEffect(() => {
@@ -117,7 +118,11 @@ export function useGlobalShortcuts() {
             break
           }
           if (!selectedShotId) break
-          if (!window.confirm('Delete the selected board?')) break
+          if (!window.confirm(
+            stateRef.current.selectedShotIds.length > 1
+              ? `Delete ${stateRef.current.selectedShotIds.length} selected boards?`
+              : 'Delete the selected board?',
+          )) break
           void run(deleteSelectedShot)
           break
         case 'r':

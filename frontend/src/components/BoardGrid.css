@@ -52,6 +52,10 @@
   box-shadow: 0 0 0 1px var(--color-accent);
 }
 
+.board-grid-tile.is-primary {
+  box-shadow: 0 0 0 2px var(--color-accent);
+}
+
 .board-grid-tile.is-dragging {
   opacity: 0.5;
 }

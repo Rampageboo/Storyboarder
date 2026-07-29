@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type DragEvent } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type DragEvent, type MouseEvent } from 'react'
 import { useProject } from '../state/useProject'
 import { shotDisplayLabel } from '../utils/shotDisplay'
 import {
@@ -49,7 +49,9 @@ export function BoardStrip() {
   const {
     project,
     selectedShotId,
+    selectedShotIds,
     setSelectedShotId,
+    selectShot,
     flushDirtyShots,
     addShotAfterSelection,
     insertShotAtIndex,
@@ -93,6 +95,7 @@ export function BoardStrip() {
   const markerClickTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   const shots = useMemo(() => project?.shots ?? [], [project?.shots])
+  const selectedSet = useMemo(() => new Set(selectedShotIds), [selectedShotIds])
   const selectedIndex = useMemo(() => shots.findIndex((s) => s.shot_id === selectedShotId), [shots, selectedShotId])
   const progressPercent = shots.length > 0 && selectedIndex >= 0 ? ((selectedIndex + 1) / shots.length) * 100 : 0
   const progressLabel =
@@ -122,6 +125,15 @@ export function BoardStrip() {
   const preserveScrollOnSelectRef = useRef(false)
   const forceAlignSelectedRef = useRef(false)
   const alignRetryRef = useRef<number[]>([])
+
+  const handleSelect = useCallback((event: MouseEvent<HTMLButtonElement>, shotId: string) => {
+    const mode = event.shiftKey
+      ? 'range'
+      : event.ctrlKey || event.metaKey
+        ? 'toggle'
+        : 'replace'
+    selectShot(shotId, mode)
+  }, [selectShot])
 
   useEffect(() => {
     if (!playing || disabled || selectedIndex < 0 || shots.length === 0) return
@@ -350,7 +362,11 @@ export function BoardStrip() {
 
   const handleDelete = useCallback(async () => {
     if (!project || !selectedShotId) return
-    if (!window.confirm('Delete the selected shot?')) return
+    if (!window.confirm(
+      selectedShotIds.length > 1
+        ? `Delete ${selectedShotIds.length} selected shots?`
+        : 'Delete the selected shot?',
+    )) return
     setBusy(true)
     try {
       await flushDirtyShots()
@@ -360,7 +376,7 @@ export function BoardStrip() {
     } finally {
       setBusy(false)
     }
-  }, [project, selectedShotId, flushDirtyShots, deleteSelectedShot])
+  }, [project, selectedShotId, selectedShotIds.length, flushDirtyShots, deleteSelectedShot])
 
   const handleMoveUp = useCallback(async () => {
     if (!project || !selectedShotId) return
@@ -640,7 +656,8 @@ export function BoardStrip() {
           <div className="board-strip-scroller">
             <div className="board-strip-track" role="list">
             {shots.map((shot, index) => {
-              const isSelected = selectedShotId === shot.shot_id
+              const isSelected = selectedSet.has(shot.shot_id)
+              const isPrimary = selectedShotId === shot.shot_id
               const label = shotDisplayLabel(shot)
               const hasDraft = isShotDirty(shot.shot_id)
               const hasPreview = shotHasPreview(shot)
@@ -663,10 +680,11 @@ export function BoardStrip() {
                 <button
                   type="button"
                   data-shot-id={shot.shot_id}
-                  draggable={!disabled}
+                  draggable={!disabled && selectedShotIds.length <= 1}
                   className={[
                     'board-strip-card',
                     isSelected ? 'is-selected' : '',
+                    isPrimary ? 'is-primary' : '',
                     dragShotId === shot.shot_id ? 'is-dragging' : '',
                     dropTarget?.id === shot.shot_id ? (dropTarget.after ? 'drop-after' : 'drop-before') : '',
                   ]
@@ -677,7 +695,7 @@ export function BoardStrip() {
                     lastScrollLeftRef.current = viewportRef.current.scrollLeft
                     preserveScrollOnSelectRef.current = true
                   }}
-                  onClick={() => setSelectedShotId(shot.shot_id)}
+                  onClick={(event) => handleSelect(event, shot.shot_id)}
                   onDragStart={(e) => handleDragStart(e, shot.shot_id)}
                   onDragOver={(e) => handleCardDragOver(e, shot.shot_id)}
                   onDrop={(e) => void handleCardDrop(e, shot.shot_id)}

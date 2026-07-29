@@ -19,6 +19,7 @@ SCENE3D_ROOT = "scenes3d"
 SCENE3D_INDEX = "scenes3d.json"
 SCENE3D_EXTENSIONS = {".glb", ".gltf", ".blend"}
 SCENE3D_ID_RE = re.compile(r"^scene3d_(\d{3,})$")
+PREVIEW_FILENAME = "storyboarder_preview.glb"
 
 
 def _now_iso() -> str:
@@ -36,6 +37,15 @@ def _index_path(project: Project) -> Path:
 def _scene_dir(project: Project, scene_id: str) -> Path:
     _validate_scene_id(scene_id)
     return _root_dir(project) / scene_id
+
+
+def preview_relative_path(scene_id: str) -> str:
+    _validate_scene_id(scene_id)
+    return f"{SCENE3D_ROOT}/{scene_id}/.preview/{PREVIEW_FILENAME}"
+
+
+def preview_file_path(project: Project, scene_id: str) -> Path:
+    return _safe_rel_path(project, preview_relative_path(scene_id))
 
 
 def _meta_path(project: Project, scene_id: str) -> Path:
@@ -343,6 +353,29 @@ def ensure_active_scene(project: Project) -> dict[str, Any]:
     return create_scene(project)["scene"]
 
 
+def configure_blend_preview(
+    project: Project,
+    scene_id: str,
+    blend_path: Path,
+) -> dict[str, Any]:
+    active_id, scene, scenes = _find_scene(project, scene_id)
+    resolved_blend = blend_path.resolve()
+    root = project.root_path.resolve()
+    if resolved_blend != root and root not in resolved_blend.parents:
+        raise ValueError("Blender file path must stay inside the project.")
+    scene.update(
+        {
+            "source_type": "blender",
+            "file_path": preview_relative_path(scene_id),
+            "file_name": PREVIEW_FILENAME,
+            "blend_file_path": resolved_blend.relative_to(root).as_posix(),
+            "updated_at": _now_iso(),
+        }
+    )
+    _save(project, active_id, scenes)
+    return next(item for item in list_scenes(project)["scenes"] if item["id"] == scene_id)
+
+
 def import_scene_file(project: Project, scene_id: str, filename: str, data: bytes) -> dict[str, Any]:
     _active_id, scene, scenes = _find_scene(project, scene_id)
     suffix = Path(filename or "").suffix.lower()
@@ -387,15 +420,32 @@ def file_path(project: Project, scene_id: str | None = None) -> Path | None:
     return path
 
 
-def open_blender_scene(project: Project) -> Path:
+def open_blender_scene(
+    project: Project,
+    *,
+    python_script: Path | None = None,
+    script_args: list[str] | None = None,
+    on_launch=None,
+) -> Path:
     scene = ensure_active_scene(project)
     attached_path = str(scene.get("blend_file_path") or "").strip()
     if attached_path:
-        return project_manager.open_blender_scene(project, attached_path)
+        return project_manager.open_blender_scene(
+            project,
+            attached_path,
+            python_script=python_script,
+            script_args=script_args,
+            on_launch=on_launch,
+        )
     blend_path = project_manager.ensure_project_blend_file(project)
     if blend_path.exists():
         payload = update_scene(project, scene["id"], {"display_settings": scene.get("display_settings") or {}})
         updated = next(item for item in payload["scenes"] if item["id"] == scene["id"])
         updated["blend_file_path"] = blend_path.relative_to(project.root_path).as_posix()
         _save(project, payload["active_scene3d_id"], payload["scenes"])
-    return project_manager.open_blender_scene(project)
+    return project_manager.open_blender_scene(
+        project,
+        python_script=python_script,
+        script_args=script_args,
+        on_launch=on_launch,
+    )

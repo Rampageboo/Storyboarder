@@ -67,7 +67,7 @@ Storyboarder is a **desktop-only** storyboarding application. There is no hosted
 | Desktop shell | pywebview (Chromium WebView on Windows) |
 | App server | FastAPI + uvicorn, loopback-only (`127.0.0.1`) |
 | Frontend | React 19 + TypeScript, built with Vite |
-| 3D engine | Three.js (vendor bundle) + Scene3D workspace (compiled TypeScript) |
+| 3D engine | External Blender for authoring; Three.js for the automatic, read-only Scene3D preview |
 | Backend language | Python 3.11+ |
 | Image/media | Pillow, OpenCV-Python, psd-tools |
 
@@ -519,16 +519,62 @@ When the plugin is linked and has a shot open as a tab, `method_open_source` swi
 
 ---
 
-## 14. Scene3D TypeScript Source and Generated Runtime Bundle
+## 14. Scene3D Blender Authoring and Automatic Preview
+
+The main Scene3D workspace now treats the project `.blend` file as its source of
+truth. All object, camera, target, light, and camera-path editing occurs in
+external Blender. Storyboarder's Scene3D workspace is a read-only Three.js
+preview with local orbit, pan, zoom, free-camera navigation, imported-camera
+locking, animation scrubbing, and capture-to-board.
+
+Clicking **Open Blender** transfers ownership instead of creating a second
+editor. Storyboarder launches the configured external Blender and injects the
+bundled camera-path and Storyboarder Link panels with `--python` for that process
+only. Nothing is installed into the external Blender profile. The session exchanges
+`storyboard_blender_bridge.json` and `storyboard_blender_heartbeat.json` in the
+local Storyboarder bridge directory. The heartbeat reports the exact `.blend`,
+active camera, dirty flag, preview revision, export status, and process identity.
+
+After the initial launch and every successful Blender save, the session plugin
+exports the active scene atomically to
+`scenes3d/<scene-id>/.preview/storyboarder_preview.glb`. This file is a disposable
+rendering cache, not a user-managed asset or source of truth. Storyboarder polls
+the preview revision and hot-reloads it while preserving preview time, selected
+camera, and display settings. A failed export leaves the last valid preview in
+place.
+
+While the external process or a fresh matching heartbeat owns the `.blend`,
+Storyboarder blocks
+project switching, Save As, Scene 3D switching/deletion/replacement, and working
+root cleanup. A fresh heartbeat is adopted after a Storyboarder restart.
+
+### Preview pipeline
+
+```text
+External Blender edits authoritative .blend
+  -> save_post handler in storyboarder_bridge.py
+  -> atomic preview GLB export
+  -> heartbeat exposes preview revision
+  -> Scene3DPanel polls revision
+  -> Scene3DEditor hot-reloads preview
+  -> local Three.js orbit/pan/zoom/camera view
+```
+
+The managed `BpyViewportManager` and background Blender worker remain in the
+tree as an experimental renderer, but they are not the main Scene3D workflow.
+Legacy manually imported GLB endpoints remain for compatibility; the main panel
+does not expose manual GLB import or reload controls.
 
 ### Pipeline overview
 
 ```
-User imports GLB   → /api/project/scene3d/import  → external_tools.import_scene3d_stream()
-                                                     → writes scene3d/scene.glb
-                                                     → updates settings.scene3d
-User opens Blender → /api/project/scene3d/open-blender → external_tools.open_blender_scene()
-                                                          → launches blender.exe
+User opens Blender → /api/project/scene3d/open-blender → stop built-in worker
+                                                          → publish bridge context
+                                                          → launch blender.exe with
+                                                            session-only add-on
+External Blender   → heartbeat (file/camera/dirty)      → ownership lock in UI/API
+Blender Save       → atomic preview GLB export          → revision heartbeat
+Storyboarder       → hot-reload local Three.js preview  → smooth read-only UX
 
  ┌── Scene3DPanel.tsx ──────────────────────────────────────────────────────┐
  │  Loads workspace bundle lazily via                                        │

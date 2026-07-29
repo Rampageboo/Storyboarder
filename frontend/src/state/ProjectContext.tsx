@@ -12,9 +12,11 @@ import {
 import {
   addShot,
   createProject,
+  createQueueBatchRequests,
   createShotCanvas,
   deleteRefSegment,
   deleteShot,
+  deleteShotsBatch,
   getMissingFiles,
   getProject,
   moveShotDown,
@@ -23,12 +25,14 @@ import {
   openShotSource,
   reorderShots,
   restoreRefApply,
-  restoreShot,
+  restoreShotsBatch,
   saveProject,
+  saveProjectAs,
   snapshotRefBoards,
   syncShot,
   updateSettings,
   updateShot,
+  updateShotsBatch,
 } from '../api'
 import {
   bootstrapApp,
@@ -45,7 +49,10 @@ import { ProjectContext } from './useProject'
 export interface ProjectContextValue {
   project: ProjectPayload | null
   selectedShotId: string | null
+  selectedShotIds: string[]
   setSelectedShotId: (shotId: string | null) => void
+  selectShot: (shotId: string, mode?: 'replace' | 'toggle' | 'range') => void
+  clearShotSelection: () => void
   replaceProject: (payload: ProjectPayload, preferredShotId?: string | null) => void
   refreshProjectFromBridge: (pluginSelectedShotId?: string | null) => Promise<void>
   refreshProjectFromGeneration: () => Promise<void>
@@ -58,9 +65,12 @@ export interface ProjectContextValue {
   /** Save and close the open document, returning the app to Home. */
   closeProjectToHome: () => Promise<void>
   saveProject: () => Promise<void>
+  saveProjectAs: () => Promise<void>
   addShotAfterSelection: () => Promise<void>
   insertShotAtIndex: (index: number) => Promise<void>
   deleteSelectedShot: () => Promise<void>
+  sendSelectedShotsToQueue: () => Promise<void>
+  changeSelectedShotsScene: (sceneId: string, sceneName: string) => Promise<void>
   moveSelectedShot: (direction: 'up' | 'down') => Promise<void>
   reorderBoards: (orderedIds: string[], selectId?: string | null) => Promise<void>
   deleteActiveRefSegment: () => Promise<void>
@@ -163,7 +173,13 @@ const HISTORY_LIMIT = 50
 
 export function ProjectProvider({ children }: PropsWithChildren) {
   const [project, setProject] = useState<ProjectPayload | null>(null)
-  const [selectedShotId, setSelectedShotId] = useState<string | null>(null)
+  const [shotSelection, setShotSelection] = useState<{
+    primary: string | null
+    ids: string[]
+    anchor: string | null
+  }>({ primary: null, ids: [], anchor: null })
+  const selectedShotId = shotSelection.primary
+  const selectedShotIds = shotSelection.ids
   const [lastError, setLastError] = useState<string | null>(null)
   const [initialLoading, setInitialLoading] = useState(true)
   const [projectActionBusy, setProjectActionBusy] = useState(false)
@@ -195,6 +211,44 @@ export function ProjectProvider({ children }: PropsWithChildren) {
     undoStackRef.current = undoStack
     redoStackRef.current = redoStack
   })
+
+  const setSelectedShotId = useCallback((shotId: string | null) => {
+    setShotSelection({
+      primary: shotId,
+      ids: shotId ? [shotId] : [],
+      anchor: shotId,
+    })
+  }, [])
+
+  const selectShot = useCallback((shotId: string, mode: 'replace' | 'toggle' | 'range' = 'replace') => {
+    setShotSelection((current) => {
+      const shots = projectRef.current?.shots ?? []
+      const order = shots.map((shot) => shot.shot_id)
+      if (!order.includes(shotId)) return current
+      if (mode === 'replace') {
+        return { primary: shotId, ids: [shotId], anchor: shotId }
+      }
+      if (mode === 'range') {
+        const anchor = current.anchor && order.includes(current.anchor) ? current.anchor : current.primary ?? shotId
+        const from = order.indexOf(anchor)
+        const to = order.indexOf(shotId)
+        const ids = order.slice(Math.min(from, to), Math.max(from, to) + 1)
+        return { primary: shotId, ids, anchor }
+      }
+      const selected = new Set(current.ids)
+      if (selected.has(shotId)) selected.delete(shotId)
+      else selected.add(shotId)
+      const ids = order.filter((id) => selected.has(id))
+      const primary = selected.has(shotId) ? shotId : ids.includes(current.primary ?? '') ? current.primary : ids[0] ?? null
+      return { primary, ids, anchor: shotId }
+    })
+  }, [])
+
+  const clearShotSelection = useCallback(() => {
+    setShotSelection((current) => current.primary
+      ? { primary: current.primary, ids: [current.primary], anchor: current.primary }
+      : current)
+  }, [])
 
   const visualEpoch = useMemo(() => projectVisualEpoch(project), [project])
 
@@ -360,7 +414,8 @@ export function ProjectProvider({ children }: PropsWithChildren) {
       resetEditState()
       setProject(payload)
       setLastError(null)
-      setSelectedShotId(preferredShotId(payload, selected))
+      const preferred = preferredShotId(payload, selected)
+      setShotSelection({ primary: preferred, ids: preferred ? [preferred] : [], anchor: preferred })
     },
     [resetEditState],
   )
@@ -368,7 +423,22 @@ export function ProjectProvider({ children }: PropsWithChildren) {
   const replaceProject = useCallback((payload: ProjectPayload, selected?: string | null) => {
     setProject(payload)
     setLastError(null)
-    setSelectedShotId((current) => preferredShotId(payload, selected === undefined ? current : selected))
+    setShotSelection((current) => {
+      if (selected !== undefined) {
+        const preferred = preferredShotId(payload, selected)
+        return { primary: preferred, ids: preferred ? [preferred] : [], anchor: preferred }
+      }
+      const validIds = new Set(payload.shots.map((shot) => shot.shot_id))
+      const ids = current.ids.filter((id) => validIds.has(id))
+      const primary = current.primary && validIds.has(current.primary)
+        ? current.primary
+        : ids[0] ?? payload.shots[0]?.shot_id ?? null
+      return {
+        primary,
+        ids: ids.length > 0 ? ids : primary ? [primary] : [],
+        anchor: current.anchor && validIds.has(current.anchor) ? current.anchor : primary,
+      }
+    })
   }, [])
 
   const refreshProjectFromBridge = useCallback(
@@ -521,7 +591,7 @@ export function ProjectProvider({ children }: PropsWithChildren) {
     } finally {
       setInitialLoading(false)
     }
-  }, [openPayload, resetEditState])
+  }, [openPayload, resetEditState, setSelectedShotId])
 
   const newProjectAction = useCallback(
     async (body: ProjectPathRequest = {}) => {
@@ -596,13 +666,30 @@ export function ProjectProvider({ children }: PropsWithChildren) {
     } finally {
       setProjectActionBusy(false)
     }
-  }, [flushDirtyShots, resetEditState])
+  }, [flushDirtyShots, resetEditState, setSelectedShotId])
 
   const saveProjectAction = useCallback(async () => {
     setProjectActionBusy(true)
     try {
       await flushDirtyShots()
       const payload = await saveProject()
+      setProject(payload)
+      setLastError(null)
+    } catch (error) {
+      setLastError(error instanceof Error ? error.message : String(error))
+      throw error
+    } finally {
+      setProjectActionBusy(false)
+    }
+  }, [flushDirtyShots])
+
+  const saveProjectAsAction = useCallback(async () => {
+    setProjectActionBusy(true)
+    try {
+      await flushDirtyShots()
+      const result = await browseProjectSave()
+      if (result.cancelled || !result.path) return
+      const payload = await saveProjectAs({ path: result.path })
       setProject(payload)
       setLastError(null)
     } catch (error) {
@@ -680,26 +767,63 @@ export function ProjectProvider({ children }: PropsWithChildren) {
 
   const deleteSelectedShot = useCallback(async () => {
     const current = projectRef.current
-    if (!current || !selectedShotId) return
-    const selectedIndex = current.shots.findIndex((shot) => shot.shot_id === selectedShotId)
-    const removedShot = current.shots[selectedIndex]
-    if (!removedShot) return
-    const payload = await deleteShot(selectedShotId)
-    const nextIndex = Math.min(Math.max(selectedIndex, 0), payload.shots.length - 1)
+    if (!current || selectedShotIds.length === 0) return
+    await flushDirtyShots()
+    const selected = new Set(selectedShotIds)
+    const removed = current.shots
+      .map((shot, index) => ({ shot, index }))
+      .filter(({ shot }) => selected.has(shot.shot_id))
+    if (removed.length === 0) return
+    const firstIndex = removed[0].index
+    const removedIds = removed.map(({ shot }) => shot.shot_id)
+    const payload = await deleteShotsBatch({ shot_ids: removedIds })
+    const nextIndex = Math.min(Math.max(firstIndex, 0), payload.shots.length - 1)
     replaceProject(payload, payload.shots[nextIndex]?.shot_id ?? null)
     pushHistory({
-      label: 'Delete board',
+      label: removed.length === 1 ? 'Delete board' : `Delete ${removed.length} boards`,
       undo: async () => ({
-        payload: await restoreShot({ shot: removedShot, index: selectedIndex }),
-        select: removedShot.shot_id,
+        payload: await restoreShotsBatch({
+          items: removed.map(({ shot, index }) => ({ shot, index })),
+        }),
+        select: removed[0].shot.shot_id,
       }),
       redo: async () => {
-        const p = await deleteShot(removedShot.shot_id)
-        const ni = Math.min(Math.max(selectedIndex, 0), p.shots.length - 1)
+        const p = await deleteShotsBatch({ shot_ids: removedIds })
+        const ni = Math.min(Math.max(firstIndex, 0), p.shots.length - 1)
         return { payload: p, select: p.shots[ni]?.shot_id ?? null }
       },
     })
-  }, [replaceProject, selectedShotId, pushHistory])
+  }, [flushDirtyShots, pushHistory, replaceProject, selectedShotIds])
+
+  const sendSelectedShotsToQueue = useCallback(async () => {
+    if (selectedShotIds.length === 0) return
+    await flushDirtyShots()
+    const response = await createQueueBatchRequests(selectedShotIds)
+    replaceProject(response.project)
+  }, [flushDirtyShots, replaceProject, selectedShotIds])
+
+  const changeSelectedShotsScene = useCallback(async (sceneId: string, sceneName: string) => {
+    const current = projectRef.current
+    if (!current || selectedShotIds.length === 0) return
+    await flushDirtyShots()
+    const selected = new Set(selectedShotIds)
+    const targets = current.shots.filter((shot) => selected.has(shot.shot_id))
+    if (targets.length === 0) return
+    const nextUpdates = targets.map((shot) => ({
+      shot_id: shot.shot_id,
+      changes: { scene_id: sceneId, scene: sceneName },
+    }))
+    const previousUpdates = targets.map((shot) => ({
+      shot_id: shot.shot_id,
+      changes: { scene_id: shot.scene_id, scene: shot.scene },
+    }))
+    replaceProject(await updateShotsBatch({ updates: nextUpdates }))
+    pushHistory({
+      label: targets.length === 1 ? 'Change board scene' : `Change scene for ${targets.length} boards`,
+      undo: async () => ({ payload: await updateShotsBatch({ updates: previousUpdates }) }),
+      redo: async () => ({ payload: await updateShotsBatch({ updates: nextUpdates }) }),
+    })
+  }, [flushDirtyShots, pushHistory, replaceProject, selectedShotIds])
 
   // Single-step nudge via the ← / → buttons. Trivially reversible by pressing the
   // other arrow, so this intentionally does NOT record an undo entry. Drag-to-reorder
@@ -834,7 +958,10 @@ export function ProjectProvider({ children }: PropsWithChildren) {
     () => ({
       project,
       selectedShotId,
+      selectedShotIds,
       setSelectedShotId,
+      selectShot,
+      clearShotSelection,
       replaceProject,
       refreshProjectFromBridge,
       refreshProjectFromGeneration,
@@ -845,9 +972,12 @@ export function ProjectProvider({ children }: PropsWithChildren) {
       openProjectPath,
       closeProjectToHome,
       saveProject: saveProjectAction,
+      saveProjectAs: saveProjectAsAction,
       addShotAfterSelection,
       insertShotAtIndex,
       deleteSelectedShot,
+      sendSelectedShotsToQueue,
+      changeSelectedShotsScene,
       moveSelectedShot,
       reorderBoards,
       deleteActiveRefSegment,
@@ -893,7 +1023,7 @@ export function ProjectProvider({ children }: PropsWithChildren) {
       refreshMissingFiles,
       refreshPreviewFields,
     }),
-    [project, selectedShotId, replaceProject, refreshProjectFromBridge, refreshProjectFromGeneration, reloadProject, newProjectAction, openProjectFromDialog, openProjectPath, closeProjectToHome, saveProjectAction, addShotAfterSelection, insertShotAtIndex, deleteSelectedShot, moveSelectedShot, reorderBoards, deleteActiveRefSegment, deleteRefSegmentUndoable, recordRefApply, undo, redo, undoStack, redoStack, syncSelectedShot, openSelectedShotSource, initialLoading, projectActionBusy, getDraft, editShotField, isShotDirty, dirtyShotIds, savingShots, saveShot, flushDirtyShots, visualEpoch, segmentRange, setSegmentAnchor, setSegmentEnd, pickSegmentShot, clearSegmentRange, activeAppliedSegmentId, setActiveAppliedSegmentId, clearActiveAppliedSegment, refSegmentInspectOpen, openRefSegmentInspect, closeRefSegmentInspect, dismissRefSegmentUi, refApplyUndoToken, lastError, clearError, reportError, missingFiles, missingFilesLoading, refreshMissingFiles, refreshPreviewFields],
+    [project, selectedShotId, selectedShotIds, setSelectedShotId, selectShot, clearShotSelection, replaceProject, refreshProjectFromBridge, refreshProjectFromGeneration, reloadProject, newProjectAction, openProjectFromDialog, openProjectPath, closeProjectToHome, saveProjectAction, saveProjectAsAction, addShotAfterSelection, insertShotAtIndex, deleteSelectedShot, sendSelectedShotsToQueue, changeSelectedShotsScene, moveSelectedShot, reorderBoards, deleteActiveRefSegment, deleteRefSegmentUndoable, recordRefApply, undo, redo, undoStack, redoStack, syncSelectedShot, openSelectedShotSource, initialLoading, projectActionBusy, getDraft, editShotField, isShotDirty, dirtyShotIds, savingShots, saveShot, flushDirtyShots, visualEpoch, segmentRange, setSegmentAnchor, setSegmentEnd, pickSegmentShot, clearSegmentRange, activeAppliedSegmentId, setActiveAppliedSegmentId, clearActiveAppliedSegment, refSegmentInspectOpen, openRefSegmentInspect, closeRefSegmentInspect, dismissRefSegmentUi, refApplyUndoToken, lastError, clearError, reportError, missingFiles, missingFilesLoading, refreshMissingFiles, refreshPreviewFields],
   )
 
   return <ProjectContext.Provider value={value}>{children}</ProjectContext.Provider>

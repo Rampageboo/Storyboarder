@@ -13,6 +13,9 @@ import type {
   ReorderShotsRequest,
   RestoreShotRequest,
   SetReferencePathsRequest,
+  ShotBatchDeleteRequest,
+  ShotBatchRestoreRequest,
+  ShotBatchUpdateRequest,
   ShotUpdate,
 } from '../types'
 
@@ -32,6 +35,27 @@ export function duplicateShot(shotId: string): Promise<ProjectPayload> {
 export function updateShot(shotId: string, body: ShotUpdate): Promise<ProjectPayload> {
   return requestJson<ProjectPayload>(`/api/shots/${encodeURIComponent(shotId)}`, {
     method: 'PATCH',
+    body,
+  })
+}
+
+export function updateShotsBatch(body: ShotBatchUpdateRequest): Promise<ProjectPayload> {
+  return requestJson<ProjectPayload>('/api/shots/batch', {
+    method: 'PATCH',
+    body,
+  })
+}
+
+export function deleteShotsBatch(body: ShotBatchDeleteRequest): Promise<ProjectPayload> {
+  return requestJson<ProjectPayload>('/api/shots/batch', {
+    method: 'DELETE',
+    body,
+  })
+}
+
+export function restoreShotsBatch(body: ShotBatchRestoreRequest): Promise<ProjectPayload> {
+  return requestJson<ProjectPayload>('/api/shots/batch/restore', {
+    method: 'POST',
     body,
   })
 }

@@ -16,7 +16,16 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
-from . import app_state, generation_service, logging_config, project_manager, runtime_state
+from . import (
+    app_state,
+    blender_bridge,
+    bpy_viewport,
+    bpy_viewport_api,
+    generation_service,
+    logging_config,
+    project_manager,
+    runtime_state,
+)
 from .backend_service import StoryboardBackendService
 from .errors import AppErrorCode
 from .logging_config import setup_logging
@@ -31,6 +40,8 @@ from .schemas import (
     CommentResolveRequest,
     DrawingSaveRequest,
     GenerationCandidateAcceptRequest,
+    GenerationBatchQueueRequest,
+    GenerationBatchDispatchRequest,
     GenerationRequestCreateRequest,
     ImportImagePathRequest,
     LiveBridgeUpdateRequest,
@@ -50,6 +61,7 @@ from .schemas import (
     ReorderShotsRequest,
     RestoreRefApplyRequest,
     RestoreShotRequest,
+    SaveProjectAsRequest,
     Scene2DCreateRequest,
     Scene2DPerspectiveCreateRequest,
     Scene2DPerspectiveMoveRequest,
@@ -61,6 +73,9 @@ from .schemas import (
     SetReferencePathsRequest,
     SettingsUpdateRequest,
     ShotUpdateRequest,
+    ShotBatchDeleteRequest,
+    ShotBatchRestoreRequest,
+    ShotBatchUpdateRequest,
 )
 
 # Photoshop plugin treats bridge files older than ~8s as stale (see BRIDGE_STALE_MS in panel.js).
@@ -223,8 +238,10 @@ def create_app(base_dir: Path, bridge_port: int = 8000) -> FastAPI:
             yield
         finally:
             app_state.stop_background_loops(app)
+            bpy_viewport.stop_worker(app)
             _shutdown_reference_cleanup(app)
-            project_manager.cleanup_document_working_root(app.state.project)
+            if not blender_bridge.owns_scene(app):
+                project_manager.cleanup_document_working_root(app.state.project)
 
     app = FastAPI(title="Storyboard Tool", lifespan=lifespan)
     app.state.base_dir = base_dir
@@ -234,6 +251,7 @@ def create_app(base_dir: Path, bridge_port: int = 8000) -> FastAPI:
     app.state.main_window = None
     app.state.api_token = _read_launch_token()
     runtime_state.init_bridge_state(app, bridge_port)
+    bpy_viewport_api.register_bpy_viewport_routes(app)
 
     def _svc() -> StoryboardBackendService:
         return StoryboardBackendService(app)
@@ -491,6 +509,10 @@ def create_app(base_dir: Path, bridge_port: int = 8000) -> FastAPI:
     def save_project() -> dict[str, Any]:
         return _svc().method_save_project()
 
+    @app.post("/api/project/save-as")
+    def save_project_as(request: SaveProjectAsRequest) -> dict[str, Any]:
+        return _svc().method_save_project_as(request.path)
+
     @app.get("/api/system/blender-candidates")
     def blender_candidates() -> dict[str, Any]:
         return _svc().method_blender_candidates()
@@ -733,6 +755,26 @@ def create_app(base_dir: Path, bridge_port: int = 8000) -> FastAPI:
     def add_shot(request: AddShotRequest = AddShotRequest()) -> dict[str, Any]:
         return _svc().method_add_shot(request.after_shot_id)
 
+    @app.patch("/api/shots/batch")
+    def update_shots_batch(request: ShotBatchUpdateRequest) -> dict[str, Any]:
+        return _svc().method_update_shots_batch(
+            [item.model_dump() for item in request.updates]
+        )
+
+    @app.delete("/api/shots/batch")
+    def delete_shots_batch(request: ShotBatchDeleteRequest) -> dict[str, Any]:
+        return _svc().method_delete_shots_batch(request.shot_ids)
+
+    @app.post("/api/shots/batch/restore")
+    def restore_shots_batch(request: ShotBatchRestoreRequest) -> dict[str, Any]:
+        return _svc().method_restore_shots_batch(
+            [item.model_dump() for item in request.items]
+        )
+
+    @app.post("/api/shots/batch/generation-requests")
+    def create_queue_batch_requests(request: GenerationBatchQueueRequest) -> dict[str, Any]:
+        return _svc().method_create_queue_batch_requests(request.shot_ids)
+
     @app.post("/api/shots/{shot_id}/duplicate")
     def duplicate_shot(shot_id: str) -> dict[str, Any]:
         return _svc().method_duplicate_shot(shot_id)
@@ -744,12 +786,22 @@ def create_app(base_dir: Path, bridge_port: int = 8000) -> FastAPI:
     @app.post("/api/shots/{shot_id}/generation-requests")
     def create_generation_request(shot_id: str, request: GenerationRequestCreateRequest) -> dict[str, Any]:
         return _svc().method_create_generation_request(
-            shot_id, request.destination, request.provider, request.mode
+            shot_id,
+            request.destination,
+            request.provider,
+            request.mode,
+            request.clear_queue_on_result,
         )
 
     @app.post("/api/generation/requests/codex-batch")
-    def create_codex_batch_requests() -> dict[str, Any]:
-        return _svc().method_create_codex_batch_requests()
+    def create_codex_batch_requests(
+        request: GenerationBatchDispatchRequest = GenerationBatchDispatchRequest(),
+    ) -> dict[str, Any]:
+        return _svc().method_create_codex_batch_requests(
+            request.provider,
+            request.clear_queue_on_result,
+            request.scope,
+        )
 
     @app.get("/api/generation/requests")
     def list_generation_requests(

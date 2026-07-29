@@ -16,6 +16,7 @@ from typing import Any
 from fastapi import FastAPI, HTTPException
 
 from . import (
+    blender_bridge,
     live_bridge,
     preview_analysis_cache,
     project_manager,
@@ -240,7 +241,7 @@ def _remember_recent(project: Project) -> None:
 def _touch_live_bridge(app: FastAPI, *, selected_shot_id: str | None = None) -> dict[str, Any]:
     if selected_shot_id is not None:
         runtime_state.set_live_selected_shot_id(app, selected_shot_id)
-    return live_bridge.publish(
+    payload = live_bridge.publish(
         app.state.base_dir,
         app.state.project,
         selected_shot_id=runtime_state.live_selected_shot_id(app),
@@ -251,6 +252,12 @@ def _touch_live_bridge(app: FastAPI, *, selected_shot_id: str | None = None) -> 
         focus_work_context=runtime_state.focus_work_context(app),
         plugin_change=runtime_state.plugin_change_payload(app),
     )
+    if app.state.project is not None:
+        try:
+            blender_bridge.publish_context(app, app.state.project)
+        except (OSError, ValueError):
+            logger.warning("Could not refresh the external Blender bridge context.")
+    return payload
 
 
 def _plugin_open_shot_ids(app: FastAPI, plugin_linked: bool, file_seen: float, http_seen: float) -> list[str]:

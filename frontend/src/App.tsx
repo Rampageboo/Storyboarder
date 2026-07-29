@@ -5,6 +5,7 @@ import { HomePage } from './components/HomePage'
 import { ShotInspector } from './components/ShotInspector'
 import { BoardGrid } from './components/BoardGrid'
 import { BoardStrip } from './components/BoardStrip'
+import { BulkBoardActions } from './components/BulkBoardActions'
 import { CanvasBoard } from './components/CanvasBoard'
 import { ReferenceSidebar } from './components/ReferenceSidebar'
 import { ReferenceAssignmentPopover } from './components/ReferenceAssignmentPopover'
@@ -120,17 +121,12 @@ function LeftRail({
   )
 }
 
-function BoardWorkspace({
-  inspectorCollapsed,
-  onToggleInspector,
-}: {
-  inspectorCollapsed: boolean
-  onToggleInspector: () => void
-}) {
+function BoardWorkspace() {
   const [boardView, setBoardView] = useState<'strip' | 'grid'>('strip')
   return (
     <>
       <main className="main-center">
+        <BulkBoardActions />
         <div className="board-view-toggle" role="tablist" aria-label="Board view">
           <button
             type="button"
@@ -161,23 +157,9 @@ function BoardWorkspace({
           </>
         )}
       </main>
-      <aside className={`main-right${inspectorCollapsed ? ' is-collapsed' : ''}`}>
-        <button
-          type="button"
-          className="inspector-size-toggle"
-          onClick={onToggleInspector}
-          aria-label={inspectorCollapsed ? 'Show shot details' : 'Hide shot details'}
-          aria-pressed={!inspectorCollapsed}
-          title={inspectorCollapsed ? 'Show shot details' : 'Hide shot details to expand the canvas'}
-        >
-          <span aria-hidden="true">{inspectorCollapsed ? '\u2039' : '\u203a'}</span>
-        </button>
-        {!inspectorCollapsed ? (
-          <>
-            <ShotInspector />
-            <AdvancedPanel />
-          </>
-        ) : null}
+      <aside className="main-right">
+        <ShotInspector />
+        <AdvancedPanel />
       </aside>
     </>
   )
@@ -190,7 +172,7 @@ function RightRail({
   onOpenSettings: () => void
   onOpenExport: () => void
 }) {
-  const { project, newProject, openProjectFromDialog, saveProject, dirtyShotIds, projectActionBusy, initialLoading } =
+  const { project, newProject, openProjectFromDialog, saveProject, saveProjectAs, dirtyShotIds, projectActionBusy, initialLoading } =
     useProject()
   const menuRef = useRef<HTMLDivElement | null>(null)
   const [menuOpen, setMenuOpen] = useState(false)
@@ -224,6 +206,14 @@ function RightRail({
       // error surfaced via banner
     }
   }, [saveProject])
+
+  const handleSaveAs = useCallback(async () => {
+    try {
+      await saveProjectAs()
+    } catch {
+      // error surfaced via banner
+    }
+  }, [saveProjectAs])
 
   const closeMenu = useCallback(() => setMenuOpen(false), [])
   const runMenuAction = useCallback(
@@ -294,6 +284,14 @@ function RightRail({
               <button
                 type="button"
                 role="menuitem"
+                onClick={() => runMenuAction(() => void handleSaveAs())}
+                disabled={!project || projectActionBusy || initialLoading}
+              >
+                Save Project As…
+              </button>
+              <button
+                type="button"
+                role="menuitem"
                 onClick={() => runMenuAction(onOpenExport)}
                 disabled={!project || projectActionBusy || initialLoading}
               >
@@ -323,7 +321,6 @@ function AppInner() {
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [exportOpen, setExportOpen] = useState(false)
   const [refsOpen, setRefsOpen] = useState(false)
-  const [inspectorCollapsed, setInspectorCollapsed] = useState(false)
   const uiReadyReportedRef = useRef(false)
   useGlobalShortcuts()
   useAutosave()
@@ -365,16 +362,18 @@ function AppInner() {
 
   return (
     <div className="app-root" style={themeVars}>
-      <LeftRail
-        showNav={!!project}
-        workspaceMode={workspaceMode}
-        refsOpen={refsOpen}
-        onToggleRefs={() => setRefsOpen((v) => !v)}
-        onSetWorkspaceMode={setWorkspaceMode}
-        onOpenSettings={() => setSettingsOpen(true)}
-        onGoHome={() => void handleGoHome()}
-        homeBusy={projectActionBusy}
-      />
+      <div className={`left-rail-dock${project ? ' is-auto-hide' : ''}`}>
+        <LeftRail
+          showNav={!!project}
+          workspaceMode={workspaceMode}
+          refsOpen={refsOpen}
+          onToggleRefs={() => setRefsOpen((v) => !v)}
+          onSetWorkspaceMode={setWorkspaceMode}
+          onOpenSettings={() => setSettingsOpen(true)}
+          onGoHome={() => void handleGoHome()}
+          homeBusy={projectActionBusy}
+        />
+      </div>
       <div className="app-main">
         <Topbar workspaceMode={workspaceMode} />
         {lastError ? (
@@ -386,7 +385,7 @@ function AppInner() {
           </div>
         ) : null}
         <div className="workspace-shell">
-          <div className={`workspace workspace-${workspaceMode}${inspectorCollapsed ? ' is-inspector-collapsed' : ''}`}>
+          <div className={`workspace workspace-${workspaceMode}`}>
             {initialLoading ? (
               <div className="loading-panel">Loading...</div>
             ) : !project ? (
@@ -394,11 +393,8 @@ function AppInner() {
             ) : (
               <>
                 <ReferenceSidebar open={refsOpen} onOpenChange={setRefsOpen} />
-                <div className={`workspace-content workspace-content-board${inspectorCollapsed ? ' is-inspector-collapsed' : ''}`} hidden={workspaceMode !== 'board'}>
-                  <BoardWorkspace
-                    inspectorCollapsed={inspectorCollapsed}
-                    onToggleInspector={() => setInspectorCollapsed((value) => !value)}
-                  />
+                <div className="workspace-content workspace-content-board" hidden={workspaceMode !== 'board'}>
+                  <BoardWorkspace />
                 </div>
                 <div className="workspace-content workspace-content-scene" hidden={workspaceMode !== 'scene2d'}>
                   <Scene2DPanel active={workspaceMode === 'scene2d'} />
@@ -406,10 +402,18 @@ function AppInner() {
                 <div className="workspace-content workspace-content-scene" hidden={workspaceMode !== 'scene3d'}>
                   <Scene3DPanel active={workspaceMode === 'scene3d'} />
                 </div>
-                <RightRail
-                  onOpenSettings={() => setSettingsOpen(true)}
-                  onOpenExport={() => setExportOpen(true)}
-                />
+                <div className="right-rail-dock">
+                  <button
+                    type="button"
+                    className="right-rail-handle"
+                    aria-label="Show More tools"
+                    title="Hover at the right edge to show More tools"
+                  />
+                  <RightRail
+                    onOpenSettings={() => setSettingsOpen(true)}
+                    onOpenExport={() => setExportOpen(true)}
+                  />
+                </div>
               </>
             )}
           </div>

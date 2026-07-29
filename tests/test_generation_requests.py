@@ -162,6 +162,116 @@ class TestGenerationRequests(unittest.TestCase):
         self.assertTrue(all(item["destination"] == "codex" for item in body["requests"]))
         self.assertTrue(all(item["request_id"] in body["codex_prompt"] for item in body["requests"]))
 
+    def test_batch_generation_accepts_stable_diffusion_backend(self) -> None:
+        second_shot = self.client.post("/api/shots", json={}).json()["shot"]
+
+        response = self.client.post(
+            "/api/generation/requests/codex-batch",
+            json={"provider": "stable_diffusion"},
+        )
+
+        self.assertEqual(response.status_code, 200, response.text)
+        body = response.json()
+        self.assertEqual({item["shot_id"] for item in body["requests"]}, {self.shot_id, second_shot["shot_id"]})
+        self.assertTrue(all(item["provider"] == "stable_diffusion" for item in body["requests"]))
+        self.assertIn("MUST operate Stable Diffusion", body["codex_prompt"])
+        self.assertIn("Do NOT use OpenAI imagegen", body["codex_prompt"])
+
+    def test_send_batch_to_codex_uses_every_pending_queue_shot(self) -> None:
+        queued_shot_ids = {self.shot_id}
+        self.client.post(
+            f"/api/shots/{self.shot_id}/generation-requests",
+            json={"destination": "queue"},
+        )
+        for _ in range(8):
+            shot = self.client.post("/api/shots", json={}).json()["shot"]
+            queued_shot_ids.add(shot["shot_id"])
+            self.client.post(
+                f"/api/shots/{shot['shot_id']}/generation-requests",
+                json={"destination": "queue"},
+            )
+        unqueued_shot = self.client.post("/api/shots", json={}).json()["shot"]
+
+        response = self.client.post("/api/generation/requests/codex-batch")
+
+        self.assertEqual(response.status_code, 200, response.text)
+        body = response.json()
+        self.assertEqual(len(body["created_request_ids"]), 9)
+        codex_requests = [
+            request for request in body["requests"]
+            if request["destination"] == "codex" and request["status"] == "queued"
+        ]
+        self.assertEqual({request["shot_id"] for request in codex_requests}, queued_shot_ids)
+        self.assertNotIn(unqueued_shot["shot_id"], {request["shot_id"] for request in codex_requests})
+        self.assertEqual(
+            {
+                request["shot_id"]
+                for request in body["requests"]
+                if request["destination"] == "queue"
+            },
+            queued_shot_ids,
+        )
+        self.assertTrue(all(request_id in body["codex_prompt"] for request_id in body["created_request_ids"]))
+
+    def test_send_all_scope_ignores_queue_filter(self) -> None:
+        second_shot = self.client.post("/api/shots", json={}).json()["shot"]
+        third_shot = self.client.post("/api/shots", json={}).json()["shot"]
+        self.client.post(
+            f"/api/shots/{self.shot_id}/generation-requests",
+            json={"destination": "queue"},
+        )
+
+        response = self.client.post(
+            "/api/generation/requests/codex-batch",
+            json={"scope": "all"},
+        )
+
+        self.assertEqual(response.status_code, 200, response.text)
+        body = response.json()
+        self.assertEqual(len(body["created_request_ids"]), 3)
+        codex_shot_ids = {
+            request["shot_id"]
+            for request in body["requests"]
+            if request["destination"] == "codex"
+        }
+        self.assertEqual(codex_shot_ids, {self.shot_id, second_shot["shot_id"], third_shot["shot_id"]})
+
+    def test_result_return_clears_only_that_shot_pending_queue(self) -> None:
+        second_shot = self.client.post("/api/shots", json={}).json()["shot"]
+        for shot_id in (self.shot_id, second_shot["shot_id"]):
+            self.client.post(
+                f"/api/shots/{shot_id}/generation-requests",
+                json={"destination": "queue"},
+            )
+
+        response = self.client.post(
+            f"/api/shots/{self.shot_id}/generation-requests",
+            json={"destination": "codex"},
+        )
+
+        self.assertEqual(response.status_code, 200, response.text)
+        request_id = response.json()["request"]["request_id"]
+        before_result = self.client.get("/api/generation/requests").json()["requests"]
+        self.assertTrue(any(
+            row["shot_id"] == self.shot_id and row["destination"] == "queue"
+            for row in before_result
+        ))
+
+        source = self.base / "returned.png"
+        Image.new("RGB", (32, 18), (10, 20, 30)).save(source)
+        project = project_manager.open_project(self.project_root / "project.json")
+        generation_service.submit_result(project, request_id, [str(source)])
+
+        after_result = self.client.get("/api/generation/requests").json()["requests"]
+        self.assertFalse(any(
+            row["shot_id"] == self.shot_id and row["destination"] == "queue"
+            for row in after_result
+        ))
+        self.assertTrue(any(
+            row["shot_id"] == second_shot["shot_id"] and row["destination"] == "queue"
+            for row in after_result
+        ))
+
     def test_send_to_codex_returns_copyable_handoff_prompt(self) -> None:
         response = _quiet(lambda: self.client.post(
             f"/api/shots/{self.shot_id}/generation-requests",
@@ -445,6 +555,9 @@ class TestGenerationRequests(unittest.TestCase):
             provider="stable_diffusion",
         )
         self.assertEqual(snapshot["provider"], "stable_diffusion")
+        self.assertEqual(snapshot["execution_constraints"]["required_backend"], "stable_diffusion")
+        self.assertTrue(snapshot["execution_constraints"]["backend_is_mandatory"])
+        self.assertTrue(snapshot["execution_constraints"]["forbid_alternative_image_generators"])
 
     def test_invalid_provider_is_rejected_without_writing_request(self) -> None:
         project = project_manager.open_project(self.project_root / "project.json")
@@ -464,6 +577,8 @@ class TestGenerationRequests(unittest.TestCase):
         self.assertEqual(body["request"]["provider"], "stable_diffusion")
         prompt = body["codex_prompt"]
         self.assertIn("Stable Diffusion", prompt)
+        self.assertIn("MUST operate Stable Diffusion", prompt)
+        self.assertIn("Do NOT use OpenAI imagegen", prompt)
         self.assertIn(body["request"]["request_id"], prompt)
 
     def test_send_to_codex_defaults_to_codex_provider(self) -> None:
@@ -584,21 +699,36 @@ class TestGenerationRequests(unittest.TestCase):
         self.assertTrue(request["generation_plan"]["use_prior_frame_as_reference"])
         self.assertIsNone(request["generation_plan"]["prior_frame"])
 
-    def test_send_to_codex_removes_shot_pending_queue_request(self) -> None:
+    def test_send_to_codex_keeps_pending_queue_until_result_returns(self) -> None:
         self.client.post(f"/api/shots/{self.shot_id}/generation-requests", json={"destination": "queue"})
         before = self.client.get(f"/api/generation/requests?shot_id={self.shot_id}").json()["requests"]
         self.assertTrue(any(row["destination"] == "queue" for row in before))
 
         self.client.post(f"/api/shots/{self.shot_id}/generation-requests", json={"destination": "codex"})
         after = self.client.get(f"/api/generation/requests?shot_id={self.shot_id}").json()["requests"]
-        self.assertFalse(any(row["destination"] == "queue" for row in after))
+        self.assertTrue(any(row["destination"] == "queue" for row in after))
         self.assertTrue(any(row["destination"] == "codex" for row in after))
 
-    def test_send_all_to_codex_clears_the_queue(self) -> None:
+    def test_result_can_leave_staged_queue_item_in_place(self) -> None:
         self.client.post(f"/api/shots/{self.shot_id}/generation-requests", json={"destination": "queue"})
-        self.client.post("/api/generation/requests/codex-batch")
+        response = self.client.post(
+            "/api/generation/requests/codex-batch",
+            json={"clear_queue_on_result": False},
+        )
+        request_id = response.json()["created_request_ids"][0]
+        request = next(
+            row for row in response.json()["requests"]
+            if row["request_id"] == request_id
+        )
+        self.assertFalse(request["clear_queue_on_result"])
+
+        source = self.base / "modified.png"
+        Image.new("RGB", (32, 18), (10, 20, 30)).save(source)
+        project = project_manager.open_project(self.project_root / "project.json")
+        generation_service.submit_result(project, request_id, [str(source)])
+
         rows = self.client.get("/api/generation/requests").json()["requests"]
-        self.assertFalse(any(row["destination"] == "queue" for row in rows))
+        self.assertTrue(any(row["destination"] == "queue" for row in rows))
 
     def test_reconcile_imports_mcp_result_as_needs_review(self) -> None:
         queued = self.client.post(

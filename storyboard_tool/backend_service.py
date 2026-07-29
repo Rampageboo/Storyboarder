@@ -16,6 +16,8 @@ from fastapi import FastAPI, HTTPException
 
 from . import (
     app_state,
+    blender_bridge,
+    bpy_viewport,
     generation_service,
     project_manager,
     project_transaction,
@@ -286,6 +288,11 @@ class StoryboardBackendService(ExportServiceMixin):
         if project is None:
             return {"closed": False, "recents": self._recent_entries()}
         try:
+            blender_bridge.require_released(self.app, "closing this project")
+        except ValueError as exc:
+            raise app_error(AppErrorCode.PROJECT_SAVE_FAILED, str(exc), status=409) from exc
+        bpy_viewport.stop_worker(self.app)
+        try:
             if self.app.state.dirty:
                 project_manager.save_project(project)
         except Exception as exc:
@@ -449,6 +456,10 @@ class StoryboardBackendService(ExportServiceMixin):
         canvas_width: int | None = None,
         canvas_height: int | None = None,
     ) -> dict[str, Any]:
+        try:
+            blender_bridge.require_released(self.app, "creating another project")
+        except ValueError as exc:
+            raise app_error(AppErrorCode.PROJECT_OPEN_FAILED, str(exc), status=409) from exc
         root = Path(path).expanduser() if path else self.app.state.base_dir / "Untitled.sbd"
         try:
             creator = project_manager.create_document if root.suffix.lower() == ".sbd" else project_manager.create_project
@@ -461,6 +472,7 @@ class StoryboardBackendService(ExportServiceMixin):
             logger.exception("Failed to create project: %s", root)
             raise app_error(AppErrorCode.PROJECT_OPEN_FAILED, str(exc)) from exc
         previous_project = self.app.state.project
+        bpy_viewport.stop_worker(self.app)
         app_state._track_project(self.app, opened_project)
         project_manager.cleanup_document_working_root(previous_project)
         app_state._remember_recent(self.app.state.project)
@@ -471,11 +483,16 @@ class StoryboardBackendService(ExportServiceMixin):
 
     def method_open_project(self, project_json_path: str) -> dict[str, Any]:
         try:
+            blender_bridge.require_released(self.app, "opening another project")
+        except ValueError as exc:
+            raise app_error(AppErrorCode.PROJECT_OPEN_FAILED, str(exc), status=409) from exc
+        try:
             opened_project = project_manager.open_project(Path(project_json_path).expanduser())
         except (FileNotFoundError, ValueError) as exc:
             logger.exception("Failed to open project: %s", project_json_path)
             raise app_error(AppErrorCode.PROJECT_OPEN_FAILED, str(exc)) from exc
         previous_project = self.app.state.project
+        bpy_viewport.stop_worker(self.app)
         app_state._track_project(self.app, opened_project)
         project_manager.cleanup_document_working_root(previous_project)
         app_state._remember_recent(self.app.state.project)
@@ -487,12 +504,37 @@ class StoryboardBackendService(ExportServiceMixin):
     def method_save_project(self) -> dict[str, Any]:
         project = app_state._require_project(self.app)
         try:
+            blender_bridge.status(self.app)
+            bpy_viewport.manager_for_app(self.app).save_if_running()
             project_manager.save_project(project)
         except Exception as exc:
             logger.exception("Failed to save project")
             raise app_error(AppErrorCode.PROJECT_SAVE_FAILED, str(exc), status=500) from exc
         self.app.state.dirty = False
         return app_state._project_payload(project, self.app.state.dirty)
+
+    def method_save_project_as(self, path: str) -> dict[str, Any]:
+        project = app_state._require_project(self.app)
+        try:
+            blender_bridge.require_released(self.app, "using Save As")
+        except ValueError as exc:
+            raise app_error(AppErrorCode.PROJECT_SAVE_FAILED, str(exc), status=409) from exc
+        bpy_viewport.stop_worker(self.app)
+        try:
+            destination = validate_project_save_path(path)
+            if not destination:
+                raise ValueError("Save As destination is required.")
+            saved_project = project_manager.save_project_as(project, Path(destination))
+        except Exception as exc:
+            logger.exception("Failed to save project as %s", path)
+            raise app_error(AppErrorCode.PROJECT_SAVE_FAILED, str(exc), status=500) from exc
+        if saved_project is not project:
+            app_state._track_project(self.app, saved_project)
+        app_state._remember_recent(self.app.state.project)
+        app_state._persist_app_session(self.app)
+        app_state._touch_live_bridge(self.app)
+        self.app.state.dirty = False
+        return app_state._project_payload(self.app.state.project, self.app.state.dirty)
 
     def method_get_missing_files(self) -> dict[str, Any]:
         project = app_state._require_project(self.app)
@@ -573,8 +615,125 @@ class StoryboardBackendService(ExportServiceMixin):
         app_state._autosave(self.app)
         return app_state._project_payload(project, self.app.state.dirty)
 
+    @staticmethod
+    def _unique_shot_ids(shot_ids: list[str]) -> list[str]:
+        unique: list[str] = []
+        seen: set[str] = set()
+        for raw_id in shot_ids:
+            shot_id = str(raw_id or "").strip()
+            if shot_id and shot_id not in seen:
+                seen.add(shot_id)
+                unique.append(shot_id)
+        if not unique:
+            raise ValueError("At least one shot is required.")
+        return unique
+
+    def method_update_shots_batch(self, updates: list[dict[str, Any]]) -> dict[str, Any]:
+        project = app_state._require_project(self.app)
+        if not isinstance(updates, list) or not updates:
+            raise app_error(AppErrorCode.INVALID_REQUEST, "At least one shot update is required.")
+        normalized: list[tuple[Any, dict[str, Any]]] = []
+        seen: set[str] = set()
+        try:
+            for item in updates:
+                shot_id = str(item.get("shot_id") or "").strip()
+                if not shot_id or shot_id in seen:
+                    raise ValueError("Batch shot ids must be non-empty and unique.")
+                seen.add(shot_id)
+                changes = item.get("changes")
+                if not isinstance(changes, dict):
+                    raise ValueError(f"Changes must be an object for shot: {shot_id}")
+                normalized.append((shot_service.find_shot(project, shot_id), changes))
+            with project_transaction.mutate_project(project):
+                for shot, changes in normalized:
+                    shot_service.update_shot(shot, changes)
+                app_state._autosave(self.app)
+        except ValueError as exc:
+            raise app_error(AppErrorCode.INVALID_REQUEST, str(exc)) from exc
+        return app_state._project_payload(project, self.app.state.dirty)
+
+    def method_delete_shots_batch(self, shot_ids: list[str]) -> dict[str, Any]:
+        project = app_state._require_project(self.app)
+        try:
+            ids = self._unique_shot_ids(shot_ids)
+            for shot_id in ids:
+                shot_service.find_shot(project, shot_id)
+            with project_transaction.mutate_project(project):
+                for shot_id in ids:
+                    shot_service.delete_shot(project, shot_id)
+                app_state._autosave(self.app)
+        except ValueError as exc:
+            raise app_error(AppErrorCode.INVALID_REQUEST, str(exc)) from exc
+        return app_state._project_payload(project, self.app.state.dirty)
+
+    def method_restore_shots_batch(self, items: list[dict[str, Any]]) -> dict[str, Any]:
+        project = app_state._require_project(self.app)
+        if not isinstance(items, list) or not items:
+            raise app_error(AppErrorCode.INVALID_REQUEST, "At least one shot is required.")
+        try:
+            normalized = sorted(
+                (
+                    (dict(item["shot"]), int(item.get("index", 0)))
+                    for item in items
+                    if isinstance(item, dict)
+                ),
+                key=lambda item: item[1],
+            )
+            if len(normalized) != len(items):
+                raise ValueError("Every restore item must contain a shot.")
+            restore_ids = [str(shot.get("shot_id") or "") for shot, _index in normalized]
+            if len(set(restore_ids)) != len(restore_ids) or any(not shot_id for shot_id in restore_ids):
+                raise ValueError("Restore shot ids must be non-empty and unique.")
+            existing_ids = {shot.shot_id for shot in project.shots}
+            if any(shot_id in existing_ids for shot_id in restore_ids):
+                raise ValueError("A restored shot already exists.")
+            with project_transaction.mutate_project(project):
+                for shot, index in normalized:
+                    project_manager.restore_shot(project, shot, index)
+                app_state._autosave(self.app)
+        except (KeyError, TypeError, ValueError) as exc:
+            raise app_error(AppErrorCode.INVALID_REQUEST, str(exc)) from exc
+        return app_state._project_payload(project, self.app.state.dirty)
+
+    def method_create_queue_batch_requests(self, shot_ids: list[str]) -> dict[str, Any]:
+        project = app_state._require_project(self.app)
+        requests: list[dict[str, Any]] = []
+        try:
+            ids = self._unique_shot_ids(shot_ids)
+            target_ids = set(ids)
+            target_shots = [shot for shot in project.shots if shot.shot_id in target_ids]
+            if len(target_shots) != len(ids):
+                missing = next(shot_id for shot_id in ids if shot_id not in {shot.shot_id for shot in target_shots})
+                raise ValueError(f"Shot not found: {missing}")
+            with project_transaction.mutate_project(project):
+                requests = [
+                    generation_service.create_request(project, shot, "queue", provider="codex")
+                    for shot in target_shots
+                ]
+                for shot, request in zip(target_shots, requests, strict=True):
+                    shot.generation_state.update({
+                        "execution_status": "queued",
+                        "review_status": "unreviewed",
+                        "freshness_status": "current",
+                        "active_output_id": "",
+                        "latest_attempt_id": request["request_id"],
+                    })
+                app_state._autosave(self.app)
+        except (OSError, ValueError) as exc:
+            raise app_error(AppErrorCode.GENERATION_REQUEST_FAILED, str(exc)) from exc
+        return {
+            "requests": generation_service.list_requests(project),
+            "project": app_state._project_payload(project, self.app.state.dirty),
+            "created_request_ids": [str(request["request_id"]) for request in requests],
+        }
+
     def method_create_generation_request(
-        self, shot_id: str, destination: str, provider: str = "codex", mode: str = ""
+        self,
+        shot_id: str,
+        destination: str,
+        provider: str = "codex",
+        mode: str = "",
+        clear_queue_on_result: bool = True,
     ) -> dict[str, Any]:
         project = app_state._require_project(self.app)
         shot = app_state._find_shot(project, shot_id)
@@ -582,7 +741,12 @@ class StoryboardBackendService(ExportServiceMixin):
         try:
             with project_transaction.mutate_project(project):
                 request = generation_service.create_request(
-                    project, shot, destination, provider=provider, mode=mode
+                    project,
+                    shot,
+                    destination,
+                    provider=provider,
+                    mode=mode,
+                    clear_queue_on_result=clear_queue_on_result,
                 )
                 shot.generation_state.update({
                     "execution_status": "queued",
@@ -599,9 +763,6 @@ class StoryboardBackendService(ExportServiceMixin):
         except (OSError, ValueError) as exc:
             raise app_error(AppErrorCode.GENERATION_REQUEST_FAILED, str(exc)) from exc
         assert request is not None
-        # Dispatching a shot to Codex removes its pending queue (staging) entry.
-        if request["destination"] == "codex":
-            generation_service.clear_pending_queue_requests(project, shot_id)
         response = {
             "request": request,
             "requests": generation_service.list_requests(project, shot_id=shot_id),
@@ -615,12 +776,54 @@ class StoryboardBackendService(ExportServiceMixin):
             )
         return response
 
-    def method_create_codex_batch_requests(self) -> dict[str, Any]:
+    def method_create_codex_batch_requests(
+        self,
+        provider: str = "codex",
+        clear_queue_on_result: bool = True,
+        scope: str = "auto",
+    ) -> dict[str, Any]:
         project = app_state._require_project(self.app)
+        pending_queue = generation_service.list_requests(
+            project,
+            destination="queue",
+            status="queued",
+        )
+        queued_shot_ids = {
+            str(request.get("shot_id") or "")
+            for request in pending_queue
+            if request.get("shot_id")
+        }
+        scope = str(scope or "").strip().lower()
+        if scope not in {"auto", "queued", "all"}:
+            raise app_error(
+                AppErrorCode.INVALID_REQUEST,
+                "Generation batch scope must be 'auto', 'queued', or 'all'.",
+            )
+        if scope == "all":
+            target_shots = list(project.shots)
+        elif scope == "queued":
+            target_shots = [shot for shot in project.shots if shot.shot_id in queued_shot_ids]
+            if not target_shots:
+                raise app_error(AppErrorCode.INVALID_REQUEST, "The generation queue is empty.")
+        else:
+            target_shots = (
+                [shot for shot in project.shots if shot.shot_id in queued_shot_ids]
+                if queued_shot_ids
+                else list(project.shots)
+            )
         try:
             with project_transaction.mutate_project(project):
-                requests = [generation_service.create_request(project, shot, "codex") for shot in project.shots]
-                for shot, request in zip(project.shots, requests, strict=True):
+                requests = [
+                    generation_service.create_request(
+                        project,
+                        shot,
+                        "codex",
+                        provider=provider,
+                        clear_queue_on_result=clear_queue_on_result,
+                    )
+                    for shot in target_shots
+                ]
+                for shot, request in zip(target_shots, requests, strict=True):
                     shot.generation_state.update({
                         "execution_status": "queued",
                         "review_status": "unreviewed",
@@ -631,15 +834,13 @@ class StoryboardBackendService(ExportServiceMixin):
                 app_state._autosave(self.app)
         except (OSError, ValueError) as exc:
             raise app_error(AppErrorCode.GENERATION_REQUEST_FAILED, str(exc)) from exc
-        # Sending every shot to Codex clears the pending queue (staging) entries.
-        for shot in project.shots:
-            generation_service.clear_pending_queue_requests(project, shot.shot_id)
         return {
             "requests": generation_service.list_requests(project),
             "project": app_state._project_payload(project, self.app.state.dirty),
             "created_request_ids": [str(request["request_id"]) for request in requests],
             "codex_prompt": generation_service.codex_batch_handoff_prompt(
                 [str(request["request_id"]) for request in requests],
+                provider=provider,
             ),
         }
 
@@ -1229,15 +1430,71 @@ class StoryboardBackendService(ExportServiceMixin):
 
     def method_open_blender_scene(self) -> dict[str, Any]:
         project = app_state._require_project(self.app)
+        existing = blender_bridge.status(self.app)
+        if existing["external_blender_owned"]:
+            opened = Path(str(existing["external_blender_blend_path"]))
+            try:
+                relative_path = opened.relative_to(project.root_path).as_posix()
+            except ValueError:
+                relative_path = ""
+            return {
+                "path": str(opened),
+                "relative_path": relative_path,
+                "blender_bridge": existing,
+                **app_state._project_payload(project, self.app.state.dirty),
+            }
+        manager = bpy_viewport.manager_for_app(self.app)
         try:
-            opened = scene3d.open_blender_scene(project)
+            manager.save_if_running()
+            bpy_viewport.stop_worker(self.app)
+            active_scene = scene3d.ensure_active_scene(project)
+            attached = str(active_scene.get("blend_file_path") or "").strip()
+            blend_path = (
+                (project.root_path / attached).resolve()
+                if attached
+                else project_manager.ensure_project_blend_file(project).resolve()
+            )
+            active_scene = scene3d.configure_blend_preview(
+                project,
+                str(active_scene["id"]),
+                blend_path,
+            )
+            session = blender_bridge.begin_session(
+                self.app,
+                project,
+                active_scene,
+                blend_path,
+            )
+            bootstrap = (
+                Path(__file__).resolve().parent
+                / "blender_addon"
+                / "register_storyboarder_addon.py"
+            )
+            opened = scene3d.open_blender_scene(
+                project,
+                python_script=bootstrap,
+                script_args=[
+                    "--storyboarder-bridge",
+                    session["bridge_path"],
+                    "--storyboarder-heartbeat",
+                    session["heartbeat_path"],
+                    "--storyboarder-session",
+                    session["session_id"],
+                ],
+                on_launch=lambda process: blender_bridge.attach_process(self.app, process),
+            )
         except (FileNotFoundError, ValueError) as exc:
+            blender_bridge.cancel_session(self.app)
             logger.exception("Failed to open Blender scene")
             raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except Exception:
+            blender_bridge.cancel_session(self.app)
+            raise
         app_state._touch_live_bridge(self.app)
         return {
             "path": str(opened),
             "relative_path": opened.relative_to(project.root_path).as_posix() if opened.exists() else "",
+            "blender_bridge": blender_bridge.status(self.app),
             **app_state._project_payload(project, self.app.state.dirty),
         }
 
@@ -1292,6 +1549,10 @@ class StoryboardBackendService(ExportServiceMixin):
     def method_delete_scene3d(self, scene3d_id: str) -> dict[str, Any]:
         project = app_state._require_project(self.app)
         try:
+            blender_bridge.require_released(self.app, "deleting a Scene 3D")
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        try:
             payload = scene3d.delete_scene(project, scene3d_id)
         except FileNotFoundError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
@@ -1303,6 +1564,10 @@ class StoryboardBackendService(ExportServiceMixin):
     def method_set_active_scene3d(self, scene3d_id: str) -> dict[str, Any]:
         project = app_state._require_project(self.app)
         try:
+            blender_bridge.require_released(self.app, "switching the active Scene 3D")
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        try:
             payload = scene3d.set_active(project, scene3d_id)
         except FileNotFoundError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
@@ -1313,6 +1578,10 @@ class StoryboardBackendService(ExportServiceMixin):
 
     def method_import_scene3d_to_scene(self, scene3d_id: str, filename: str, data: list[int] | bytes | bytearray) -> dict[str, Any]:
         project = app_state._require_project(self.app)
+        try:
+            blender_bridge.require_released(self.app, "replacing a Scene 3D asset")
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
         try:
             before_scene = next(
                 (item for item in scene3d.list_scenes(project).get("scenes", []) if item.get("id") == scene3d_id),
@@ -1838,6 +2107,10 @@ class StoryboardBackendService(ExportServiceMixin):
     def method_import_scene3d(self, filename: str, data: list[int] | bytes | bytearray) -> dict[str, Any]:
         project = app_state._require_project(self.app)
         try:
+            blender_bridge.require_released(self.app, "replacing the active Scene 3D asset")
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        try:
             scene_payload = scene3d.import_active_scene_file(project, str(filename or "scene.glb"), _normalize_upload_bytes(data))
         except (FileNotFoundError, ValueError) as exc:
             logger.exception("Failed to import Scene3D file: %s", filename)
@@ -1938,11 +2211,12 @@ def _serialized_mutation(method):
 # concurrent reads and media serving are never blocked by a mutation.
 _MUTATING_METHODS = (
     # Project lifecycle
-    "method_new_project", "method_open_project", "method_save_project",
+    "method_new_project", "method_open_project", "method_save_project", "method_save_project_as",
     # Shot CRUD / ordering
-    "method_add_shot", "method_duplicate_shot", "method_update_shot", "method_delete_shot",
+    "method_add_shot", "method_duplicate_shot", "method_update_shot", "method_update_shots_batch",
+    "method_delete_shot", "method_delete_shots_batch", "method_restore_shots_batch",
     "method_restore_shot", "method_reorder_shots", "method_move_shot_up", "method_move_shot_down",
-    "method_create_generation_request", "method_create_codex_batch_requests", "method_delete_generation_request", "method_pull_generation_results", "method_reconcile_generation_results",
+    "method_create_generation_request", "method_create_queue_batch_requests", "method_create_codex_batch_requests", "method_delete_generation_request", "method_pull_generation_results", "method_reconcile_generation_results",
     "method_accept_generation_candidate", "method_remove_fixed_layer",
     # Shot media / sources
     "method_import_image_path", "method_import_shot_image", "method_add_shot_reference_image",

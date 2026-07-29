@@ -29,6 +29,15 @@ def init_bridge_state(app: FastAPI, bridge_port: int) -> None:
     app.state.generation_result_revision = 0
     app.state.generation_result_condition = threading.Condition()
 
+    # External Blender ownership is tracked separately from the Photoshop link.
+    app.state.external_blender_session_id = ""
+    app.state.external_blender_blend_path = ""
+    app.state.external_blender_scene3d_id = ""
+    app.state.external_blender_launched_at = 0.0
+    app.state.external_blender_process = None
+    app.state.external_blender_initial_mtime_ns = 0
+    app.state.external_blender_observed_mtime_ns = 0
+
     # Per-project preview-analysis jobs: norm_root → job dict
     app.state.preview_analysis_jobs = {}
 

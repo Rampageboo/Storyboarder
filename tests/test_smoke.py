@@ -16,7 +16,7 @@ with warnings.catch_warnings():
     warnings.filterwarnings("ignore", message="Using `httpx` with `starlette.testclient` is deprecated")
     from fastapi.testclient import TestClient
 
-from storyboard_tool import desktop, live_bridge, project_manager
+from storyboard_tool import blender_bridge, desktop, live_bridge, project_manager
 from storyboard_tool import api as api_module
 from storyboard_tool import backend_service as backend_service_module
 from storyboard_tool import export_service as export_service_module
@@ -371,11 +371,17 @@ class StoryboardSmokeTests(unittest.TestCase):
             self.assertEqual(created.status_code, 200)
 
             original_open = project_manager.open_blender_scene
+            original_bridge_path = blender_bridge.bridge_file_path
+            original_heartbeat_path = blender_bridge.heartbeat_file_path
+            blender_bridge.bridge_file_path = lambda: Path(tmp) / "blender_bridge.json"
+            blender_bridge.heartbeat_file_path = lambda: Path(tmp) / "blender_heartbeat.json"
 
-            def fake_open_blender_scene(project, relative_path=""):
+            def fake_open_blender_scene(project, relative_path="", **kwargs):
                 blend = project.root_path / "scene3d" / "scene.blend"
                 blend.parent.mkdir(parents=True, exist_ok=True)
                 blend.write_text("fake", encoding="utf-8")
+                if kwargs.get("on_launch"):
+                    kwargs["on_launch"](type("Process", (), {"poll": lambda self: None})())
                 return blend
 
             project_manager.open_blender_scene = fake_open_blender_scene
@@ -384,6 +390,8 @@ class StoryboardSmokeTests(unittest.TestCase):
                     response = client.post("/api/project/scene3d/open-blender")
             finally:
                 project_manager.open_blender_scene = original_open
+                blender_bridge.bridge_file_path = original_bridge_path
+                blender_bridge.heartbeat_file_path = original_heartbeat_path
 
             self.assertEqual(response.status_code, 200)
             payload = response.json()
@@ -392,6 +400,8 @@ class StoryboardSmokeTests(unittest.TestCase):
             self.assertIn("shots", payload)
             self.assertIsInstance(payload["dirty"], bool)
             self.assertIsInstance(payload["settings"], dict)
+            self.assertEqual(payload["settings"]["scene3d"]["source"], "blender")
+            self.assertTrue(payload["settings"]["scene3d"]["file_path"].endswith("/.preview/storyboarder_preview.glb"))
 
     def test_update_settings_clears_reference_model_mode(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

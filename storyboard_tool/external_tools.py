@@ -6,7 +6,7 @@ import subprocess
 import sys
 import tempfile
 from pathlib import Path
-from typing import BinaryIO
+from typing import Any, BinaryIO, Callable
 
 from . import project_manager as pm
 from .image_utils import is_psd_path
@@ -41,7 +41,14 @@ def ensure_project_blend_file(project: Project) -> Path:
     return blend_path
 
 
-def open_blender_scene(project: Project, relative_path: str = "") -> Path:
+def open_blender_scene(
+    project: Project,
+    relative_path: str = "",
+    *,
+    python_script: Path | None = None,
+    script_args: list[str] | None = None,
+    on_launch: Callable[[subprocess.Popen[Any]], None] | None = None,
+) -> Path:
     from .system_utils import detect_blender_paths, resolve_blender_executable
 
     cleaned_path = pm._normalize_rel_path(str(relative_path or "").strip())
@@ -77,7 +84,16 @@ def open_blender_scene(project: Project, relative_path: str = "") -> Path:
     args = [str(configured)]
     if blend_path.exists():
         args.append(str(blend_path.resolve()))
-    subprocess.Popen(args)
+    if python_script is not None:
+        resolved_script = python_script.resolve()
+        if not resolved_script.is_file():
+            raise FileNotFoundError(f"Blender integration script not found: {resolved_script}")
+        args.extend(["--python", str(resolved_script)])
+    if script_args:
+        args.extend(["--", *[str(item) for item in script_args]])
+    process = subprocess.Popen(args)
+    if on_launch is not None:
+        on_launch(process)
     return blend_path
 
 
