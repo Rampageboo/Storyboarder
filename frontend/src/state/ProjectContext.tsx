@@ -202,6 +202,7 @@ export function ProjectProvider({ children }: PropsWithChildren) {
   const undoStackRef = useRef<HistoryEntry[]>([])
   const redoStackRef = useRef<HistoryEntry[]>([])
   const historyBusyRef = useRef(false)
+  const projectTransitionBusyRef = useRef(false)
   const missingFilesInFlightRef = useRef(false)
 
   // Keep refs current after every render so stable callbacks always read latest values.
@@ -528,6 +529,23 @@ export function ProjectProvider({ children }: PropsWithChildren) {
     }
   }, [saveShot])
 
+  const runProjectTransition = useCallback(
+    async function runProjectTransition<T>(operation: () => Promise<T>): Promise<T> {
+      if (projectTransitionBusyRef.current) {
+        throw new Error('Another project transition is already in progress.')
+      }
+      projectTransitionBusyRef.current = true
+      setProjectActionBusy(true)
+      try {
+        return await operation()
+      } finally {
+        projectTransitionBusyRef.current = false
+        setProjectActionBusy(false)
+      }
+    },
+    [],
+  )
+
   const undo = useCallback(async () => {
     if (historyBusyRef.current) return
     const entry = undoStackRef.current[undoStackRef.current.length - 1]
@@ -595,78 +613,76 @@ export function ProjectProvider({ children }: PropsWithChildren) {
 
   const newProjectAction = useCallback(
     async (body: ProjectPathRequest = {}) => {
-      setProjectActionBusy(true)
-      try {
-        await flushDirtyShots()
-        let nextBody = body
-        if (!nextBody.path) {
-          const result = await browseProjectSave()
-          if (result.cancelled || !result.path) return
-          nextBody = { ...nextBody, path: result.path }
+      return runProjectTransition(async () => {
+        try {
+          let nextBody = body
+          if (!nextBody.path) {
+            const result = await browseProjectSave()
+            if (result.cancelled || !result.path) return
+            nextBody = { ...nextBody, path: result.path }
+          }
+          // A native picker can stay open for a long time. Flush immediately
+          // before the backend transition, not before opening the picker.
+          await flushDirtyShots()
+          const payload = await createProject(nextBody)
+          openPayload(payload, payload.shots[0]?.shot_id ?? null)
+        } catch (error) {
+          setLastError(error instanceof Error ? error.message : String(error))
+          throw error
         }
-        const payload = await createProject(nextBody)
-        openPayload(payload, payload.shots[0]?.shot_id ?? null)
-      } catch (error) {
-        setLastError(error instanceof Error ? error.message : String(error))
-        throw error
-      } finally {
-        setProjectActionBusy(false)
-      }
+      })
     },
-    [flushDirtyShots, openPayload],
+    [flushDirtyShots, openPayload, runProjectTransition],
   )
 
   const openProjectFromDialog = useCallback(async () => {
-    setProjectActionBusy(true)
-    try {
-      await flushDirtyShots()
-      const result = await browseProjectJson()
-      if (result.cancelled || !result.path) return
-      const payload = await openProject({ project_json_path: result.path })
-      openPayload(payload, payload.shots[0]?.shot_id ?? null)
-    } catch (error) {
-      setLastError(error instanceof Error ? error.message : String(error))
-      throw error
-    } finally {
-      setProjectActionBusy(false)
-    }
-  }, [flushDirtyShots, openPayload])
-
-  const openProjectPath = useCallback(
-    async (path: string) => {
-      setProjectActionBusy(true)
+    return runProjectTransition(async () => {
       try {
+        const result = await browseProjectJson()
+        if (result.cancelled || !result.path) return
         await flushDirtyShots()
-        const payload = await openProject({ project_json_path: path })
+        const payload = await openProject({ project_json_path: result.path })
         openPayload(payload, payload.shots[0]?.shot_id ?? null)
       } catch (error) {
         setLastError(error instanceof Error ? error.message : String(error))
         throw error
-      } finally {
-        setProjectActionBusy(false)
       }
+    })
+  }, [flushDirtyShots, openPayload, runProjectTransition])
+
+  const openProjectPath = useCallback(
+    async (path: string) => {
+      return runProjectTransition(async () => {
+        try {
+          await flushDirtyShots()
+          const payload = await openProject({ project_json_path: path })
+          openPayload(payload, payload.shots[0]?.shot_id ?? null)
+        } catch (error) {
+          setLastError(error instanceof Error ? error.message : String(error))
+          throw error
+        }
+      })
     },
-    [flushDirtyShots, openPayload],
+    [flushDirtyShots, openPayload, runProjectTransition],
   )
 
   const closeProjectToHome = useCallback(async () => {
-    setProjectActionBusy(true)
-    try {
-      // Push pending board edits down first: the backend flush only writes what
-      // it already holds, so an unsaved inspector field would be lost here.
-      await flushDirtyShots()
-      await closeProject()
-      resetEditState()
-      setProject(null)
-      setSelectedShotId(null)
-      setLastError(null)
-    } catch (error) {
-      setLastError(error instanceof Error ? error.message : String(error))
-      throw error
-    } finally {
-      setProjectActionBusy(false)
-    }
-  }, [flushDirtyShots, resetEditState, setSelectedShotId])
+    return runProjectTransition(async () => {
+      try {
+        // Push pending board edits down first: the backend flush only writes what
+        // it already holds, so an unsaved inspector field would be lost here.
+        await flushDirtyShots()
+        await closeProject()
+        resetEditState()
+        setProject(null)
+        setSelectedShotId(null)
+        setLastError(null)
+      } catch (error) {
+        setLastError(error instanceof Error ? error.message : String(error))
+        throw error
+      }
+    })
+  }, [flushDirtyShots, resetEditState, runProjectTransition, setSelectedShotId])
 
   const saveProjectAction = useCallback(async () => {
     setProjectActionBusy(true)

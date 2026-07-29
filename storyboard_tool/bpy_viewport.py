@@ -212,6 +212,15 @@ class BpyViewportManager:
                 return None
             return self.save()
 
+    def save_and_stop(self) -> dict[str, Any] | None:
+        """Durably save and release the built-in writer as one ordered action."""
+        with self._lock:
+            if not self.running:
+                return None
+            result = self.save()
+            self.stop()
+            return result
+
     def _require_running(self) -> None:
         if not self.running:
             raise BpyViewportError("Built-in Blender is not running.")
@@ -267,3 +276,18 @@ def stop_worker(app: Any) -> None:
     manager = getattr(app.state, "bpy_viewport_manager", None)
     if manager is not None:
         manager.stop()
+
+
+def save_and_stop_worker(app: Any) -> dict[str, Any] | None:
+    """Save/release the active built-in Blender writer, if one exists."""
+    manager = getattr(app.state, "bpy_viewport_manager", None)
+    if manager is None:
+        return None
+    save_and_stop = getattr(manager, "save_and_stop", None)
+    if callable(save_and_stop):
+        return save_and_stop()
+    # Compatibility for injected managers/test doubles.
+    result = manager.save_if_running()
+    if result is not None:
+        manager.stop()
+    return result

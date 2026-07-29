@@ -178,7 +178,12 @@ def create_app(base_dir: Path, bridge_port: int = 8000) -> FastAPI:
 
             while not stop_event.wait(_BRIDGE_REFRESH_SECONDS):
                 try:
-                    app_state._touch_live_bridge(app)
+                    with app_state.project_background_writer(
+                        app,
+                        "live_bridge",
+                    ) as allowed:
+                        if allowed:
+                            app_state._touch_live_bridge(app)
                 except Exception:
                     # Keep the loop alive; bridge file writes are best-effort, but a
                     # persistent failure should be visible in the log, not silent.
@@ -202,12 +207,18 @@ def create_app(base_dir: Path, bridge_port: int = 8000) -> FastAPI:
                     observed_revisions[project_key] = revision
                     continue
                 try:
-                    with project_manager.PROJECT_LOCK:
-                        # Do not let a result from a project just closed or replaced
-                        # get applied to whichever project became active meanwhile.
-                        if app.state.project is not project:
+                    with app_state.project_background_writer(
+                        app,
+                        "generation_results",
+                    ) as allowed:
+                        if not allowed:
                             continue
-                        result = _svc().method_pull_generation_results()
+                        with project_manager.PROJECT_LOCK:
+                            # Do not let a result from a project just closed or replaced
+                            # get applied to whichever project became active meanwhile.
+                            if app.state.project is not project:
+                                continue
+                            result = _svc().method_pull_generation_results()
                     if result["updated_shot_ids"] or result["accepted_request_ids"]:
                         runtime_state.mark_generation_results_changed(app)
                         app_state._touch_live_bridge(app)

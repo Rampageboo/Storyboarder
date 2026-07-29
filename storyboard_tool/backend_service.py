@@ -288,21 +288,23 @@ class StoryboardBackendService(ExportServiceMixin):
         if project is None:
             return {"closed": False, "recents": self._recent_entries()}
         try:
-            blender_bridge.require_released(self.app, "closing this project")
-        except ValueError as exc:
-            raise app_error(AppErrorCode.PROJECT_SAVE_FAILED, str(exc), status=409) from exc
-        bpy_viewport.stop_worker(self.app)
-        try:
-            if self.app.state.dirty:
-                project_manager.save_project(project)
-        except Exception as exc:
+            app_state.transition_active_project(
+                self.app,
+                action="closing this project",
+                candidate_factory=None,
+            )
+        except app_state.ProjectTransitionError as exc:
             logger.exception("Failed to save project while closing")
-            raise app_error(AppErrorCode.PROJECT_SAVE_FAILED, str(exc), status=500) from exc
-        self.app.state.dirty = False
-        self.app.state.project = None
-        self.app.state.project_disk_mtime = 0.0
-        project_manager.cleanup_document_working_root(project)
-        app_state._touch_live_bridge(self.app)
+            status = 409 if exc.stage in {
+                "writer_quiesce",
+                "external_blender_release",
+                "builtin_blender_release",
+            } else 500
+            raise app_error(
+                AppErrorCode.PROJECT_SAVE_FAILED,
+                str(exc.cause),
+                status=status,
+            ) from exc
         return {"closed": True, "recents": self._recent_entries()}
 
     def method_ui_ready(self) -> dict[str, Any]:
@@ -370,7 +372,13 @@ class StoryboardBackendService(ExportServiceMixin):
         def _run() -> None:
             decoded = 0
             try:
-                decoded = app_state._analyse_uncached_previews(captured_project)
+                with app_state.project_background_writer(
+                    app,
+                    f"preview_analysis:{task_id}",
+                ) as allowed:
+                    if not allowed:
+                        return
+                    decoded = app_state._analyse_uncached_previews(captured_project)
                 new_rev = prior_revision + 1 if decoded > 0 else prior_revision
                 logger.info("[analysis] task %s: %d decoded, revision %d→%d", task_id[:8], decoded, prior_revision, new_rev)
             except Exception as exc:
@@ -456,50 +464,54 @@ class StoryboardBackendService(ExportServiceMixin):
         canvas_width: int | None = None,
         canvas_height: int | None = None,
     ) -> dict[str, Any]:
-        try:
-            blender_bridge.require_released(self.app, "creating another project")
-        except ValueError as exc:
-            raise app_error(AppErrorCode.PROJECT_OPEN_FAILED, str(exc), status=409) from exc
         root = Path(path).expanduser() if path else self.app.state.base_dir / "Untitled.sbd"
         try:
             creator = project_manager.create_document if root.suffix.lower() == ".sbd" else project_manager.create_project
-            opened_project = creator(
-                root,
-                canvas_width=canvas_width if canvas_width is not None else 1920,
-                canvas_height=canvas_height if canvas_height is not None else 1080,
+            opened_project = app_state.transition_active_project(
+                self.app,
+                action="creating another project",
+                candidate_factory=lambda: creator(
+                    root,
+                    canvas_width=canvas_width if canvas_width is not None else 1920,
+                    canvas_height=canvas_height if canvas_height is not None else 1080,
+                ),
             )
-        except (FileNotFoundError, ValueError) as exc:
+        except app_state.ProjectTransitionError as exc:
             logger.exception("Failed to create project: %s", root)
-            raise app_error(AppErrorCode.PROJECT_OPEN_FAILED, str(exc)) from exc
-        previous_project = self.app.state.project
-        bpy_viewport.stop_worker(self.app)
-        app_state._track_project(self.app, opened_project)
-        project_manager.cleanup_document_working_root(previous_project)
-        app_state._remember_recent(self.app.state.project)
-        app_state._persist_app_session(self.app)
-        app_state._touch_live_bridge(self.app)
-        self.app.state.dirty = False
-        return app_state._project_payload(self.app.state.project, self.app.state.dirty)
+            status = 409 if exc.stage in {
+                "writer_quiesce",
+                "external_blender_release",
+                "builtin_blender_release",
+            } else 400 if exc.stage in {"candidate_open", "candidate_validate"} else 500
+            raise app_error(
+                AppErrorCode.PROJECT_OPEN_FAILED,
+                str(exc.cause),
+                status=status,
+            ) from exc
+        return app_state._project_payload(opened_project, self.app.state.dirty)
 
     def method_open_project(self, project_json_path: str) -> dict[str, Any]:
         try:
-            blender_bridge.require_released(self.app, "opening another project")
-        except ValueError as exc:
-            raise app_error(AppErrorCode.PROJECT_OPEN_FAILED, str(exc), status=409) from exc
-        try:
-            opened_project = project_manager.open_project(Path(project_json_path).expanduser())
-        except (FileNotFoundError, ValueError) as exc:
+            opened_project = app_state.transition_active_project(
+                self.app,
+                action="opening another project",
+                candidate_factory=lambda: project_manager.open_project(
+                    Path(project_json_path).expanduser()
+                ),
+            )
+        except app_state.ProjectTransitionError as exc:
             logger.exception("Failed to open project: %s", project_json_path)
-            raise app_error(AppErrorCode.PROJECT_OPEN_FAILED, str(exc)) from exc
-        previous_project = self.app.state.project
-        bpy_viewport.stop_worker(self.app)
-        app_state._track_project(self.app, opened_project)
-        project_manager.cleanup_document_working_root(previous_project)
-        app_state._remember_recent(self.app.state.project)
-        app_state._persist_app_session(self.app)
-        app_state._touch_live_bridge(self.app)
-        self.app.state.dirty = False
-        return app_state._project_payload(self.app.state.project, self.app.state.dirty)
+            status = 409 if exc.stage in {
+                "writer_quiesce",
+                "external_blender_release",
+                "builtin_blender_release",
+            } else 400 if exc.stage in {"candidate_open", "candidate_validate"} else 500
+            raise app_error(
+                AppErrorCode.PROJECT_OPEN_FAILED,
+                str(exc.cause),
+                status=status,
+            ) from exc
+        return app_state._project_payload(opened_project, self.app.state.dirty)
 
     def method_save_project(self) -> dict[str, Any]:
         project = app_state._require_project(self.app)
@@ -2211,7 +2223,7 @@ def _serialized_mutation(method):
 # concurrent reads and media serving are never blocked by a mutation.
 _MUTATING_METHODS = (
     # Project lifecycle
-    "method_new_project", "method_open_project", "method_save_project", "method_save_project_as",
+    "method_save_project", "method_save_project_as",
     # Shot CRUD / ordering
     "method_add_shot", "method_duplicate_shot", "method_update_shot", "method_update_shots_batch",
     "method_delete_shot", "method_delete_shots_batch", "method_restore_shots_batch",

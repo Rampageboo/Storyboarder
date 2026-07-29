@@ -108,6 +108,10 @@ from .asset_validation import validate_project_integrity  # noqa: E402
 # different states. Hold this lock around any full persistence pass, and reuse it to
 # guard the reload-on-read swap in app_state so a save can't be torn by a reload.
 PROJECT_LOCK = threading.RLock()
+# Lifecycle transitions first quiesce background writers, then take
+# PROJECT_LOCK to drain/freeze request mutations. Keeping a dedicated outer
+# lock makes that ordering explicit and prevents two transitions from racing.
+PROJECT_TRANSITION_LOCK = threading.RLock()
 
 
 def create_project(
@@ -267,6 +271,24 @@ def save_project(project: Project, *, flush_document: bool = True) -> None:
         save_settings(project)
         if flush_document and project.document_path:
             project_document.pack_document(project.root_path, project.document_path)
+
+
+def validate_transition_candidate(project: Project) -> None:
+    """Reject an incomplete separately-opened candidate before activation.
+
+    Missing linked artwork remains a supported, repairable state, so this gate
+    is intentionally narrower than ``validate_project_integrity``.
+    """
+    root = project.root_path.resolve()
+    if not root.is_dir():
+        raise ValueError(f"Project root not found: {root}")
+    if not project.json_path.is_file():
+        raise ValueError(f"Project file not found: {project.json_path}")
+    if project.document_path is not None and not project.document_path.is_file():
+        raise ValueError(f"Project document not found: {project.document_path}")
+    shot_ids = [shot.shot_id for shot in project.shots]
+    if len(shot_ids) != len(set(shot_ids)):
+        raise ValueError("Project contains duplicate shot IDs.")
 
 
 def sync_document(project: Project) -> None:

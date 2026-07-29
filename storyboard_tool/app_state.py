@@ -8,8 +8,12 @@ them downward, with no circular dependency.
 
 from __future__ import annotations
 
+import contextlib
 import logging
+import secrets
+import threading
 import time
+from collections.abc import Callable, Generator
 from pathlib import Path
 from typing import Any
 
@@ -17,6 +21,7 @@ from fastapi import FastAPI, HTTPException
 
 from . import (
     blender_bridge,
+    bpy_viewport,
     live_bridge,
     preview_analysis_cache,
     project_manager,
@@ -29,6 +34,287 @@ from .errors import AppErrorCode, app_error
 from .models import Project, SHOT_STATUSES, Shot
 
 logger = logging.getLogger(__name__)
+
+PROJECT_WRITER_QUIESCE_TIMEOUT_SECONDS = 5.0
+
+
+class ProjectTransitionError(RuntimeError):
+    """A pre-commit project transition failure with its exact stage."""
+
+    def __init__(self, action: str, stage: str, cause: Exception) -> None:
+        self.action = action
+        self.stage = stage
+        self.cause = cause
+        super().__init__(f"{action} failed during {stage}: {cause}")
+
+
+def _ensure_transition_runtime(app: FastAPI) -> None:
+    """Initialize per-app writer accounting without racing request threads."""
+    with project_manager.PROJECT_TRANSITION_LOCK:
+        if not isinstance(
+            getattr(app.state, "project_writer_condition", None),
+            threading.Condition,
+        ):
+            app.state.project_writer_condition = threading.Condition()
+            app.state.project_writers_quiesced = False
+            app.state.active_project_writers = {}
+        if not str(getattr(app.state, "project_session_id", "") or ""):
+            app.state.project_session_id = secrets.token_urlsafe(24)
+        if not hasattr(app.state, "last_project_transition"):
+            app.state.last_project_transition = {}
+
+
+@contextlib.contextmanager
+def project_background_writer(app: FastAPI, name: str) -> Generator[bool, None, None]:
+    """Register a background writer, or decline it while transitions are paused."""
+    _ensure_transition_runtime(app)
+    condition: threading.Condition = app.state.project_writer_condition
+    registered = False
+    with condition:
+        if not bool(app.state.project_writers_quiesced):
+            active = app.state.active_project_writers
+            active[name] = int(active.get(name, 0)) + 1
+            registered = True
+    try:
+        yield registered
+    finally:
+        if registered:
+            with condition:
+                active = app.state.active_project_writers
+                remaining = int(active.get(name, 0)) - 1
+                if remaining > 0:
+                    active[name] = remaining
+                else:
+                    active.pop(name, None)
+                condition.notify_all()
+
+
+def quiesce_project_writers(
+    app: FastAPI,
+    timeout: float | None = None,
+) -> dict[str, Any]:
+    """Pause new background writes and wait for registered writers to exit."""
+    _ensure_transition_runtime(app)
+    condition: threading.Condition = app.state.project_writer_condition
+    wait_seconds = (
+        float(timeout)
+        if timeout is not None
+        else float(
+            getattr(
+                app.state,
+                "project_writer_quiesce_timeout",
+                PROJECT_WRITER_QUIESCE_TIMEOUT_SECONDS,
+            )
+        )
+    )
+    deadline = time.monotonic() + max(0.0, wait_seconds)
+    with condition:
+        app.state.project_writers_quiesced = True
+        while app.state.active_project_writers:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                names = ", ".join(sorted(app.state.active_project_writers))
+                raise TimeoutError(
+                    f"Timed out waiting for project writers to quiesce: {names}"
+                )
+            condition.wait(timeout=remaining)
+        return {
+            "active": [],
+            "registered": [
+                "live_bridge",
+                "generation_results",
+                "preview_analysis",
+                "plugin_http_mutations",
+            ],
+            "plugin_http": "frozen_by_project_lock",
+            "plugin_inbox": "excluded_uncommitted_layout1_no_inbox",
+            "transaction_log": "drained_by_project_lock_no_persistent_log",
+        }
+
+
+def resume_project_writers(app: FastAPI) -> None:
+    _ensure_transition_runtime(app)
+    condition: threading.Condition = app.state.project_writer_condition
+    with condition:
+        app.state.project_writers_quiesced = False
+        condition.notify_all()
+
+
+def _transition_checkpoint(
+    app: FastAPI,
+    report: dict[str, Any],
+    stage: str,
+) -> None:
+    report["current_stage"] = stage
+    report["stages"].append(stage)
+    app.state.last_project_transition = report
+    fault = getattr(app.state, "project_transition_fault", None)
+    if callable(fault):
+        fault(stage)
+    elif str(fault or "") == stage:
+        raise RuntimeError(f"Injected project transition fault at {stage}")
+
+
+def transition_active_project(
+    app: FastAPI,
+    *,
+    action: str,
+    candidate_factory: Callable[[], Project] | None,
+) -> Project | None:
+    """Durably hand off the active project or leave the old state untouched.
+
+    All fallible work happens before the in-memory swap. Old runtime-root
+    cleanup is deliberately last and never runs on a failed transition.
+    """
+    _ensure_transition_runtime(app)
+    report: dict[str, Any] = {
+        "action": action,
+        "status": "running",
+        "current_stage": "",
+        "stages": [],
+        "writers": {},
+    }
+    source: Project | None = app.state.project
+    candidate: Project | None = None
+    source_dirty = bool(getattr(app.state, "dirty", False))
+    source_disk_mtime = float(
+        getattr(app.state, "project_disk_mtime", 0.0) or 0.0
+    )
+    source_session_id = str(getattr(app.state, "project_session_id", "") or "")
+    writers_quiesced = False
+
+    with project_manager.PROJECT_TRANSITION_LOCK:
+        try:
+            _transition_checkpoint(app, report, "lock_acquired")
+            report["current_stage"] = "writer_quiesce"
+            report["writers"] = quiesce_project_writers(app)
+            writers_quiesced = True
+            _transition_checkpoint(app, report, "writers_quiesced")
+
+            with project_manager.PROJECT_LOCK:
+                source = app.state.project
+                source_dirty = bool(getattr(app.state, "dirty", False))
+                source_disk_mtime = float(
+                    getattr(app.state, "project_disk_mtime", 0.0) or 0.0
+                )
+                source_session_id = str(
+                    getattr(app.state, "project_session_id", "") or ""
+                )
+                report["source_dirty_before"] = source_dirty
+                _transition_checkpoint(app, report, "mutations_frozen")
+
+                # Layout 1 has no backend-owned plugin inbox. HTTP plugin writes
+                # are drained/frozen by PROJECT_LOCK; unknown direct filesystem
+                # writes are explicitly excluded rather than silently ingested.
+                _transition_checkpoint(app, report, "plugin_inbox_resolved")
+
+                report["current_stage"] = "external_blender_release"
+                blender_bridge.require_released(app, action)
+                _transition_checkpoint(app, report, "external_blender_released")
+
+                report["current_stage"] = "builtin_blender_release"
+                built_in_save = bpy_viewport.save_and_stop_worker(app)
+                report["built_in_blender_saved"] = built_in_save is not None
+                _transition_checkpoint(app, report, "builtin_blender_released")
+
+                dirty_after_writer_checks = bool(
+                    getattr(app.state, "dirty", False)
+                )
+                report["source_dirty_after_writer_checks"] = (
+                    dirty_after_writer_checks
+                )
+                must_persist_source = source is not None and (
+                    dirty_after_writer_checks or built_in_save is not None
+                )
+                report["current_stage"] = "backend_serialize"
+                if must_persist_source:
+                    project_manager.save_project(source, flush_document=False)
+                _transition_checkpoint(app, report, "backend_serialized")
+
+                report["current_stage"] = "source_save"
+                if (
+                    must_persist_source
+                    and source is not None
+                    and source.document_path
+                ):
+                    project_manager.sync_document(source)
+                _transition_checkpoint(app, report, "source_durable")
+
+                if candidate_factory is not None:
+                    report["current_stage"] = "candidate_open"
+                    candidate = candidate_factory()
+                    _transition_checkpoint(app, report, "candidate_opened")
+                    report["current_stage"] = "candidate_validate"
+                    project_manager.validate_transition_candidate(candidate)
+                    _transition_checkpoint(app, report, "candidate_validated")
+
+                _transition_checkpoint(app, report, "before_swap")
+
+                # Commit point: these assignments/reset operations perform no I/O.
+                if candidate is None:
+                    app.state.project = None
+                    app.state.project_disk_mtime = 0.0
+                else:
+                    _track_project(app, candidate)
+                app.state.dirty = False
+                runtime_state.rotate_project_session(app)
+                blender_bridge.cancel_session(app)
+                report["status"] = "committed"
+                report["current_stage"] = "committed"
+                report["project_session_id"] = app.state.project_session_id
+                app.state.last_project_transition = report
+
+            # These publications are recoverable and must not roll back the
+            # already-atomic active-project swap.
+            try:
+                if candidate is not None:
+                    _remember_recent(candidate)
+                _persist_app_session(app)
+                _touch_live_bridge(app)
+            except Exception:
+                logger.warning(
+                    "Project transition committed but publication failed",
+                    exc_info=True,
+                )
+
+            if source is not None and source is not candidate:
+                try:
+                    project_manager.cleanup_document_working_root(source)
+                except Exception:
+                    logger.warning(
+                        "Could not clean the previous project work root",
+                        exc_info=True,
+                    )
+            return candidate
+        except Exception as exc:
+            # No active-project assignment occurs before the commit point.
+            app.state.project = source
+            app.state.dirty = source_dirty
+            app.state.project_disk_mtime = source_disk_mtime
+            app.state.project_session_id = source_session_id
+            if candidate is not None and candidate is not source:
+                try:
+                    project_manager.cleanup_document_working_root(candidate)
+                except Exception:
+                    logger.warning(
+                        "Could not clean rejected candidate work root",
+                        exc_info=True,
+                    )
+            report["status"] = "failed"
+            report["error"] = str(exc)
+            app.state.last_project_transition = report
+            if isinstance(exc, ProjectTransitionError):
+                raise
+            raise ProjectTransitionError(
+                action,
+                str(report.get("current_stage") or "unknown"),
+                exc,
+            ) from exc
+        finally:
+            if writers_quiesced or bool(
+                getattr(app.state, "project_writers_quiesced", False)
+            ):
+                resume_project_writers(app)
 
 
 def _project_payload(project: Project, dirty: bool) -> dict[str, Any]:
@@ -239,25 +525,28 @@ def _remember_recent(project: Project) -> None:
 
 
 def _touch_live_bridge(app: FastAPI, *, selected_shot_id: str | None = None) -> dict[str, Any]:
-    if selected_shot_id is not None:
-        runtime_state.set_live_selected_shot_id(app, selected_shot_id)
-    payload = live_bridge.publish(
-        app.state.base_dir,
-        app.state.project,
-        selected_shot_id=runtime_state.live_selected_shot_id(app),
-        port=int(app.state.bridge_port),
-        focus_shot_id=runtime_state.live_focus_shot_id(app),
-        focus_token=runtime_state.focus_token(app),
-        work_context=runtime_state.active_work_context(app),
-        focus_work_context=runtime_state.focus_work_context(app),
-        plugin_change=runtime_state.plugin_change_payload(app),
-    )
-    if app.state.project is not None:
-        try:
-            blender_bridge.publish_context(app, app.state.project)
-        except (OSError, ValueError):
-            logger.warning("Could not refresh the external Blender bridge context.")
-    return payload
+    # Bridge publication writes into the active project root. Serialize it with
+    # mutations/transitions so it can never recreate an old root during cleanup.
+    with project_manager.PROJECT_LOCK:
+        if selected_shot_id is not None:
+            runtime_state.set_live_selected_shot_id(app, selected_shot_id)
+        payload = live_bridge.publish(
+            app.state.base_dir,
+            app.state.project,
+            selected_shot_id=runtime_state.live_selected_shot_id(app),
+            port=int(app.state.bridge_port),
+            focus_shot_id=runtime_state.live_focus_shot_id(app),
+            focus_token=runtime_state.focus_token(app),
+            work_context=runtime_state.active_work_context(app),
+            focus_work_context=runtime_state.focus_work_context(app),
+            plugin_change=runtime_state.plugin_change_payload(app),
+        )
+        if app.state.project is not None:
+            try:
+                blender_bridge.publish_context(app, app.state.project)
+            except (OSError, ValueError):
+                logger.warning("Could not refresh the external Blender bridge context.")
+        return payload
 
 
 def _plugin_open_shot_ids(app: FastAPI, plugin_linked: bool, file_seen: float, http_seen: float) -> list[str]:

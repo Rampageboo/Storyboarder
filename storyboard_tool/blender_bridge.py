@@ -301,6 +301,6 @@ def owns_scene(app: FastAPI) -> bool:
 def require_released(app: FastAPI, action: str) -> None:
     if owns_scene(app):
         raise ValueError(
-            f"Close the externally opened Blender scene before {action}. "
+            f"Save and close the externally opened Blender scene before {action}. "
             "Storyboarder has paused its built-in Blender to prevent double editing."
         )
