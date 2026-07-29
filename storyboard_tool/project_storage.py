@@ -20,9 +20,8 @@ from pathlib import Path
 from typing import Any
 
 from .models import Project
+from .project_layout import PROJECT_JSON_VERSION
 from .shot_store import shots_csv_mtime, shots_json_mtime
-
-PROJECT_JSON_VERSION = 3
 
 DEFAULT_SETTINGS: dict = {
     "autosave": True,

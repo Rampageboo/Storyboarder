@@ -226,6 +226,20 @@ class Project:
     # selection, and sets this so exported board numbers stay the ones the user
     # sees in the strip instead of restarting at 1.
     board_numbers: list[int] = field(default_factory=list)
+    layout: int = 1
+    project_id: str = ""
+    storage_revision: int = 0
+    project_root_path: Path | None = None
+
+    @property
+    def metadata_root(self) -> Path:
+        """Expanded metadata/work root (the historical ``root_path``)."""
+        return self.root_path
+
+    @property
+    def project_root(self) -> Path:
+        """Portable project folder; identical to ``root_path`` for Layout 1."""
+        return self.project_root_path or self.root_path
 
     @property
     def json_path(self) -> Path:

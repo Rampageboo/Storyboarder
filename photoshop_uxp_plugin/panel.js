@@ -906,7 +906,7 @@ async function loadProjectJson() {
   const csvShots = await loadShotsCsv();
   if (csvShots) {
     data.shots = csvShots;
-    data.version = data.version || 3;
+    data.version = data.version || 4;
     return data;
   }
   if (!Array.isArray(data.shots)) {
@@ -930,7 +930,7 @@ async function saveProjectJson() {
   requireProjectRoot();
   const entry = await projectRoot.getEntry("project.json");
   const payload = {
-    version: projectData.version || 3,
+    version: projectData.version || 4,
   };
   await writeEntryText(entry, JSON.stringify(payload, null, 2));
   await saveShotsCsv(projectData.shots || []);

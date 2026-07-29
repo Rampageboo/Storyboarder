@@ -15,6 +15,7 @@ from pathlib import Path
 
 from .image_utils import is_psd_path
 from .models import Project, Shot
+from .project_layout import resolve_project_path
 
 
 def get_shot_dir(project: Project, shot: Shot) -> Path:
@@ -43,15 +44,8 @@ def resolve_project_relative_path(
     Raises ValueError for missing paths, path-traversal, or wrong extension.
     Does NOT check whether the path exists on disk.
     """
-    path_text = str(rel_path or "").strip()
-    if not path_text:
-        raise ValueError("Project-relative path is required.")
-    resolved = (project.root_path / path_text).resolve()
-    root = project.root_path.resolve()
-    if resolved != root and root not in resolved.parents:
-        raise ValueError("Path must be inside the project.")
-    if required_suffixes is not None:
-        suffixes = tuple(str(suffix).lower() for suffix in required_suffixes)
-        if resolved.suffix.lower() not in suffixes:
-            raise ValueError(f"Path must use one of these extensions: {', '.join(required_suffixes)}")
-    return resolved
+    return resolve_project_path(
+        project,
+        rel_path,
+        required_suffixes=required_suffixes,
+    )

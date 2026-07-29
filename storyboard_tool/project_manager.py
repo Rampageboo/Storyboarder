@@ -3,7 +3,7 @@
 Storage boundary
 ----------------
 Canonical store:
-  project.json   — lightweight manifest (version key only; NO inline shots).
+  project.json   — lightweight schema/layout manifest; NO inline shots.
   shots.json     — all shot metadata; the source of truth.  Written atomically
                    by save_shots_json / save_shots.  Read first in open_project.
   settings.json  — project-wide settings (canvas size, color, paths, etc.).
@@ -51,6 +51,11 @@ from .image_utils import (
 from .linked_sync import linked_mtime, sync_shot_from_linked_files
 from .models import Project, Shot
 from . import project_document
+from .project_layout import (
+    ensure_layout_enabled,
+    parse_project_manifest,
+    project_manifest,
+)
 from .shot_store import (
     load_shots_csv,
     load_shots_json,
@@ -200,7 +205,14 @@ def _open_expanded_project(project_json_path: Path) -> Project:
     except json.JSONDecodeError as exc:
         raise ValueError(f"Invalid project.json: {exc}") from exc
 
-    project = Project(root_path=project_json_path.parent)
+    layout_spec = parse_project_manifest(payload)
+    ensure_layout_enabled(layout_spec.layout)
+    project = Project(
+        root_path=project_json_path.parent,
+        layout=layout_spec.layout,
+        project_id=layout_spec.project_id,
+        storage_revision=layout_spec.storage_revision,
+    )
     _ensure_project_dirs(project.root_path)
     project.settings = _load_settings(project)
     sync_ref_segment_settings(project)
@@ -259,11 +271,12 @@ def save_project(project: Project, *, flush_document: bool = True) -> None:
     relies on periodic autosave, manual save, and save-on-close to flush.
     """
     with PROJECT_LOCK:
+        ensure_layout_enabled(project.layout)
         _ensure_project_dirs(project.root_path)
         if project.settings.get("backup_on_save", True):
             _write_backup(project)
-        # project.json is a lightweight manifest (version only); shots live in shots.json.
-        _atomic_write_json(project.json_path, {"version": PROJECT_JSON_VERSION})
+        # project.json is a lightweight layout manifest; shots live in shots.json.
+        _atomic_write_json(project.json_path, project_manifest(project))
         # Canonical shots.json + regenerated readable shots.csv compatibility snapshot.
         # Serialize a snapshot (list copy) so both files describe the same shot ordering
         # even if another thread mutates project.shots between the two writes.

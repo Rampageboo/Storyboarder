@@ -6,7 +6,7 @@
 (() => {
   const SHOTS_JSON_NAME = "shots.json";
   const SHOTS_JSON_VERSION = 1;
-  const PROJECT_JSON_VERSION = 3;
+  const PROJECT_JSON_VERSION = 4;
   const REF_SEGMENT_COLUMNS = ["ref_video_path", "ref_video_time", "ref_segment_time"];
 
   try {

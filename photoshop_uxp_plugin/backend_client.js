@@ -161,7 +161,7 @@ function normalizeShotFromBackend(raw = {}) {
 
 function projectDataFromPluginContext(context) {
   return {
-    version: 3,
+    version: 4,
     name: String(context?.project_name || ""),
     settings: {},
     shots: Array.isArray(context?.shots)
