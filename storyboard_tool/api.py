@@ -198,7 +198,7 @@ def create_app(base_dir: Path, bridge_port: int = 8000) -> FastAPI:
                 project = app.state.project
                 if project is None:
                     continue
-                project_key = str(project.root_path.resolve())
+                project_key = str(project.project_root.resolve())
                 revision = generation_service.result_inbox_revision(project)
                 previous = observed_revisions.get(project_key)
                 if previous is not None and revision <= previous:

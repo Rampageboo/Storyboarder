@@ -7,7 +7,9 @@ leaks into domain consumers.
 from __future__ import annotations
 
 import re
+import stat
 from dataclasses import dataclass
+from functools import lru_cache
 from pathlib import Path, PurePosixPath
 from typing import Any, Iterable, Protocol
 
@@ -22,6 +24,21 @@ LAYOUT_2_ENABLED = False
 
 MAX_STORAGE_REVISION = (1 << 63) - 1
 _DRIVE_PATH_RE = re.compile(r"^[A-Za-z]:")
+
+_LAYOUT_1_PROJECT_PATHS = {
+    "images_dir": "images",
+    "shots_dir": "shots",
+    "references_dir": "references",
+    "scenes2d_dir": "scenes2d",
+    "scenes3d_dir": "scenes3d",
+    "exports_dir": "exports",
+    "scripts_dir": "scripts",
+    "backups_dir": "backups",
+}
+_METADATA_PATHS = {
+    "manifest": "project.json",
+    "settings": "settings.json",
+}
 
 
 class ProjectLayoutError(ValueError):
@@ -47,6 +64,11 @@ class LayoutDisabledError(ProjectLayoutError):
 class ProjectPathContext(Protocol):
     @property
     def project_root(self) -> Path: ...
+
+    @property
+    def metadata_root(self) -> Path: ...
+
+    layout: int
 
 
 @dataclass(frozen=True)
@@ -189,36 +211,129 @@ def _is_within(candidate: Path, root: Path) -> bool:
     return candidate == root or root in candidate.parents
 
 
+def _stat_signature(value: Any) -> tuple[int, ...]:
+    return (
+        int(value.st_dev),
+        int(value.st_ino),
+        int(value.st_mode),
+        int(value.st_size),
+        int(value.st_mtime_ns),
+        int(getattr(value, "st_file_attributes", 0)),
+    )
+
+
+@lru_cache(maxsize=4096)
+def _casefold_directory_inventory(
+    directory: str,
+    signature: tuple[int, ...],
+) -> tuple[tuple[str, tuple[str, ...]], ...]:
+    """Cache a directory's case-fold table until its filesystem mtime changes."""
+    del signature  # Part of the cache key; contents are read from ``directory``.
+    names: dict[str, list[str]] = {}
+    for child in Path(directory).iterdir():
+        names.setdefault(child.name.casefold(), []).append(child.name)
+    return tuple(
+        (folded, tuple(sorted(entries)))
+        for folded, entries in sorted(names.items())
+    )
+
+
 def _reject_casefold_disk_collision(root: Path, relative: PurePosixPath) -> None:
     current = root
     for part in relative.parts:
-        if not current.is_dir():
-            return
         try:
-            matches = [child for child in current.iterdir() if child.name.casefold() == part.casefold()]
+            current_stat = current.stat()
+        except FileNotFoundError:
+            return
         except OSError as exc:
             raise ProjectPathError(f"Cannot inspect project path component {current}: {exc}") from exc
-        distinct_names = {child.name for child in matches}
-        if len(distinct_names) > 1:
-            names = ", ".join(sorted(repr(name) for name in distinct_names))
+        if not stat.S_ISDIR(current_stat.st_mode):
+            return
+        try:
+            inventory = dict(
+                _casefold_directory_inventory(
+                    str(current),
+                    _stat_signature(current_stat),
+                )
+            )
+        except OSError as exc:
+            raise ProjectPathError(f"Cannot inspect project path component {current}: {exc}") from exc
+        matches = inventory.get(part.casefold(), ())
+        if len(matches) > 1:
+            names = ", ".join(repr(name) for name in matches)
             raise ProjectPathError(f"Case-fold collision under {current}: {names}.")
-        current = matches[0] if matches else current / part
+        current = current / matches[0] if matches else current / part
+
+
+@lru_cache(maxsize=16384)
+def _resolve_signed_path(path: str, signature: tuple[int, ...]) -> Path:
+    """Cache expensive Windows reparse resolution until the entry changes."""
+    del signature
+    return Path(path).resolve(strict=False)
 
 
 def _reject_reparse_escape(root: Path, relative: PurePosixPath) -> Path:
-    root_resolved = root.resolve(strict=False)
-    current = root
-    for part in relative.parts:
-        current = current / part
-        if current.exists() or current.is_symlink():
-            resolved_component = current.resolve(strict=False)
-            if not _is_within(resolved_component, root_resolved):
-                raise ProjectPathError(f"Project path escapes through a reparse point: {relative}.")
+    try:
+        root_resolved = _resolve_signed_path(str(root), _stat_signature(root.lstat()))
+    except FileNotFoundError:
+        root_resolved = root.resolve(strict=False)
+    except OSError as exc:
+        raise ProjectPathError(f"Cannot inspect project root {root}: {exc}") from exc
 
-    resolved = current.resolve(strict=False)
+    current = root
+    resolved = root_resolved
+    parts = relative.parts
+    for index, part in enumerate(parts):
+        current = current / part
+        try:
+            signature = _stat_signature(current.lstat())
+        except FileNotFoundError:
+            resolved = resolved.joinpath(*parts[index:])
+            break
+        except OSError as exc:
+            raise ProjectPathError(f"Cannot inspect project path component {current}: {exc}") from exc
+        resolved = _resolve_signed_path(str(current), signature)
+        if not _is_within(resolved, root_resolved):
+            raise ProjectPathError(f"Project path escapes through a reparse point: {relative}.")
+
     if not _is_within(resolved, root_resolved):
         raise ProjectPathError(f"Project path escapes the project root: {relative}.")
     return resolved
+
+
+def _resolve_under_root(
+    root: Path,
+    relative: PurePosixPath,
+    *,
+    must_exist: bool,
+    required_suffixes: tuple[str, ...] | None,
+    field_name: str,
+    missing_source: str,
+) -> Path:
+    absolute_root = Path(root).absolute()
+    _reject_casefold_disk_collision(absolute_root, relative)
+    resolved = _reject_reparse_escape(absolute_root, relative)
+
+    if required_suffixes is not None:
+        suffixes = tuple(str(suffix).lower() for suffix in required_suffixes)
+        if resolved.suffix.lower() not in suffixes:
+            raise ProjectPathError(
+                f"{field_name} must use one of these extensions: {', '.join(required_suffixes)}"
+            )
+
+    if must_exist and not resolved.exists():
+        raise ProjectIntegrityError(
+            f"{missing_source.capitalize()} {field_name} target is missing: {relative.as_posix()}."
+        )
+    return resolved
+
+
+def _resolve_generated_child(root: Path, *parts: str, field_name: str) -> Path:
+    relative = validate_project_relative_posix(
+        "/".join(str(part) for part in parts),
+        field_name=field_name,
+    )
+    return _reject_reparse_escape(Path(root).absolute(), relative)
 
 
 def resolve_project_path(
@@ -245,21 +360,103 @@ def resolve_project_path(
         raise ProjectPathError(f"{field_name} is required.")
 
     relative = validate_project_relative_posix(chosen, field_name=field_name)
-    root = Path(project.project_root).absolute()
-    _reject_casefold_disk_collision(root, relative)
-    resolved = _reject_reparse_escape(root, relative)
+    return _resolve_under_root(
+        project.project_root,
+        relative,
+        must_exist=must_exist,
+        required_suffixes=required_suffixes,
+        field_name=field_name,
+        missing_source="default" if using_default else "stored",
+    )
 
+
+def resolve_project_child(
+    project: ProjectPathContext,
+    *parts: str,
+    required_suffixes: tuple[str, ...] | None = None,
+) -> Path:
+    """Resolve a generated Layout path from validated POSIX components."""
+    resolved = _resolve_generated_child(
+        project.project_root,
+        *parts,
+        field_name="generated project path",
+    )
     if required_suffixes is not None:
         suffixes = tuple(str(suffix).lower() for suffix in required_suffixes)
         if resolved.suffix.lower() not in suffixes:
             raise ProjectPathError(
-                f"{field_name} must use one of these extensions: {', '.join(required_suffixes)}"
+                "generated project path must use one of these extensions: "
+                f"{', '.join(required_suffixes)}"
             )
-
-    if must_exist and not resolved.exists():
-        source = "default" if using_default else "stored"
-        raise ProjectIntegrityError(f"{source.capitalize()} {field_name} target is missing: {chosen}.")
     return resolved
+
+
+def resolve_project_sibling(
+    project: ProjectPathContext,
+    path: Path,
+    sibling_name: str,
+) -> Path:
+    """Resolve a generated sibling of an already project-contained path."""
+    candidate = Path(path).parent / sibling_name
+    return resolve_project_path(project, project_relative_posix(project, candidate))
+
+
+def resolve_root_child(root: Path, *parts: str) -> Path:
+    """Resolve a safe relative child below an explicit internal root."""
+    return _resolve_generated_child(Path(root), *parts, field_name="internal path")
+
+
+def resolve_metadata_path(
+    project: ProjectPathContext,
+    relative_path: str,
+    *,
+    must_exist: bool = False,
+) -> Path:
+    """Resolve an internal metadata/work path under ``metadata_root``."""
+    relative = validate_project_relative_posix(relative_path, field_name="metadata path")
+    return _resolve_under_root(
+        project.metadata_root,
+        relative,
+        must_exist=must_exist,
+        required_suffixes=None,
+        field_name="metadata path",
+        missing_source="stored",
+    )
+
+
+def project_path_for(project: ProjectPathContext, role: str) -> Path:
+    """Return a canonical layout-owned project path for a static role."""
+    layout = getattr(project, "layout", LAYOUT_1)
+    if layout != LAYOUT_1:
+        raise LayoutDisabledError(f"Path role {role!r} is not enabled for Layout {layout}.")
+    try:
+        relative = _LAYOUT_1_PROJECT_PATHS[role]
+    except KeyError as exc:
+        raise ProjectSchemaError(f"Unknown project path role: {role!r}.") from exc
+    return _resolve_generated_child(
+        project.project_root,
+        relative,
+        field_name=f"{role} path",
+    )
+
+
+def metadata_path_for(project: ProjectPathContext, role: str) -> Path:
+    """Return a canonical layout-owned metadata path for a static role."""
+    try:
+        relative = _METADATA_PATHS[role]
+    except KeyError as exc:
+        raise ProjectSchemaError(f"Unknown metadata path role: {role!r}.") from exc
+    return _resolve_generated_child(
+        project.metadata_root,
+        relative,
+        field_name=f"{role} metadata path",
+    )
+
+
+def layout1_project_root(parent_or_project_dir: Path) -> Path:
+    """Apply the legacy Layout 1 ``Storyboard_Project`` folder convention."""
+    candidate = Path(parent_or_project_dir)
+    return candidate if candidate.name == "Storyboard_Project" else candidate / "Storyboard_Project"
 
 
 def project_relative_posix(project: ProjectPathContext, path: Path) -> str:

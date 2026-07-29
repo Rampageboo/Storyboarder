@@ -17,6 +17,7 @@ from typing import Any
 
 from .external_tools import ensure_project_blend_file
 from .models import Project
+from .project_layout import resolve_project_path
 from .system_utils import detect_blender_paths, resolve_blender_executable
 
 
@@ -42,10 +43,10 @@ def project_blend_path(project: Project) -> Path:
     relative = str((active or {}).get("blend_file_path") or "").strip()
     if not relative:
         return ensure_project_blend_file(project).resolve()
-    root = project.root_path.resolve()
-    candidate = (root / relative).resolve()
-    if candidate != root and root not in candidate.parents:
-        raise BpyViewportError("Blender scene path must stay inside the project.")
+    try:
+        candidate = resolve_project_path(project, relative)
+    except ValueError as exc:
+        raise BpyViewportError("Blender scene path must stay inside the project.") from exc
     if candidate.suffix.lower() != ".blend":
         raise BpyViewportError("The active built-in Blender scene must be a .blend file.")
     if not candidate.is_file():

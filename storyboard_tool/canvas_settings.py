@@ -42,7 +42,7 @@ def get_canvas_size(project: Project) -> tuple[int, int]:
 
 def shot_is_blank_canvas(project: Project, shot: Shot) -> bool:
     if shot.preview_image_path or shot.image_path:
-        linked = project.root_path / (shot.preview_image_path or shot.image_path)
+        linked = _pm().resolve_project_path(project, shot.preview_image_path or shot.image_path)
         if linked.is_file() and not is_solid_color_image(linked):
             return False
     return not shot_has_artwork_preview(shot)
@@ -113,8 +113,18 @@ def _sync_shot_canvas_color_assets(project: Project, shot: Shot, color: str) -> 
 
     shot_dir = _pm().get_shot_dir(project, shot)
     shot_dir.mkdir(parents=True, exist_ok=True)
-    preview_path = shot_dir / f"{shot.shot_id}_preview.png"
-    thumb_path = shot_dir / f"{shot.shot_id}_thumb.png"
+    preview_path = _pm().resolve_project_child(
+        project,
+        "shots",
+        shot.shot_id,
+        f"{shot.shot_id}_preview.png",
+    )
+    thumb_path = _pm().resolve_project_child(
+        project,
+        "shots",
+        shot.shot_id,
+        f"{shot.shot_id}_thumb.png",
+    )
 
     if not shot_has_artwork_preview(shot):
         # Do not generate per-shot default preview/thumbnail files. If old solid
@@ -131,7 +141,10 @@ def _sync_shot_canvas_color_assets(project: Project, shot: Shot, color: str) -> 
             changed = True
         return changed
 
-    linked_preview = project.root_path / (shot.preview_image_path or shot.image_path)
+    linked_preview = _pm().resolve_project_path(
+        project,
+        shot.preview_image_path or shot.image_path,
+    )
     if linked_preview.is_file() and is_solid_color_image(linked_preview):
         # Avoid rewriting the shot's preview fields; the UI will render the global
         # canvas background when no artwork exists.
@@ -153,14 +166,34 @@ def write_canvas_color_files(project: Project, color: str, shot: Shot | None = N
     payload_text = json.dumps(payload, indent=2)
     color_text = f"{normalized}\n"
 
-    targets = [project.root_path]
+    targets = [
+        (
+            _pm().resolve_project_child(project, "canvas_color.txt"),
+            _pm().resolve_project_child(project, "storyboard_bridge.json"),
+        )
+    ]
     if shot is not None:
-        targets.append(_pm().get_shot_dir(project, shot))
+        targets.append(
+            (
+                _pm().resolve_project_child(
+                    project,
+                    "shots",
+                    shot.shot_id,
+                    "canvas_color.txt",
+                ),
+                _pm().resolve_project_child(
+                    project,
+                    "shots",
+                    shot.shot_id,
+                    "storyboard_bridge.json",
+                ),
+            )
+        )
 
-    for target_dir in targets:
-        target_dir.mkdir(parents=True, exist_ok=True)
-        (target_dir / "canvas_color.txt").write_text(color_text, encoding="utf-8")
-        (target_dir / "storyboard_bridge.json").write_text(payload_text, encoding="utf-8")
+    for color_path, bridge_path in targets:
+        color_path.parent.mkdir(parents=True, exist_ok=True)
+        color_path.write_text(color_text, encoding="utf-8")
+        bridge_path.write_text(payload_text, encoding="utf-8")
 
 
 def create_canvas_for_shot(
@@ -175,21 +208,30 @@ def create_canvas_for_shot(
         default_width if width is None else width,
         default_height if height is None else height,
     )
-    shot_dir = _pm().get_shot_dir(project, shot)
     color = persist_canvas_color(
         project,
         background_color or get_canvas_color(project),
     )
     background_path = _pm().get_shot_board_background_path(project, shot)
     psd_path = create_blank_psd(
-        shot_dir / f"{shot.shot_id}.psd",
+        _pm().resolve_project_child(
+            project,
+            "shots",
+            shot.shot_id,
+            f"{shot.shot_id}.psd",
+        ),
         canvas_width,
         canvas_height,
         background_color=color,
     )
     _pm().sync_psd_board_background(project, shot, psd_path)
     if background_path is not None:
-        bg_dest = shot_dir / board_background_filename(shot.shot_id)
+        bg_dest = _pm().resolve_project_child(
+            project,
+            "shots",
+            shot.shot_id,
+            board_background_filename(shot.shot_id),
+        )
         _pm()._save_board_background_copy(background_path, bg_dest)
     else:
         # No per-shot default background PNG; the canvas background is a UI backdrop.
@@ -197,7 +239,7 @@ def create_canvas_for_shot(
         shot.thumbnail_path = ""
         shot.preview_image_path = ""
         shot.image_path = ""
-    shot.source_file_path = psd_path.relative_to(project.root_path).as_posix()
+    shot.source_file_path = _pm().project_relative_posix(project, psd_path)
     shot.source_sync_mtime = linked_mtime(project, shot)
     write_canvas_color_files(project, color, shot)
     return psd_path
@@ -209,7 +251,15 @@ def write_bridge_file(project: Project, shot: Shot | None = None) -> None:
 
 def _set_shot_canvas_thumbnail(project: Project, shot: Shot, preview_path: Path) -> None:
     """Keep the in-app canvas on the configured color until Photoshop sync adds artwork."""
-    thumbnail_path = create_thumbnail(preview_path, _pm().get_shot_dir(project, shot) / f"{shot.shot_id}_thumb.png")
-    shot.thumbnail_path = thumbnail_path.relative_to(project.root_path).as_posix()
+    thumbnail_path = create_thumbnail(
+        preview_path,
+        _pm().resolve_project_child(
+            project,
+            "shots",
+            shot.shot_id,
+            f"{shot.shot_id}_thumb.png",
+        ),
+    )
+    shot.thumbnail_path = _pm().project_relative_posix(project, thumbnail_path)
     shot.preview_image_path = ""
     shot.image_path = ""

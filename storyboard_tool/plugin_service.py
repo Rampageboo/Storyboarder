@@ -55,7 +55,7 @@ class PluginBridgeService:
             "work_context": runtime_state.active_work_context(self.app),
             "work_items": self.work_items(project),
             "project_name": project.name,
-            "project_root": str(project.root_path),
+            "project_root": str(project.project_root),
             "project_json_path": str(project.json_path),
             "selected_shot_id": selected_shot_id,
             "focused_shot_id": focused_shot_id,
@@ -134,9 +134,9 @@ class PluginBridgeService:
         if not rel:
             return ""
         try:
-            return str((project.root_path / rel).resolve()).replace("\\", "/")
-        except OSError:
-            return str(project.root_path / rel).replace("\\", "/")
+            return str(project_manager.resolve_project_path(project, rel)).replace("\\", "/")
+        except (OSError, ValueError):
+            return ""
 
     def work_item_by_key(self, project, key: str) -> dict[str, Any] | None:
         key = str(key or "").strip()
@@ -157,12 +157,20 @@ class PluginBridgeService:
                 raise HTTPException(status_code=400, detail=str(exc)) from exc
             if not source_path.is_file():
                 raise HTTPException(status_code=400, detail=f"PSD not found: {source_rel}")
-            shot.source_file_path = source_path.relative_to(project.root_path).as_posix()
+            shot.source_file_path = project_manager.project_relative_posix(project, source_path)
             shot.source_sync_mtime = source_path.stat().st_mtime
         else:
-            fallback_source = project.root_path / f"shots/{shot.shot_id}/{shot.shot_id}.psd"
+            fallback_source = project_manager.resolve_project_child(
+                project,
+                "shots",
+                shot.shot_id,
+                f"{shot.shot_id}.psd",
+            )
             if fallback_source.is_file():
-                shot.source_file_path = fallback_source.relative_to(project.root_path).as_posix()
+                shot.source_file_path = project_manager.project_relative_posix(
+                    project,
+                    fallback_source,
+                )
                 shot.source_sync_mtime = fallback_source.stat().st_mtime
         try:
             project_manager.relink_preview_image(project, shot, preview_rel)
@@ -187,7 +195,7 @@ class PluginBridgeService:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         if not source_path.is_file():
             raise HTTPException(status_code=400, detail=f"PSD not found: {source_rel}")
-        shot.source_file_path = source_path.relative_to(project.root_path).as_posix()
+        shot.source_file_path = project_manager.project_relative_posix(project, source_path)
         shot.source_sync_mtime = source_path.stat().st_mtime
         app_state._autosave(self.app)
         self.mark_project_changed()
@@ -234,23 +242,47 @@ class PluginBridgeService:
     def shot_paths(self, project, shot: Shot | None) -> dict[str, str]:
         if shot is None:
             return {}
-        shot_dir = project_manager.get_shot_dir(project, shot)
         preview = project_manager.resolve_shot_preview_path(project, shot)
         thumb = project_manager.resolve_shot_thumbnail_path(project, shot)
         background = project_manager.get_shot_board_background_path(project, shot)
         psd = self.shot_psd_path(project, shot)
         return {
-            "psd": str(psd) if psd else str(shot_dir / f"{shot.shot_id}.psd"),
-            "preview": str(preview) if preview else str(shot_dir / f"{shot.shot_id}_preview.png"),
-            "thumbnail": str(thumb) if thumb else str(shot_dir / f"{shot.shot_id}_thumb.png"),
-            "board_background": str(background) if background else str(shot_dir / f"{shot.shot_id}_background.png"),
+            "psd": str(psd) if psd else str(
+                project_manager.resolve_project_child(
+                    project, "shots", shot.shot_id, f"{shot.shot_id}.psd"
+                )
+            ),
+            "preview": str(preview) if preview else str(
+                project_manager.resolve_project_child(
+                    project, "shots", shot.shot_id, f"{shot.shot_id}_preview.png"
+                )
+            ),
+            "thumbnail": str(thumb) if thumb else str(
+                project_manager.resolve_project_child(
+                    project, "shots", shot.shot_id, f"{shot.shot_id}_thumb.png"
+                )
+            ),
+            "board_background": str(background) if background else str(
+                project_manager.resolve_project_child(
+                    project, "shots", shot.shot_id, f"{shot.shot_id}_background.png"
+                )
+            ),
         }
 
     def shot_psd_path(self, project, shot: Shot) -> Path | None:
         candidates: list[Path] = []
         if shot.source_file_path:
-            candidates.append(project.root_path / shot.source_file_path)
-        candidates.append(project_manager.get_shot_dir(project, shot) / f"{shot.shot_id}.psd")
+            candidates.append(
+                project_manager.resolve_project_path(project, shot.source_file_path)
+            )
+        candidates.append(
+            project_manager.resolve_project_child(
+                project,
+                "shots",
+                shot.shot_id,
+                f"{shot.shot_id}.psd",
+            )
+        )
         for candidate in candidates:
             if candidate.is_file():
                 return candidate
@@ -278,7 +310,7 @@ class PluginBridgeService:
         canonical_source_rel = scene2d._source_rel(scene_id, perspective_id)
         if source_rel != canonical_source_rel:
             raise HTTPException(status_code=400, detail="Perspective source path is not canonical.")
-        source_path = project.root_path / source_rel
+        source_path = project_manager.resolve_project_path(project, source_rel)
         if not source_path.is_file():
             raise HTTPException(status_code=400, detail=f"Source PSD not found: {source_rel}")
 
@@ -289,12 +321,10 @@ class PluginBridgeService:
         if preview_rel != canonical_preview_rel:
             raise HTTPException(status_code=400, detail="Perspective preview path is not canonical.")
 
-        preview_path = project.root_path / preview_rel
-        # Safety: preview must stay inside project root
         try:
-            preview_path.resolve().relative_to(project.root_path.resolve())
-        except ValueError:
-            raise HTTPException(status_code=400, detail="Preview path escapes project root.") from None
+            preview_path = project_manager.resolve_project_path(project, preview_rel)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail="Preview path escapes project root.") from exc
 
         if not preview_path.is_file():
             raise HTTPException(status_code=400, detail="Exported preview PNG not found — did the plugin save it?")
@@ -331,7 +361,10 @@ class PluginBridgeService:
         except FileNotFoundError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
 
-        source_path = project.root_path / perspective["source_file_path"]
+        source_path = project_manager.resolve_project_path(
+            project,
+            perspective["source_file_path"],
+        )
         if not source_path.is_file():
             raise HTTPException(status_code=400, detail=f"Source PSD not found: {perspective['source_file_path']}")
 
@@ -369,7 +402,13 @@ class PluginBridgeService:
         preview = project_manager.resolve_shot_preview_path(project, shot)
         thumb = project_manager.resolve_shot_thumbnail_path(project, shot)
         background = project_manager.get_shot_board_background_path(project, shot)
-        source_missing = bool(shot.source_file_path) and not (project.root_path / shot.source_file_path).is_file()
+        try:
+            source_missing = bool(shot.source_file_path) and not project_manager.resolve_project_path(
+                project,
+                shot.source_file_path,
+            ).is_file()
+        except ValueError:
+            source_missing = bool(shot.source_file_path)
         psd_size = psd.stat().st_size if psd and psd.is_file() else 0
         psd_mtime = psd.stat().st_mtime if psd and psd.is_file() else 0.0
         preview_mtime = preview.stat().st_mtime if preview and preview.is_file() else 0.0

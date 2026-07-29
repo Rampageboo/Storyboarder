@@ -214,11 +214,12 @@ def test_casefold_collision_on_disk_is_rejected_when_host_allows_it(tmp_path: Pa
     first = tmp_path / "Images"
     second = tmp_path / "images"
     first.mkdir()
+    project = Project(root_path=tmp_path)
+    resolve_project_path(project, "Images/board.png")
     try:
         second.mkdir()
     except FileExistsError:
         pytest.skip("Host filesystem is case-insensitive.")
-    project = Project(root_path=tmp_path)
 
     with pytest.raises(ProjectPathError, match="Case-fold collision"):
         resolve_project_path(project, "Images/board.png")

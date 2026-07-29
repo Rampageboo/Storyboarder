@@ -15,21 +15,21 @@ from pathlib import Path
 
 from .image_utils import is_psd_path
 from .models import Project, Shot
-from .project_layout import resolve_project_path
+from .project_layout import resolve_project_child, resolve_project_path
 
 
 def get_shot_dir(project: Project, shot: Shot) -> Path:
     """Return the canonical directory for a shot's files."""
-    return project.shots_dir / shot.shot_id
+    return resolve_project_child(project, "shots", shot.shot_id)
 
 
 def shot_has_psd_canvas(project: Project, shot: Shot) -> bool:
     """True when the shot folder contains a linked Photoshop canvas."""
     if shot.source_file_path:
-        path = project.root_path / shot.source_file_path
+        path = resolve_project_path(project, shot.source_file_path)
         if path.is_file() and is_psd_path(path):
             return True
-    fallback = get_shot_dir(project, shot) / f"{shot.shot_id}.psd"
+    fallback = resolve_project_child(project, "shots", shot.shot_id, f"{shot.shot_id}.psd")
     return fallback.is_file() and is_psd_path(fallback)
 
 

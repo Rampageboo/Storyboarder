@@ -9,6 +9,7 @@ from typing import Any
 
 from .canvas_settings import get_canvas_size
 from .models import Project, Shot
+from .project_layout import resolve_project_child
 from .project_manager import get_canvas_color, get_shot_dir
 
 LIVE_BRIDGE_VERSION = 1
@@ -97,7 +98,7 @@ def build_payload(
     if project and selected_shot_id:
         shot = next((item for item in project.shots if item.shot_id == selected_shot_id), None)
 
-    project_root = str(project.root_path) if project else ""
+    project_root = str(project.project_root) if project else ""
     shot_folder = ""
     source_file_path = ""
     if project and shot is not None:
@@ -164,7 +165,7 @@ def write_payload_files(base_dir: Path, project: Project | None, payload: dict[s
     _try_write_bridge_file(shared_bridge_file_path(), text)
 
     if project is not None:
-        _try_write_bridge_file(project.root_path / LIVE_BRIDGE_FILENAME, text)
+        _try_write_bridge_file(resolve_project_child(project, LIVE_BRIDGE_FILENAME), text)
 
 
 def _try_write_bridge_file(path: Path, text: str) -> bool:

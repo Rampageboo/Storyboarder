@@ -339,7 +339,7 @@ class StoryboardBackendService(ExportServiceMixin):
         if project is None:
             return {"ok": True, "status": "no_project"}
 
-        project_root = str(project.root_path.resolve()).replace("\\", "/")
+        project_root = str(project.project_root.resolve()).replace("\\", "/")
         existing = runtime_state.get_preview_analysis_job(self.app, project_root)
         if existing and existing["state"] == "running":
             return {
@@ -397,7 +397,7 @@ class StoryboardBackendService(ExportServiceMixin):
             # Only notify when work changed — zero-work jobs must not trigger project reloads
             if decoded > 0:
                 current = app.state.project
-                if current and str(current.root_path.resolve()).replace("\\", "/") == captured_root:
+                if current and str(current.project_root.resolve()).replace("\\", "/") == captured_root:
                     try:
                         app_state._touch_live_bridge(app)
                     except Exception:
@@ -417,7 +417,7 @@ class StoryboardBackendService(ExportServiceMixin):
         project = self.app.state.project
         if project is None:
             return {"ok": True, "status": "no_project", "job": None}
-        project_root = str(project.root_path.resolve()).replace("\\", "/")
+        project_root = str(project.project_root.resolve()).replace("\\", "/")
         job = runtime_state.get_preview_analysis_job(self.app, project_root)
         status = job["state"] if job else "idle"
         return {"ok": True, "status": status, "job": job}
@@ -1391,7 +1391,9 @@ class StoryboardBackendService(ExportServiceMixin):
         # of launching Photoshop again (which creates a confusing duplicate).
         plugin_linked, _age, open_shot_ids = app_state._plugin_link_state(self.app)
         if plugin_linked and shot_id in open_shot_ids:
-            source_native_path = str((project.root_path / shot.source_file_path).resolve()).replace("\\", "/")
+            source_native_path = str(
+                project_manager.resolve_project_path(project, shot.source_file_path)
+            ).replace("\\", "/")
             runtime_state.set_active_shot_context(
                 self.app,
                 shot_id,
@@ -1446,7 +1448,7 @@ class StoryboardBackendService(ExportServiceMixin):
         if existing["external_blender_owned"]:
             opened = Path(str(existing["external_blender_blend_path"]))
             try:
-                relative_path = opened.relative_to(project.root_path).as_posix()
+                relative_path = project_manager.project_relative_posix(project, opened)
             except ValueError:
                 relative_path = ""
             return {
@@ -1462,7 +1464,7 @@ class StoryboardBackendService(ExportServiceMixin):
             active_scene = scene3d.ensure_active_scene(project)
             attached = str(active_scene.get("blend_file_path") or "").strip()
             blend_path = (
-                (project.root_path / attached).resolve()
+                project_manager.resolve_project_path(project, attached)
                 if attached
                 else project_manager.ensure_project_blend_file(project).resolve()
             )
@@ -1505,7 +1507,9 @@ class StoryboardBackendService(ExportServiceMixin):
         app_state._touch_live_bridge(self.app)
         return {
             "path": str(opened),
-            "relative_path": opened.relative_to(project.root_path).as_posix() if opened.exists() else "",
+            "relative_path": (
+                project_manager.project_relative_posix(project, opened) if opened.exists() else ""
+            ),
             "blender_bridge": blender_bridge.status(self.app),
             **app_state._project_payload(project, self.app.state.dirty),
         }
@@ -1876,7 +1880,9 @@ class StoryboardBackendService(ExportServiceMixin):
         expected_source_rel = scene2d._source_rel(scene_id, perspective_id)
         if source_rel != expected_source_rel:
             raise HTTPException(status_code=400, detail="Perspective source path is not canonical.")
-        source_path = project.root_path / source_rel if source_rel else None
+        source_path = (
+            project_manager.resolve_project_path(project, source_rel) if source_rel else None
+        )
 
         if not source_path or not source_path.is_file():
             raise HTTPException(status_code=400, detail=f"Source PSD not found: {source_rel}")
@@ -1907,7 +1913,7 @@ class StoryboardBackendService(ExportServiceMixin):
             except (FileNotFoundError, ValueError) as exc:
                 raise HTTPException(status_code=400, detail=str(exc)) from exc
             perspective = scene2d._find_perspective(sc, perspective_id)
-            source_path = project.root_path / relative_path
+            source_path = project_manager.resolve_project_path(project, relative_path)
             runtime_state.set_active_scene2d_context(
                 self.app,
                 scene_id,
@@ -1938,7 +1944,12 @@ class StoryboardBackendService(ExportServiceMixin):
         project = app_state._require_project(self.app)
         try:
             scene, perspective, _scenes = scene2d.refresh_perspective_preview(project, scene_id, perspective_id)
-            preview_exists = bool((project.root_path / perspective["preview_image_path"]).is_file())
+            preview_exists = bool(
+                project_manager.resolve_project_path(
+                    project,
+                    perspective["preview_image_path"],
+                ).is_file()
+            )
         except FileNotFoundError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         except ValueError as exc:

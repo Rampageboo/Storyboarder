@@ -318,7 +318,7 @@ def transition_active_project(
 
 
 def _project_payload(project: Project, dirty: bool) -> dict[str, Any]:
-    cache = preview_analysis_cache.load_cache(project.root_path)
+    cache = preview_analysis_cache.load_cache(project.metadata_root)
     return {
         "project_path": str(project.visible_path),
         "project_json_path": str(project.reopen_path),
@@ -386,7 +386,7 @@ def _analyse_uncached_previews(project: Project) -> int:
     """
     from .image_utils import image_has_transparency, is_solid_color_image
 
-    cache = preview_analysis_cache.load_cache(project.root_path)
+    cache = preview_analysis_cache.load_cache(project.metadata_root)
     analysed = 0
     dirty = False
     # Snapshot the shot list: this runs on a background thread while request threads
@@ -410,7 +410,7 @@ def _analyse_uncached_previews(project: Project) -> int:
         dirty = True
 
     if dirty:
-        preview_analysis_cache.save_cache(project.root_path, cache)
+        preview_analysis_cache.save_cache(project.metadata_root, cache)
     return analysed
 
 
@@ -502,7 +502,7 @@ def _dialog_initial_dir(app: FastAPI, kind: str) -> str:
     if kind == "folder":
         candidate = project.visible_path.parent
     elif kind == "project-json":
-        candidate = project.visible_path.parent if project.document_path else project.root_path
+        candidate = project.visible_path.parent if project.document_path else project.project_root
     elif kind == "blender":
         current = str(project.settings.get("blender_path", "") or "")
         candidate = Path(current).parent if current else Path(r"C:\Program Files\Blender Foundation")
@@ -711,7 +711,7 @@ def _bridge_status_payload(app: FastAPI) -> dict[str, Any]:
         "live": live,
     }
     if project is not None:
-        pa = runtime_state.preview_analysis_status_for_project(app, str(project.root_path))
+        pa = runtime_state.preview_analysis_status_for_project(app, str(project.project_root))
         if pa is not None:
             result["preview_analysis"] = pa
     return result
@@ -743,12 +743,17 @@ def _persist_app_session(app: FastAPI, *, selected_shot_id: str | None = None) -
 def _annotation_path(project: Project, shot: Shot) -> Path:
     if not shot.annotation_path:
         project_manager.get_shot_dir(project, shot).mkdir(parents=True, exist_ok=True)
-        path = project_manager.get_shot_dir(project, shot) / f"{shot.shot_id}_annotations.json"
+        path = project_manager.resolve_project_child(
+            project,
+            "shots",
+            shot.shot_id,
+            f"{shot.shot_id}_annotations.json",
+        )
         project_manager._atomic_write_text(path, "[]")
-        shot.annotation_path = path.relative_to(project.root_path).as_posix()
+        shot.annotation_path = project_manager.project_relative_posix(project, path)
         project_manager.save_project(project)
         return path
-    path = project.root_path / shot.annotation_path
+    path = project_manager.resolve_project_path(project, shot.annotation_path)
     if not path.exists():
         path.parent.mkdir(parents=True, exist_ok=True)
         project_manager._atomic_write_text(path, "[]")

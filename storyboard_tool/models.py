@@ -4,6 +4,8 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
+from .project_layout import metadata_path_for, project_path_for
+
 
 SHOT_STATUSES = ("Draft", "In Progress", "Review", "Approved", "Final")
 
@@ -243,43 +245,43 @@ class Project:
 
     @property
     def json_path(self) -> Path:
-        return self.root_path / "project.json"
+        return metadata_path_for(self, "manifest")
 
     @property
     def images_dir(self) -> Path:
-        return self.root_path / "images"
+        return project_path_for(self, "images_dir")
 
     @property
     def shots_dir(self) -> Path:
-        return self.root_path / "shots"
+        return project_path_for(self, "shots_dir")
 
     @property
     def references_dir(self) -> Path:
-        return self.root_path / "references"
+        return project_path_for(self, "references_dir")
 
     @property
     def scenes2d_dir(self) -> Path:
-        return self.root_path / "scenes2d"
+        return project_path_for(self, "scenes2d_dir")
 
     @property
     def scenes3d_dir(self) -> Path:
-        return self.root_path / "scenes3d"
+        return project_path_for(self, "scenes3d_dir")
 
     @property
     def exports_dir(self) -> Path:
-        return self.root_path / "exports"
+        return project_path_for(self, "exports_dir")
 
     @property
     def scripts_dir(self) -> Path:
-        return self.root_path / "scripts"
+        return project_path_for(self, "scripts_dir")
 
     @property
     def backups_dir(self) -> Path:
-        return self.root_path / "backups"
+        return project_path_for(self, "backups_dir")
 
     @property
     def settings_path(self) -> Path:
-        return self.root_path / "settings.json"
+        return metadata_path_for(self, "settings")
 
     @property
     def name(self) -> str:

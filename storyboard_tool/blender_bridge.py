@@ -128,7 +128,7 @@ def publish_context(app: FastAPI, project: Project) -> dict[str, Any]:
         "version": 1,
         "session_id": session_id,
         "project_name": project.name,
-        "project_root": str(project.root_path.resolve()),
+        "project_root": str(project.project_root.resolve()),
         "project_json_path": str(project.json_path.resolve()),
         "scene3d_id": scene_id,
         "scene3d_title": str(scene_payload.get("title") or scene_id),
@@ -182,7 +182,7 @@ def _adopt_fresh_session(app: FastAPI, project: Project) -> None:
         heartbeat_blend = _resolve(str(heartbeat.get("blend_path") or ""))
     except (OSError, ValueError):
         return
-    project_root = project.root_path.resolve()
+    project_root = project.project_root.resolve()
     if (
         age > HEARTBEAT_MAX_AGE_SECONDS
         or context_root != project_root

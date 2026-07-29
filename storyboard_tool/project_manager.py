@@ -53,8 +53,13 @@ from .models import Project, Shot
 from . import project_document
 from .project_layout import (
     ensure_layout_enabled,
+    layout1_project_root,
     parse_project_manifest,
+    project_relative_posix,
     project_manifest,
+    resolve_project_child,
+    resolve_project_path,
+    resolve_root_child,
 )
 from .shot_store import (
     load_shots_csv,
@@ -125,9 +130,7 @@ def create_project(
     canvas_width: int = 1920,
     canvas_height: int = 1080,
 ) -> Project:
-    root = parent_or_project_dir
-    if root.name != "Storyboard_Project":
-        root = root / "Storyboard_Project"
+    root = layout1_project_root(parent_or_project_dir)
 
     root.mkdir(parents=True, exist_ok=True)
     _ensure_project_dirs(root)
@@ -187,7 +190,7 @@ def open_project(project_json_path: Path) -> Project:
         document_path = project_json_path.expanduser().resolve()
         working_root = project_document.extract_document(document_path)
         try:
-            project = _open_expanded_project(working_root / "project.json")
+            project = _open_expanded_project(resolve_root_child(working_root, "project.json"))
         except Exception:
             shutil.rmtree(working_root, ignore_errors=True)
             raise
@@ -213,7 +216,7 @@ def _open_expanded_project(project_json_path: Path) -> Project:
         project_id=layout_spec.project_id,
         storage_revision=layout_spec.storage_revision,
     )
-    _ensure_project_dirs(project.root_path)
+    _ensure_project_dirs(project.metadata_root)
     project.settings = _load_settings(project)
     sync_ref_segment_settings(project)
 
@@ -226,8 +229,8 @@ def _open_expanded_project(project_json_path: Path) -> Project:
     # 4. Empty list  — brand-new project.
     # Migration is non-destructive: it only ADDS shots.json; it never deletes
     # the legacy sources (CSV, inline shots) until the project is saved normally.
-    json_path = shots_json_path(project.root_path)
-    csv_path = shots_csv_path(project.root_path)
+    json_path = shots_json_path(project.metadata_root)
+    csv_path = shots_csv_path(project.metadata_root)
     needs_json_migration = False
     if json_path.is_file():
         # Canonical path — shots.csv is intentionally not consulted.
@@ -252,7 +255,7 @@ def _open_expanded_project(project_json_path: Path) -> Project:
     # take the canonical path. Legacy sources (CSV, inline shots) are left on
     # disk until a full save_project() call regenerates them from canonical data.
     if needs_json_migration:
-        save_shots_json(project.root_path, project.shots)
+        save_shots_json(project.metadata_root, project.shots)
     save_settings(project)
     color = get_canvas_color(project)
     write_canvas_color_files(project, color)
@@ -272,7 +275,7 @@ def save_project(project: Project, *, flush_document: bool = True) -> None:
     """
     with PROJECT_LOCK:
         ensure_layout_enabled(project.layout)
-        _ensure_project_dirs(project.root_path)
+        _ensure_project_dirs(project.metadata_root)
         if project.settings.get("backup_on_save", True):
             _write_backup(project)
         # project.json is a lightweight layout manifest; shots live in shots.json.
@@ -280,10 +283,10 @@ def save_project(project: Project, *, flush_document: bool = True) -> None:
         # Canonical shots.json + regenerated readable shots.csv compatibility snapshot.
         # Serialize a snapshot (list copy) so both files describe the same shot ordering
         # even if another thread mutates project.shots between the two writes.
-        save_shots(project.root_path, list(project.shots))
+        save_shots(project.metadata_root, list(project.shots))
         save_settings(project)
         if flush_document and project.document_path:
-            project_document.pack_document(project.root_path, project.document_path)
+            project_document.pack_document(project.metadata_root, project.document_path)
 
 
 def validate_transition_candidate(project: Project) -> None:
@@ -292,7 +295,7 @@ def validate_transition_candidate(project: Project) -> None:
     Missing linked artwork remains a supported, repairable state, so this gate
     is intentionally narrower than ``validate_project_integrity``.
     """
-    root = project.root_path.resolve()
+    root = project.metadata_root.resolve()
     if not root.is_dir():
         raise ValueError(f"Project root not found: {root}")
     if not project.json_path.is_file():
@@ -309,7 +312,7 @@ def sync_document(project: Project) -> None:
     if not project.document_path:
         return
     with PROJECT_LOCK:
-        project_document.pack_document(project.root_path, project.document_path)
+        project_document.pack_document(project.metadata_root, project.document_path)
 
 
 def save_project_as(project: Project, document_path: Path) -> Project:
@@ -322,7 +325,7 @@ def save_project_as(project: Project, document_path: Path) -> Project:
     document = document_path.expanduser().resolve()
     if document.suffix.lower() != project_document.DOCUMENT_SUFFIX:
         document = document.with_suffix(project_document.DOCUMENT_SUFFIX)
-    root = project.root_path.resolve()
+    root = project.metadata_root.resolve()
     try:
         document.relative_to(root)
     except ValueError:
@@ -353,7 +356,9 @@ def save_project_as(project: Project, document_path: Path) -> Project:
                 dirs_exist_ok=True,
                 ignore=ignore_unpacked,
             )
-            saved_project = _open_expanded_project(working_root / "project.json")
+            saved_project = _open_expanded_project(
+                resolve_root_child(working_root, "project.json")
+            )
             saved_project.document_path = document
             project_document.pack_document(working_root, document)
             project_document.write_session_marker(working_root, document)
@@ -367,7 +372,7 @@ def cleanup_document_working_root(project: Project | None) -> bool:
     """Best-effort removal of a private expanded `.sbd` work tree."""
     if project is None or not project.document_path:
         return False
-    root = project.root_path.resolve()
+    root = project.metadata_root.resolve()
     temp_root = Path(tempfile.gettempdir()).resolve()
     if root.parent != temp_root or not root.name.startswith(project_document.WORKING_ROOT_PREFIX):
         return False
@@ -448,10 +453,22 @@ def move_shot_down(project: Project, index: int) -> int:
 
 
 def import_image_for_shot(project: Project, shot: Shot, source_path: Path) -> Path:
-    shot_dir = get_shot_dir(project, shot)
-    destination = shot_dir / f"{shot.shot_id}_preview.png"
+    destination = resolve_project_child(
+        project,
+        "shots",
+        shot.shot_id,
+        f"{shot.shot_id}_preview.png",
+    )
     copied_path = copy_and_convert_image(source_path, destination)
-    _save_board_background_copy(copied_path, shot_dir / board_background_filename(shot.shot_id))
+    _save_board_background_copy(
+        copied_path,
+        resolve_project_child(
+            project,
+            "shots",
+            shot.shot_id,
+            board_background_filename(shot.shot_id),
+        ),
+    )
     _set_shot_preview_paths(project, shot, copied_path)
     return copied_path
 
@@ -462,17 +479,33 @@ def import_image_stream_for_shot(
     source_stream: BinaryIO,
     source_suffix: str,
 ) -> Path:
-    shot_dir = get_shot_dir(project, shot)
-    destination = shot_dir / f"{shot.shot_id}_preview.png"
+    destination = resolve_project_child(
+        project,
+        "shots",
+        shot.shot_id,
+        f"{shot.shot_id}_preview.png",
+    )
     copied_path = copy_and_convert_image_stream(source_stream, source_suffix, destination)
-    _save_board_background_copy(copied_path, shot_dir / board_background_filename(shot.shot_id))
+    _save_board_background_copy(
+        copied_path,
+        resolve_project_child(
+            project,
+            "shots",
+            shot.shot_id,
+            board_background_filename(shot.shot_id),
+        ),
+    )
     _set_shot_preview_paths(project, shot, copied_path)
     return copied_path
 
 
 def remove_image_for_shot(project: Project, shot: Shot) -> None:
-    shot_dir = get_shot_dir(project, shot)
-    (shot_dir / board_background_filename(shot.shot_id)).unlink(missing_ok=True)
+    resolve_project_child(
+        project,
+        "shots",
+        shot.shot_id,
+        board_background_filename(shot.shot_id),
+    ).unlink(missing_ok=True)
     shot.image_path = ""
     shot.preview_image_path = ""
     shot.thumbnail_path = ""
@@ -511,16 +544,21 @@ def recover_shot_source_psd(project: Project, shot: Shot, *, preserve_layers: bo
 
     if not shot.source_file_path:
         raise ValueError("No source PSD linked for this shot.")
-    source = project.root_path / shot.source_file_path
+    source = resolve_project_path(project, shot.source_file_path)
     if not source.is_file():
         raise FileNotFoundError("Source PSD file is missing.")
     if not psd_recovery.can_open_with_psd_tools(source):
         raise ValueError("The PSD is too damaged to read — it cannot be rebuilt.")
 
-    shot_dir = get_shot_dir(project, shot)
-    history = shot_dir / "_history"
+    history = resolve_project_child(project, "shots", shot.shot_id, "_history")
     history.mkdir(parents=True, exist_ok=True)
-    backup = history / f"{shot.shot_id}.broken-{int(time.time())}.psd"
+    backup = resolve_project_child(
+        project,
+        "shots",
+        shot.shot_id,
+        "_history",
+        f"{shot.shot_id}.broken-{int(time.time())}.psd",
+    )
     shutil.copy2(source, backup)
     # PSD recovery is now rare (the old plugin's forced-save corruption that required it
     # is fixed), so keep only the most recent few broken-PSD backups. Best-effort.
@@ -537,17 +575,27 @@ def recover_shot_source_psd(project: Project, shot: Shot, *, preserve_layers: bo
 
     # Rebuild to a temp file first, then atomically swap it over the source so a
     # failed rebuild never destroys the (still backed-up) original.
-    temp = shot_dir / f"{shot.shot_id}.rebuilt.psd"
+    temp = resolve_project_child(
+        project,
+        "shots",
+        shot.shot_id,
+        f"{shot.shot_id}.rebuilt.psd",
+    )
     info = psd_recovery.rebuild_psd(source, temp, preserve_layers=preserve_layers)
     os.replace(temp, source)
 
-    preview_path = shot_dir / f"{shot.shot_id}_preview.png"
+    preview_path = resolve_project_child(
+        project,
+        "shots",
+        shot.shot_id,
+        f"{shot.shot_id}_preview.png",
+    )
     export_psd_composite_to_png(source, preview_path)
     _set_shot_preview_paths(project, shot, preview_path)
     shot.source_sync_mtime = linked_mtime(project, shot)
 
     return {
-        "backup": backup.relative_to(project.root_path).as_posix(),
+        "backup": project_relative_posix(project, backup),
         "method": info.get("method", "flatten"),
         "layers_recovered": info["layers_recovered"],
         "layers_skipped": info["layers_skipped"],
@@ -574,8 +622,12 @@ def _apply_reference_frame_to_shot(
 
     width, height = get_canvas_size(project)
     bg_color = get_canvas_color(project)
-    shot_dir = get_shot_dir(project, shot)
-    background_path = shot_dir / board_background_filename(shot.shot_id)
+    background_path = resolve_project_child(
+        project,
+        "shots",
+        shot.shot_id,
+        board_background_filename(shot.shot_id),
+    )
     background_path.parent.mkdir(parents=True, exist_ok=True)
     tmp_path = background_path.with_suffix(".tmp.png")
     try:
@@ -609,8 +661,12 @@ def _apply_model_capture_to_shot(
     from PIL import Image
 
     width, height = get_canvas_size(project)
-    shot_dir = get_shot_dir(project, shot)
-    background_path = shot_dir / board_background_filename(shot.shot_id)
+    background_path = resolve_project_child(
+        project,
+        "shots",
+        shot.shot_id,
+        board_background_filename(shot.shot_id),
+    )
     mode = normalize_reference_fit_mode(fit_mode)
     background_path.parent.mkdir(parents=True, exist_ok=True)
     tmp_path = background_path.with_suffix(".tmp.png")
@@ -639,12 +695,16 @@ def add_reference_image_stream(
     source_stream: BinaryIO,
     source_suffix: str,
 ) -> Path:
-    shot_dir = get_shot_dir(project, shot)
-    ref_dir = shot_dir / "references"
     next_number = len(shot.reference_image_paths) + 1
-    destination = ref_dir / f"{shot.shot_id}_ref_{next_number:03d}.png"
+    destination = resolve_project_child(
+        project,
+        "shots",
+        shot.shot_id,
+        "references",
+        f"{shot.shot_id}_ref_{next_number:03d}.png",
+    )
     copied_path = copy_and_convert_image_stream(source_stream, source_suffix, destination)
-    shot.reference_image_paths.append(copied_path.relative_to(project.root_path).as_posix())
+    shot.reference_image_paths.append(project_relative_posix(project, copied_path))
     return copied_path
 
 
@@ -681,7 +741,6 @@ def set_reference_image_paths(project: Project, shot: Shot, paths: list[str]) ->
 
 
 def cleanup_orphan_reference_images(project: Project) -> list[str]:
-    root = project.root_path.resolve()
     referenced = collect_reference_image_paths(project)
     deleted: list[str] = []
     shots_dir = project.shots_dir
@@ -694,7 +753,7 @@ def cleanup_orphan_reference_images(project: Project) -> list[str]:
             if not file_path.is_file():
                 continue
             try:
-                rel_path = file_path.relative_to(root).as_posix()
+                rel_path = project_relative_posix(project, file_path)
             except ValueError:
                 continue
             if rel_path in referenced:
@@ -719,8 +778,12 @@ def import_source_file_stream(
     filename: str,
 ) -> Path:
     suffix = Path(filename).suffix or ".psd"
-    shot_dir = get_shot_dir(project, shot)
-    destination = shot_dir / f"{shot.shot_id}{suffix}"
+    destination = resolve_project_child(
+        project,
+        "shots",
+        shot.shot_id,
+        f"{shot.shot_id}{suffix}",
+    )
     tmp = destination.with_suffix(suffix + ".tmp")
     try:
         with tmp.open("wb") as file:
@@ -729,17 +792,32 @@ def import_source_file_stream(
     except BaseException:
         tmp.unlink(missing_ok=True)
         raise
-    shot.source_file_path = destination.relative_to(project.root_path).as_posix()
+    shot.source_file_path = project_relative_posix(project, destination)
     if is_psd_path(destination):
-        preview_path = export_psd_composite_to_png(destination, shot_dir / f"{shot.shot_id}_preview.png")
+        preview_path = export_psd_composite_to_png(
+            destination,
+            resolve_project_child(
+                project,
+                "shots",
+                shot.shot_id,
+                f"{shot.shot_id}_preview.png",
+            ),
+        )
         _set_shot_preview_paths(project, shot, preview_path)
     shot.source_sync_mtime = linked_mtime(project, shot)
     return destination
 
 
 def save_drawing_for_shot(project: Project, shot: Shot, data_url: str) -> Path:
-    shot_dir = get_shot_dir(project, shot)
-    preview_path = save_png_data_url(data_url, shot_dir / f"{shot.shot_id}_preview.png")
+    preview_path = save_png_data_url(
+        data_url,
+        resolve_project_child(
+            project,
+            "shots",
+            shot.shot_id,
+            f"{shot.shot_id}_preview.png",
+        ),
+    )
     _set_shot_preview_paths(project, shot, preview_path)
     return preview_path
 
@@ -756,13 +834,23 @@ def _require_index(project: Project, index: int) -> None:
 def _ensure_shot_files(project: Project, shot: Shot) -> None:
     shot_dir = get_shot_dir(project, shot)
     shot_dir.mkdir(parents=True, exist_ok=True)
-    (shot_dir / "references").mkdir(exist_ok=True)
+    resolve_project_child(project, "shots", shot.shot_id, "references").mkdir(exist_ok=True)
     if not shot.annotation_path:
-        annotation_path = shot_dir / f"{shot.shot_id}_annotations.json"
+        annotation_path = resolve_project_child(
+            project,
+            "shots",
+            shot.shot_id,
+            f"{shot.shot_id}_annotations.json",
+        )
         if not annotation_path.exists():
             _atomic_write_text(annotation_path, "[]")
-        shot.annotation_path = annotation_path.relative_to(project.root_path).as_posix()
-    notes_path = shot_dir / f"{shot.shot_id}_notes.json"
+        shot.annotation_path = project_relative_posix(project, annotation_path)
+    notes_path = resolve_project_child(
+        project,
+        "shots",
+        shot.shot_id,
+        f"{shot.shot_id}_notes.json",
+    )
     if not notes_path.exists():
         notes_path.write_text(json.dumps(shot.to_dict(), indent=2), encoding="utf-8")
     relink_shot_preview_from_disk(project, shot)

@@ -21,12 +21,12 @@ def blend_template_path() -> Path:
 
 
 def get_project_blend_path(project: Project) -> Path:
-    return project.root_path / "scene3d" / "scene.blend"
+    return pm.resolve_project_child(project, "scene3d", "scene.blend")
 
 
 def ensure_project_blend_file(project: Project) -> Path:
     """Copy bundled scene_template.blend into the project when scene.blend is missing."""
-    scene_dir = project.root_path / "scene3d"
+    scene_dir = pm.resolve_project_child(project, "scene3d")
     scene_dir.mkdir(parents=True, exist_ok=True)
     blend_path = get_project_blend_path(project)
     if not blend_path.exists():
@@ -35,7 +35,7 @@ def ensure_project_blend_file(project: Project) -> Path:
             shutil.copy2(template, blend_path)
     scene_settings = dict(project.settings.get("scene3d") or {})
     if blend_path.exists():
-        scene_settings["blend_file_path"] = blend_path.relative_to(project.root_path).as_posix()
+        scene_settings["blend_file_path"] = pm.project_relative_posix(project, blend_path)
     project.settings["scene3d"] = scene_settings
     pm.save_settings(project)
     return blend_path
@@ -53,10 +53,11 @@ def open_blender_scene(
 
     cleaned_path = pm._normalize_rel_path(str(relative_path or "").strip())
     if cleaned_path:
-        blend_path = (project.root_path / cleaned_path).resolve()
-        root = project.root_path.resolve()
-        if blend_path != root and root not in blend_path.parents:
-            raise ValueError("Blender file path must stay inside the project.")
+        blend_path = pm.resolve_project_path(
+            project,
+            cleaned_path,
+            required_suffixes=(".blend",),
+        )
         if blend_path.suffix.lower() != ".blend":
             raise ValueError("Attached Blender asset must be a .blend file.")
         if not blend_path.is_file():
@@ -134,9 +135,9 @@ def import_scene3d_stream(project: Project, source_stream: BinaryIO, filename: s
     suffix = Path(filename).suffix.lower()
     if suffix not in SCENE3D_EXTENSIONS:
         raise ValueError("Only .glb and .gltf Blender exports are supported.")
-    scene_dir = project.root_path / "scene3d"
+    scene_dir = pm.resolve_project_child(project, "scene3d")
     scene_dir.mkdir(exist_ok=True)
-    destination = scene_dir / f"scene{suffix}"
+    destination = pm.resolve_project_child(project, "scene3d", f"scene{suffix}")
     fd, tmp_name = tempfile.mkstemp(dir=str(scene_dir), prefix=f"{destination.name}.", suffix=".tmp")
     try:
         with os.fdopen(fd, "wb") as file:
@@ -148,7 +149,7 @@ def import_scene3d_stream(project: Project, source_stream: BinaryIO, filename: s
         except OSError:
             pass
         raise
-    relative_path = destination.relative_to(project.root_path).as_posix()
+    relative_path = pm.project_relative_posix(project, destination)
     scene_settings = dict(project.settings.get("scene3d") or {})
     scene_settings.update(
         {
@@ -166,10 +167,7 @@ def get_scene3d_file_path(project: Project) -> Path | None:
     relative_path = str((project.settings.get("scene3d") or {}).get("file_path", "")).strip()
     if not relative_path:
         return None
-    candidate = (project.root_path / relative_path).resolve()
-    root = project.root_path.resolve()
-    if root not in candidate.parents and candidate != root:
-        raise ValueError("Scene file path must be inside the project folder.")
+    candidate = pm.resolve_project_path(project, relative_path)
     if not candidate.exists() or not candidate.is_file():
         raise FileNotFoundError(f"Scene file not found: {relative_path}")
     return candidate
@@ -183,10 +181,7 @@ def open_project_file(
 ) -> Path:
     if shot is not None:
         pm.write_bridge_file(project, shot)
-    file_path = (project.root_path / relative_path).resolve()
-    root = project.root_path.resolve()
-    if root not in file_path.parents and file_path != root:
-        raise ValueError("File path must be inside the project folder.")
+    file_path = pm.resolve_project_path(project, relative_path)
     if not file_path.exists() or not file_path.is_file():
         raise FileNotFoundError(f"File not found: {relative_path}")
     if shot is not None and is_psd_path(file_path):

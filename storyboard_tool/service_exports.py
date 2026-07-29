@@ -225,10 +225,10 @@ class ExportServiceMixin:
 
     def method_get_project_file(self, path: str) -> dict[str, str]:
         project = app_state._require_project(self.app)
-        file_path = (project.root_path / path).resolve()
-        root = project.root_path.resolve()
-        if root not in file_path.parents and file_path != root:
-            raise HTTPException(status_code=400, detail="File path is outside the project.")
+        try:
+            file_path = project_manager.resolve_project_path(project, path)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail="File path is outside the project.") from exc
         if not file_path.exists() or not file_path.is_file():
             raise HTTPException(status_code=404, detail="File is missing.")
         return {"path": str(file_path), "media_type": "", "filename": file_path.name}

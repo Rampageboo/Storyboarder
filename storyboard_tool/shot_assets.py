@@ -32,6 +32,7 @@ from .image_utils import (
     is_solid_color_image,
 )
 from .models import Project, Shot
+from .project_layout import project_relative_posix, resolve_project_child, resolve_project_path
 from .shot_files import get_shot_dir, resolve_project_relative_path
 
 
@@ -49,13 +50,9 @@ def _contained_project_path(project: Project, rel_path: str) -> Path | None:
     if not text:
         return None
     try:
-        resolved = (project.root_path / text).resolve()
+        return resolve_project_path(project, text)
     except (OSError, ValueError):
         return None
-    root = project.root_path.resolve()
-    if resolved == root or root in resolved.parents:
-        return resolved
-    return None
 
 
 def resolve_shot_preview_path(project: Project, shot: Shot) -> Path | None:
@@ -74,8 +71,9 @@ def resolve_shot_preview_path(project: Project, shot: Shot) -> Path | None:
         image_candidate = _contained_project_path(project, shot.image_path)
         if image_candidate is not None:
             candidates.append(image_candidate)
-    shot_dir = get_shot_dir(project, shot)
-    candidates.append(shot_dir / f"{shot.shot_id}_preview.png")
+    candidates.append(
+        resolve_project_child(project, "shots", shot.shot_id, f"{shot.shot_id}_preview.png")
+    )
     for path in candidates:
         if path.is_file():
             return path
@@ -92,8 +90,9 @@ def resolve_shot_thumbnail_path(project: Project, shot: Shot) -> Path | None:
     thumbnail_candidate = _contained_project_path(project, shot.thumbnail_path)
     if thumbnail_candidate is not None:
         candidates.append(thumbnail_candidate)
-    shot_dir = get_shot_dir(project, shot)
-    candidates.append(shot_dir / f"{shot.shot_id}_thumb.png")
+    candidates.append(
+        resolve_project_child(project, "shots", shot.shot_id, f"{shot.shot_id}_thumb.png")
+    )
     preview_path = resolve_shot_preview_path(project, shot)
     if preview_path is not None:
         candidates.append(preview_path)
@@ -115,8 +114,12 @@ def get_shot_board_background_path(project: Project, shot: Shot) -> Path | None:
     layer, which the preview composite then hides, producing a blank board.
     This mirrors the Photoshop plugin's resolveBoardBackgroundEntry logic.
     """
-    shot_dir = get_shot_dir(project, shot)
-    dedicated = shot_dir / board_background_filename(shot.shot_id)
+    dedicated = resolve_project_child(
+        project,
+        "shots",
+        shot.shot_id,
+        board_background_filename(shot.shot_id),
+    )
     if dedicated.is_file():
         return dedicated
     return None
@@ -124,7 +127,12 @@ def get_shot_board_background_path(project: Project, shot: Shot) -> Path | None:
 
 def get_shot_codex_layer_path(project: Project, shot: Shot) -> Path | None:
     """Return the accepted Codex image layer, or ``None`` when absent."""
-    path = get_shot_dir(project, shot) / codex_layer_filename(shot.shot_id)
+    path = resolve_project_child(
+        project,
+        "shots",
+        shot.shot_id,
+        codex_layer_filename(shot.shot_id),
+    )
     return path if path.is_file() else None
 
 
@@ -132,7 +140,12 @@ def save_codex_layer_from_path(project: Project, shot: Shot, source_path: Path) 
     """Atomically replace the fixed Codex layer without touching artist artwork."""
     width = max(1, int(project.settings.get("canvas_width") or 1920))
     height = max(1, int(project.settings.get("canvas_height") or 1080))
-    destination = get_shot_dir(project, shot) / codex_layer_filename(shot.shot_id)
+    destination = resolve_project_child(
+        project,
+        "shots",
+        shot.shot_id,
+        codex_layer_filename(shot.shot_id),
+    )
     destination.parent.mkdir(parents=True, exist_ok=True)
     tmp = destination.with_suffix(".tmp.png")
     try:
@@ -153,7 +166,12 @@ def save_codex_layer_from_path(project: Project, shot: Shot, source_path: Path) 
 
 def remove_codex_layer_for_shot(project: Project, shot: Shot) -> None:
     """Remove only the accepted Codex layer and refresh the display cache."""
-    path = get_shot_dir(project, shot) / codex_layer_filename(shot.shot_id)
+    path = resolve_project_child(
+        project,
+        "shots",
+        shot.shot_id,
+        codex_layer_filename(shot.shot_id),
+    )
     path.unlink(missing_ok=True)
     try:
         _refresh_thumbnail_for_shot(project, shot)
@@ -168,8 +186,12 @@ def remove_board_background_for_shot(project: Project, shot: Shot) -> None:
     thumbnail_path intact so a board the artist has drawn on keeps its
     illustration when its reference is removed.
     """
-    shot_dir = get_shot_dir(project, shot)
-    (shot_dir / board_background_filename(shot.shot_id)).unlink(missing_ok=True)
+    resolve_project_child(
+        project,
+        "shots",
+        shot.shot_id,
+        board_background_filename(shot.shot_id),
+    ).unlink(missing_ok=True)
     try:
         _refresh_thumbnail_for_shot(project, shot)
     except Exception:  # noqa: BLE001
@@ -194,15 +216,20 @@ def _set_shot_preview_paths(project: Project, shot: Shot, preview_path: Path) ->
     left at its previous value so the frontend can regenerate it on demand.
     """
     # Set critical artwork metadata first — the preview file is safely on disk.
-    shot.image_path = preview_path.relative_to(project.root_path).as_posix()
+    shot.image_path = project_relative_posix(project, preview_path)
     shot.preview_image_path = shot.image_path
     # Thumbnail is a display cache; failure must not roll back the artwork paths above.
     try:
         thumbnail_path = create_thumbnail(
             preview_path,
-            get_shot_dir(project, shot) / f"{shot.shot_id}_thumb.png",
+            resolve_project_child(
+                project,
+                "shots",
+                shot.shot_id,
+                f"{shot.shot_id}_thumb.png",
+            ),
         )
-        shot.thumbnail_path = thumbnail_path.relative_to(project.root_path).as_posix()
+        shot.thumbnail_path = project_relative_posix(project, thumbnail_path)
     except Exception:  # noqa: BLE001
         pass  # thumbnail_path stays at prior value; frontend regenerates on next load
 
@@ -218,8 +245,12 @@ def _refresh_thumbnail_for_shot(project: Project, shot: Shot) -> Path | None:
     The three fixed layers are rendered in product order: reference background,
     accepted Codex image, then non-solid artist artwork.
     """
-    shot_dir = get_shot_dir(project, shot)
-    thumb_path = shot_dir / f"{shot.shot_id}_thumb.png"
+    thumb_path = resolve_project_child(
+        project,
+        "shots",
+        shot.shot_id,
+        f"{shot.shot_id}_thumb.png",
+    )
 
     composite = render_shot_composite_image(project, shot)
     if composite is None:
@@ -234,7 +265,7 @@ def _refresh_thumbnail_for_shot(project: Project, shot: Shot) -> Path | None:
     except BaseException:
         tmp.unlink(missing_ok=True)
         raise
-    shot.thumbnail_path = thumb_path.relative_to(project.root_path).as_posix()
+    shot.thumbnail_path = project_relative_posix(project, thumb_path)
     return thumb_path
 
 

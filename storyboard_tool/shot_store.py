@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from .models import Shot
+from .project_layout import resolve_root_child
 
 # ── Storage boundary ──────────────────────────────────────────────────────────
 #
@@ -82,7 +83,7 @@ class ShotStoreError(ValueError):
 
 
 def shots_csv_path(project_root: Path) -> Path:
-    return project_root / SHOTS_CSV_NAME
+    return resolve_root_child(project_root, SHOTS_CSV_NAME)
 
 
 def new_shot_id() -> str:
@@ -141,7 +142,7 @@ def shots_csv_mtime(project_root: Path) -> float:
 
 
 def shots_json_path(project_root: Path) -> Path:
-    return project_root / SHOTS_JSON_NAME
+    return resolve_root_child(project_root, SHOTS_JSON_NAME)
 
 
 def load_shots_json(path: Path) -> list[Shot] | None:

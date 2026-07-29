@@ -27,16 +27,16 @@ def _now_iso() -> str:
 
 
 def _root_dir(project: Project) -> Path:
-    return project.root_path / SCENE3D_ROOT
+    return project_manager.resolve_project_child(project, SCENE3D_ROOT)
 
 
 def _index_path(project: Project) -> Path:
-    return _root_dir(project) / SCENE3D_INDEX
+    return project_manager.resolve_project_child(project, SCENE3D_ROOT, SCENE3D_INDEX)
 
 
 def _scene_dir(project: Project, scene_id: str) -> Path:
     _validate_scene_id(scene_id)
-    return _root_dir(project) / scene_id
+    return project_manager.resolve_project_child(project, SCENE3D_ROOT, scene_id)
 
 
 def preview_relative_path(scene_id: str) -> str:
@@ -49,7 +49,12 @@ def preview_file_path(project: Project, scene_id: str) -> Path:
 
 
 def _meta_path(project: Project, scene_id: str) -> Path:
-    return _scene_dir(project, scene_id) / f"{scene_id}_meta.json"
+    return project_manager.resolve_project_child(
+        project,
+        SCENE3D_ROOT,
+        scene_id,
+        f"{scene_id}_meta.json",
+    )
 
 
 def _validate_scene_id(scene_id: str) -> str:
@@ -81,14 +86,10 @@ def _normalize_keywords(value: Any) -> list[str]:
 
 
 def _safe_rel_path(project: Project, relative_path: str) -> Path:
-    rel = project_manager._normalize_rel_path(str(relative_path or "").strip())
+    rel = str(relative_path or "").strip()
     if not rel:
         raise ValueError("Scene 3D path is empty.")
-    resolved = (project.root_path / rel).resolve()
-    root = project.root_path.resolve()
-    if resolved != root and root not in resolved.parents:
-        raise ValueError("Scene 3D path escapes the project.")
-    return resolved
+    return project_manager.resolve_project_path(project, rel)
 
 
 def _write_binary_atomic(path: Path, data: bytes) -> None:
@@ -359,16 +360,14 @@ def configure_blend_preview(
     blend_path: Path,
 ) -> dict[str, Any]:
     active_id, scene, scenes = _find_scene(project, scene_id)
-    resolved_blend = blend_path.resolve()
-    root = project.root_path.resolve()
-    if resolved_blend != root and root not in resolved_blend.parents:
-        raise ValueError("Blender file path must stay inside the project.")
+    blend_relative = project_manager.project_relative_posix(project, blend_path)
+    resolved_blend = project_manager.resolve_project_path(project, blend_relative)
     scene.update(
         {
             "source_type": "blender",
             "file_path": preview_relative_path(scene_id),
             "file_name": PREVIEW_FILENAME,
-            "blend_file_path": resolved_blend.relative_to(root).as_posix(),
+            "blend_file_path": blend_relative,
             "updated_at": _now_iso(),
         }
     )
@@ -441,7 +440,10 @@ def open_blender_scene(
     if blend_path.exists():
         payload = update_scene(project, scene["id"], {"display_settings": scene.get("display_settings") or {}})
         updated = next(item for item in payload["scenes"] if item["id"] == scene["id"])
-        updated["blend_file_path"] = blend_path.relative_to(project.root_path).as_posix()
+        updated["blend_file_path"] = project_manager.project_relative_posix(
+            project,
+            blend_path,
+        )
         _save(project, payload["active_scene3d_id"], payload["scenes"])
     return project_manager.open_blender_scene(
         project,

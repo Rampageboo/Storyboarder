@@ -56,19 +56,27 @@ def new_uuid() -> str:
 
 
 def _root_dir(project: Project) -> Path:
-    return project.root_path / SCENE2D_ROOT
+    return project_manager.resolve_project_child(project, SCENE2D_ROOT)
 
 
 def _index_path(project: Project) -> Path:
-    return _root_dir(project) / SCENE2D_INDEX
+    return project_manager.resolve_project_child(project, SCENE2D_ROOT, SCENE2D_INDEX)
 
 
 def _journal_path(project: Project) -> Path:
-    return _root_dir(project) / UUID_MIGRATION_JOURNAL
+    return project_manager.resolve_project_child(
+        project,
+        SCENE2D_ROOT,
+        UUID_MIGRATION_JOURNAL,
+    )
 
 
 def _backup_root(project: Project) -> Path:
-    return _root_dir(project) / UUID_MIGRATION_BACKUP_ROOT
+    return project_manager.resolve_project_child(
+        project,
+        SCENE2D_ROOT,
+        UUID_MIGRATION_BACKUP_ROOT,
+    )
 
 
 def _validate_scene_id(scene_id: str) -> str:
@@ -101,11 +109,16 @@ def _validate_perspective_id_for_load(perspective_id: str) -> str:
 
 def _scene_dir(project: Project, scene_id: str) -> Path:
     _validate_scene_id(scene_id)
-    return _root_dir(project) / scene_id
+    return project_manager.resolve_project_child(project, SCENE2D_ROOT, scene_id)
 
 
 def _meta_path(project: Project, scene_id: str) -> Path:
-    return _scene_dir(project, scene_id) / f"{scene_id}_meta.json"
+    return project_manager.resolve_project_child(
+        project,
+        SCENE2D_ROOT,
+        scene_id,
+        f"{scene_id}_meta.json",
+    )
 
 
 def _source_rel(scene_id: str, perspective_id: str) -> str:
@@ -122,14 +135,10 @@ def _image_source_rel(scene_id: str, perspective_id: str, suffix: str) -> str:
 
 
 def _safe_rel_path(project: Project, relative_path: str) -> Path:
-    rel = project_manager._normalize_rel_path(str(relative_path or "").strip())
+    rel = str(relative_path or "").strip()
     if not rel:
         raise ValueError("Scene 2D path is empty.")
-    resolved = (project.root_path / rel).resolve()
-    root = project.root_path.resolve()
-    if resolved != root and root not in resolved.parents:
-        raise ValueError("Scene 2D path escapes the project.")
-    return resolved
+    return project_manager.resolve_project_path(project, rel)
 
 
 def _write_binary_atomic(path: Path, data: bytes) -> None:
@@ -379,7 +388,7 @@ def _remove_backup_area(project: Project) -> None:
 
 
 def _project_rel(project: Project, path: Path) -> str:
-    return path.resolve().relative_to(project.root_path.resolve()).as_posix()
+    return project_manager.project_relative_posix(project, path)
 
 
 def _backup_rel_for_original(original_rel: str) -> str:
@@ -439,31 +448,56 @@ def _restore_original_files(project: Project, original_files: list[dict[str, Any
 
 
 def _safe_project_rel(project: Project, rel_path: str) -> Path:
-    rel = project_manager._normalize_rel_path(rel_path)
+    rel = str(rel_path or "").strip()
     if not rel:
         raise ValueError("Scene 2D migration path is empty.")
-    path = (project.root_path / rel).resolve()
-    root = project.root_path.resolve()
-    if path != root and root not in path.parents:
-        raise ValueError("Scene 2D migration path escapes the project.")
-    return path
+    return project_manager.resolve_project_path(project, rel)
 
 
 def _move_root(project: Project) -> Path:
-    return _root_dir(project) / PERSPECTIVE_MOVE_ROOT
+    return project_manager.resolve_project_child(
+        project,
+        SCENE2D_ROOT,
+        PERSPECTIVE_MOVE_ROOT,
+    )
 
 
-def _move_journal_path(tx_dir: Path) -> Path:
-    return tx_dir / PERSPECTIVE_MOVE_JOURNAL
+def _move_journal_path(tx_dir: Path, *, project: Project | None = None) -> Path:
+    if project is None:
+        return project_manager.resolve_root_child(tx_dir, PERSPECTIVE_MOVE_JOURNAL)
+    return project_manager.resolve_project_child(
+        project,
+        SCENE2D_ROOT,
+        PERSPECTIVE_MOVE_ROOT,
+        tx_dir.name,
+        PERSPECTIVE_MOVE_JOURNAL,
+    )
 
 
-def _write_move_journal(tx_dir: Path, payload: dict[str, Any]) -> None:
+def _write_move_journal(
+    tx_dir: Path,
+    payload: dict[str, Any],
+    *,
+    project: Project | None = None,
+) -> None:
     tx_dir.mkdir(parents=True, exist_ok=True)
-    project_manager._atomic_write_json(_move_journal_path(tx_dir), {"version": 2, **payload, "updated_at": _now_iso()})
+    project_manager._atomic_write_json(
+        _move_journal_path(tx_dir, project=project),
+        {"version": 2, **payload, "updated_at": _now_iso()},
+    )
 
 
 def _move_backup_root_rel(project: Project, tx_dir: Path) -> str:
-    return _project_rel(project, tx_dir / "backup")
+    return _project_rel(
+        project,
+        project_manager.resolve_project_child(
+            project,
+            SCENE2D_ROOT,
+            PERSPECTIVE_MOVE_ROOT,
+            tx_dir.name,
+            "backup",
+        ),
+    )
 
 
 def _move_backup_rel(project: Project, tx_dir: Path, name: str) -> str:
@@ -579,6 +613,7 @@ def _rollback_perspective_move(project: Project, tx_dir: Path, journal: dict[str
                         "verified": result.verified,
                     },
                 },
+                project=project,
             )
         except Exception:
             LOGGER.exception("Failed to write rollback_failed journal.")
@@ -796,8 +831,12 @@ def _recover_perspective_moves(project: Project) -> bool:
         if state == "metadata_committing":
             try:
                 _verify_perspective_move_commit(project, journal)
-                _write_move_journal(tx_dir, {**journal, "state": "metadata_committed"})
-                _write_move_journal(tx_dir, {**journal, "state": "verified"})
+                _write_move_journal(
+                    tx_dir,
+                    {**journal, "state": "metadata_committed"},
+                    project=project,
+                )
+                _write_move_journal(tx_dir, {**journal, "state": "verified"}, project=project)
                 _cleanup_move_tx(tx_dir)
             except Exception:
                 _rollback_perspective_move(project, tx_dir, journal)
@@ -806,7 +845,7 @@ def _recover_perspective_moves(project: Project) -> bool:
         if state == "metadata_committed":
             try:
                 _verify_perspective_move_commit(project, journal)
-                _write_move_journal(tx_dir, {**journal, "state": "verified"})
+                _write_move_journal(tx_dir, {**journal, "state": "verified"}, project=project)
                 _cleanup_move_tx(tx_dir)
                 continue
             except Exception:
@@ -1084,12 +1123,12 @@ def _copy_if_present(project: Project, source_rel: str, dest_rel: str, created_s
 
 def _legacy_scene_roots(project: Project, scenes: list[dict[str, Any]]) -> list[Path]:
     roots: list[Path] = []
-    project_root = project.root_path.resolve()
+    project_root = project.project_root.resolve()
     for scene in scenes:
         old_id = str(scene.get("id") or "")
         if is_uuid(old_id):
             continue
-        candidate = (_root_dir(project) / old_id).resolve()
+        candidate = project_manager.resolve_project_child(project, SCENE2D_ROOT, old_id)
         if candidate.is_dir() and candidate != project_root and project_root in candidate.parents:
             roots.append(candidate)
     return roots
@@ -1142,7 +1181,9 @@ def _migrate_scene2d_storage(project: Project, scenes: list[dict[str, Any]]) -> 
     created_scene_dirs: set[Path] = set()
     created_rel_paths: set[str] = set()
     legacy_roots = _legacy_scene_roots(project, scenes)
-    legacy_root_rels = [path.relative_to(project.root_path).as_posix() for path in legacy_roots]
+    legacy_root_rels = [
+        project_manager.project_relative_posix(project, path) for path in legacy_roots
+    ]
     original_index = _read_bytes_if_exists(_index_path(project))
     original_settings = _read_bytes_if_exists(project.settings_path)
     original_settings_memory = dict(project.settings)
@@ -1152,7 +1193,12 @@ def _migrate_scene2d_storage(project: Project, scenes: list[dict[str, Any]]) -> 
         if is_uuid(scene["id"]):
             path = _meta_path(project, scene["id"])
         else:
-            path = _root_dir(project) / scene["id"] / f"{scene['id']}_meta.json"
+            path = project_manager.resolve_project_child(
+                project,
+                SCENE2D_ROOT,
+                scene["id"],
+                f"{scene['id']}_meta.json",
+            )
         original_meta[path] = _read_bytes_if_exists(path)
         original_paths.append(path)
     original_files = _create_migration_backups(project, original_paths)
@@ -1182,11 +1228,11 @@ def _migrate_scene2d_storage(project: Project, scenes: list[dict[str, Any]]) -> 
                         raise ValueError(f"Scene 2D migration path collision: {destination}")
                     planned_destinations.add(destination)
                 _copy_if_present(project, perspective["source_file_path"], source_rel, created_scene_dirs, required=True)
-                if (project.root_path / new_scene_dir_rel).is_dir():
+                if project_manager.resolve_project_path(project, new_scene_dir_rel).is_dir():
                     created_rel_paths.add(new_scene_dir_rel)
                 if preview_rel != source_rel:
                     _copy_if_present(project, perspective.get("preview_image_path", ""), preview_rel, created_scene_dirs, required=False)
-                    if (project.root_path / new_scene_dir_rel).is_dir():
+                    if project_manager.resolve_project_path(project, new_scene_dir_rel).is_dir():
                         created_rel_paths.add(new_scene_dir_rel)
                 perspective_preview_map[(old_scene_id, old_perspective_id)] = preview_rel
                 new_perspective = dict(perspective)
@@ -1200,7 +1246,11 @@ def _migrate_scene2d_storage(project: Project, scenes: list[dict[str, Any]]) -> 
             new_scene.update({"id": new_scene_id, "primary_perspective_id": new_primary_id or "", "perspectives": new_perspectives})
             new_scenes.append(_normalize_scene(new_scene))
 
-        created_rel_paths.update(path.relative_to(project.root_path).as_posix() for path in created_scene_dirs if path.exists())
+        created_rel_paths.update(
+            project_manager.project_relative_posix(project, path)
+            for path in created_scene_dirs
+            if path.exists()
+        )
         _write_journal(project, {"state": "files_staged", **journal_base, "created_paths": sorted(created_rel_paths)})
 
         new_settings, settings_changed = _migrated_settings_payload(project.settings, scene_map, perspective_map, perspective_preview_map)
@@ -1813,10 +1863,27 @@ def duplicate_perspective(
 
     new_title = _duplicate_perspective_title(scene, source.get("title") or "")
 
-    perspectives_parent = _scene_dir(project, scene_id) / "perspectives"
+    perspectives_parent = project_manager.resolve_project_child(
+        project,
+        SCENE2D_ROOT,
+        scene_id,
+        "perspectives",
+    )
     operation_id = uuid.uuid4().hex
-    staging_dir = perspectives_parent / f".duplicate-{operation_id}"
-    new_dir = perspectives_parent / new_id
+    staging_dir = project_manager.resolve_project_child(
+        project,
+        SCENE2D_ROOT,
+        scene_id,
+        "perspectives",
+        f".duplicate-{operation_id}",
+    )
+    new_dir = project_manager.resolve_project_child(
+        project,
+        SCENE2D_ROOT,
+        scene_id,
+        "perspectives",
+        new_id,
+    )
 
     index_path = _index_path(project)
     meta_path = _meta_path(project, scene_id)
@@ -1825,9 +1892,29 @@ def duplicate_perspective(
 
     try:
         staging_dir.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(source_file, staging_dir / Path(new_source_rel).name)
+        shutil.copy2(
+            source_file,
+            project_manager.resolve_project_child(
+                project,
+                SCENE2D_ROOT,
+                scene_id,
+                "perspectives",
+                f".duplicate-{operation_id}",
+                Path(new_source_rel).name,
+            ),
+        )
         if copy_preview:
-            shutil.copy2(source_preview_path, staging_dir / "preview.png")
+            shutil.copy2(
+                source_preview_path,
+                project_manager.resolve_project_child(
+                    project,
+                    SCENE2D_ROOT,
+                    scene_id,
+                    "perspectives",
+                    f".duplicate-{operation_id}",
+                    "preview.png",
+                ),
+            )
 
         staging_dir.rename(new_dir)
 
@@ -1916,7 +2003,13 @@ def move_perspective(
 
     perspective = _find_perspective(source_scene, perspective_id)
     source_dir = _safe_rel_path(project, perspective["source_file_path"]).parent
-    target_dir = _root_dir(project) / target_scene["id"] / "perspectives" / perspective["id"]
+    target_dir = project_manager.resolve_project_child(
+        project,
+        SCENE2D_ROOT,
+        target_scene["id"],
+        "perspectives",
+        perspective["id"],
+    )
     if not source_dir.is_dir():
         raise FileNotFoundError("Scene 2D perspective folder not found.")
     if target_dir.exists():
@@ -1947,7 +2040,12 @@ def move_perspective(
                 }
             )
 
-    tx_dir = _move_root(project) / uuid.uuid4().hex
+    tx_dir = project_manager.resolve_project_child(
+        project,
+        SCENE2D_ROOT,
+        PERSPECTIVE_MOVE_ROOT,
+        uuid.uuid4().hex,
+    )
     source_file_path = _safe_rel_path(project, perspective["source_file_path"])
     preview_file_path = _safe_rel_path(project, perspective["preview_image_path"])
     operation_id = tx_dir.name
@@ -1974,10 +2072,14 @@ def move_perspective(
     try:
         original_files = _backup_move_metadata(project, tx_dir, source_scene["id"], target_scene["id"])
         journal_base = {**journal_base, "original_files": original_files}
-        _write_move_journal(tx_dir, journal_base)
+        _write_move_journal(tx_dir, journal_base, project=project)
         target_dir.parent.mkdir(parents=True, exist_ok=True)
         shutil.move(str(source_dir), str(target_dir))
-        _write_move_journal(tx_dir, {**journal_base, "state": "files_moved"})
+        _write_move_journal(
+            tx_dir,
+            {**journal_base, "state": "files_moved"},
+            project=project,
+        )
 
         source_scene["perspectives"] = [
             item for item in source_scene.get("perspectives", []) if item["id"] != perspective["id"]
@@ -2005,7 +2107,11 @@ def move_perspective(
                 link["source_scene2d_perspective_id"] = perspective["id"]
                 link["path"] = expected_preview
                 changed_links = True
-        _write_move_journal(tx_dir, {**journal_base, "state": "metadata_committing"})
+        _write_move_journal(
+            tx_dir,
+            {**journal_base, "state": "metadata_committing"},
+            project=project,
+        )
         if changed_links:
             project.settings["reference_links"] = project_manager.normalize_reference_links(links)
             project_manager.save_settings(project)
@@ -2015,14 +2121,18 @@ def move_perspective(
         _save_scenes(project, scenes)
         final_journal = {**journal_base, "state": "metadata_committed"}
         _verify_perspective_move_commit(project, final_journal)
-        _write_move_journal(tx_dir, final_journal)
-        _write_move_journal(tx_dir, {**journal_base, "state": "verified"})
+        _write_move_journal(tx_dir, final_journal, project=project)
+        _write_move_journal(
+            tx_dir,
+            {**journal_base, "state": "verified"},
+            project=project,
+        )
         _cleanup_move_tx(tx_dir)
     except BaseException as operation_error:
         journal = {**journal_base}
         try:
-            if _move_journal_path(tx_dir).is_file():
-                loaded = _read_json(_move_journal_path(tx_dir))
+            if _move_journal_path(tx_dir, project=project).is_file():
+                loaded = _read_json(_move_journal_path(tx_dir, project=project))
                 if isinstance(loaded, dict):
                     journal = loaded
             _rollback_perspective_move(project, tx_dir, journal)

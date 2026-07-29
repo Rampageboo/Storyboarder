@@ -23,6 +23,11 @@ from PIL import Image
 
 from . import shot_assets
 from .models import Project, Shot
+from .project_layout import (
+    ProjectPathError,
+    project_relative_posix,
+    resolve_project_child,
+)
 from .project_storage import atomic_write_json
 from .shot_files import resolve_project_relative_path
 
@@ -120,8 +125,8 @@ def _prior_frame_ref(project: Project, path: Path | None) -> dict[str, Any] | No
     if path is None:
         return None
     try:
-        rel = path.resolve().relative_to(project.root_path.resolve()).as_posix()
-    except ValueError:
+        rel = project_relative_posix(project, path)
+    except ProjectPathError:
         rel = ""
     return {
         "source": "codex-layer",
@@ -140,23 +145,23 @@ def _new_id(prefix: str) -> str:
 
 
 def _generation_root(project: Project) -> Path:
-    return project.root_path / "generation"
+    return resolve_project_child(project, "generation")
 
 
 def _requests_dir(project: Project) -> Path:
-    return _generation_root(project) / "requests"
+    return resolve_project_child(project, "generation", "requests")
 
 
 def _results_dir(project: Project) -> Path:
-    return _generation_root(project) / "results"
+    return resolve_project_child(project, "generation", "results")
 
 
 def _state_dir(project: Project) -> Path:
-    return _generation_root(project) / "state"
+    return resolve_project_child(project, "generation", "state")
 
 
 def _candidates_dir(project: Project) -> Path:
-    return _generation_root(project) / "candidates"
+    return resolve_project_child(project, "generation", "candidates")
 
 
 def _validate_id(value: str, label: str) -> str:
@@ -177,11 +182,21 @@ def _read_json_object(path: Path) -> dict[str, Any]:
 
 
 def _request_path(project: Project, request_id: str) -> Path:
-    return _requests_dir(project) / f"{_validate_id(request_id, 'request id')}.json"
+    return resolve_project_child(
+        project,
+        "generation",
+        "requests",
+        f"{_validate_id(request_id, 'request id')}.json",
+    )
 
 
 def _state_path(project: Project, request_id: str) -> Path:
-    return _state_dir(project) / f"{_validate_id(request_id, 'request id')}.json"
+    return resolve_project_child(
+        project,
+        "generation",
+        "state",
+        f"{_validate_id(request_id, 'request id')}.json",
+    )
 
 
 def _apply_request_state(project: Project, request: dict[str, Any]) -> dict[str, Any]:
@@ -567,7 +582,7 @@ def build_request_snapshot(
         "schema_version": SCHEMA_VERSION,
         "request_id": request_id,
         "project_name": project.name,
-        "project_root": str(project.root_path.resolve()),
+        "project_root": str(project.project_root.resolve()),
         "shot_id": shot.shot_id,
         "shot_number": shot_number,
         "destination": destination,
@@ -773,7 +788,12 @@ def list_requests(
 
 
 def _result_request_dir(project: Project, request_id: str) -> Path:
-    return _results_dir(project) / _validate_id(request_id, "request id")
+    return resolve_project_child(
+        project,
+        "generation",
+        "results",
+        _validate_id(request_id, "request id"),
+    )
 
 
 def list_results(project: Project, request_id: str) -> list[dict[str, Any]]:
@@ -849,16 +869,29 @@ def submit_result(
         raise ValueError(f"Provide between 1 and {MAX_ARTIFACTS} image artifacts.")
 
     result_id = _new_id("out")
-    candidate_dir = _candidates_dir(project) / request_id / result_id
+    candidate_dir = resolve_project_child(
+        project,
+        "generation",
+        "candidates",
+        request_id,
+        result_id,
+    )
     artifacts: list[dict[str, Any]] = []
     try:
         for index, source in enumerate(paths, start=1):
             suffix = source.suffix.lower()
-            target = candidate_dir / f"candidate_{index:03d}{suffix}"
+            target = resolve_project_child(
+                project,
+                "generation",
+                "candidates",
+                request_id,
+                result_id,
+                f"candidate_{index:03d}{suffix}",
+            )
             _copy_image_artifact(source, target)
             artifacts.append({
                 "name": target.name,
-                "project_relative_path": target.relative_to(project.root_path).as_posix(),
+                "project_relative_path": project_relative_posix(project, target),
                 "absolute_path": str(target.resolve()),
                 "media_type": suffix.lstrip("."),
             })
@@ -871,7 +904,16 @@ def submit_result(
             "summary": str(summary or "").strip(),
             "artifacts": artifacts,
         }
-        atomic_write_json(_result_request_dir(project, request_id) / f"{result_id}.json", result)
+        atomic_write_json(
+            resolve_project_child(
+                project,
+                "generation",
+                "results",
+                request_id,
+                f"{result_id}.json",
+            ),
+            result,
+        )
     except BaseException:
         shutil.rmtree(candidate_dir, ignore_errors=True)
         raise
@@ -976,7 +1018,13 @@ def accept_candidate_as_codex_layer(
     if artifact is None:
         raise ValueError("Generation artifact not found in this result.")
     source = resolve_project_relative_path(project, cleaned_path)
-    candidate_root = (_candidates_dir(project) / _validate_id(request_id, "request id") / result_id).resolve()
+    candidate_root = resolve_project_child(
+        project,
+        "generation",
+        "candidates",
+        _validate_id(request_id, "request id"),
+        result_id,
+    )
     if candidate_root not in source.parents:
         raise ValueError("Generation artifact is outside its candidate folder.")
     destination = shot_assets.save_codex_layer_from_path(project, shot, source)

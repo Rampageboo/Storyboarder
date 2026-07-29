@@ -16,6 +16,7 @@ from .export_utils import (
     missing_files,
 )
 from .models import Project
+from .project_layout import resolve_project_child
 
 VALID_PDF_LAYOUTS: frozenset[str] = frozenset({"one_per_page", "two_per_page", "thumbnails"})
 DEFAULT_PDF_LAYOUT: str = "two_per_page"
@@ -56,7 +57,7 @@ def resolve_output_path(project: Project, export_type: str, suffix: str = "") ->
     if suffix:
         stem, dot, extension = filename.partition(".")
         filename = f"{stem}{suffix}{dot}{extension}"
-    return project.exports_dir / filename
+    return resolve_project_child(project, "exports", filename)
 
 
 def check_export_exists(project: Project, export_type: str, suffix: str = "") -> Path:
