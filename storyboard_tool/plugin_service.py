@@ -13,6 +13,7 @@ from fastapi import FastAPI, HTTPException
 
 from . import app_state, project_manager, runtime_state, scene2d, shot_service
 from .errors import AppErrorCode, app_error
+from .file_transactions import rollback_paths
 from .models import Shot
 from .project_layout import (
     LAYOUT_2,
@@ -815,13 +816,6 @@ class PluginBridgeService:
         current = app_state._require_project(self.app)
         self._require_layout_protocol(current, protocol)
         project = app_state._refresh_project_from_disk(self.app)
-        if project.layout == LAYOUT_2:
-            self._consume_write_intent(
-                project,
-                protocol,
-                expected_work_key=f"scene2d:{scene_id}:{perspective_id}",
-                expected_role="preview",
-            )
         try:
             sc, scenes = scene2d._find_scene(project, scene_id)
         except FileNotFoundError as exc:
@@ -863,16 +857,61 @@ class PluginBridgeService:
         except ValueError as exc:
             raise HTTPException(status_code=400, detail="Preview path escapes project root.") from exc
 
-        if not preview_path.is_file():
+        if project.layout != LAYOUT_2 and not preview_path.is_file():
             raise HTTPException(status_code=400, detail="Exported preview PNG not found — did the plugin save it?")
 
-        # Update timestamps atomically
-        timestamp = scene2d._now_iso()
-        perspective["updated_at"] = timestamp
-        sc["updated_at"] = timestamp
-        updated_scenes = scene2d._replace_scene(scenes, scene2d._with_legacy_aliases(sc))
-        scene2d._save_scenes(project, updated_scenes)
-        app_state.persist_project_mutation(self.app)
+        preview_sha256 = ""
+        if project.layout == LAYOUT_2:
+            record = self._consume_write_intent(
+                project,
+                protocol,
+                expected_work_key=f"scene2d:{scene_id}:{perspective_id}",
+                expected_role="preview",
+            )
+            if Path(str(record.get("target_path") or "")) != preview_path:
+                self._cleanup_intent_record(record)
+                raise app_error(
+                    AppErrorCode.PLUGIN_WRITE_INTENT_REJECTED,
+                    "Plugin write intent target is no longer canonical.",
+                    status=409,
+                )
+            inbox = Path(str(record.get("inbox_path") or ""))
+            if (
+                not inbox.is_file()
+                or inbox.is_symlink()
+                or inbox.stat().st_size > _MAX_PLUGIN_IMAGE_BYTES
+                or _file_header(inbox, 8) != b"\x89PNG\r\n\x1a\n"
+            ):
+                self._cleanup_intent_record(record)
+                raise app_error(
+                    AppErrorCode.PLUGIN_WRITE_INTENT_REJECTED,
+                    "Plugin preview inbox file is missing or invalid.",
+                    status=400,
+                )
+            try:
+                preview_sha256 = _stable_sha256(inbox)
+                with rollback_paths((preview_path,)):
+                    preview_path.parent.mkdir(parents=True, exist_ok=True)
+                    os.replace(inbox, preview_path)
+                    timestamp = scene2d._now_iso()
+                    perspective["updated_at"] = timestamp
+                    sc["updated_at"] = timestamp
+                    updated_scenes = scene2d._replace_scene(
+                        scenes, scene2d._with_legacy_aliases(sc)
+                    )
+                    scene2d._save_scenes(project, updated_scenes)
+                    app_state.persist_project_mutation(self.app)
+            except BaseException:
+                self._cleanup_intent_record(record)
+                raise
+            self._cleanup_intent_record(record)
+        else:
+            timestamp = scene2d._now_iso()
+            perspective["updated_at"] = timestamp
+            sc["updated_at"] = timestamp
+            updated_scenes = scene2d._replace_scene(scenes, scene2d._with_legacy_aliases(sc))
+            scene2d._save_scenes(project, updated_scenes)
+            app_state.persist_project_mutation(self.app)
 
         runtime_state.mark_scene2d_changed(self.app, scene_id, perspective_id)
         app_state._touch_live_bridge(self.app)
@@ -881,6 +920,7 @@ class PluginBridgeService:
         return {
             "work_context": work_ctx,
             "scene": scene2d._with_legacy_aliases(sc),
+            "preview_sha256": preview_sha256,
             "perspective": perspective,
             "preview_image_path": preview_rel,
         }
@@ -895,13 +935,6 @@ class PluginBridgeService:
         current = app_state._require_project(self.app)
         self._require_layout_protocol(current, protocol)
         project = app_state._refresh_project_from_disk(self.app)
-        if project.layout == LAYOUT_2:
-            self._consume_write_intent(
-                project,
-                protocol,
-                expected_work_key=f"scene2d:{scene_id}:{perspective_id}",
-                expected_role="source_psd",
-            )
         try:
             sc, scenes = scene2d._find_scene(project, scene_id)
         except FileNotFoundError as exc:
@@ -916,8 +949,45 @@ class PluginBridgeService:
             project,
             perspective["source_file_path"],
         )
-        if not source_path.is_file():
-            raise HTTPException(status_code=400, detail=f"Source PSD not found: {perspective['source_file_path']}")
+        source_sha256 = ""
+        if project.layout == LAYOUT_2:
+            record = self._consume_write_intent(
+                project,
+                protocol,
+                expected_work_key=f"scene2d:{scene_id}:{perspective_id}",
+                expected_role="source_psd",
+            )
+            if Path(str(record.get("target_path") or "")) != source_path:
+                raise app_error(
+                    AppErrorCode.PLUGIN_WRITE_INTENT_REJECTED,
+                    "Plugin write intent target is no longer canonical.",
+                    status=409,
+                )
+            if (
+                not source_path.is_file()
+                or source_path.is_symlink()
+                or source_path.stat().st_size < 4
+                or _file_header(source_path, 4) != b"8BPS"
+            ):
+                raise app_error(
+                    AppErrorCode.PLUGIN_WRITE_INTENT_REJECTED,
+                    "Canonical Photoshop file is missing or invalid.",
+                    status=400,
+                )
+            try:
+                source_sha256 = _stable_sha256(source_path)
+            except OSError as exc:
+                raise app_error(
+                    AppErrorCode.PLUGIN_WRITE_INTENT_REJECTED,
+                    "Canonical Photoshop file changed during hash validation.",
+                    status=409,
+                ) from exc
+            record["committed_sha256"] = source_sha256
+        elif not source_path.is_file():
+            raise HTTPException(
+                status_code=400,
+                detail=f"Source PSD not found: {perspective['source_file_path']}",
+            )
 
         timestamp = scene2d._now_iso()
         perspective["updated_at"] = timestamp
@@ -927,7 +997,12 @@ class PluginBridgeService:
         app_state.persist_project_mutation(self.app)
 
         work_ctx = runtime_state.active_work_context(self.app)
-        return {"work_context": work_ctx, "scene": scene2d._with_legacy_aliases(sc), "perspective": perspective}
+        return {
+            "work_context": work_ctx,
+            "scene": scene2d._with_legacy_aliases(sc),
+            "perspective": perspective,
+            "source_sha256": source_sha256,
+        }
 
     def scene2d_next_perspective(
         self,

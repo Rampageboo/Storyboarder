@@ -19,6 +19,7 @@ from . import (
     blender_bridge,
     bpy_viewport,
     generation_service,
+    project_document,
     project_manager,
     project_transaction,
     recents,
@@ -34,6 +35,7 @@ from .external_tools import preheat_photoshop
 from .export_utils import missing_files
 from .image_utils import normalize_hex_color
 from .linked_sync import sync_project
+from .project_layout import LAYOUT_2
 from .plugin_service import PluginBridgeService
 from .service_exports import ExportServiceMixin
 from .system_utils import (
@@ -1531,8 +1533,13 @@ class StoryboardBackendService(ExportServiceMixin):
                 / "blender_addon"
                 / "register_storyboarder_addon.py"
             )
-            opened = scene3d.open_blender_scene(
+            launch_path = Path(session["launch_path"])
+            launch_relative = project_manager.project_relative_posix(
+                project, launch_path
+            )
+            opened = project_manager.open_blender_scene(
                 project,
+                launch_relative,
                 python_script=bootstrap,
                 script_args=[
                     "--storyboarder-bridge",
@@ -2279,11 +2286,69 @@ class StoryboardBackendService(ExportServiceMixin):
 # _refresh_project_from_disk calls (which also take it) compose without deadlock.
 
 
+_LAYOUT2_TRANSACTIONAL_METHODS = frozenset(
+    {
+        "method_open_blender_scene",
+        "method_import_scene3d",
+        "method_import_scene3d_to_scene",
+        "method_create_scene3d",
+        "method_update_scene3d",
+        "method_delete_scene3d",
+        "method_set_active_scene3d",
+        "method_create_scene2d",
+        "method_update_scene2d",
+        "method_delete_scene2d",
+        "method_open_scene2d",
+        "method_add_scene2d_to_references",
+        "method_create_scene2d_perspective",
+        "method_update_scene2d_perspective",
+        "method_delete_scene2d_perspective",
+        "method_reorder_scene2d_perspectives",
+        "method_import_scene2d_perspective",
+        "method_duplicate_scene2d_perspective",
+        "method_set_primary_scene2d_perspective",
+        "method_move_scene2d_perspective",
+        "method_open_scene2d_perspective",
+        "method_add_scene2d_perspective_to_references",
+        "method_plugin_scene2d_export_preview",
+        "method_plugin_scene2d_psd_saved",
+        "method_plugin_scene2d_next_perspective",
+    }
+)
+
+
 def _serialized_mutation(method):
     @functools.wraps(method)
     def wrapper(self, *args, **kwargs):
         with project_manager.PROJECT_LOCK:
-            return method(self, *args, **kwargs)
+            project = getattr(self.app.state, "project", None)
+            if (
+                project is None
+                or project.layout != LAYOUT_2
+                or method.__name__ not in _LAYOUT2_TRANSACTIONAL_METHODS
+            ):
+                return method(self, *args, **kwargs)
+            revision_before = int(project.storage_revision)
+            app_state_before = {
+                name: getattr(self.app.state, name, None)
+                for name in (
+                    "dirty",
+                    "project_disk_mtime",
+                    "external_blender_context_revision",
+                )
+            }
+            try:
+                with project_document.layout2_mutation_transaction(
+                    project.project_root
+                ):
+                    with project_transaction.mutate_project(project):
+                        return method(self, *args, **kwargs)
+            except BaseException:
+                self.app.state.project = project
+                project.storage_revision = revision_before
+                for name, value in app_state_before.items():
+                    setattr(self.app.state, name, value)
+                raise
 
     return wrapper
 
@@ -2315,6 +2380,7 @@ _MUTATING_METHODS = (
     "method_apply_ref_segment_model_captures", "method_restore_ref_apply",
     "method_delete_ref_segment", "method_snapshot_ref_boards",
     # Scene 3D
+    "method_open_blender_scene",
     "method_import_scene3d", "method_import_scene3d_to_scene", "method_create_scene3d",
     "method_update_scene3d", "method_delete_scene3d", "method_set_active_scene3d",
     # Scene 2D

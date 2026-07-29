@@ -1,6 +1,7 @@
 """Project-level Scene 3D collection storage."""
 from __future__ import annotations
 
+import contextlib
 import copy
 import json
 import os
@@ -500,30 +501,52 @@ def import_scene_file(project: Project, scene_id: str, filename: str, data: byte
     if suffix not in SCENE3D_EXTENSIONS:
         raise ValueError("Only .blend, .glb, and .gltf Scene 3D files are supported.")
     stem = _slug(Path(filename or "").stem) or scene["id"]
-    destination_rel = (
-        scene3d_asset_relative(project, scene["id"], suffix)
-        if project.layout == LAYOUT_2
-        else f"{SCENE3D_ROOT}/{scene['id']}/{stem}{suffix}"
-    )
-    _write_binary_atomic(_safe_rel_path(project, destination_rel), bytes(data))
-    keywords = _normalize_keywords([*(scene.get("keywords") or []), Path(filename or "").stem])
-    if suffix == ".blend":
-        scene.update({
-            "blend_file_path": destination_rel,
-            "keywords": keywords,
-            "updated_at": _now_iso(),
-        })
+    stored_rel = ""
+    if project.layout == LAYOUT_2:
+        if suffix == ".blend":
+            stored_rel = str(scene.get("blend_file_path") or "")
+        elif str(scene.get("source_type") or "") in {"glb", "gltf"}:
+            stored_rel = str(scene.get("file_path") or "")
+    if stored_rel:
+        destination = _safe_rel_path(project, stored_rel)
+        if destination.suffix.lower() != suffix:
+            raise ValueError(
+                "Imported Scene 3D file type differs from its persisted target."
+            )
+        destination_rel = stored_rel
     else:
-        scene.update(
-            {
-                "source_type": "glb" if suffix == ".glb" else "gltf",
-                "file_path": destination_rel,
-                "file_name": Path(filename or "").name or f"{stem}{suffix}",
-                "keywords": keywords,
-                "updated_at": _now_iso(),
-            }
+        destination_rel = (
+            scene3d_asset_relative(project, scene["id"], suffix)
+            if project.layout == LAYOUT_2
+            else f"{SCENE3D_ROOT}/{scene['id']}/{stem}{suffix}"
         )
-    _save(project, scene["id"], scenes)
+        destination = _safe_rel_path(project, destination_rel)
+    keywords = _normalize_keywords([*(scene.get("keywords") or []), Path(filename or "").stem])
+    settings_before = copy.deepcopy(project.settings)
+    try:
+        paths = (destination, _root_dir(project), project.settings_path)
+        with rollback_paths(paths) if project.layout == LAYOUT_2 else contextlib.nullcontext():
+            _write_binary_atomic(destination, bytes(data))
+            if suffix == ".blend":
+                scene.update({
+                    "blend_file_path": destination_rel,
+                    "keywords": keywords,
+                    "updated_at": _now_iso(),
+                })
+            else:
+                scene.update(
+                    {
+                        "source_type": "glb" if suffix == ".glb" else "gltf",
+                        "file_path": destination_rel,
+                        "file_name": Path(filename or "").name or f"{stem}{suffix}",
+                        "keywords": keywords,
+                        "updated_at": _now_iso(),
+                    }
+                )
+            _save(project, scene["id"], scenes)
+    except BaseException:
+        project.settings = settings_before
+        raise
     return {"scene": scene, **list_scenes(project)}
 
 

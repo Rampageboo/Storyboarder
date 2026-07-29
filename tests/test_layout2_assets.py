@@ -9,7 +9,7 @@ import pytest
 from fastapi import FastAPI
 from PIL import Image
 
-from storyboard_tool import export_service, generation_service, project_manager, scene3d
+from storyboard_tool import export_service, generation_service, project_manager, scene2d, scene3d
 from storyboard_tool.file_transactions import (
     atomic_copy_stream,
     atomic_output_directory,
@@ -46,6 +46,7 @@ def _project(tmp_path: Path) -> tuple[Project, Shot]:
         settings=dict(project_manager.DEFAULT_SETTINGS),
     )
     scene3d.initialize_layout2_metadata(project)
+    scene2d.initialize_layout2_metadata(project)
     return project, shot
 
 

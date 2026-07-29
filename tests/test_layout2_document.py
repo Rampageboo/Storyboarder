@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import base64
 import json
+import subprocess
+import sys
 import uuid
 import zipfile
 from pathlib import Path
@@ -210,6 +212,88 @@ def test_layout2_equal_revision_rejects_changed_member_inventory(tmp_path: Path)
         match="changed without advancing",
     ):
         project_document.commit_layout2_document(root)
+
+
+def test_layout2_recovery_rolls_back_process_crash_inside_mutation(
+    tmp_path: Path,
+) -> None:
+    root, work = _layout2_project(tmp_path)
+    project_document.commit_layout2_document(root)
+    command = "\n".join(
+        (
+            "import json, os",
+            "from pathlib import Path",
+            "from storyboard_tool import project_document",
+            f"root = Path({str(root)!r})",
+            "work = project_document.layout2_work_root(root)",
+            "transaction = project_document.layout2_mutation_transaction(root)",
+            "transaction.__enter__()",
+            "(work / 'settings.json').write_text(json.dumps({'canvas_width': 999}), encoding='utf-8')",
+            "project_document.advance_layout2_work_revision(root, expected_revision=1)",
+            "os._exit(23)",
+        )
+    )
+
+    crashed = subprocess.run(
+        [sys.executable, "-c", command],
+        cwd=Path(__file__).parents[1],
+        check=False,
+    )
+
+    assert crashed.returncode == 23
+    transactions = root / ".storyboarder" / "transactions"
+    assert any(
+        path.name.startswith("mutation-") for path in transactions.iterdir()
+    )
+    recovered = project_document.recover_layout2_work(root)
+
+    assert recovered.work_revision == 1
+    assert recovered.committed_revision == 1
+    assert json.loads((work / "settings.json").read_text(encoding="utf-8"))[
+        "canvas_width"
+    ] == 1920
+    assert not any(
+        path.name.startswith("mutation-") for path in transactions.iterdir()
+    )
+
+def test_layout2_resolved_cleanup_is_never_replayed(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root, work = _layout2_project(tmp_path)
+    project_document.commit_layout2_document(root)
+    real_rmtree = project_document.shutil.rmtree
+
+    def leave_resolved(path, *args, **kwargs):
+        if Path(path).name.startswith(".mutation-resolved-"):
+            return None
+        return real_rmtree(path, *args, **kwargs)
+
+    with monkeypatch.context() as cleanup_fault:
+        cleanup_fault.setattr(project_document.shutil, "rmtree", leave_resolved)
+        with project_document.layout2_mutation_transaction(root):
+            (work / "settings.json").write_text(
+                json.dumps({"canvas_width": 1280}),
+                encoding="utf-8",
+            )
+            project_document.advance_layout2_work_revision(
+                root,
+                expected_revision=1,
+            )
+
+    transactions = root / ".storyboarder" / "transactions"
+    assert any(
+        path.name.startswith(".mutation-resolved-")
+        for path in transactions.iterdir()
+    )
+
+    recovered = project_document.recover_layout2_work(root)
+
+    assert recovered.work_revision == 2
+    assert json.loads((work / "settings.json").read_text(encoding="utf-8"))[
+        "canvas_width"
+    ] == 1280
+    assert not any(transactions.iterdir())
 
 
 def test_layout2_recovery_rename_failure_restores_previous_work(

@@ -24,6 +24,7 @@ PREVIEW_EXPORT_PENDING = False
 PREVIEW_EXPORTING = False
 PREVIEW_ERROR = ""
 PREVIEW_REVISION = 0
+SAVE_AUTHORIZED = False
 
 
 def _parse_args() -> argparse.Namespace:
@@ -141,19 +142,21 @@ def _queue_preview_export(*, delay: float = 0.35) -> None:
 
 @persistent
 def _on_save_pre(_unused: Any) -> None:
-    global CONTEXT
+    global CONTEXT, PREVIEW_ERROR, SAVE_AUTHORIZED
     CONTEXT = _read_context()
-    if CONTEXT.get("path_mode") == "explicit-assets" and (
-        not _context_allows_write() or not _current_blend_matches_context()
-    ):
-        raise RuntimeError(
-            "Storyboarder blocked this save because its online write lease is stale."
+    SAVE_AUTHORIZED = _context_allows_write() and _current_blend_matches_context()
+    if CONTEXT.get("path_mode") == "explicit-assets" and not SAVE_AUTHORIZED:
+        PREVIEW_ERROR = (
+            "Storyboarder lease is stale; this session save will not be ingested "
+            "into the canonical project asset."
         )
+        print(f"Storyboarder: {PREVIEW_ERROR}")
 
 
 @persistent
 def _on_save_post(_unused: Any) -> None:
-    _queue_preview_export()
+    if SAVE_AUTHORIZED:
+        _queue_preview_export()
 
 
 def _heartbeat() -> float:
@@ -181,6 +184,7 @@ def _heartbeat() -> float:
                 "preview_revision": PREVIEW_REVISION,
                 "preview_exporting": PREVIEW_EXPORTING or PREVIEW_EXPORT_PENDING,
                 "preview_error": PREVIEW_ERROR,
+                "save_authorized": SAVE_AUTHORIZED,
                 "pid": os.getpid(),
                 "seen_at": time.time(),
             }

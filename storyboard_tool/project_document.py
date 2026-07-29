@@ -7,6 +7,7 @@ the visible document atomically.
 """
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
 import os
@@ -14,6 +15,7 @@ import shutil
 import stat
 import sys
 import tempfile
+import threading
 import time
 import uuid
 import zipfile
@@ -71,6 +73,12 @@ _LAYOUT2_JSON_PREFIXES = frozenset({"annotations", "notes", "scenes2d", "scenes3
 _LAYOUT2_GENERATION_GROUPS = frozenset({"requests", "state", "results"})
 _LAYOUT2_COVER_MEMBER = "cover.png"
 _LAYOUT2_STATE_MEMBER = "state.json"
+_LAYOUT2_MUTATION_PREFIX = "mutation-"
+_LAYOUT2_MUTATION_PREPARE_PREFIX = ".mutation-prepare-"
+_LAYOUT2_MUTATION_RESOLVED_PREFIX = ".mutation-resolved-"
+_LAYOUT2_MUTATION_RESTORE_PREFIX = ".mutation-restore-"
+_LAYOUT2_MUTATION_DISCARD_PREFIX = ".mutation-discard-"
+_LAYOUT2_MUTATION_LOCAL = threading.local()
 
 
 class Layout2DocumentError(ValueError):
@@ -124,6 +132,204 @@ def layout2_state_path(project_root: Path) -> Path:
         ".storyboarder",
         _LAYOUT2_STATE_MEMBER,
     )
+
+
+def _layout2_transactions_root(project_root: Path) -> Path:
+    return resolve_root_child(
+        Path(project_root).expanduser().resolve(),
+        ".storyboarder",
+        "transactions",
+    )
+
+
+def _atomic_write_bytes(path: Path, payload: bytes) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    descriptor, name = tempfile.mkstemp(
+        dir=str(path.parent),
+        prefix=f".{path.name}.",
+        suffix=".tmp",
+    )
+    temporary = Path(name)
+    try:
+        with os.fdopen(descriptor, "wb") as stream:
+            stream.write(payload)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary, path)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def _restore_layout2_mutation_snapshot(project_root: Path, transaction: Path) -> None:
+    root = Path(project_root).expanduser().resolve()
+    manifest_path = resolve_root_child(transaction, "manifest.json")
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise Layout2RevisionConflict(
+            f"Layout 2 mutation recovery manifest is unreadable: {transaction.name}."
+        ) from exc
+    if not isinstance(manifest, dict) or manifest.get("version") != 1:
+        raise Layout2RevisionConflict(
+            f"Layout 2 mutation recovery manifest is invalid: {transaction.name}."
+        )
+
+    transactions_root = _layout2_transactions_root(root)
+    work_root = layout2_work_root(root)
+    state_path = layout2_state_path(root)
+    work_present = manifest.get("work_present") is True
+    state_present = manifest.get("state_present") is True
+    staged_restore = resolve_root_child(
+        transactions_root, f"{_LAYOUT2_MUTATION_RESTORE_PREFIX}{uuid.uuid4().hex}"
+    )
+    discarded = resolve_root_child(
+        transactions_root, f"{_LAYOUT2_MUTATION_DISCARD_PREFIX}{uuid.uuid4().hex}"
+    )
+    try:
+        if work_present:
+            snapshot_work = resolve_root_child(transaction, "work")
+            if not snapshot_work.is_dir():
+                raise Layout2RevisionConflict(
+                    "Layout 2 mutation recovery is missing its work snapshot."
+                )
+            shutil.copytree(snapshot_work, staged_restore)
+            if work_root.exists():
+                os.replace(work_root, discarded)
+            try:
+                os.replace(staged_restore, work_root)
+            except BaseException:
+                if discarded.exists() and not work_root.exists():
+                    os.replace(discarded, work_root)
+                raise
+            shutil.rmtree(discarded, ignore_errors=True)
+        elif work_root.exists():
+            os.replace(work_root, discarded)
+            shutil.rmtree(discarded, ignore_errors=True)
+
+        if state_present:
+            state_snapshot = resolve_root_child(transaction, "state.json")
+            if not state_snapshot.is_file():
+                raise Layout2RevisionConflict(
+                    "Layout 2 mutation recovery is missing its state snapshot."
+                )
+            _atomic_write_bytes(state_path, state_snapshot.read_bytes())
+        else:
+            state_path.unlink(missing_ok=True)
+    finally:
+        shutil.rmtree(staged_restore, ignore_errors=True)
+
+
+def recover_incomplete_layout2_mutation(project_root: Path) -> bool:
+    """Roll back a mutation that did not reach its response boundary."""
+    root = Path(project_root).expanduser().resolve()
+    transactions_root = _layout2_transactions_root(root)
+    if not transactions_root.is_dir():
+        return False
+    for disposable_prefix in (
+        _LAYOUT2_MUTATION_PREPARE_PREFIX,
+        _LAYOUT2_MUTATION_RESOLVED_PREFIX,
+        _LAYOUT2_MUTATION_RESTORE_PREFIX,
+        _LAYOUT2_MUTATION_DISCARD_PREFIX,
+    ):
+        for disposable in transactions_root.glob(f"{disposable_prefix}*"):
+            shutil.rmtree(disposable, ignore_errors=True)
+    pending = sorted(
+        path
+        for path in transactions_root.glob(f"{_LAYOUT2_MUTATION_PREFIX}*")
+        if path.is_dir() and not path.is_symlink()
+    )
+    if len(pending) > 1:
+        raise Layout2RevisionConflict(
+            "Multiple incomplete Layout 2 mutations require manual recovery."
+        )
+    if not pending:
+        return False
+    _restore_layout2_mutation_snapshot(root, pending[0])
+    token = pending[0].name.removeprefix(_LAYOUT2_MUTATION_PREFIX)
+    resolved = resolve_root_child(
+        transactions_root, f"{_LAYOUT2_MUTATION_RESOLVED_PREFIX}{token}"
+    )
+    os.replace(pending[0], resolved)
+    shutil.rmtree(resolved, ignore_errors=True)
+    return True
+
+
+@contextlib.contextmanager
+def layout2_mutation_transaction(project_root: Path):
+    """Make work metadata and revision evidence recoverable as one mutation."""
+    depth = int(getattr(_LAYOUT2_MUTATION_LOCAL, "depth", 0) or 0)
+    if depth:
+        _LAYOUT2_MUTATION_LOCAL.depth = depth + 1
+        try:
+            yield
+        finally:
+            _LAYOUT2_MUTATION_LOCAL.depth = depth
+        return
+
+    root = Path(project_root).expanduser().resolve()
+    recover_incomplete_layout2_mutation(root)
+    transactions_root = _layout2_transactions_root(root)
+    transactions_root.mkdir(parents=True, exist_ok=True)
+    token = uuid.uuid4().hex
+    preparing = resolve_root_child(
+        transactions_root, f"{_LAYOUT2_MUTATION_PREPARE_PREFIX}{token}"
+    )
+    transaction = resolve_root_child(
+        transactions_root, f"{_LAYOUT2_MUTATION_PREFIX}{token}"
+    )
+    resolved = resolve_root_child(
+        transactions_root, f"{_LAYOUT2_MUTATION_RESOLVED_PREFIX}{token}"
+    )
+    preparing.mkdir()
+    work_root = layout2_work_root(root)
+    state_path = layout2_state_path(root)
+    cleanup_resolved = False
+    try:
+        if work_root.is_dir():
+            shutil.copytree(work_root, resolve_root_child(preparing, "work"))
+        if state_path.is_file():
+            _atomic_write_bytes(
+                resolve_root_child(preparing, "state.json"),
+                state_path.read_bytes(),
+            )
+        _atomic_write_json(
+            resolve_root_child(preparing, "manifest.json"),
+            {
+                "version": 1,
+                "work_present": work_root.is_dir(),
+                "state_present": state_path.is_file(),
+            },
+        )
+        os.replace(preparing, transaction)
+        _LAYOUT2_MUTATION_LOCAL.depth = 1
+        try:
+            yield
+        except BaseException:
+            _restore_layout2_mutation_snapshot(root, transaction)
+            try:
+                os.replace(transaction, resolved)
+            except OSError:
+                # The active snapshot remains valid and will be replayed before
+                # the next mutation or project recovery.
+                pass
+            else:
+                cleanup_resolved = True
+            raise
+        else:
+            try:
+                os.replace(transaction, resolved)
+            except BaseException:
+                _restore_layout2_mutation_snapshot(root, transaction)
+                raise
+            cleanup_resolved = True
+        finally:
+            _LAYOUT2_MUTATION_LOCAL.depth = 0
+    finally:
+        shutil.rmtree(preparing, ignore_errors=True)
+        if cleanup_resolved and resolved.exists():
+            # The atomic rename above records the outcome. Interrupted cleanup
+            # is therefore harmless and is collected during the next recovery.
+            shutil.rmtree(resolved, ignore_errors=True)
 
 
 def _layout2_member_kind(name: str) -> str:
@@ -693,6 +899,7 @@ def recover_layout2_work(
 ) -> Layout2RecoveryResult:
     """Recover newer JSON work, otherwise restore the committed archive."""
     root = Path(project_root).expanduser().resolve()
+    recover_incomplete_layout2_mutation(root)
     document = _layout2_document_path(root, document_path)
     snapshot = validate_layout2_document(document)
     work_root = layout2_work_root(root)

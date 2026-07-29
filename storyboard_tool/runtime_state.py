@@ -34,6 +34,7 @@ def init_bridge_state(app: FastAPI, bridge_port: int) -> None:
     # External Blender ownership is tracked separately from the Photoshop link.
     app.state.external_blender_session_id = ""
     app.state.external_blender_blend_path = ""
+    app.state.external_blender_target_path = ""
     app.state.external_blender_scene3d_id = ""
     app.state.external_blender_project_session_id = ""
     app.state.external_blender_context_revision = -1
