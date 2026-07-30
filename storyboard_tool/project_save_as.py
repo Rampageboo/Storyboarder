@@ -116,12 +116,17 @@ def _runtime_excluded(relative: PurePosixPath) -> bool:
     if relative.as_posix() == project_document.SESSION_MARKER:
         return True
     folded_name = parts[-1].casefold()
+    blend_version = folded_name.rpartition(".blend")[2]
     if (
         len(parts) >= 2
         and parts[0].casefold() == "blender"
         and folded_name.startswith(".")
         and ".storyboarder-session-" in folded_name
-        and folded_name.endswith(".blend")
+        and ".blend" in folded_name
+        and (
+            blend_version == ""
+            or (blend_version.isdigit() and int(blend_version) > 0)
+        )
     ):
         return True
     return bool(

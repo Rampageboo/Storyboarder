@@ -606,19 +606,25 @@ def test_layout2_save_as_excludes_orphaned_external_blender_session(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     project = _layout2_project(tmp_path, monkeypatch)
-    session = project.project_root / "Blender" / ".Scene.storyboarder-session-deadbeef.BLEND"
-    session.parent.mkdir(parents=True)
-    session.write_bytes(b"orphaned-runtime")
+    sessions = [
+        project.project_root / "Blender" / ".Scene.storyboarder-session-deadbeef.BLEND",
+        project.project_root / "Blender" / ".Scene.storyboarder-session-deadbeef.blend1",
+        project.project_root / "Blender" / ".Scene.storyboarder-session-deadbeef.BLEND2",
+    ]
+    sessions[0].parent.mkdir(parents=True)
+    for index, session in enumerate(sessions):
+        session.write_bytes(f"orphaned-runtime-{index}".encode())
 
     outcome = project_save_as.materialize_layout2_save_as(
         project,
         tmp_path / "NoRuntime.sbd",
     )
 
-    relative = session.relative_to(project.project_root).as_posix()
-    assert relative in outcome.excluded_paths
-    assert session.read_bytes() == b"orphaned-runtime"
-    assert not (outcome.destination_root / relative).exists()
+    for index, session in enumerate(sessions):
+        relative = session.relative_to(project.project_root).as_posix()
+        assert relative in outcome.excluded_paths
+        assert session.read_bytes() == f"orphaned-runtime-{index}".encode()
+        assert not (outcome.destination_root / relative).exists()
 
 
 def test_layout2_save_as_rejects_missing_generation_artifact(
