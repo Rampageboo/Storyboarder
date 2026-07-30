@@ -908,6 +908,54 @@ def _archive_matches_work(document: Path, files: dict[str, Path]) -> bool:
     return True
 
 
+def validate_layout2_source_lineage(
+    project_root: Path,
+    *,
+    document_path: Path | None = None,
+) -> Layout2DocumentSnapshot:
+    """Read-only validation that document, work, and state share one lineage."""
+    root = Path(project_root).expanduser().resolve()
+    document = _layout2_document_path(root, document_path)
+    snapshot = validate_layout2_document(document)
+    files, work_project_id, work_revision = _validate_layout2_work_tree(
+        layout2_work_root(root)
+    )
+    state = _read_layout2_state(root)
+    if state is None:
+        raise Layout2RevisionConflict(
+            "Layout 2 source lineage requires state.json."
+        )
+    if work_project_id != snapshot.project_id:
+        raise Layout2RevisionConflict(
+            "Layout 2 document and work state project_id differ."
+        )
+    if state["project_id"] != snapshot.project_id:
+        raise Layout2RevisionConflict(
+            "Layout 2 state.json project_id differs from the document."
+        )
+    if snapshot.revision > work_revision:
+        raise Layout2RevisionConflict(
+            "Layout 2 document revision exceeds the work revision invariant."
+        )
+    if int(state["global_revision"]) != work_revision:
+        raise Layout2RevisionConflict(
+            "Layout 2 state.json global revision differs from the work state."
+        )
+    if int(state["committed_revision"]) != snapshot.revision:
+        raise Layout2RevisionConflict(
+            "Layout 2 state.json committed revision differs from the document."
+        )
+    if state["commit_id"] != snapshot.commit_id:
+        raise Layout2RevisionConflict(
+            "Layout 2 state.json commit_id differs from the document."
+        )
+    if snapshot.revision == work_revision and not _archive_matches_work(document, files):
+        raise Layout2RevisionConflict(
+            "Layout 2 work metadata changed without advancing its revision."
+        )
+    return snapshot
+
+
 def commit_layout2_document(
     project_root: Path,
     *,

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import copy
 import hashlib
+import json
 import os
 import shutil
 import stat
@@ -18,6 +19,7 @@ from .project_layout import (
     LAYOUT_2,
     ProjectPathError,
     ensure_no_casefold_collisions,
+    generation_metadata_path,
     project_manifest,
     resolve_project_path,
     resolve_root_child,
@@ -113,10 +115,19 @@ def _runtime_excluded(relative: PurePosixPath) -> bool:
     parts = relative.parts
     if relative.as_posix() == project_document.SESSION_MARKER:
         return True
+    folded_name = parts[-1].casefold()
+    if (
+        len(parts) >= 2
+        and parts[0].casefold() == "blender"
+        and folded_name.startswith(".")
+        and ".storyboarder-session-" in folded_name
+        and folded_name.endswith(".blend")
+    ):
+        return True
     return bool(
         len(parts) >= 2
-        and parts[0] == ".storyboarder"
-        and (parts[1] in _RUNTIME_DIRS or parts[-1].casefold().endswith(".lock"))
+        and parts[0].casefold() == ".storyboarder"
+        and (parts[1].casefold() in _RUNTIME_DIRS or folded_name.endswith(".lock"))
     )
 
 
@@ -205,6 +216,20 @@ def _destination_paths(source_root: Path, requested: Path) -> tuple[Path, Path]:
     return destination_root, destination_document
 
 
+def _reject_target_document_collision(
+    inventory: TreeInventory,
+    destination_document: Path,
+) -> None:
+    folded = destination_document.name.casefold()
+    copied = set(inventory.copy_files).union(inventory.copy_directories)
+    for name in sorted(copied):
+        relative = PurePosixPath(name)
+        if len(relative.parts) == 1 and relative.name.casefold() == folded:
+            raise ValueError(
+                f"Save As inventory collides with target document name: {name}."
+            )
+
+
 def _source_cover(document: Path) -> bytes | None:
     project_document.validate_layout2_document(document)
     with zipfile.ZipFile(document, "r") as archive:
@@ -269,6 +294,20 @@ def _stored_asset_paths(project: Project) -> list[tuple[str, str]]:
         for value in shot.reference_image_paths:
             if value:
                 values.append((f"shot {shot.shot_id} reference", str(value)))
+        bindings = shot.prompt_config.get("reference_bindings", [])
+        if not isinstance(bindings, list):
+            raise ValueError(
+                f"Shot {shot.shot_id} reference_bindings must be a list."
+            )
+        for index, binding in enumerate(bindings):
+            if not isinstance(binding, dict):
+                raise ValueError(
+                    f"Shot {shot.shot_id} reference binding {index} must be an object."
+                )
+            for field in ("path", "relative_path", "reference_path"):
+                value = str(binding.get(field) or "")
+                if value:
+                    values.append((f"shot {shot.shot_id} binding {index} {field}", value))
     for link in project.settings.get("reference_links") or []:
         if isinstance(link, dict) and str(link.get("path") or ""):
             values.append((f"reference {link.get('id') or ''}", str(link["path"])))
@@ -317,6 +356,168 @@ def validate_layout2_stored_references(project: Project) -> None:
             raise FileNotFoundError(f"Stored reference is missing for {label}: {relative}.")
 
 
+def _read_generation_object(path: Path, *, label: str) -> dict:
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ValueError(f"Invalid {label}: {path.name}.") from exc
+    if not isinstance(payload, dict):
+        raise ValueError(f"Invalid {label}: {path.name}.")
+    return payload
+
+
+def _rebase_path_fields(
+    project: Project,
+    payload: dict,
+    *,
+    relative_field: str,
+    absolute_field: str,
+    label: str,
+    published_root: Path,
+    exists_field: str | None = None,
+) -> None:
+    relative = str(payload.get(relative_field) or "").strip()
+    absolute = str(payload.get(absolute_field) or "").strip()
+    if not relative:
+        if absolute:
+            raise ValueError(
+                f"{label} stores a non-portable absolute path without a project-relative path."
+            )
+        return
+    try:
+        target = resolve_project_path(project, relative, field_name=label)
+    except (ProjectPathError, OSError) as exc:
+        raise ValueError(f"Invalid stored reference for {label}: {relative}.") from exc
+    if not target.is_file():
+        raise FileNotFoundError(f"Stored reference is missing for {label}: {relative}.")
+    portable = validate_project_relative_posix(relative, field_name=label)
+    payload[absolute_field] = str(
+        resolve_root_child(published_root, *portable.parts).resolve()
+    )
+    if exists_field is not None:
+        payload[exists_field] = True
+
+
+def _validate_binding_payload(project: Project, prompt_config: object, *, label: str) -> None:
+    if not isinstance(prompt_config, dict):
+        raise ValueError(f"{label} prompt_config must be an object.")
+    bindings = prompt_config.get("reference_bindings", [])
+    if not isinstance(bindings, list):
+        raise ValueError(f"{label} reference_bindings must be a list.")
+    for index, binding in enumerate(bindings):
+        if not isinstance(binding, dict):
+            raise ValueError(f"{label} reference binding {index} must be an object.")
+        for field in ("path", "relative_path", "reference_path"):
+            relative = str(binding.get(field) or "").strip()
+            if not relative:
+                continue
+            try:
+                target = resolve_project_path(
+                    project,
+                    relative,
+                    field_name=f"{label} binding {index} {field}",
+                )
+            except (ProjectPathError, OSError) as exc:
+                raise ValueError(
+                    f"Invalid stored reference for {label} binding {index} {field}: {relative}."
+                ) from exc
+            if not target.is_file():
+                raise FileNotFoundError(
+                    f"Stored reference is missing for {label} binding {index} {field}: {relative}."
+                )
+
+
+def _rebase_generation_metadata(project: Project, published_root: Path) -> set[str]:
+    from . import generation_service
+
+    rewritten: set[str] = set()
+    request_input_fields = (
+        "shot", "scene_bible", "scene_context", "character_bible",
+        "prompt_config", "continuity", "references", "keyword_assets",
+        "continuity_context", "canvas",
+    )
+    requests = generation_metadata_path(project, "requests")
+    if requests.is_dir():
+        for path in sorted(requests.glob("*.json")):
+            payload = _read_generation_object(path, label="generation request")
+            if payload.get("schema_version") != generation_service.SCHEMA_VERSION:
+                raise ValueError(f"Unsupported generation request schema: {path.name}.")
+            if any(field not in payload for field in request_input_fields):
+                raise ValueError(f"Incomplete generation request snapshot: {path.name}.")
+            payload["project_root"] = str(Path(published_root).resolve())
+            _validate_binding_payload(
+                project,
+                payload["prompt_config"],
+                label=f"generation request {path.stem}",
+            )
+            references = payload.get("references")
+            if not isinstance(references, list):
+                raise ValueError(f"Generation request references must be a list: {path.name}.")
+            for index, reference in enumerate(references):
+                if not isinstance(reference, dict):
+                    raise ValueError(f"Generation request reference {index} is invalid: {path.name}.")
+                _rebase_path_fields(
+                    project, reference, relative_field="project_relative_path",
+                    absolute_field="absolute_path", exists_field="exists",
+                    label=f"generation request {path.stem} reference {index}",
+                    published_root=published_root,
+                )
+            assets = payload.get("keyword_assets")
+            if not isinstance(assets, list):
+                raise ValueError(f"Generation request keyword_assets must be a list: {path.name}.")
+            for index, asset in enumerate(assets):
+                if not isinstance(asset, dict):
+                    raise ValueError(f"Generation request keyword asset {index} is invalid: {path.name}.")
+                _rebase_path_fields(
+                    project, asset, relative_field="file_path", absolute_field="absolute_path",
+                    exists_field="file_exists", label=f"generation request {path.stem} asset {index}",
+                    published_root=published_root,
+                )
+                _rebase_path_fields(
+                    project, asset, relative_field="blend_file_path",
+                    absolute_field="blend_absolute_path", exists_field="blend_file_exists",
+                    label=f"generation request {path.stem} Blend asset {index}",
+                    published_root=published_root,
+                )
+            plan = payload.get("generation_plan")
+            if isinstance(plan, dict) and plan.get("prior_frame") is not None:
+                prior = plan["prior_frame"]
+                if not isinstance(prior, dict):
+                    raise ValueError(f"Generation request prior_frame is invalid: {path.name}.")
+                _rebase_path_fields(
+                    project, prior, relative_field="project_relative_path",
+                    absolute_field="absolute_path", exists_field="exists",
+                    label=f"generation request {path.stem} prior frame",
+                    published_root=published_root,
+                )
+            input_snapshot = {field: payload[field] for field in request_input_fields}
+            payload["input_revision"] = generation_service._canonical_hash(input_snapshot)
+            atomic_write_json(path, payload)
+            rewritten.add(path.relative_to(project.project_root).as_posix())
+
+    results = generation_metadata_path(project, "results")
+    if results.is_dir():
+        for path in sorted(results.glob("*/*.json")):
+            payload = _read_generation_object(path, label="generation result")
+            if payload.get("schema_version") != generation_service.SCHEMA_VERSION:
+                raise ValueError(f"Unsupported generation result schema: {path.name}.")
+            artifacts = payload.get("artifacts")
+            if not isinstance(artifacts, list):
+                raise ValueError(f"Generation result artifacts must be a list: {path.name}.")
+            for index, artifact in enumerate(artifacts):
+                if not isinstance(artifact, dict):
+                    raise ValueError(f"Generation result artifact {index} is invalid: {path.name}.")
+                _rebase_path_fields(
+                    project, artifact, relative_field="project_relative_path",
+                    absolute_field="absolute_path",
+                    label=f"generation result {path.stem} artifact {index}",
+                    published_root=published_root,
+                )
+            atomic_write_json(path, payload)
+            rewritten.add(path.relative_to(project.project_root).as_posix())
+    return rewritten
+
+
 def materialize_layout2_save_as(project: Project, requested: Path) -> Layout2SaveAsResult:
     """Publish a complete validated snapshot with one directory rename."""
     if project.layout != LAYOUT_2:
@@ -329,8 +530,10 @@ def materialize_layout2_save_as(project: Project, requested: Path) -> Layout2Sav
     if not source_document.is_file() or source_document.parent != source_root:
         raise ValueError("Layout 2 Save As requires its canonical source .sbd.")
     destination_root, destination_document = _destination_paths(source_root, requested)
+    project_document.validate_layout2_source_lineage(source_root, document_path=source_document)
     validate_layout2_stored_references(project)
     source_before = _scan_tree(source_root, source_document=source_document)
+    _reject_target_document_collision(source_before, destination_document)
     cover = _source_cover(source_document)
     if source_before.files.get(source_document.name) != _record(source_document):
         raise OSError("Source project changed during Save As preflight.")
@@ -350,10 +553,12 @@ def materialize_layout2_save_as(project: Project, requested: Path) -> Layout2Sav
         current_stage = "snapshot"
         staged_project = _snapshot_project(project, stage)
         _write_frozen_primary_metadata(staged_project)
+        rewritten_members = _rebase_generation_metadata(staged_project, destination_root)
         validate_layout2_stored_references(staged_project)
         staged_before_commit = _scan_tree(stage)
         for name, expected in source_before.copy_files.items():
-            if name not in _PRIMARY_MUTABLE_MEMBERS and staged_before_commit.files.get(name) != expected:
+            if (name not in _PRIMARY_MUTABLE_MEMBERS and name not in rewritten_members
+                    and staged_before_commit.files.get(name) != expected):
                 raise OSError(f"Staged source member differs from its source: {name}.")
         snapshot_hash = _snapshot_hash(staged_before_commit.files, cover)
 
@@ -377,12 +582,19 @@ def materialize_layout2_save_as(project: Project, requested: Path) -> Layout2Sav
             project_document.commit_layout2_document(stage)
         staged_document = resolve_root_child(stage, f"{stage.name}.sbd")
         final_staged_document = resolve_root_child(stage, destination_document.name)
+        if final_staged_document.exists():
+            raise FileExistsError(
+                "Save As target document collides with a copied source member."
+            )
         os.replace(staged_document, final_staged_document)
         project_document.validate_layout2_document(final_staged_document)
 
         current_stage = "verification"
         source_after = _scan_tree(source_root, source_document=source_document)
-        if source_after.files != source_before.files:
+        if (
+            source_after.files != source_before.files
+            or source_after.copy_directories != source_before.copy_directories
+        ):
             raise OSError("Source project changed during Save As snapshotting.")
         final_inventory = _scan_tree(stage)
         expected_names = set(staged_before_commit.files)

@@ -4,6 +4,7 @@ import hashlib
 import json
 import os
 import threading
+import zipfile
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -13,6 +14,7 @@ from fastapi import HTTPException
 from storyboard_tool import (
     app_state,
     blender_bridge,
+    generation_service,
     project_document,
     project_layout,
     project_manager,
@@ -67,12 +69,12 @@ def _layout2_project(
     shot.image_path = preview_relative
     shot.preview_image_path = preview_relative
     project_manager.save_project(project, flush_document=False)
+    scene2d.initialize_layout2_metadata(project)
+    scene3d.initialize_layout2_metadata(project)
     project_document.commit_layout2_document(root)
     (root / "User Notes.txt").write_bytes(b"unknown-user-file")
     transaction = root / ".storyboarder" / "transactions" / "pending" / "plugin-inbox"
     transaction.mkdir(parents=True)
-    scene2d.initialize_layout2_metadata(project)
-    scene3d.initialize_layout2_metadata(project)
     (transaction / "pending.png").write_bytes(b"uncommitted")
     return project
 
@@ -442,6 +444,227 @@ def test_layout2_save_as_missing_stored_reference_fails_before_staging(
 
     assert not (tmp_path / "Missing").exists()
     assert not list(tmp_path.glob(".Missing.save-as-*"))
+
+
+def test_layout2_save_as_rejects_uncommitted_work_at_same_revision(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    project = _layout2_project(tmp_path, monkeypatch)
+    drift = project.metadata_root / "notes" / "drift.json"
+    drift.parent.mkdir(parents=True, exist_ok=True)
+    drift.write_text("{}\n", encoding="utf-8")
+
+    with pytest.raises(
+        project_document.Layout2RevisionConflict,
+        match="changed without advancing",
+    ):
+        project_save_as.materialize_layout2_save_as(project, tmp_path / "Drift.sbd")
+
+    assert not list(tmp_path.glob(".Drift.save-as-*"))
+
+
+def test_layout2_save_as_rejects_document_work_project_id_mismatch(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    project = _layout2_project(tmp_path, monkeypatch)
+    document = project.document_path
+    assert document is not None
+    replacement = tmp_path / "replacement.sbd"
+    with zipfile.ZipFile(document, "r") as source, zipfile.ZipFile(replacement, "w") as target:
+        for info in source.infolist():
+            raw = source.read(info)
+            if info.filename == "project.json":
+                payload = json.loads(raw.decode("utf-8"))
+                payload["project_id"] = "910b2631-641e-4d28-aa4a-1d18d66b2425"
+                raw = (json.dumps(payload, ensure_ascii=False, indent=2) + "\n").encode("utf-8")
+            target.writestr(info.filename, raw)
+    os.replace(replacement, document)
+    project_document.validate_layout2_document(document)
+
+    with pytest.raises(
+        project_document.Layout2RevisionConflict,
+        match="project_id differ",
+    ):
+        project_save_as.materialize_layout2_save_as(project, tmp_path / "Foreign.sbd")
+
+    assert not list(tmp_path.glob(".Foreign.save-as-*"))
+
+
+def test_layout2_save_as_validates_prompt_binding_paths_before_staging(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    project = _layout2_project(tmp_path, monkeypatch)
+    project.shots[0].prompt_config["reference_bindings"] = [
+        {"role": "style", "relative_path": "Images/References/missing.png"}
+    ]
+
+    with pytest.raises(FileNotFoundError, match="Stored reference is missing"):
+        project_save_as.materialize_layout2_save_as(project, tmp_path / "Binding.sbd")
+
+    assert not list(tmp_path.glob(".Binding.save-as-*"))
+
+
+def test_layout2_save_as_rebases_known_generation_metadata(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    project = _layout2_project(tmp_path, monkeypatch)
+    shot = project.shots[0]
+    shot.reference_image_paths = [shot.preview_image_path]
+    project_manager.save_project(project, flush_document=False)
+    request = generation_service.create_request(project, shot, "queue", mode="clean")
+    request_path = project_layout.generation_metadata_path(
+        project, "requests", f"{request['request_id']}.json"
+    )
+    artifact_relative = f"Images/Generated/{request['request_id']}/out_001/candidate_001.png"
+    artifact = project.project_root / artifact_relative
+    artifact.parent.mkdir(parents=True)
+    artifact.write_bytes(b"\x89PNG\r\n\x1a\nresult")
+    result_path = project_layout.generation_metadata_path(
+        project, "results", request["request_id"], "out_001.json"
+    )
+    result_path.parent.mkdir(parents=True)
+    project_save_as.atomic_write_json(
+        result_path,
+        {
+            "schema_version": generation_service.SCHEMA_VERSION,
+            "result_id": "out_001",
+            "request_id": request["request_id"],
+            "shot_id": shot.shot_id,
+            "created_at": "2026-07-30T00:00:00Z",
+            "summary": "",
+            "artifacts": [
+                {
+                    "name": artifact.name,
+                    "output_id": "out_001",
+                    "project_relative_path": artifact_relative,
+                    "absolute_path": str(artifact.resolve()),
+                    "media_type": "png",
+                }
+            ],
+        },
+    )
+    source_request = request_path.read_bytes()
+    source_result = result_path.read_bytes()
+    project.storage_revision = project_document.advance_layout2_work_revision(
+        project.project_root,
+        expected_revision=project.storage_revision,
+    )
+
+    outcome = project_save_as.materialize_layout2_save_as(
+        project,
+        tmp_path / "GenerationCopy.sbd",
+    )
+
+    target_project = project_manager.open_project(outcome.document_path)
+    target_request_path = project_layout.generation_metadata_path(
+        target_project, "requests", f"{request['request_id']}.json"
+    )
+    target_result_path = project_layout.generation_metadata_path(
+        target_project, "results", request["request_id"], "out_001.json"
+    )
+    target_request = json.loads(target_request_path.read_text(encoding="utf-8"))
+    target_result = json.loads(target_result_path.read_text(encoding="utf-8"))
+    input_fields = (
+        "shot", "scene_bible", "scene_context", "character_bible",
+        "prompt_config", "continuity", "references", "keyword_assets",
+        "continuity_context", "canvas",
+    )
+    expected_input = {field: target_request[field] for field in input_fields}
+    assert target_request["project_root"] == str(outcome.destination_root.resolve())
+    assert target_request["references"][0]["absolute_path"] == str(
+        (outcome.destination_root / shot.preview_image_path).resolve()
+    )
+    assert target_request["input_revision"] == generation_service._canonical_hash(expected_input)
+    assert target_result["artifacts"][0]["absolute_path"] == str(
+        (outcome.destination_root / artifact_relative).resolve()
+    )
+    assert request_path.read_bytes() == source_request
+    assert result_path.read_bytes() == source_result
+
+
+def test_layout2_save_as_rejects_target_document_inventory_collision(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    project = _layout2_project(tmp_path, monkeypatch)
+    collision = project.project_root / "copy.SBD"
+    collision.write_bytes(b"unknown-user-document")
+
+    with pytest.raises(ValueError, match="collides with target document"):
+        project_save_as.materialize_layout2_save_as(project, tmp_path / "Copy.sbd")
+
+    assert collision.read_bytes() == b"unknown-user-document"
+    assert not list(tmp_path.glob(".Copy.save-as-*"))
+
+
+def test_layout2_save_as_excludes_orphaned_external_blender_session(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    project = _layout2_project(tmp_path, monkeypatch)
+    session = project.project_root / "Blender" / ".Scene.storyboarder-session-deadbeef.BLEND"
+    session.parent.mkdir(parents=True)
+    session.write_bytes(b"orphaned-runtime")
+
+    outcome = project_save_as.materialize_layout2_save_as(
+        project,
+        tmp_path / "NoRuntime.sbd",
+    )
+
+    relative = session.relative_to(project.project_root).as_posix()
+    assert relative in outcome.excluded_paths
+    assert session.read_bytes() == b"orphaned-runtime"
+    assert not (outcome.destination_root / relative).exists()
+
+
+def test_layout2_save_as_rejects_missing_generation_artifact(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    project = _layout2_project(tmp_path, monkeypatch)
+    result_path = project_layout.generation_metadata_path(
+        project,
+        "results",
+        "req_missing",
+        "out_missing.json",
+    )
+    result_path.parent.mkdir(parents=True)
+    project_save_as.atomic_write_json(
+        result_path,
+        {
+            "schema_version": generation_service.SCHEMA_VERSION,
+            "result_id": "out_missing",
+            "request_id": "req_missing",
+            "shot_id": project.shots[0].shot_id,
+            "created_at": "2026-07-30T00:00:00Z",
+            "summary": "",
+            "artifacts": [
+                {
+                    "name": "missing.png",
+                    "output_id": "out_missing",
+                    "project_relative_path": "Images/Generated/missing.png",
+                    "absolute_path": str(
+                        (project.project_root / "Images" / "Generated" / "missing.png").resolve()
+                    ),
+                    "media_type": "png",
+                }
+            ],
+        },
+    )
+    project.storage_revision = project_document.advance_layout2_work_revision(
+        project.project_root,
+        expected_revision=project.storage_revision,
+    )
+
+    with pytest.raises(project_save_as.Layout2SaveAsError, match="Stored reference is missing"):
+        project_save_as.materialize_layout2_save_as(project, tmp_path / "MissingResult.sbd")
+
+    assert not (tmp_path / "MissingResult").exists()
+    assert not list(tmp_path.glob(".MissingResult.save-as-*"))
 
 
 @pytest.mark.parametrize(
