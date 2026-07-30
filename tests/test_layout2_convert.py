@@ -199,6 +199,8 @@ def test_convert_rewrites_representative_layout1_and_preserves_source(
         converted_result = json.loads(result_files[0].read_text(encoding="utf-8"))
         artifact = converted_result["artifacts"][0]
         assert artifact["project_relative_path"].startswith("Images/Generated/")
+        assert artifact["name"] == Path(artifact["project_relative_path"]).name
+        assert artifact["media_type"] == Path(artifact["name"]).suffix.lstrip(".")
         assert Path(artifact["absolute_path"]).is_file()
     finally:
         project_manager.cleanup_document_working_root(project)
@@ -763,6 +765,100 @@ def test_convert_rejects_generation_storage_identity_mismatch(
             )
         assert raised.value.stage == "classification"
         assert not (tmp_path / f"Bad-{mismatch}").exists()
+    finally:
+        project_manager.cleanup_document_working_root(project)
+
+
+@pytest.mark.parametrize(
+    "malformation",
+    [
+        "request_destination",
+        "request_provider",
+        "request_mode",
+        "request_status",
+        "request_clear_queue",
+        "state_status",
+        "result_empty",
+        "result_too_many",
+        "artifact_zero_bytes",
+        "artifact_oversized",
+        "artifact_corrupt",
+        "artifact_name",
+        "artifact_media_type",
+    ],
+)
+def test_convert_rejects_generation_contract_malformation(
+    tmp_path: Path,
+    malformation: str,
+) -> None:
+    project = _legacy_project(tmp_path)
+    source_hash = _sha(project.document_path)
+    request_path = next(
+        project_layout.generation_metadata_path(project, "requests").glob("*.json")
+    )
+    request = json.loads(request_path.read_text(encoding="utf-8"))
+    result_path = next(
+        project_layout.generation_metadata_path(project, "results").glob("*/*.json")
+    )
+    result = json.loads(result_path.read_text(encoding="utf-8"))
+    artifact = result["artifacts"][0]
+    artifact_path = project.metadata_root / artifact["project_relative_path"]
+
+    if malformation.startswith("request_"):
+        field = malformation.removeprefix("request_")
+        if field == "clear_queue":
+            request["clear_queue_on_result"] = "false"
+        else:
+            request[field] = "unsupported"
+        request_path.write_text(json.dumps(request), encoding="utf-8")
+    elif malformation == "state_status":
+        state_path = project_layout.generation_metadata_path(
+            project, "state", f"{request['request_id']}.json"
+        )
+        state_path.parent.mkdir(parents=True, exist_ok=True)
+        state_path.write_text(json.dumps({
+            "schema_version": generation_service.SCHEMA_VERSION,
+            "request_id": request["request_id"],
+            "status": "unsupported",
+        }), encoding="utf-8")
+    elif malformation == "result_empty":
+        result["artifacts"] = []
+        result_path.write_text(json.dumps(result), encoding="utf-8")
+    elif malformation == "result_too_many":
+        result["artifacts"] = [
+            dict(artifact) for _ in range(generation_service.MAX_ARTIFACTS + 1)
+        ]
+        result_path.write_text(json.dumps(result), encoding="utf-8")
+    elif malformation == "artifact_zero_bytes":
+        artifact_path.write_bytes(b"")
+    elif malformation == "artifact_oversized":
+        with artifact_path.open("wb") as stream:
+            stream.seek(generation_service.MAX_ARTIFACT_BYTES)
+            stream.write(b"\0")
+    elif malformation == "artifact_corrupt":
+        artifact_path.write_bytes(b"not-a-real-png")
+    elif malformation == "artifact_name":
+        artifact["name"] = "other.png"
+        result_path.write_text(json.dumps(result), encoding="utf-8")
+    else:
+        artifact["media_type"] = "jpeg"
+        result_path.write_text(json.dumps(result), encoding="utf-8")
+
+    target_name = f"BadContract-{malformation}"
+    try:
+        with pytest.raises(project_convert.Layout2ConvertError) as raised:
+            project_convert.materialize_layout1_to_layout2(
+                project, tmp_path / f"{target_name}.sbd"
+            )
+        assert raised.value.stage == "classification"
+        assert raised.value.report_path is not None
+        report = json.loads(
+            raised.value.report_path.read_text(encoding="utf-8")
+        )
+        assert report["status"] == "failed"
+        assert report["stage"] == "classification"
+        assert not (tmp_path / target_name).exists()
+        assert _sha(project.document_path) == source_hash
     finally:
         project_manager.cleanup_document_working_root(project)
 

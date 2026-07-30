@@ -767,6 +767,21 @@ def _validate_request_schema(
         payload.get("shot_number"), int
     ):
         raise ValueError(f"Generation request shot_number is invalid: {path.name}.")
+    enum_fields = {
+        "destination": generation_service.DESTINATIONS,
+        "provider": generation_service.PROVIDERS,
+        "mode": generation_service.MODES,
+        "status": generation_service.REQUEST_STATUSES,
+    }
+    for field, allowed in enum_fields.items():
+        if payload[field] not in allowed:
+            raise ValueError(
+                f"Generation request {field} is unsupported: {path.name}."
+            )
+    if type(payload.get("clear_queue_on_result")) is not bool:
+        raise ValueError(
+            f"Generation request clear_queue_on_result is invalid: {path.name}."
+        )
     shot_id = generation_service._validate_id(payload["shot_id"], "shot id")
     target_shot = next(
         (shot for shot in planner.target.shots if shot.shot_id == shot_id),
@@ -896,7 +911,7 @@ def _migrate_generation(planner: _Planner) -> None:
             )
             if request_id not in request_payloads:
                 raise ValueError("Generation state has no matching request.")
-            if not isinstance(payload.get("status"), str):
+            if payload.get("status") not in generation_service.REQUEST_STATUSES:
                 raise ValueError(f"Generation state status is invalid: {path.name}.")
             relative = path.relative_to(planner.source.project_root).as_posix()
             planner._record_classification(relative, "rewritten generation state")
@@ -923,7 +938,9 @@ def _migrate_generation(planner: _Planner) -> None:
             if str(payload.get("shot_id") or "") != str(request_payload["shot_id"]):
                 raise ValueError("Generation result shot_id does not match its request.")
             artifacts = payload.get("artifacts")
-            if not isinstance(artifacts, list):
+            if not isinstance(artifacts, list) or not (
+                1 <= len(artifacts) <= generation_service.MAX_ARTIFACTS
+            ):
                 raise ValueError(f"Generation result artifacts are invalid: {path.name}.")
             for index, artifact in enumerate(artifacts, start=1):
                 if not isinstance(artifact, dict):
@@ -932,10 +949,19 @@ def _migrate_generation(planner: _Planner) -> None:
                 _require_generation_id(
                     artifact.get("output_id"), expected_output_id, "artifact output id"
                 )
-                source_value = str(artifact.get("project_relative_path") or "")
-                suffix = Path(source_value).suffix.lower()
-                if suffix not in generation_service.IMAGE_SUFFIXES:
-                    raise ValueError("Generation artifact has an unsupported file type.")
+                source_value = artifact.get("project_relative_path")
+                if not isinstance(source_value, str) or not source_value:
+                    raise ValueError("Generation artifact path is invalid.")
+                _source_relative, source_path = planner._source_relative(
+                    source_value, f"generation artifact {index}"
+                )
+                suffix = generation_service.validate_image_artifact(source_path)
+                if artifact.get("name") != source_path.name:
+                    raise ValueError("Generation artifact name does not match its file.")
+                if artifact.get("media_type") != suffix.lstrip("."):
+                    raise ValueError(
+                        "Generation artifact media_type does not match its file."
+                    )
                 mapped = planner.copy(
                     source_value,
                     generation_asset_relative(
@@ -945,6 +971,8 @@ def _migrate_generation(planner: _Planner) -> None:
                     required=True,
                 )
                 artifact["project_relative_path"] = mapped
+                artifact["name"] = PurePosixPath(mapped).name
+                artifact["media_type"] = suffix.lstrip(".")
                 artifact["absolute_path"] = str(
                     resolve_root_child(planner.final_root, *PurePosixPath(mapped).parts)
                 )

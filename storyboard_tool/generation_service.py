@@ -825,16 +825,24 @@ def result_inbox_revision(project: Project) -> int:
     return latest
 
 
-def _copy_image_artifact(source: Path, target: Path) -> None:
+def validate_image_artifact(source: Path) -> str:
+    """Validate an artifact against the canonical generation image contract."""
+    source = Path(source)
     if not source.is_file():
         raise ValueError(f"Artifact not found: {source}")
-    if source.suffix.lower() not in IMAGE_SUFFIXES:
+    suffix = source.suffix.lower()
+    if suffix not in IMAGE_SUFFIXES:
         raise ValueError(f"Unsupported artifact format: {source.suffix}")
     size = source.stat().st_size
     if size <= 0 or size > MAX_ARTIFACT_BYTES:
         raise ValueError("Artifact must be a non-empty image no larger than 64 MB.")
     with Image.open(source) as image:
         image.verify()
+    return suffix
+
+
+def _copy_image_artifact(source: Path, target: Path) -> None:
+    validate_image_artifact(source)
     target.parent.mkdir(parents=True, exist_ok=True)
     # Keep the temporary name short so atomic copies also work near Windows' legacy MAX_PATH limit.
     fd, tmp_name = tempfile.mkstemp(dir=str(target.parent), prefix=".tmp-", suffix=target.suffix)
