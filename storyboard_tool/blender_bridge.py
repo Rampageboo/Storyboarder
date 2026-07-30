@@ -75,7 +75,9 @@ def begin_session(
     scene: dict[str, Any],
     blend_path: Path,
 ) -> dict[str, Any]:
-    session_id = secrets.token_urlsafe(24)
+    # Keep the opaque token safe as a standalone argparse value. token_urlsafe()
+    # may begin with "-", which Blender's add-on parser interprets as an option.
+    session_id = f"sb_{secrets.token_urlsafe(24)}"
     resolved_blend = blend_path.resolve()
     session_blend = resolved_blend
     scene_id = str(scene.get("id") or "")

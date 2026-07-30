@@ -49,6 +49,27 @@ def _begin(app, project, blend_path: Path) -> tuple[dict, _Process]:
     return session, process
 
 
+def test_external_blender_session_id_is_cli_argument_safe(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    _isolated_bridge(monkeypatch, tmp_path)
+    monkeypatch.setattr(
+        blender_bridge.secrets, "token_urlsafe", lambda _length: "-option-like"
+    )
+    project = project_manager.create_project(tmp_path / "project")
+    blend_path = project.root_path / "scene3d" / "scene.blend"
+    blend_path.parent.mkdir(parents=True, exist_ok=True)
+    blend_path.write_bytes(b"blend")
+    app = create_app(tmp_path)
+    app.state.project = project
+
+    session, _process = _begin(app, project, blend_path)
+
+    assert session["session_id"] == "sb_-option-like"
+    assert not session["session_id"].startswith("-")
+
+
 def test_external_blender_owns_until_process_and_heartbeat_end(
     tmp_path: Path,
     monkeypatch,
