@@ -31,6 +31,7 @@ Ownership rules:
 from __future__ import annotations
 
 import json
+import logging
 import os
 import shutil
 import tempfile
@@ -54,6 +55,7 @@ from .linked_sync import linked_mtime, sync_shot_from_linked_files
 from .models import Project, Shot
 from . import project_document
 from .project_layout import (
+    LAYOUT_1,
     LAYOUT_2,
     ensure_layout_enabled,
     layout1_project_root,
@@ -214,6 +216,17 @@ def _layout2_creation_paths(requested: Path) -> tuple[Path, Path]:
     return destination_root, destination_document
 
 
+def can_convert_to_layout2(project: Project) -> bool:
+    """Return whether the accepted Layout 1 document converter can handle this project."""
+    document = project.document_path
+    return bool(
+        project.layout == LAYOUT_1
+        and document is not None
+        and document.suffix.lower() == project_document.DOCUMENT_SUFFIX
+        and document.is_file()
+    )
+
+
 def create_layout2_document(
     document_path: Path,
     *,
@@ -270,14 +283,26 @@ def create_layout2_document(
                 raise FileExistsError(
                     f"Project destination appeared during creation: {child.name}."
                 )
-        os.rename(stage, destination_root)
-        operation.rmdir()
-        return replace(
+        published_project = replace(
             project,
             project_root_path=destination_root,
             root_path=resolve_root_child(destination_root, ".storyboarder", "work"),
             document_path=destination_document,
         )
+        os.rename(stage, destination_root)
+        try:
+            operation.rmdir()
+        except OSError:
+            try:
+                logging.getLogger(__name__).warning(
+                    "Layout 2 project was published but its empty staging directory "
+                    "could not be removed: %s",
+                    operation,
+                    exc_info=True,
+                )
+            except Exception:
+                pass
+        return published_project
     except BaseException:
         if operation.exists():
             shutil.rmtree(operation, ignore_errors=True)

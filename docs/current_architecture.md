@@ -312,7 +312,7 @@ All shot business logic lives here. **No FastAPI or HTTP imports** — errors ar
 
 `save_project()` and `save_settings()` use `_atomic_write_json()` so a crash or write error during save never leaves a partial or empty JSON file. New Layout 2 projects are portable folders whose canonical `<name>.sbd` is a metadata-only ZIP. Editable assets stay visible under `Images/`, `PSD/`, `Blender/`, and `Exports/`; JSON work state is under `.storyboarder/work`. `create_layout2_document()` builds and validates the complete project in a same-volume staging directory, then publishes it with one refusing rename. `project_document.commit_layout2_document()` writes a sibling temporary archive and uses `os.replace()` so the document is never partially overwritten.
 
-Layout 1 single-file and folder projects remain readable. `create_document()` is retained for compatibility and tests, while the user-facing `.sbd` new-project path now calls `create_layout2_document()`. The **Convert to Layout 2** UI invokes `/api/project/convert`, which publishes a source-preserving sibling folder and switches only after validation.
+Layout 1 single-file and folder projects remain readable. `create_document()` is retained for compatibility and tests, while the user-facing `.sbd` new-project path now calls `create_layout2_document()`. The **Convert to Layout 2** UI is capability-gated to an existing Layout 1 `.sbd` and invokes `/api/project/convert`, which publishes a source-preserving sibling folder and switches only after validation. A legacy folder project must first use **Save Project As...** to become a Layout 1 `.sbd`; the conversion endpoint rejects folder projects before writer quiesce or staging.
 
 **Layout 2 project structure**
 

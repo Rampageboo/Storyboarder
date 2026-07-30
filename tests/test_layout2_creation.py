@@ -124,3 +124,42 @@ def test_new_project_api_defaults_sbd_to_layout2(
     )
     assert payload["settings"]["canvas_width"] == 1600
     assert payload["settings"]["canvas_height"] == 900
+    assert payload["can_convert_to_layout2"] is False
+
+
+def test_new_layout2_project_remains_successful_when_post_publish_cleanup_fails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(project_layout, "LAYOUT_2_ENABLED", True)
+    source = project_manager.create_document(tmp_path / "Source.sbd")
+    source_work = source.metadata_root
+    app_root = tmp_path / "app-cleanup"
+    app_root.mkdir()
+    app = create_app(app_root)
+    app.state.project = source
+    app.state.project_disk_mtime = project_manager.project_disk_mtime(source)
+    original_rmdir = Path.rmdir
+
+    def fail_operation_cleanup(path: Path) -> None:
+        if path.name.startswith(".sb-create-"):
+            raise OSError("injected post-publish cleanup failure")
+        original_rmdir(path)
+
+    monkeypatch.setattr(Path, "rmdir", fail_operation_cleanup)
+
+    payload = StoryboardBackendService(app).method_new_project(
+        path=str(tmp_path / "Published.sbd"),
+    )
+
+    target = tmp_path / "Published"
+    document = target / "Published.sbd"
+    assert payload["layout"] == project_layout.LAYOUT_2
+    assert payload["document_path"] == str(document.resolve())
+    assert app.state.project.document_path == document.resolve()
+    assert app.state.last_project_transition["status"] == "committed"
+    snapshot = project_document.validate_layout2_document(document)
+    assert snapshot.project_id == payload["project_id"]
+    assert snapshot.revision == payload["storage_revision"]
+    assert not source_work.exists()
+    assert len(list(tmp_path.glob(".sb-create-*"))) == 1

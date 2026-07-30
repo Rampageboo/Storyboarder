@@ -331,6 +331,7 @@ def test_convert_coordinator_activates_only_validated_target(
     source_work = project.metadata_root
     source_session = app.state.project_session_id
     try:
+        assert app_state._project_payload(project, True)["can_convert_to_layout2"] is True
         payload = StoryboardBackendService(app).method_convert_project(
             str(tmp_path / "Activated.sbd")
         )
@@ -342,6 +343,7 @@ def test_convert_coordinator_activates_only_validated_target(
         assert app.state.dirty is False
         assert _sha(project.document_path) == source_hash
         assert app.state.last_project_transition["status"] == "committed"
+        assert payload["can_convert_to_layout2"] is False
         assert not source_work.exists()
     finally:
         project_manager.cleanup_document_working_root(project)
@@ -1024,3 +1026,37 @@ def test_convert_cleanup_failure_does_not_rollback_committed_target(
         assert (tmp_path / "CleanupWarning" / "CleanupWarning.sbd").is_file()
     finally:
         original_cleanup(project)
+
+
+def test_convert_folder_project_is_capability_hidden_and_rejected_before_transition(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(project_layout, "LAYOUT_2_ENABLED", True)
+    project = project_manager.create_project(tmp_path / "Legacy Folder")
+    app = _app_for(project, tmp_path)
+    called = False
+
+    def unexpected_conversion(*_args, **_kwargs):
+        nonlocal called
+        called = True
+        raise AssertionError("folder conversion must fail before transition")
+
+    monkeypatch.setattr(
+        app_state,
+        "convert_active_project_to_layout2",
+        unexpected_conversion,
+    )
+
+    assert app_state._project_payload(project, True)["can_convert_to_layout2"] is False
+    with TestClient(app) as client:
+        app.state.project = project
+        response = client.post(
+            "/api/project/convert",
+            json={"path": str(tmp_path / "Should Not Exist.sbd")},
+        )
+
+    assert response.status_code == 409
+    assert "Save Project As" in str(response.json())
+    assert called is False
+    assert not (tmp_path / "Should Not Exist").exists()

@@ -491,6 +491,7 @@ export function ProjectProvider({ children }: PropsWithChildren) {
           ...prev,
           shots: serverShot ? prev.shots.map((shot) => (shot.shot_id === shotId ? serverShot : shot)) : prev.shots,
           dirty: payload.dirty,
+          storage_revision: payload.storage_revision,
           name: payload.name,
           settings: payload.settings,
           statuses: payload.statuses,

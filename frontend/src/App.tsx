@@ -17,6 +17,7 @@ import { SettingsModal } from './components/SettingsModal'
 import { ExportModal } from './components/ExportModal'
 import { ProjectProvider } from './state/ProjectContext'
 import { useProject } from './state/useProject'
+import { canConvertProjectToLayout2 } from './projectCapabilities'
 import { LiveBridgeProvider } from './state/LiveBridgeContext'
 import { useGlobalShortcuts } from './hooks/useGlobalShortcuts'
 import { useAutosave } from './hooks/useAutosave'
@@ -297,7 +298,7 @@ function RightRail({
               >
                 Save Project As…
               </button>
-              {project?.layout === 1 ? (
+              {canConvertProjectToLayout2(project) ? (
                 <button
                   type="button"
                   role="menuitem"

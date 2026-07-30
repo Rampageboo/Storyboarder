@@ -587,6 +587,13 @@ class StoryboardBackendService(ExportServiceMixin):
                 "Convert supports Layout 1 to Layout 2 only.",
                 status=409,
             )
+        if not project_manager.can_convert_to_layout2(project):
+            raise app_error(
+                AppErrorCode.PROJECT_SAVE_FAILED,
+                "Convert requires an active Layout 1 .sbd document. "
+                "Use Save Project As first, then convert that document.",
+                status=409,
+            )
         try:
             ensure_layout_enabled(LAYOUT_2)
         except LayoutDisabledError as exc:

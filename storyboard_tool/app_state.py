@@ -583,6 +583,7 @@ def _project_payload(project: Project, dirty: bool) -> dict[str, Any]:
         "layout": project.layout,
         "project_id": project.project_id,
         "storage_revision": project.storage_revision,
+        "can_convert_to_layout2": project_manager.can_convert_to_layout2(project),
         "dirty": dirty,
         "settings": project.settings,
         "statuses": list(SHOT_STATUSES),

@@ -60,9 +60,9 @@ Basic workflow:
 
 Optional UXP workflow:
 
-1. In the Photoshop UXP panel, choose the matching shot folder.
-2. Click `Save PSD + Preview`.
-3. Storyboard Tool picks up the newest linked file automatically.
+1. Keep Storyboard Tool running with the project open, then open Storyboard Bridge in Photoshop.
+2. Open or activate a linked shot PSD from Storyboard Tool or the plugin.
+3. Click `Export preview` or `Export + next`; Layout 2 paths come from the linked backend context.
 
 ## Project Structure
 
@@ -83,7 +83,9 @@ MyProject/
 Keep the folder and its `.sbd` file together when moving or sharing a project.
 The `.sbd` stores JSON metadata, while editable and generated assets remain visible
 in the sibling directories. Legacy single-file and folder projects remain readable;
-use **More > Convert to Layout 2** to create a source-preserving Layout 2 copy.
+for a legacy single-file `.sbd`, use **More > Convert to Layout 2** to create a
+source-preserving Layout 2 copy. For a legacy folder project, first use
+**Save Project As...** to create a Layout 1 `.sbd`, then convert that document.
 
 ## Canvas color
 
