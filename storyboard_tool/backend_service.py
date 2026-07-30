@@ -532,14 +532,37 @@ class StoryboardBackendService(ExportServiceMixin):
     def method_save_project_as(self, path: str) -> dict[str, Any]:
         project = app_state._require_project(self.app)
         try:
+            destination = validate_project_save_path(path)
+            if not destination:
+                raise ValueError("Save As destination is required.")
+        except Exception as exc:
+            raise app_error(AppErrorCode.PROJECT_SAVE_FAILED, str(exc), status=400) from exc
+
+        if project.layout == LAYOUT_2:
+            try:
+                saved_project = app_state.save_active_project_as_layout2(
+                    self.app,
+                    Path(destination),
+                )
+            except app_state.ProjectTransitionError as exc:
+                status = 409 if exc.stage in {
+                    "writer_quiesce",
+                    "external_blender_release",
+                    "builtin_blender_release",
+                } else 500
+                raise app_error(
+                    AppErrorCode.PROJECT_SAVE_FAILED,
+                    str(exc.cause),
+                    status=status,
+                ) from exc
+            return app_state._project_payload(saved_project, self.app.state.dirty)
+
+        try:
             blender_bridge.require_released(self.app, "using Save As")
         except ValueError as exc:
             raise app_error(AppErrorCode.PROJECT_SAVE_FAILED, str(exc), status=409) from exc
         bpy_viewport.stop_worker(self.app)
         try:
-            destination = validate_project_save_path(path)
-            if not destination:
-                raise ValueError("Save As destination is required.")
             saved_project = project_manager.save_project_as(project, Path(destination))
         except Exception as exc:
             logger.exception("Failed to save project as %s", path)
@@ -2323,6 +2346,18 @@ _LAYOUT2_TRANSACTIONAL_METHODS = frozenset(
 def _serialized_mutation(method):
     @functools.wraps(method)
     def wrapper(self, *args, **kwargs):
+        if method.__name__ == "method_save_project_as":
+            # Save As must serialize against all project transitions. Layout 2
+            # then acquires PROJECT_LOCK inside its coordinator, preserving the
+            # global transition-lock -> project-lock order; Layout 1 keeps its
+            # historical whole-method project lock.
+            with project_manager.PROJECT_TRANSITION_LOCK:
+                project = getattr(self.app.state, "project", None)
+                if project is not None and project.layout == LAYOUT_2:
+                    return method(self, *args, **kwargs)
+                with project_manager.PROJECT_LOCK:
+                    return method(self, *args, **kwargs)
+
         with project_manager.PROJECT_LOCK:
             project = getattr(self.app.state, "project", None)
             if (

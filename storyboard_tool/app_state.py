@@ -26,6 +26,7 @@ from . import (
     preview_analysis_cache,
     project_document,
     project_manager,
+    project_save_as,
     recents,
     runtime_state,
     session_store,
@@ -309,6 +310,135 @@ def transition_active_project(
                 raise
             raise ProjectTransitionError(
                 action,
+                str(report.get("current_stage") or "unknown"),
+                exc,
+            ) from exc
+        finally:
+            if writers_quiesced or bool(
+                getattr(app.state, "project_writers_quiesced", False)
+            ):
+                resume_project_writers(app)
+
+
+def save_active_project_as_layout2(app: FastAPI, requested_document: Path) -> Project:
+    """Snapshot Layout 2 to a new folder without making the source durable."""
+    _ensure_transition_runtime(app)
+    source = _require_project(app)
+    source_dirty = bool(getattr(app.state, "dirty", False))
+    source_disk_mtime = float(getattr(app.state, "project_disk_mtime", 0.0) or 0.0)
+    source_session_id = str(getattr(app.state, "project_session_id", "") or "")
+    result: project_save_as.Layout2SaveAsResult | None = None
+    candidate: Project | None = None
+    writers_quiesced = False
+    report: dict[str, Any] = {
+        "action": "saving this Layout 2 project as",
+        "status": "running",
+        "current_stage": "",
+        "stages": [],
+        "writers": {},
+    }
+
+    with project_manager.PROJECT_TRANSITION_LOCK:
+        try:
+            _transition_checkpoint(app, report, "lock_acquired")
+            report["current_stage"] = "writer_quiesce"
+            report["writers"] = quiesce_project_writers(app)
+            writers_quiesced = True
+            _transition_checkpoint(app, report, "writers_quiesced")
+
+            with project_manager.PROJECT_LOCK:
+                source = _require_project(app)
+                if source.layout != LAYOUT_2:
+                    raise ValueError("Layout 2 snapshot coordinator requires Layout 2.")
+                source_dirty = bool(getattr(app.state, "dirty", False))
+                source_disk_mtime = float(
+                    getattr(app.state, "project_disk_mtime", 0.0) or 0.0
+                )
+                source_session_id = str(
+                    getattr(app.state, "project_session_id", "") or ""
+                )
+                _transition_checkpoint(app, report, "mutations_frozen")
+
+                transactions = project_manager.resolve_project_child(
+                    source, ".storyboarder", "transactions"
+                )
+                excluded_transactions = (
+                    sorted(path.name for path in transactions.iterdir())
+                    if transactions.is_dir()
+                    else []
+                )
+                report["writers"]["plugin_inbox"] = {
+                    "status": "excluded_uncommitted",
+                    "count": len(excluded_transactions),
+                }
+                report["writers"]["transaction_log"] = "frozen_and_excluded"
+                _transition_checkpoint(app, report, "plugin_inbox_resolved")
+
+                report["current_stage"] = "external_blender_release"
+                blender_bridge.require_released(app, "using Save As")
+                _transition_checkpoint(app, report, "external_blender_released")
+
+                report["current_stage"] = "builtin_blender_release"
+                manager = getattr(app.state, "bpy_viewport_manager", None)
+                if manager is not None and bool(getattr(manager, "running", False)):
+                    raise ValueError(
+                        "Save and close the built-in Blender scene before using Save As."
+                    )
+                _transition_checkpoint(app, report, "builtin_blender_released")
+
+                report["current_stage"] = "snapshot"
+                result = project_save_as.materialize_layout2_save_as(
+                    source,
+                    requested_document,
+                )
+                report.update(
+                    {
+                        "snapshot_hash": result.snapshot_hash,
+                        "destination_root": str(result.destination_root),
+                        "destination_document": str(result.document_path),
+                        "excluded_paths": list(result.excluded_paths),
+                    }
+                )
+                _transition_checkpoint(app, report, "snapshot_published")
+
+                report["current_stage"] = "candidate_open"
+                candidate = project_manager.open_project(result.document_path)
+                _transition_checkpoint(app, report, "candidate_opened")
+                report["current_stage"] = "candidate_validate"
+                project_manager.validate_transition_candidate(candidate)
+                _transition_checkpoint(app, report, "candidate_validated")
+                _transition_checkpoint(app, report, "before_swap")
+
+                _track_project(app, candidate)
+                app.state.dirty = False
+                runtime_state.rotate_project_session(app)
+                blender_bridge.cancel_session(app)
+                report["status"] = "committed"
+                report["current_stage"] = "committed"
+                report["project_session_id"] = app.state.project_session_id
+                app.state.last_project_transition = report
+
+            try:
+                _remember_recent(candidate)
+                _persist_app_session(app)
+                _touch_live_bridge(app)
+            except Exception:
+                logger.warning("Layout 2 Save As publication failed", exc_info=True)
+            return candidate
+        except Exception as exc:
+            app.state.project = source
+            app.state.dirty = source_dirty
+            app.state.project_disk_mtime = source_disk_mtime
+            app.state.project_session_id = source_session_id
+            report["status"] = "failed"
+            report["error"] = str(exc)
+            if result is not None:
+                report["completed_target"] = str(result.destination_root)
+            app.state.last_project_transition = report
+            if isinstance(exc, ProjectTransitionError):
+                raise
+            raise ProjectTransitionError(
+                "saving this Layout 2 project as",
                 str(report.get("current_stage") or "unknown"),
                 exc,
             ) from exc
