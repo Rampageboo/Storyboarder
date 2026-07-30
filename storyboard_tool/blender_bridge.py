@@ -379,6 +379,25 @@ def _ingest_layout2_session_save(
     project: Project,
     heartbeat: dict[str, Any],
 ) -> bool:
+    """Revalidate and ingest one external save under the same project lock."""
+    if project.layout != LAYOUT_2 or not heartbeat:
+        return False
+    with project_manager.PROJECT_LOCK:
+        validated, _age = _validated_heartbeat(app, project)
+        if not validated:
+            return False
+        return _ingest_layout2_session_save_locked(
+            app,
+            project,
+            validated,
+        )
+
+
+def _ingest_layout2_session_save_locked(
+    app: FastAPI,
+    project: Project,
+    heartbeat: dict[str, Any],
+) -> bool:
     """Broker one stable Blender session save into the canonical asset."""
     if project.layout != LAYOUT_2 or not heartbeat:
         return False
@@ -439,6 +458,10 @@ def _ingest_layout2_session_save(
             with project_document.layout2_mutation_transaction(
                 project.project_root
             ):
+                project_document.enlist_layout2_mutation_paths(
+                    project.project_root,
+                    (canonical_path,),
+                )
                 with rollback_paths((canonical_path,)):
                     atomic_copy_file(session_path, canonical_path)
                     app_state.persist_project_mutation(app)

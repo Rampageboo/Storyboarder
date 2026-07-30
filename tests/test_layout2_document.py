@@ -219,6 +219,9 @@ def test_layout2_recovery_rolls_back_process_crash_inside_mutation(
 ) -> None:
     root, work = _layout2_project(tmp_path)
     project_document.commit_layout2_document(root)
+    existing_asset = root / "assets" / "scene.blend"
+    existing_asset.parent.mkdir(parents=True)
+    existing_asset.write_bytes(b"original-blend")
     command = "\n".join(
         (
             "import json, os",
@@ -228,6 +231,10 @@ def test_layout2_recovery_rolls_back_process_crash_inside_mutation(
             "work = project_document.layout2_work_root(root)",
             "transaction = project_document.layout2_mutation_transaction(root)",
             "transaction.__enter__()",
+            "existing = root / 'assets' / 'scene.blend'",
+            "created = root / 'assets' / 'new-preview.png'",
+            "project_document.enlist_layout2_mutation_paths(root, (existing, created))",
+            "existing.write_bytes(b'changed-blend'); created.write_bytes(b'new-preview')",
             "(work / 'settings.json').write_text(json.dumps({'canvas_width': 999}), encoding='utf-8')",
             "project_document.advance_layout2_work_revision(root, expected_revision=1)",
             "os._exit(23)",
@@ -255,6 +262,32 @@ def test_layout2_recovery_rolls_back_process_crash_inside_mutation(
     assert not any(
         path.name.startswith("mutation-") for path in transactions.iterdir()
     )
+    assert existing_asset.read_bytes() == b"original-blend"
+    assert not (root / "assets" / "new-preview.png").exists()
+
+
+def test_layout2_mutation_restores_enlisted_directory_on_failure(
+    tmp_path: Path,
+) -> None:
+    root, _work = _layout2_project(tmp_path)
+    asset_dir = root / "assets" / "scene"
+    asset_dir.mkdir(parents=True)
+    (asset_dir / "kept.bin").write_bytes(b"before")
+
+    with pytest.raises(RuntimeError, match="fault"):
+        with project_document.layout2_mutation_transaction(root):
+            project_document.enlist_layout2_mutation_paths(root, (asset_dir,))
+            (asset_dir / "kept.bin").write_bytes(b"after")
+            (asset_dir / "new.bin").write_bytes(b"new")
+            raise RuntimeError("fault")
+
+    assert (asset_dir / "kept.bin").read_bytes() == b"before"
+    assert not (asset_dir / "new.bin").exists()
+    assert not any(
+        path.name.startswith("mutation-")
+        for path in (root / ".storyboarder" / "transactions").iterdir()
+    )
+
 
 def test_layout2_resolved_cleanup_is_never_replayed(
     tmp_path: Path,
@@ -263,6 +296,8 @@ def test_layout2_resolved_cleanup_is_never_replayed(
     root, work = _layout2_project(tmp_path)
     project_document.commit_layout2_document(root)
     real_rmtree = project_document.shutil.rmtree
+    accepted_asset = root / "assets" / "kept.bin"
+    accepted_asset.parent.mkdir(parents=True)
 
     def leave_resolved(path, *args, **kwargs):
         if Path(path).name.startswith(".mutation-resolved-"):
@@ -272,6 +307,8 @@ def test_layout2_resolved_cleanup_is_never_replayed(
     with monkeypatch.context() as cleanup_fault:
         cleanup_fault.setattr(project_document.shutil, "rmtree", leave_resolved)
         with project_document.layout2_mutation_transaction(root):
+            project_document.enlist_layout2_mutation_paths(root, (accepted_asset,))
+            accepted_asset.write_bytes(b"accepted")
             (work / "settings.json").write_text(
                 json.dumps({"canvas_width": 1280}),
                 encoding="utf-8",
@@ -294,6 +331,8 @@ def test_layout2_resolved_cleanup_is_never_replayed(
         "canvas_width"
     ] == 1280
     assert not any(transactions.iterdir())
+
+    assert accepted_asset.read_bytes() == b"accepted"
 
 
 def test_layout2_recovery_rename_failure_restores_previous_work(

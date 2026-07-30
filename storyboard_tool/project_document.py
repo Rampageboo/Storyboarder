@@ -21,7 +21,7 @@ import uuid
 import zipfile
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
-from typing import Any
+from typing import Any, Iterable
 
 from .project_layout import (
     LAYOUT_2,
@@ -78,6 +78,7 @@ _LAYOUT2_MUTATION_PREPARE_PREFIX = ".mutation-prepare-"
 _LAYOUT2_MUTATION_RESOLVED_PREFIX = ".mutation-resolved-"
 _LAYOUT2_MUTATION_RESTORE_PREFIX = ".mutation-restore-"
 _LAYOUT2_MUTATION_DISCARD_PREFIX = ".mutation-discard-"
+_LAYOUT2_MUTATION_ASSET_PREFIX = "asset-"
 _LAYOUT2_MUTATION_LOCAL = threading.local()
 
 
@@ -160,8 +161,7 @@ def _atomic_write_bytes(path: Path, payload: bytes) -> None:
         temporary.unlink(missing_ok=True)
 
 
-def _restore_layout2_mutation_snapshot(project_root: Path, transaction: Path) -> None:
-    root = Path(project_root).expanduser().resolve()
+def _read_layout2_mutation_manifest(transaction: Path) -> dict[str, Any]:
     manifest_path = resolve_root_child(transaction, "manifest.json")
     try:
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
@@ -173,6 +173,242 @@ def _restore_layout2_mutation_snapshot(project_root: Path, transaction: Path) ->
         raise Layout2RevisionConflict(
             f"Layout 2 mutation recovery manifest is invalid: {transaction.name}."
         )
+    assets = manifest.get("assets", [])
+    if not isinstance(assets, list) or any(
+        not isinstance(entry, dict) for entry in assets
+    ):
+        raise Layout2RevisionConflict(
+            f"Layout 2 mutation asset journal is invalid: {transaction.name}."
+        )
+    manifest["assets"] = assets
+    return manifest
+
+
+def _snapshot_layout2_asset_path(
+    root: Path,
+    transaction: Path,
+    target: Path,
+    ordinal: int,
+) -> dict[str, str]:
+    relative = target.relative_to(root).as_posix()
+    validate_project_relative_posix(
+        relative,
+        field_name="Layout 2 mutation asset path",
+    )
+    snapshot_name = f"{_LAYOUT2_MUTATION_ASSET_PREFIX}{ordinal:06d}"
+    snapshot = resolve_root_child(transaction, "assets", snapshot_name)
+    if target.is_symlink():
+        raise Layout2RevisionConflict(
+            f"Layout 2 mutation asset cannot be a symbolic link: {relative}."
+        )
+    if target.is_dir():
+        for child in target.rglob("*"):
+            if child.is_symlink():
+                raise Layout2RevisionConflict(
+                    f"Layout 2 mutation asset tree contains a symbolic link: {relative}."
+                )
+        snapshot.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copytree(target, snapshot)
+        for copied in snapshot.rglob("*"):
+            if copied.is_file():
+                with copied.open("rb+") as stream:
+                    os.fsync(stream.fileno())
+        kind = "directory"
+    elif target.is_file():
+        snapshot.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(target, snapshot)
+        with snapshot.open("rb+") as stream:
+            os.fsync(stream.fileno())
+        kind = "file"
+    elif target.exists():
+        raise Layout2RevisionConflict(
+            f"Layout 2 mutation asset has an unsupported type: {relative}."
+        )
+    else:
+        snapshot_name = ""
+        kind = "missing"
+    return {
+        "path": relative,
+        "kind": kind,
+        "snapshot": snapshot_name,
+    }
+
+
+def enlist_layout2_mutation_paths(
+    project_root: Path,
+    paths: Iterable[Path],
+) -> tuple[str, ...]:
+    """Durably journal asset paths before a Layout 2 mutation changes them."""
+    transaction_value = getattr(_LAYOUT2_MUTATION_LOCAL, "transaction", None)
+    active_root = getattr(_LAYOUT2_MUTATION_LOCAL, "project_root", None)
+    if transaction_value is None or active_root is None:
+        return ()
+    root = Path(project_root).expanduser().resolve()
+    if root != Path(active_root):
+        raise Layout2RevisionConflict(
+            "Nested Layout 2 mutation attempted to journal another project."
+        )
+    transaction = Path(transaction_value)
+    manifest = _read_layout2_mutation_manifest(transaction)
+    assets = manifest["assets"]
+    existing = {
+        str(entry.get("path") or ""): entry
+        for entry in assets
+    }
+    transactions_root = _layout2_transactions_root(root)
+    requested: list[Path] = []
+    for raw in paths:
+        candidate = Path(raw)
+        resolved = candidate.resolve()
+        if resolved == root or root not in resolved.parents:
+            raise Layout2RevisionConflict(
+                f"Layout 2 mutation asset escapes the project root: {candidate}."
+            )
+        if (
+            resolved == transactions_root
+            or transactions_root in resolved.parents
+            or resolved in transactions_root.parents
+        ):
+            raise Layout2RevisionConflict(
+                "Layout 2 mutation assets cannot include the transaction journal."
+            )
+        if resolved not in requested:
+            requested.append(resolved)
+    requested.sort(key=lambda value: len(value.parts))
+    compact = [
+        candidate
+        for candidate in requested
+        if not any(parent in candidate.parents for parent in requested)
+    ]
+    journaled: list[str] = []
+    for candidate in compact:
+        relative = candidate.relative_to(root).as_posix()
+        covering = next(
+            (
+                stored
+                for stored in existing
+                if stored
+                and (
+                    relative == stored
+                    or PurePosixPath(stored) in PurePosixPath(relative).parents
+                )
+            ),
+            None,
+        )
+        if covering is not None:
+            continue
+        if any(
+            PurePosixPath(relative) in PurePosixPath(stored).parents
+            for stored in existing
+            if stored
+        ):
+            raise Layout2RevisionConflict(
+                "Layout 2 mutation cannot widen an asset snapshot after writes began."
+            )
+        entry = _snapshot_layout2_asset_path(
+            root,
+            transaction,
+            candidate,
+            len(assets) + 1,
+        )
+        assets.append(entry)
+        _atomic_write_json(
+            resolve_root_child(transaction, "manifest.json"),
+            manifest,
+        )
+        existing[relative] = entry
+        journaled.append(relative)
+    return tuple(journaled)
+
+
+def _restore_layout2_asset_snapshot(
+    root: Path,
+    transaction: Path,
+    entry: dict[str, Any],
+) -> None:
+    relative_text = str(entry.get("path") or "")
+    relative = validate_project_relative_posix(
+        relative_text,
+        field_name="Layout 2 mutation asset path",
+    )
+    target = resolve_root_child(root, *relative.parts)
+    kind = entry.get("kind")
+    snapshot_name = str(entry.get("snapshot") or "")
+    if kind not in {"missing", "file", "directory"}:
+        raise Layout2RevisionConflict(
+            f"Layout 2 mutation asset kind is invalid: {relative_text}."
+        )
+    transactions_root = _layout2_transactions_root(root)
+    discarded = resolve_root_child(
+        transactions_root,
+        f"{_LAYOUT2_MUTATION_DISCARD_PREFIX}{uuid.uuid4().hex}",
+    )
+    staged = resolve_root_child(
+        transactions_root,
+        f"{_LAYOUT2_MUTATION_RESTORE_PREFIX}{uuid.uuid4().hex}",
+    )
+    snapshot = (
+        resolve_root_child(transaction, "assets", snapshot_name)
+        if snapshot_name
+        else None
+    )
+    try:
+        if kind == "missing":
+            if target.exists() or target.is_symlink():
+                os.replace(target, discarded)
+            return
+        if snapshot is None or snapshot.is_symlink():
+            raise Layout2RevisionConflict(
+                f"Layout 2 mutation asset snapshot is missing: {relative_text}."
+            )
+        target.parent.mkdir(parents=True, exist_ok=True)
+        if kind == "file":
+            if not snapshot.is_file():
+                raise Layout2RevisionConflict(
+                    f"Layout 2 mutation file snapshot is missing: {relative_text}."
+                )
+            if target.is_dir() and not target.is_symlink():
+                os.replace(target, discarded)
+            descriptor, name = tempfile.mkstemp(
+                dir=str(target.parent),
+                prefix=f".{target.name}.",
+                suffix=".restore",
+            )
+            os.close(descriptor)
+            temporary = Path(name)
+            try:
+                shutil.copy2(snapshot, temporary)
+                with temporary.open("rb+") as stream:
+                    os.fsync(stream.fileno())
+                os.replace(temporary, target)
+            finally:
+                temporary.unlink(missing_ok=True)
+            return
+        if not snapshot.is_dir():
+            raise Layout2RevisionConflict(
+                f"Layout 2 mutation directory snapshot is missing: {relative_text}."
+            )
+        shutil.copytree(snapshot, staged)
+        if target.exists() or target.is_symlink():
+            os.replace(target, discarded)
+        try:
+            os.replace(staged, target)
+        except BaseException:
+            if discarded.exists() and not target.exists():
+                os.replace(discarded, target)
+            raise
+    finally:
+        shutil.rmtree(staged, ignore_errors=True)
+        if discarded.exists() or discarded.is_symlink():
+            if discarded.is_dir() and not discarded.is_symlink():
+                shutil.rmtree(discarded, ignore_errors=True)
+            else:
+                discarded.unlink(missing_ok=True)
+
+
+def _restore_layout2_mutation_snapshot(project_root: Path, transaction: Path) -> None:
+    root = Path(project_root).expanduser().resolve()
+    manifest = _read_layout2_mutation_manifest(transaction)
 
     transactions_root = _layout2_transactions_root(root)
     work_root = layout2_work_root(root)
@@ -185,6 +421,12 @@ def _restore_layout2_mutation_snapshot(project_root: Path, transaction: Path) ->
     discarded = resolve_root_child(
         transactions_root, f"{_LAYOUT2_MUTATION_DISCARD_PREFIX}{uuid.uuid4().hex}"
     )
+    for asset_entry in reversed(manifest["assets"]):
+        _restore_layout2_asset_snapshot(
+            root,
+            transaction,
+            asset_entry,
+        )
     try:
         if work_present:
             snapshot_work = resolve_root_child(transaction, "work")
@@ -298,10 +540,13 @@ def layout2_mutation_transaction(project_root: Path):
                 "version": 1,
                 "work_present": work_root.is_dir(),
                 "state_present": state_path.is_file(),
+                "assets": [],
             },
         )
         os.replace(preparing, transaction)
         _LAYOUT2_MUTATION_LOCAL.depth = 1
+        _LAYOUT2_MUTATION_LOCAL.project_root = root
+        _LAYOUT2_MUTATION_LOCAL.transaction = transaction
         try:
             yield
         except BaseException:
@@ -324,6 +569,8 @@ def layout2_mutation_transaction(project_root: Path):
             cleanup_resolved = True
         finally:
             _LAYOUT2_MUTATION_LOCAL.depth = 0
+            _LAYOUT2_MUTATION_LOCAL.project_root = None
+            _LAYOUT2_MUTATION_LOCAL.transaction = None
     finally:
         shutil.rmtree(preparing, ignore_errors=True)
         if cleanup_resolved and resolved.exists():

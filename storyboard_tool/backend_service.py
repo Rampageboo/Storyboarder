@@ -2204,6 +2204,7 @@ class StoryboardBackendService(ExportServiceMixin):
         except (FileNotFoundError, ValueError) as exc:
             logger.exception("Failed to import Scene3D file: %s", filename)
             raise HTTPException(status_code=400, detail=str(exc)) from exc
+        app_state.persist_project_mutation(self.app)
         app_state._touch_live_bridge(self.app)
         payload = app_state._project_payload(project, self.app.state.dirty)
         return {"scene3d": project.settings.get("scene3d") or {}, "scenes3d": scene_payload, **payload}
@@ -2307,6 +2308,8 @@ _LAYOUT2_TRANSACTIONAL_METHODS = frozenset(
         "method_import_scene2d_perspective",
         "method_duplicate_scene2d_perspective",
         "method_set_primary_scene2d_perspective",
+        "method_refresh_scene2d_preview",
+        "method_refresh_scene2d_perspective_preview",
         "method_move_scene2d_perspective",
         "method_open_scene2d_perspective",
         "method_add_scene2d_perspective_to_references",
@@ -2390,6 +2393,7 @@ _MUTATING_METHODS = (
     "method_delete_scene2d_perspective", "method_reorder_scene2d_perspectives",
     "method_import_scene2d_perspective", "method_duplicate_scene2d_perspective",
     "method_set_primary_scene2d_perspective", "method_move_scene2d_perspective",
+    "method_refresh_scene2d_preview", "method_refresh_scene2d_perspective_preview",
     "method_open_scene2d_perspective", "method_add_scene2d_perspective_to_references",
     # Plugin-driven state updates
     "method_plugin_write_intent", "method_plugin_export_preview", "method_plugin_psd_saved",

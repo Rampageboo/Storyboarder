@@ -8,7 +8,7 @@ import tempfile
 from pathlib import Path
 from typing import Any, BinaryIO, Callable
 
-from . import project_manager as pm
+from . import project_document, project_manager as pm
 from .file_transactions import atomic_copy_file, atomic_copy_stream
 from .image_utils import is_psd_path
 from .models import Project, Shot
@@ -51,6 +51,11 @@ def ensure_project_blend_file(
 ) -> Path:
     """Lazily copy the bundled template to the active layout-owned Blend path."""
     blend_path = get_project_blend_path(project, scene_id)
+    if project.layout == LAYOUT_2:
+        project_document.enlist_layout2_mutation_paths(
+            project.project_root,
+            (blend_path,),
+        )
     scene_dir = blend_path.parent
     scene_dir.mkdir(parents=True, exist_ok=True)
     if not blend_path.exists():

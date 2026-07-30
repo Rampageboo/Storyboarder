@@ -8,7 +8,15 @@ from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import Response
 from pydantic import BaseModel, Field
 
-from . import app_state, blender_bridge, bpy_viewport, scene3d
+from . import (
+    app_state,
+    blender_bridge,
+    bpy_viewport,
+    project_document,
+    project_manager,
+    project_transaction,
+    scene3d,
+)
 from .project_layout import LAYOUT_2
 
 
@@ -48,6 +56,54 @@ def register_bpy_viewport_routes(app: FastAPI) -> None:
     def translate_error(exc: bpy_viewport.BpyViewportError) -> HTTPException:
         return HTTPException(status_code=400, detail=str(exc))
 
+    def run_layout2_writer_mutation(operation) -> dict[str, Any]:
+        """Commit one built-in Blender write at one Layout 2 revision."""
+        current = project()
+        viewport = manager()
+        if current.layout != LAYOUT_2:
+            require_writer_context()
+            result = operation(viewport)
+            app.state.dirty = True
+            return result
+
+        with project_manager.PROJECT_LOCK:
+            revision_before = context_revision(current)
+            app_state_before = {
+                name: getattr(app.state, name, None)
+                for name in (
+                    "dirty",
+                    "project_disk_mtime",
+                    "external_blender_context_revision",
+                )
+            }
+            try:
+                with project_document.layout2_mutation_transaction(
+                    current.project_root
+                ):
+                    with project_transaction.mutate_project(current):
+                        require_writer_context()
+                        canonical = bpy_viewport.project_blend_path(current)
+                        project_document.enlist_layout2_mutation_paths(
+                            current.project_root,
+                            (canonical,),
+                        )
+                        result = operation(viewport)
+                        app_state.persist_project_mutation(app)
+                        viewport.bind_context(
+                            current,
+                            project_session_id=str(
+                                getattr(app.state, "project_session_id", "") or ""
+                            ),
+                            context_revision=context_revision(current),
+                        )
+                        return result
+            except BaseException:
+                current.storage_revision = revision_before
+                for name, value in app_state_before.items():
+                    setattr(app.state, name, value)
+                viewport.stop()
+                raise
+
     @app.get("/api/project/bpy-viewport/status")
     def bpy_viewport_status() -> dict[str, Any]:
         external = blender_bridge.status(app)
@@ -62,32 +118,63 @@ def register_bpy_viewport_routes(app: FastAPI) -> None:
 
     @app.post("/api/project/bpy-viewport/start")
     def start_bpy_viewport() -> dict[str, Any]:
-        if blender_bridge.owns_scene(app):
-            raise HTTPException(
-                status_code=409,
-                detail=(
-                    "External Blender owns this scene. Close it before starting "
-                    "the built-in Blender viewport."
-                ),
-            )
         try:
             current = project()
             viewport = manager()
-            if current.layout == LAYOUT_2:
-                scenes_before = scene3d.list_scenes(current)
-                bpy_viewport.project_blend_path(current)
-                if scene3d.list_scenes(current) != scenes_before:
-                    app_state.persist_project_mutation(app)
-            if callable(getattr(viewport, "bind_context", None)):
-                result = viewport.start(
-                    current,
-                    project_session_id=str(
-                        getattr(app.state, "project_session_id", "") or ""
-                    ),
-                    context_revision=context_revision(current),
-                )
-            else:
+            if current.layout != LAYOUT_2:
+                if blender_bridge.owns_scene(app):
+                    raise HTTPException(
+                        status_code=409,
+                        detail=(
+                            "External Blender owns this scene. Close it before "
+                            "starting the built-in Blender viewport."
+                        ),
+                    )
                 result = viewport.start(current)
+            else:
+                with project_manager.PROJECT_LOCK:
+                    if blender_bridge.owns_scene(app):
+                        raise HTTPException(
+                            status_code=409,
+                            detail=(
+                                "External Blender owns this scene. Close it before "
+                                "starting the built-in Blender viewport."
+                            ),
+                        )
+                    revision_before = context_revision(current)
+                    app_state_before = {
+                        name: getattr(app.state, name, None)
+                        for name in (
+                            "dirty",
+                            "project_disk_mtime",
+                            "external_blender_context_revision",
+                        )
+                    }
+                    try:
+                        with project_document.layout2_mutation_transaction(
+                            current.project_root
+                        ):
+                            with project_transaction.mutate_project(current):
+                                scenes_before = scene3d.list_scenes(current)
+                                bpy_viewport.project_blend_path(current)
+                                if scene3d.list_scenes(current) != scenes_before:
+                                    app_state.persist_project_mutation(app)
+                                result = viewport.start(
+                                    current,
+                                    project_session_id=str(
+                                        getattr(
+                                            app.state, "project_session_id", ""
+                                        )
+                                        or ""
+                                    ),
+                                    context_revision=context_revision(current),
+                                )
+                    except BaseException:
+                        current.storage_revision = revision_before
+                        for name, value in app_state_before.items():
+                            setattr(app.state, name, value)
+                        viewport.stop()
+                        raise
             return {
                 **result,
                 **blender_bridge.status(app),
@@ -142,19 +229,15 @@ def register_bpy_viewport_routes(app: FastAPI) -> None:
         if len(request.points) < 2:
             raise HTTPException(status_code=400, detail="Draw at least two camera-path points.")
         try:
-            require_writer_context()
-            result = manager().create_camera_path(request.model_dump())
+            return run_layout2_writer_mutation(
+                lambda viewport: viewport.create_camera_path(request.model_dump())
+            )
         except bpy_viewport.BpyViewportError as exc:
             raise translate_error(exc) from exc
-        app.state.dirty = True
-        return result
 
     @app.post("/api/project/bpy-viewport/save")
     def save_bpy_scene() -> dict[str, Any]:
         try:
-            require_writer_context()
-            result = manager().save()
+            return run_layout2_writer_mutation(lambda viewport: viewport.save())
         except bpy_viewport.BpyViewportError as exc:
             raise translate_error(exc) from exc
-        app.state.dirty = True
-        return result

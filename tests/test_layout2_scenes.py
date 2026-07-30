@@ -77,6 +77,56 @@ def _v2_protocol(
     }
 
 
+class _Layout2BpyManager:
+    def __init__(self, project: Project, session_id: str, canonical: Path) -> None:
+        self.running = True
+        self.canonical = canonical
+        self.project_root = str(project.project_root.resolve())
+        self.session_id = session_id
+        self.context_revision = project.storage_revision
+        self.stop_count = 0
+
+    def status(self) -> dict[str, object]:
+        return {
+            "running": self.running,
+            "blend_path": str(self.canonical),
+            "engine": "bpy",
+        }
+
+    def require_context(
+        self,
+        project: Project,
+        *,
+        project_session_id: str,
+        context_revision: int,
+    ) -> None:
+        if (
+            self.project_root != str(project.project_root.resolve())
+            or self.session_id != project_session_id
+            or self.context_revision != context_revision
+        ):
+            raise BpyViewportError("Built-in Blender context is stale.")
+
+    def bind_context(
+        self,
+        project: Project,
+        *,
+        project_session_id: str,
+        context_revision: int,
+    ) -> None:
+        self.project_root = str(project.project_root.resolve())
+        self.session_id = project_session_id
+        self.context_revision = context_revision
+
+    def save(self) -> dict[str, object]:
+        self.canonical.write_bytes(b"worker-save")
+        return {"ok": True, "blend_path": str(self.canonical)}
+
+    def stop(self) -> None:
+        self.running = False
+        self.stop_count += 1
+
+
 def test_layout2_scene2d_assets_are_flat_and_metadata_stays_in_work(
     tmp_path: Path,
 ) -> None:
@@ -427,6 +477,40 @@ def test_layout2_external_blender_brokers_only_save_authorized_session_bytes(
     assert project.storage_revision == before_revision + 1
 
 
+def test_layout2_external_ingest_revalidates_heartbeat_inside_project_lock(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    project = _project(tmp_path)
+    scene = scene3d.create_scene(project, title="Race")["scene"]
+    canonical = project.project_root / "Blender" / f"{scene['id']}.blend"
+    canonical.parent.mkdir(parents=True)
+    canonical.write_bytes(b"canonical-before")
+    scene3d.configure_blend_preview(project, scene["id"], canonical)
+    app_root = tmp_path / "race-app"
+    app_root.mkdir()
+    app = create_app(app_root)
+    app.state.project = project
+    before_revision = project.storage_revision
+    initially_valid = {
+        "session_id": "stale-after-status",
+        "save_authorized": True,
+    }
+    monkeypatch.setattr(
+        blender_bridge,
+        "_validated_heartbeat",
+        lambda *_args, **_kwargs: ({}, None),
+    )
+
+    ingested = blender_bridge._ingest_layout2_session_save(
+        app, project, initially_valid
+    )
+
+    assert ingested is False
+    assert canonical.read_bytes() == b"canonical-before"
+    assert project.storage_revision == before_revision
+
+
 def test_layout2_real_blender_native_save_cannot_bypass_broker(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -551,6 +635,129 @@ def test_layout2_builtin_blender_rejects_stale_writer_context(tmp_path: Path) ->
             project_session_id=app.state.project_session_id,
             context_revision=project.storage_revision + 1,
         )
+
+
+def test_layout2_builtin_blender_start_does_not_rebind_running_stale_worker(
+    tmp_path: Path,
+) -> None:
+    project = _project(tmp_path)
+    scene = scene3d.create_scene(project, title="Running")["scene"]
+    canonical = project.project_root / "Blender" / f"{scene['id']}.blend"
+    canonical.parent.mkdir(parents=True)
+    canonical.write_bytes(b"blend")
+    scene3d.configure_blend_preview(project, scene["id"], canonical)
+    app = create_app(tmp_path)
+    manager = BpyViewportManager()
+    manager.bind_context(
+        project,
+        project_session_id=app.state.project_session_id,
+        context_revision=project.storage_revision,
+    )
+
+    class _RunningProcess:
+        def poll(self):
+            return None
+
+    process = _RunningProcess()
+    manager._blend_path = canonical.resolve()
+    manager._process = process
+
+    with pytest.raises(BpyViewportError, match="stale"):
+        manager.start(
+            project,
+            project_session_id=app.state.project_session_id,
+            context_revision=project.storage_revision + 1,
+        )
+
+    assert manager._process is process
+    assert manager._context_revision == project.storage_revision
+
+
+def test_layout2_builtin_blender_save_advances_once_and_rebinds(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(project_layout, "LAYOUT_2_ENABLED", True)
+    project = _project(tmp_path)
+    project.settings["backup_on_save"] = False
+    scene = scene3d.create_scene(project, title="Save")["scene"]
+    canonical = project.project_root / "Blender" / f"{scene['id']}.blend"
+    canonical.parent.mkdir(parents=True)
+    canonical.write_bytes(b"before")
+    scene3d.configure_blend_preview(project, scene["id"], canonical)
+    project_manager.save_project(project, flush_document=False)
+    project_document.commit_layout2_document(project.project_root)
+    app_root = tmp_path / "builtin-save-app"
+    app_root.mkdir()
+    app = create_app(app_root)
+    app.state.project = project
+    app.state.project_disk_mtime = project_manager.project_disk_mtime(project)
+    manager = _Layout2BpyManager(
+        project, app.state.project_session_id, canonical
+    )
+    app.state.bpy_viewport_manager = manager
+    before_revision = project.storage_revision
+    endpoint = next(
+        route.endpoint
+        for route in app.routes
+        if getattr(route, "path", "") == "/api/project/bpy-viewport/save"
+    )
+
+    result = endpoint()
+
+    assert result["ok"] is True
+    assert canonical.read_bytes() == b"worker-save"
+    assert project.storage_revision == before_revision + 1
+    assert manager.context_revision == project.storage_revision
+    assert manager.running is True
+
+
+def test_layout2_builtin_blender_save_fault_restores_binary_and_stops_worker(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(project_layout, "LAYOUT_2_ENABLED", True)
+    project = _project(tmp_path)
+    project.settings["backup_on_save"] = False
+    scene = scene3d.create_scene(project, title="Save rollback")["scene"]
+    canonical = project.project_root / "Blender" / f"{scene['id']}.blend"
+    canonical.parent.mkdir(parents=True)
+    canonical.write_bytes(b"before")
+    scene3d.configure_blend_preview(project, scene["id"], canonical)
+    project_manager.save_project(project, flush_document=False)
+    project_document.commit_layout2_document(project.project_root)
+    app_root = tmp_path / "builtin-save-fault-app"
+    app_root.mkdir()
+    app = create_app(app_root)
+    app.state.project = project
+    app.state.project_disk_mtime = project_manager.project_disk_mtime(project)
+    manager = _Layout2BpyManager(
+        project, app.state.project_session_id, canonical
+    )
+    app.state.bpy_viewport_manager = manager
+    before_tree = _tree_bytes(project.project_root)
+    before_revision = project.storage_revision
+    endpoint = next(
+        route.endpoint
+        for route in app.routes
+        if getattr(route, "path", "") == "/api/project/bpy-viewport/save"
+    )
+    real_persist = app_state.persist_project_mutation
+
+    def fail_after_persist(current_app) -> None:
+        real_persist(current_app)
+        raise OSError("injected built-in save fault")
+
+    monkeypatch.setattr(app_state, "persist_project_mutation", fail_after_persist)
+
+    with pytest.raises(OSError, match="built-in save fault"):
+        endpoint()
+
+    assert project.storage_revision == before_revision
+    assert _tree_bytes(project.project_root) == before_tree
+    assert canonical.read_bytes() == b"before"
+    assert manager.running is False
+    assert manager.stop_count == 1
 
 
 def test_layout2_builtin_blender_uses_valid_persisted_path(
@@ -717,6 +924,86 @@ def test_layout2_scene_mutation_rolls_back_split_revision_faults(
     assert not transactions.exists() or not any(
         path.name.startswith("mutation-") for path in transactions.iterdir()
     )
+
+
+def test_layout2_backend_delete_restores_assets_after_post_persist_fault(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(project_layout, "LAYOUT_2_ENABLED", True)
+    project = _project(tmp_path)
+    project.settings["backup_on_save"] = False
+    scene, _scenes = scene2d.create_scene(project, "Delete atomically")
+    perspective = scene["perspectives"][0]
+    preview = project.project_root / perspective["preview_image_path"]
+    preview.parent.mkdir(parents=True, exist_ok=True)
+    preview.write_bytes(b"preview-before")
+    project_manager.save_project(project, flush_document=False)
+    project_document.commit_layout2_document(project.project_root)
+    app_root = tmp_path / "delete-post-persist-app"
+    app_root.mkdir()
+    app = create_app(app_root)
+    app.state.project = project
+    app.state.project_disk_mtime = project_manager.project_disk_mtime(project)
+    app.state.dirty = False
+    service = StoryboardBackendService(app)
+    before_tree = _tree_bytes(project.project_root)
+    before_revision = project.storage_revision
+    real_persist = app_state.persist_project_mutation
+
+    def fail_after_persist(current_app) -> None:
+        real_persist(current_app)
+        raise OSError("injected post-persist delete fault")
+
+    monkeypatch.setattr(app_state, "persist_project_mutation", fail_after_persist)
+
+    with pytest.raises(OSError, match="post-persist delete"):
+        service.method_delete_scene2d(scene["id"])
+
+    assert project.storage_revision == before_revision
+    assert _tree_bytes(project.project_root) == before_tree
+    assert preview.read_bytes() == b"preview-before"
+
+
+def test_layout2_backend_scene3d_import_restores_binary_after_persist_fault(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(project_layout, "LAYOUT_2_ENABLED", True)
+    project = _project(tmp_path)
+    project.settings["backup_on_save"] = False
+    scene = scene3d.create_scene(project, title="Import atomically")["scene"]
+    original = scene3d.import_scene_file(
+        project,
+        scene["id"],
+        "original.glb",
+        b"original-binary",
+    )["scene"]
+    project_manager.save_project(project, flush_document=False)
+    project_document.commit_layout2_document(project.project_root)
+    app_root = tmp_path / "import-post-persist-app"
+    app_root.mkdir()
+    app = create_app(app_root)
+    app.state.project = project
+    app.state.project_disk_mtime = project_manager.project_disk_mtime(project)
+    app.state.dirty = False
+    service = StoryboardBackendService(app)
+    before_tree = _tree_bytes(project.project_root)
+    before_revision = project.storage_revision
+    real_persist = app_state.persist_project_mutation
+
+    def fail_after_persist(current_app) -> None:
+        real_persist(current_app)
+        raise OSError("injected post-persist import fault")
+
+    monkeypatch.setattr(app_state, "persist_project_mutation", fail_after_persist)
+
+    with pytest.raises(OSError, match="post-persist import"):
+        service.method_import_scene3d("replacement.glb", b"replacement-binary")
+
+    assert project.storage_revision == before_revision
+    assert _tree_bytes(project.project_root) == before_tree
+    assert (project.project_root / original["file_path"]).read_bytes() == b"original-binary"
 
 
 def test_layout2_scene2d_open_uses_persisted_psd_path(
@@ -1123,6 +1410,56 @@ def test_layout2_scene2d_index_is_canonical_strict_and_posix_only(
     ] = "PSD\\Scene2D\\invalid.psd"
     index.write_text(json.dumps(payload), encoding="utf-8")
     with pytest.raises(ValueError, match="POSIX"):
+        scene2d.list_scenes(project)
+
+
+def test_layout2_scene2d_rejects_cross_scene_perspective_id_collision(
+    tmp_path: Path,
+) -> None:
+    project = _project(tmp_path)
+    first, _scenes = scene2d.create_scene(project, "First")
+    second, _scenes = scene2d.create_scene(project, "Second")
+    index = project.metadata_root / "scenes2d" / "scenes2d.json"
+    payload = json.loads(index.read_text(encoding="utf-8"))
+    duplicate_id = first["perspectives"][0]["id"]
+    second_payload = next(
+        item for item in payload["scenes"] if item["id"] == second["id"]
+    )
+    second_payload["perspectives"][0]["id"] = duplicate_id
+    second_payload["primary_perspective_id"] = duplicate_id
+    index.write_text(json.dumps(payload), encoding="utf-8")
+    second_meta = (
+        project.metadata_root
+        / "scenes2d"
+        / second["id"]
+        / f"{second['id']}_meta.json"
+    )
+    second_meta.write_text(json.dumps(second_payload), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="duplicate perspective"):
+        scene2d.list_scenes(project)
+
+
+def test_layout2_scene2d_rejects_primary_without_perspectives(
+    tmp_path: Path,
+) -> None:
+    project = _project(tmp_path)
+    scene, _scenes = scene2d.create_scene(project, "Primary")
+    index = project.metadata_root / "scenes2d" / "scenes2d.json"
+    payload = json.loads(index.read_text(encoding="utf-8"))
+    scene_payload = payload["scenes"][0]
+    assert scene_payload["primary_perspective_id"]
+    scene_payload["perspectives"] = []
+    index.write_text(json.dumps(payload), encoding="utf-8")
+    meta = (
+        project.metadata_root
+        / "scenes2d"
+        / scene["id"]
+        / f"{scene['id']}_meta.json"
+    )
+    meta.write_text(json.dumps(scene_payload), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="primary perspective is invalid"):
         scene2d.list_scenes(project)
 
 

@@ -13,7 +13,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from . import project_manager
+from . import project_document, project_manager
 from .file_transactions import quarantined_deletions, rollback_paths
 from .models import Project
 from . import scene2d
@@ -409,6 +409,10 @@ def _delete_scene_layout2(project: Project, scene_id: str) -> dict[str, Any]:
         if relative
     }
     assets.update((preview_file_path(project, scene["id"]), _scene_dir(project, scene["id"])))
+    project_document.enlist_layout2_mutation_paths(
+        project.project_root,
+        assets,
+    )
     scenes = [item for item in scenes if item["id"] != scene["id"]]
     if active_id == scene["id"]:
         active_id = scenes[0]["id"] if scenes else ""
@@ -523,6 +527,12 @@ def import_scene_file(project: Project, scene_id: str, filename: str, data: byte
         destination = _safe_rel_path(project, destination_rel)
     keywords = _normalize_keywords([*(scene.get("keywords") or []), Path(filename or "").stem])
     settings_before = copy.deepcopy(project.settings)
+    if project.layout == LAYOUT_2:
+        project_document.enlist_layout2_mutation_paths(
+            project.project_root,
+            (destination,),
+        )
+
     try:
         paths = (destination, _root_dir(project), project.settings_path)
         with rollback_paths(paths) if project.layout == LAYOUT_2 else contextlib.nullcontext():

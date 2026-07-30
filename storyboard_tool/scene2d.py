@@ -15,7 +15,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from . import project_manager
+from . import project_document, project_manager
 from .file_transactions import (
     atomic_copy_file,
     quarantined_deletions,
@@ -1395,6 +1395,7 @@ def _list_layout2_scenes(project: Project) -> list[dict[str, Any]]:
         raise ValueError("Layout 2 Scene 2D index must contain a scenes list.")
     scenes: list[dict[str, Any]] = []
     scene_ids: set[str] = set()
+    perspective_ids: set[str] = set()
     for item in data["scenes"]:
         if not isinstance(item, dict):
             raise ValueError("Layout 2 Scene 2D index contains an invalid entry.")
@@ -1413,8 +1414,13 @@ def _list_layout2_scenes(project: Project) -> list[dict[str, Any]]:
         scene = _normalize_scene(item, project=project)
         if scene["id"] in scene_ids:
             raise ValueError("Layout 2 Scene 2D index contains duplicate scene IDs.")
+        if perspective_ids.intersection(raw_perspective_ids):
+            raise ValueError("Layout 2 Scene 2D contains duplicate perspective IDs.")
+        perspective_ids.update(raw_perspective_ids)
         primary_id = str(item.get("primary_perspective_id") or "")
-        if raw_perspectives and primary_id not in set(raw_perspective_ids):
+        if (raw_perspectives and not primary_id) or (
+            primary_id and primary_id not in set(raw_perspective_ids)
+        ):
             raise ValueError("Layout 2 Scene 2D primary perspective is invalid.")
         meta = _meta_path(project, scene["id"])
         if not meta.is_file():
@@ -1518,9 +1524,15 @@ def _replace_scene(scenes: list[dict[str, Any]], scene: dict[str, Any]) -> list[
 
 
 def _create_psd(project: Project, relative_path: str) -> None:
+    target = _safe_rel_path(project, relative_path)
+    if project.layout == LAYOUT_2:
+        project_document.enlist_layout2_mutation_paths(
+            project.project_root,
+            (target,),
+        )
     width, height = project_manager.get_canvas_size(project)
     background = project_manager.get_canvas_color(project)
-    create_blank_psd(_safe_rel_path(project, relative_path), width, height, background_color=background)
+    create_blank_psd(target, width, height, background_color=background)
 
 
 def create_scene(
@@ -1623,6 +1635,10 @@ def _delete_scene_layout2(project: Project, scene_id: str) -> list[dict[str, Any
         if relative
     }
     assets.add(_scene_dir(project, scene["id"]))
+    project_document.enlist_layout2_mutation_paths(
+        project.project_root,
+        assets,
+    )
     remaining = [item for item in scenes if item["id"] != scene["id"]]
     links = project_manager.normalize_reference_links(
         project.settings.get("reference_links")
@@ -1756,7 +1772,12 @@ def import_perspective(
         if suffix in PSD_EXTENSIONS
         else _image_source_rel(scene["id"], perspective_id, suffix, project)
     )
-    _write_binary_atomic(_safe_rel_path(project, source_rel), bytes(data))
+    source_path = _safe_rel_path(project, source_rel)
+    project_document.enlist_layout2_mutation_paths(
+        project.project_root,
+        (source_path,),
+    )
+    _write_binary_atomic(source_path, bytes(data))
     perspective_type = "psd" if suffix in PSD_EXTENSIONS else "image"
     preview_rel = (
         source_rel
@@ -1848,6 +1869,10 @@ def _delete_perspective_layout2(
         )
         if relative
     }
+    project_document.enlist_layout2_mutation_paths(
+        project.project_root,
+        assets,
+    )
     scene["perspectives"] = [
         item for item in scene["perspectives"] if item["id"] != perspective["id"]
     ]
@@ -2078,6 +2103,12 @@ def _duplicate_perspective_layout2(
         _safe_rel_path(project, new_preview_rel)
         if new_preview_rel != new_source_rel
         else None
+    )
+    project_document.enlist_layout2_mutation_paths(
+        project.project_root,
+        tuple(
+            path for path in (new_source, new_preview) if path is not None
+        ),
     )
     index_path = _index_path(project)
     meta_path = _meta_path(project, scene_id)

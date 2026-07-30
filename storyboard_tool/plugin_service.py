@@ -11,7 +11,7 @@ from typing import Any
 
 from fastapi import FastAPI, HTTPException
 
-from . import app_state, project_manager, runtime_state, scene2d, shot_service
+from . import app_state, project_document, project_manager, runtime_state, scene2d, shot_service
 from .errors import AppErrorCode, app_error
 from .file_transactions import rollback_paths
 from .models import Shot
@@ -889,6 +889,10 @@ class PluginBridgeService:
                     status=400,
                 )
             try:
+                project_document.enlist_layout2_mutation_paths(
+                    project.project_root,
+                    (preview_path,),
+                )
                 preview_sha256 = _stable_sha256(inbox)
                 with rollback_paths((preview_path,)):
                     preview_path.parent.mkdir(parents=True, exist_ok=True)

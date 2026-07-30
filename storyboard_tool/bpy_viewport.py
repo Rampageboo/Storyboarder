@@ -128,7 +128,7 @@ class BpyViewportManager:
         with self._lock:
             blend_path = project_blend_path(project)
             if self.running and self._blend_path == blend_path:
-                self.bind_context(
+                self.require_context(
                     project,
                     project_session_id=project_session_id,
                     context_revision=context_revision,
