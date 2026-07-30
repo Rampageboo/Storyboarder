@@ -619,6 +619,10 @@ def create_app(base_dir: Path, bridge_port: int = 8000) -> FastAPI:
     def save_project_as(request: SaveProjectAsRequest) -> dict[str, Any]:
         return _svc().method_save_project_as(request.path)
 
+    @app.post("/api/project/convert")
+    def convert_project(request: SaveProjectAsRequest) -> dict[str, Any]:
+        return _svc().method_convert_project(request.path)
+
     @app.get("/api/system/blender-candidates")
     def blender_candidates() -> dict[str, Any]:
         return _svc().method_blender_candidates()

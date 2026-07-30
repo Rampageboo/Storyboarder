@@ -87,6 +87,33 @@ class ProjectLayoutSpec:
     storage_revision: int = 0
 
 
+def validate_conversion_provenance(value: Any) -> dict[str, Any]:
+    """Validate optional Layout 2 conversion provenance without treating it as a path."""
+    if value is None:
+        return {}
+    if not isinstance(value, dict):
+        raise ProjectSchemaError("converted_from must be an object.")
+    required_strings = ("source_path", "timestamp", "source_hash")
+    if not value:
+        return {}
+    for field in required_strings:
+        item = value.get(field)
+        if not isinstance(item, str) or not item or item != item.strip():
+            raise ProjectSchemaError(
+                f"converted_from {field} must be a non-empty string."
+            )
+    source_version = value.get("source_version")
+    if (
+        isinstance(source_version, bool)
+        or not isinstance(source_version, int)
+        or source_version not in SUPPORTED_PROJECT_JSON_VERSIONS
+    ):
+        raise ProjectSchemaError("converted_from source_version is unsupported.")
+    source_hash = value["source_hash"]
+    if not re.fullmatch(r"[0-9a-fA-F]{64}", source_hash):
+        raise ProjectSchemaError("converted_from source_hash must be a SHA-256 digest.")
+    return dict(value)
+
 def parse_project_manifest(payload: Any) -> ProjectLayoutSpec:
     """Validate the schema/layout fields in a project manifest.
 
@@ -125,6 +152,7 @@ def parse_project_manifest(payload: Any) -> ProjectLayoutSpec:
             f"Layout 2 storage_revision must be an integer from 0 to {MAX_STORAGE_REVISION}."
         )
 
+    validate_conversion_provenance(payload.get("converted_from"))
     return ProjectLayoutSpec(
         schema_version=version,
         layout=LAYOUT_2,
@@ -156,12 +184,16 @@ def project_manifest(project: Any) -> dict[str, Any]:
             "storage_revision": getattr(project, "storage_revision", None),
         }
     )
-    return {
+    manifest = {
         "version": spec.schema_version,
         "layout": spec.layout,
         "project_id": spec.project_id,
         "storage_revision": spec.storage_revision,
     }
+    converted_from = validate_conversion_provenance(getattr(project, "converted_from", None))
+    if converted_from:
+        manifest["converted_from"] = converted_from
+    return manifest
 
 
 def validate_project_relative_posix(

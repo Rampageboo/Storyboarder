@@ -242,6 +242,9 @@ def _open_expanded_project(
         project_id=layout_spec.project_id,
         storage_revision=layout_spec.storage_revision,
         project_root_path=project_root_path,
+        converted_from=(
+            dict(payload["converted_from"]) if isinstance(payload.get("converted_from"), dict) else {}
+        ),
     )
     _ensure_project_dirs(project.metadata_root)
     project.settings = _load_settings(project)

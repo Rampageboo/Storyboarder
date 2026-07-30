@@ -24,6 +24,7 @@ from . import (
     bpy_viewport,
     live_bridge,
     preview_analysis_cache,
+    project_convert,
     project_document,
     project_manager,
     project_save_as,
@@ -34,7 +35,7 @@ from . import (
 )
 from .errors import AppErrorCode, app_error
 from .models import Project, SHOT_STATUSES, Shot
-from .project_layout import LAYOUT_2
+from .project_layout import LAYOUT_1, LAYOUT_2, ensure_layout_enabled
 
 logger = logging.getLogger(__name__)
 
@@ -439,6 +440,122 @@ def save_active_project_as_layout2(app: FastAPI, requested_document: Path) -> Pr
                 raise
             raise ProjectTransitionError(
                 "saving this Layout 2 project as",
+                str(report.get("current_stage") or "unknown"),
+                exc,
+            ) from exc
+        finally:
+            if writers_quiesced or bool(
+                getattr(app.state, "project_writers_quiesced", False)
+            ):
+                resume_project_writers(app)
+
+
+def convert_active_project_to_layout2(app: FastAPI, requested_document: Path) -> Project:
+    """Convert Layout 1 into a published Layout 2 sibling without saving the source."""
+    ensure_layout_enabled(LAYOUT_2)
+    _ensure_transition_runtime(app)
+    source = _require_project(app)
+    source_dirty = bool(getattr(app.state, "dirty", False))
+    source_disk_mtime = float(getattr(app.state, "project_disk_mtime", 0.0) or 0.0)
+    source_session_id = str(getattr(app.state, "project_session_id", "") or "")
+    result: project_convert.Layout2ConvertResult | None = None
+    candidate: Project | None = None
+    writers_quiesced = False
+    report: dict[str, Any] = {
+        "action": "converting this Layout 1 project to Layout 2",
+        "status": "running",
+        "current_stage": "",
+        "stages": [],
+        "writers": {},
+    }
+
+    with project_manager.PROJECT_TRANSITION_LOCK:
+        try:
+            _transition_checkpoint(app, report, "lock_acquired")
+            report["current_stage"] = "writer_quiesce"
+            report["writers"] = quiesce_project_writers(app)
+            writers_quiesced = True
+            _transition_checkpoint(app, report, "writers_quiesced")
+
+            with project_manager.PROJECT_LOCK:
+                source = _require_project(app)
+                if source.layout != LAYOUT_1:
+                    raise ValueError("Convert supports Layout 1 to Layout 2 only.")
+                source_dirty = bool(getattr(app.state, "dirty", False))
+                source_disk_mtime = float(
+                    getattr(app.state, "project_disk_mtime", 0.0) or 0.0
+                )
+                source_session_id = str(
+                    getattr(app.state, "project_session_id", "") or ""
+                )
+                _transition_checkpoint(app, report, "mutations_frozen")
+
+                report["current_stage"] = "external_blender_release"
+                blender_bridge.require_released(app, "converting to Layout 2")
+                _transition_checkpoint(app, report, "external_blender_released")
+
+                report["current_stage"] = "builtin_blender_release"
+                manager = getattr(app.state, "bpy_viewport_manager", None)
+                if manager is not None and bool(getattr(manager, "running", False)):
+                    raise ValueError(
+                        "Save and close the built-in Blender scene before converting to Layout 2."
+                    )
+                _transition_checkpoint(app, report, "builtin_blender_released")
+
+                report["current_stage"] = "conversion"
+                result = project_convert.materialize_layout1_to_layout2(
+                    source,
+                    requested_document,
+                )
+                report.update(
+                    {
+                        "snapshot_hash": result.snapshot_hash,
+                        "source_hash": result.source_hash,
+                        "destination_root": str(result.destination_root),
+                        "destination_document": str(result.document_path),
+                        "excluded_paths": list(result.excluded_paths),
+                    }
+                )
+                _transition_checkpoint(app, report, "conversion_published")
+
+                report["current_stage"] = "candidate_open"
+                candidate = project_manager.open_project(result.document_path)
+                _transition_checkpoint(app, report, "candidate_opened")
+                report["current_stage"] = "candidate_validate"
+                project_manager.validate_transition_candidate(candidate)
+                _transition_checkpoint(app, report, "candidate_validated")
+                _transition_checkpoint(app, report, "before_swap")
+
+                _track_project(app, candidate)
+                app.state.dirty = False
+                runtime_state.rotate_project_session(app)
+                blender_bridge.cancel_session(app)
+                report["status"] = "committed"
+                report["current_stage"] = "committed"
+                report["project_session_id"] = app.state.project_session_id
+                app.state.last_project_transition = report
+
+            try:
+                _remember_recent(candidate)
+                _persist_app_session(app)
+                _touch_live_bridge(app)
+            except Exception:
+                logger.warning("Layout 2 conversion publication failed", exc_info=True)
+            return candidate
+        except Exception as exc:
+            app.state.project = source
+            app.state.dirty = source_dirty
+            app.state.project_disk_mtime = source_disk_mtime
+            app.state.project_session_id = source_session_id
+            report["status"] = "failed"
+            report["error"] = str(exc)
+            if result is not None:
+                report["completed_target"] = str(result.destination_root)
+            app.state.last_project_transition = report
+            if isinstance(exc, ProjectTransitionError):
+                raise
+            raise ProjectTransitionError(
+                "converting this Layout 1 project to Layout 2",
                 str(report.get("current_stage") or "unknown"),
                 exc,
             ) from exc

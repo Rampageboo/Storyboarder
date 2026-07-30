@@ -238,6 +238,7 @@ class Project:
     project_id: str = ""
     storage_revision: int = 0
     project_root_path: Path | None = None
+    converted_from: dict[str, Any] = field(default_factory=dict)
 
     @property
     def metadata_root(self) -> Path:

@@ -35,7 +35,7 @@ from .external_tools import preheat_photoshop
 from .export_utils import missing_files
 from .image_utils import normalize_hex_color
 from .linked_sync import sync_project
-from .project_layout import LAYOUT_2
+from .project_layout import LAYOUT_2, LayoutDisabledError, ensure_layout_enabled
 from .plugin_service import PluginBridgeService
 from .service_exports import ExportServiceMixin
 from .system_utils import (
@@ -574,6 +574,46 @@ class StoryboardBackendService(ExportServiceMixin):
         app_state._touch_live_bridge(self.app)
         self.app.state.dirty = False
         return app_state._project_payload(self.app.state.project, self.app.state.dirty)
+
+    def method_convert_project(self, path: str) -> dict[str, Any]:
+        project = app_state._require_project(self.app)
+        if project.layout == LAYOUT_2:
+            raise app_error(
+                AppErrorCode.PROJECT_SAVE_FAILED,
+                "Convert supports Layout 1 to Layout 2 only.",
+                status=409,
+            )
+        try:
+            ensure_layout_enabled(LAYOUT_2)
+        except LayoutDisabledError as exc:
+            raise app_error(
+                AppErrorCode.PROJECT_SAVE_FAILED, str(exc), status=409
+            ) from exc
+
+        try:
+            destination = validate_project_save_path(path)
+            if not destination:
+                raise ValueError("Convert destination is required.")
+        except Exception as exc:
+            raise app_error(AppErrorCode.PROJECT_SAVE_FAILED, str(exc), status=400) from exc
+
+        try:
+            converted = app_state.convert_active_project_to_layout2(
+                self.app,
+                Path(destination),
+            )
+        except app_state.ProjectTransitionError as exc:
+            status = 409 if exc.stage in {
+                "writer_quiesce",
+                "external_blender_release",
+                "builtin_blender_release",
+            } else 500
+            raise app_error(
+                AppErrorCode.PROJECT_SAVE_FAILED,
+                str(exc.cause),
+                status=status,
+            ) from exc
+        return app_state._project_payload(converted, self.app.state.dirty)
 
     def method_get_missing_files(self) -> dict[str, Any]:
         project = app_state._require_project(self.app)
@@ -2346,6 +2386,11 @@ _LAYOUT2_TRANSACTIONAL_METHODS = frozenset(
 def _serialized_mutation(method):
     @functools.wraps(method)
     def wrapper(self, *args, **kwargs):
+        if method.__name__ == "method_convert_project":
+            # The coordinator owns quiesce and the transition -> project lock order.
+            with project_manager.PROJECT_TRANSITION_LOCK:
+                return method(self, *args, **kwargs)
+
         if method.__name__ == "method_save_project_as":
             # Save As must serialize against all project transitions. Layout 2
             # then acquires PROJECT_LOCK inside its coordinator, preserving the
@@ -2396,7 +2441,7 @@ def _serialized_mutation(method):
 # concurrent reads and media serving are never blocked by a mutation.
 _MUTATING_METHODS = (
     # Project lifecycle
-    "method_save_project", "method_save_project_as",
+    "method_save_project", "method_save_project_as", "method_convert_project",
     # Shot CRUD / ordering
     "method_add_shot", "method_duplicate_shot", "method_update_shot", "method_update_shots_batch",
     "method_delete_shot", "method_delete_shots_batch", "method_restore_shots_batch",
