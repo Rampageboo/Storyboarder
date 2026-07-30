@@ -541,6 +541,13 @@ def convert_active_project_to_layout2(app: FastAPI, requested_document: Path) ->
                 _touch_live_bridge(app)
             except Exception:
                 logger.warning("Layout 2 conversion publication failed", exc_info=True)
+            try:
+                project_manager.cleanup_document_working_root(source)
+            except Exception:
+                logger.warning(
+                    "Could not clean the converted Layout 1 work root",
+                    exc_info=True,
+                )
             return candidate
         except Exception as exc:
             app.state.project = source
