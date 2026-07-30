@@ -66,27 +66,24 @@ Optional UXP workflow:
 
 ## Project Structure
 
-New projects are created as:
+New projects use the portable Layout 2 folder format:
 
 ```text
-Storyboard_Project/
-  project.json
-  settings.json
-  backups/
-  shots/
-    shot_001/
-      shot_001_preview.png
-      shot_001_thumb.png
-      shot_001_annotations.json
-      shot_001_notes.json
-      references/
-  references/
-  images/
-  exports/
-  scripts/
+MyProject/
+  MyProject.sbd             # metadata-only portable document
+  Images/                   # previews, references, generated images
+  PSD/                      # editable board and Scene 2D sources
+  Blender/                  # Blender scenes, created only when needed
+  Exports/
+  .storyboarder/
+    work/                   # recoverable JSON metadata working state
+    state.json              # committed/global revision lineage
 ```
 
-New imported shot images are copied into each shot folder and renamed to match the shot ID, for example `shots/shot_001/shot_001_preview.png`.
+Keep the folder and its `.sbd` file together when moving or sharing a project.
+The `.sbd` stores JSON metadata, while editable and generated assets remain visible
+in the sibling directories. Legacy single-file and folder projects remain readable;
+use **More > Convert to Layout 2** to create a source-preserving Layout 2 copy.
 
 ## Canvas color
 
@@ -101,4 +98,4 @@ python main.py
 
 This opens a **desktop app window** (via pywebview). The local FastAPI server is an internal implementation detail — do not open the app in a system browser.
 
-The app stores projects as `project.json` plus local image files. New/Open Project dialogs use native file pickers handled by the internal server.
+The app stores new projects as a portable folder containing a metadata-only `.sbd` plus editable asset directories. New/Open Project dialogs use native file pickers handled by the internal server.

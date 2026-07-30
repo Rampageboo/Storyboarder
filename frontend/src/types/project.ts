@@ -6,6 +6,9 @@ export interface ProjectPayload {
   project_json_path: string
   document_path?: string
   name: string
+  layout: 1 | 2
+  project_id: string
+  storage_revision: number
   dirty: boolean
   settings: ProjectSettings
   statuses: ShotStatus[]

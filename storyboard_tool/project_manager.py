@@ -36,6 +36,7 @@ import shutil
 import tempfile
 import threading
 import uuid
+from dataclasses import replace
 from pathlib import Path
 from typing import Any, BinaryIO
 
@@ -178,6 +179,109 @@ def create_document(
         project_document.remove_working_root(root)
         raise
     return project
+
+
+def _layout2_creation_paths(requested: Path) -> tuple[Path, Path]:
+    """Resolve an unused portable project folder and its canonical document."""
+    from .project_save_as import _is_reparse  # noqa: PLC0415
+
+    requested_document = Path(requested).expanduser().absolute()
+    if requested_document.suffix.lower() != project_document.DOCUMENT_SUFFIX:
+        requested_document = requested_document.with_suffix(project_document.DOCUMENT_SUFFIX)
+    parent = requested_document.parent
+    if not parent.is_dir():
+        raise FileNotFoundError(f"Project parent folder not found: {parent}")
+    if _is_reparse(parent):
+        raise ValueError("Project destination parent cannot be a reparse point.")
+    requested_document = requested_document.resolve()
+    destination_root = requested_document.parent / requested_document.stem
+    destination_document = destination_root / f"{destination_root.name}.sbd"
+    folded_targets = {
+        destination_root.name.casefold(),
+        requested_document.name.casefold(),
+    }
+    for child in requested_document.parent.iterdir():
+        if child.name.casefold() in folded_targets:
+            raise FileExistsError(
+                f"Project destination collides by case with an existing path: {child.name}."
+            )
+    if (
+        destination_root.exists()
+        or requested_document.exists()
+        or destination_document.exists()
+    ):
+        raise FileExistsError("Project destination already exists; projects are never merged.")
+    return destination_root, destination_document
+
+
+def create_layout2_document(
+    document_path: Path,
+    *,
+    canvas_width: int = 1920,
+    canvas_height: int = 1080,
+) -> Project:
+    """Atomically create a portable Layout 2 folder project."""
+    from . import scene2d, scene3d  # noqa: PLC0415
+
+    ensure_layout_enabled(LAYOUT_2)
+    destination_root, destination_document = _layout2_creation_paths(document_path)
+    operation = Path(
+        tempfile.mkdtemp(prefix=".sb-create-", dir=str(destination_root.parent))
+    )
+    stage = operation / destination_root.name
+    try:
+        stage.mkdir(parents=False, exist_ok=False)
+        for name in ("Images", "PSD", "Blender", "Exports"):
+            resolve_root_child(stage, name).mkdir()
+        work = resolve_root_child(stage, ".storyboarder", "work")
+        work.mkdir(parents=True)
+        width, height = normalize_canvas_size(canvas_width, canvas_height)
+        settings = DEFAULT_SETTINGS.copy()
+        settings["canvas_width"] = width
+        settings["canvas_height"] = height
+        project = Project(
+            root_path=work,
+            settings=settings,
+            document_path=resolve_root_child(stage, destination_document.name),
+            layout=LAYOUT_2,
+            project_id=str(uuid.uuid4()),
+            storage_revision=1,
+            project_root_path=stage,
+        )
+        save_project(project, flush_document=False)
+        scene2d.initialize_layout2_metadata(project)
+        scene3d.initialize_layout2_metadata(project)
+        save_project(project, flush_document=False)
+        project_document.commit_layout2_document(
+            stage,
+            document_path=project.document_path,
+        )
+        project_document.validate_layout2_source_lineage(
+            stage,
+            document_path=project.document_path,
+        )
+
+        folded_targets = {
+            destination_root.name.casefold(),
+            (destination_root.parent / f"{destination_root.name}.sbd").name.casefold(),
+        }
+        for child in destination_root.parent.iterdir():
+            if child != operation and child.name.casefold() in folded_targets:
+                raise FileExistsError(
+                    f"Project destination appeared during creation: {child.name}."
+                )
+        os.rename(stage, destination_root)
+        operation.rmdir()
+        return replace(
+            project,
+            project_root_path=destination_root,
+            root_path=resolve_root_child(destination_root, ".storyboarder", "work"),
+            document_path=destination_document,
+        )
+    except BaseException:
+        if operation.exists():
+            shutil.rmtree(operation, ignore_errors=True)
+        raise
 
 
 def reload_project_if_changed(project: Project, loaded_mtime: float) -> tuple[Project, float, bool]:

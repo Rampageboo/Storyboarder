@@ -65,8 +65,10 @@ def test_save_as_switches_document_and_preserves_original(
     copied = tmp_path / "Copy.sbd"
     app_dir = tmp_path / "app"
     app_dir.mkdir()
+    legacy = project_manager.create_document(original)
+    assert project_manager.cleanup_document_working_root(legacy)
     client = TestClient(api_module.create_app(app_dir))
-    assert client.post("/api/project/new", json={"path": str(original)}).status_code == 200
+    assert client.post("/api/project/open", json={"project_json_path": str(original)}).status_code == 200
     added = client.post("/api/shots", json={})
     shot_id = added.json()["shot"]["shot_id"]
     assert client.post("/api/project/save").status_code == 200
@@ -123,12 +125,13 @@ def test_document_api_create_scene_and_reopen_without_rewriting_on_open(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(project_document.tempfile, "tempdir", str(tmp_path))
-    document = tmp_path / "API Film.sbd"
+    requested = tmp_path / "API Film.sbd"
+    document = tmp_path / "API Film" / "API Film.sbd"
     first_app_dir = tmp_path / "app-one"
     first_app_dir.mkdir()
     client = TestClient(api_module.create_app(first_app_dir))
 
-    created = client.post("/api/project/new", json={"path": str(document)})
+    created = client.post("/api/project/new", json={"path": str(requested)})
     assert created.status_code == 200, created.text
     assert created.json()["project_path"] == str(document.resolve())
     assert created.json()["project_json_path"] == str(document.resolve())
@@ -157,8 +160,10 @@ def test_mutations_defer_sbd_pack_until_save(tmp_path: Path, monkeypatch: pytest
     document = tmp_path / "Deferred.sbd"
     app_dir = tmp_path / "app"
     app_dir.mkdir()
+    legacy = project_manager.create_document(document)
+    assert project_manager.cleanup_document_working_root(legacy)
     client = TestClient(api_module.create_app(app_dir))
-    assert client.post("/api/project/new", json={"path": str(document)}).status_code == 200
+    assert client.post("/api/project/open", json={"project_json_path": str(document)}).status_code == 200
 
     added = client.post("/api/shots")
     assert added.status_code == 200, added.text

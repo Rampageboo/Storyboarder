@@ -172,7 +172,7 @@ function RightRail({
   onOpenSettings: () => void
   onOpenExport: () => void
 }) {
-  const { project, newProject, openProjectFromDialog, saveProject, saveProjectAs, dirtyShotIds, projectActionBusy, initialLoading } =
+  const { project, newProject, openProjectFromDialog, saveProject, saveProjectAs, convertProject, dirtyShotIds, projectActionBusy, initialLoading } =
     useProject()
   const menuRef = useRef<HTMLDivElement | null>(null)
   const [menuOpen, setMenuOpen] = useState(false)
@@ -214,6 +214,14 @@ function RightRail({
       // error surfaced via banner
     }
   }, [saveProjectAs])
+
+  const handleConvert = useCallback(async () => {
+    try {
+      await convertProject()
+    } catch {
+      // error surfaced via banner
+    }
+  }, [convertProject])
 
   const closeMenu = useCallback(() => setMenuOpen(false), [])
   const runMenuAction = useCallback(
@@ -289,6 +297,16 @@ function RightRail({
               >
                 Save Project As…
               </button>
+              {project?.layout === 1 ? (
+                <button
+                  type="button"
+                  role="menuitem"
+                  onClick={() => runMenuAction(() => void handleConvert())}
+                  disabled={projectActionBusy || initialLoading}
+                >
+                  Convert to Layout 2...
+                </button>
+              ) : null}
               <button
                 type="button"
                 role="menuitem"

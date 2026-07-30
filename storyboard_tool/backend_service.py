@@ -468,7 +468,11 @@ class StoryboardBackendService(ExportServiceMixin):
     ) -> dict[str, Any]:
         root = Path(path).expanduser() if path else self.app.state.base_dir / "Untitled.sbd"
         try:
-            creator = project_manager.create_document if root.suffix.lower() == ".sbd" else project_manager.create_project
+            creator = (
+                project_manager.create_layout2_document
+                if root.suffix.lower() == ".sbd"
+                else project_manager.create_project
+            )
             opened_project = app_state.transition_active_project(
                 self.app,
                 action="creating another project",

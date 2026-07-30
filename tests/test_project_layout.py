@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from storyboard_tool import project_manager
+from storyboard_tool import project_layout, project_manager
 from storyboard_tool.models import Project
 from storyboard_tool.project_layout import (
     LAYOUT_1,
@@ -95,7 +95,11 @@ def test_layout2_requires_stable_id_and_bounded_revision(fields: dict) -> None:
         parse_project_manifest({"version": 4, "layout": 2, **fields})
 
 
-def test_layout2_schema_can_be_validated_but_open_is_disabled(tmp_path: Path) -> None:
+def test_layout2_schema_can_be_validated_but_open_is_disabled(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(project_layout, "LAYOUT_2_ENABLED", False)
     root = tmp_path / "project"
     root.mkdir()
     manifest = {
@@ -112,7 +116,11 @@ def test_layout2_schema_can_be_validated_but_open_is_disabled(tmp_path: Path) ->
     assert sorted(path.name for path in root.iterdir()) == ["project.json"]
 
 
-def test_layout2_save_is_disabled_before_writing(tmp_path: Path) -> None:
+def test_layout2_save_is_disabled_before_writing(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(project_layout, "LAYOUT_2_ENABLED", False)
     metadata_root = tmp_path / ".storyboarder" / "work"
     project = Project(
         root_path=metadata_root,

@@ -10,7 +10,7 @@ from pathlib import Path
 
 import pytest
 
-from storyboard_tool import project_document, project_manager, recents
+from storyboard_tool import project_document, project_layout, project_manager, recents
 from storyboard_tool.project_layout import LayoutDisabledError
 
 
@@ -485,6 +485,7 @@ def test_layout2_disabled_open_never_creates_a_temporary_asset_tree(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    monkeypatch.setattr(project_layout, "LAYOUT_2_ENABLED", False)
     root, work = _layout2_project(tmp_path)
     document = root / "Portable.sbd"
     project_document.commit_layout2_document(root, cover_path=_cover(tmp_path / "cover.png"))

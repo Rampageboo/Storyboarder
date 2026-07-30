@@ -10,6 +10,7 @@ from storyboard_tool import (
     app_state,
     blender_bridge,
     project_document,
+    project_layout,
     project_manager,
 )
 from storyboard_tool.api import create_app
@@ -162,7 +163,10 @@ def test_dirty_new_saves_source_before_creating_and_activating_target(
 
     payload = StoryboardBackendService(app).method_new_project(path=str(destination))
 
-    assert payload["document_path"] == str(destination.resolve())
+    assert payload["document_path"] == str(
+        (tmp_path / "Created" / "Created.sbd").resolve()
+    )
+    assert payload["layout"] == project_layout.LAYOUT_2
     assert app.state.project is not source
     reopened = project_manager.open_project(source_document)
     try:

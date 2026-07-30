@@ -301,7 +301,7 @@ All shot business logic lives here. **No FastAPI or HTTP imports** — errors ar
 
 **Responsibilities**
 
-- Project lifecycle: legacy folder `create_project()`, single-file `create_document()`, `open_project()`, `save_project()`
+- Project lifecycle: default portable-folder `create_layout2_document()`, legacy folder `create_project()`, legacy single-file `create_document()`, `open_project()`, `save_project()`
 - Shot list CRUD: `add_shot()`, `duplicate_shot()`, `delete_shot()`, `restore_shot()`, `reorder_shots()`
 - Canonical file paths: `get_shot_dir()`, `resolve_shot_preview_path()`, `resolve_shot_thumbnail_path()`
 - Canvas management: `get_canvas_color()`, `create_canvas_for_shot()`
@@ -310,9 +310,15 @@ All shot business logic lives here. **No FastAPI or HTTP imports** — errors ar
 
 **Atomic save**
 
-`save_project()` and `save_settings()` use `_atomic_write_json()` so a crash or write error during save never leaves a partial or empty JSON file. New projects are user-visible `.sbd` ZIP documents. They are expanded into a private working directory while open, then `project_document.pack_document()` writes a sibling temporary archive and uses `os.replace()` so the visible document is never partially overwritten. Legacy folder projects remain readable.
+`save_project()` and `save_settings()` use `_atomic_write_json()` so a crash or write error during save never leaves a partial or empty JSON file. New Layout 2 projects are portable folders whose canonical `<name>.sbd` is a metadata-only ZIP. Editable assets stay visible under `Images/`, `PSD/`, `Blender/`, and `Exports/`; JSON work state is under `.storyboarder/work`. `create_layout2_document()` builds and validates the complete project in a same-volume staging directory, then publishes it with one refusing rename. `project_document.commit_layout2_document()` writes a sibling temporary archive and uses `os.replace()` so the document is never partially overwritten.
 
-**Expanded project structure (inside `.sbd`, or visible for a legacy folder project)**
+Layout 1 single-file and folder projects remain readable. `create_document()` is retained for compatibility and tests, while the user-facing `.sbd` new-project path now calls `create_layout2_document()`. The **Convert to Layout 2** UI invokes `/api/project/convert`, which publishes a source-preserving sibling folder and switches only after validation.
+
+**Layout 2 project structure**
+
+`<name>/<name>.sbd`, `Images/`, `PSD/`, `Blender/`, `Exports/`, and `.storyboarder/{work,state.json}`. The `.sbd` contains allowlisted JSON metadata (and optional `cover.png`) only. Blender files are created lazily when a Scene 3D workflow needs them.
+
+**Legacy Layout 1 expanded structure (inside a single-file `.sbd`, or visible for a folder project)**
 
 ```
 Storyboard_Project/
@@ -831,6 +837,7 @@ Four per-shot files serve distinct roles and must not be conflated:
 
 | Flow | Files touched | Module | Transaction-safe? |
 |---|---|---|---|
+| `create_layout2_document` | staged portable folder + metadata-only `.sbd`, then one directory rename | `project_manager` / `project_document` | yes; failed staging is removed before publication |
 | `create_document` | private work tree + one visible `.sbd` archive | `project_manager` / `project_document` | atomic JSON plus atomic archive replacement |
 | `create_project` | legacy root dirs, project.json, settings.json | `project_manager` | atomic JSON writes only |
 | `add_shot` | `shots/<id>/` dir, optional blank canvas PSD | `project_manager` | no rollback needed — shot ID is new |

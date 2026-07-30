@@ -11,6 +11,7 @@ import {
 } from 'react'
 import {
   addShot,
+  convertProject,
   createProject,
   createQueueBatchRequests,
   createShotCanvas,
@@ -66,6 +67,7 @@ export interface ProjectContextValue {
   closeProjectToHome: () => Promise<void>
   saveProject: () => Promise<void>
   saveProjectAs: () => Promise<void>
+  convertProject: () => Promise<void>
   addShotAfterSelection: () => Promise<void>
   insertShotAtIndex: (index: number) => Promise<void>
   deleteSelectedShot: () => Promise<void>
@@ -716,6 +718,21 @@ export function ProjectProvider({ children }: PropsWithChildren) {
     }
   }, [flushDirtyShots])
 
+  const convertProjectAction = useCallback(async () => {
+    return runProjectTransition(async () => {
+      try {
+        const result = await browseProjectSave()
+        if (result.cancelled || !result.path) return
+        await flushDirtyShots()
+        const payload = await convertProject({ path: result.path })
+        openPayload(payload, selectedShotId)
+      } catch (error) {
+        setLastError(error instanceof Error ? error.message : String(error))
+        throw error
+      }
+    })
+  }, [flushDirtyShots, openPayload, runProjectTransition, selectedShotId])
+
   const addShotAfterSelection = useCallback(async () => {
     const current = projectRef.current
     const afterId = current && selectedShotId ? selectedShotId : undefined
@@ -989,6 +1006,7 @@ export function ProjectProvider({ children }: PropsWithChildren) {
       closeProjectToHome,
       saveProject: saveProjectAction,
       saveProjectAs: saveProjectAsAction,
+      convertProject: convertProjectAction,
       addShotAfterSelection,
       insertShotAtIndex,
       deleteSelectedShot,
@@ -1039,7 +1057,7 @@ export function ProjectProvider({ children }: PropsWithChildren) {
       refreshMissingFiles,
       refreshPreviewFields,
     }),
-    [project, selectedShotId, selectedShotIds, setSelectedShotId, selectShot, clearShotSelection, replaceProject, refreshProjectFromBridge, refreshProjectFromGeneration, reloadProject, newProjectAction, openProjectFromDialog, openProjectPath, closeProjectToHome, saveProjectAction, saveProjectAsAction, addShotAfterSelection, insertShotAtIndex, deleteSelectedShot, sendSelectedShotsToQueue, changeSelectedShotsScene, moveSelectedShot, reorderBoards, deleteActiveRefSegment, deleteRefSegmentUndoable, recordRefApply, undo, redo, undoStack, redoStack, syncSelectedShot, openSelectedShotSource, initialLoading, projectActionBusy, getDraft, editShotField, isShotDirty, dirtyShotIds, savingShots, saveShot, flushDirtyShots, visualEpoch, segmentRange, setSegmentAnchor, setSegmentEnd, pickSegmentShot, clearSegmentRange, activeAppliedSegmentId, setActiveAppliedSegmentId, clearActiveAppliedSegment, refSegmentInspectOpen, openRefSegmentInspect, closeRefSegmentInspect, dismissRefSegmentUi, refApplyUndoToken, lastError, clearError, reportError, missingFiles, missingFilesLoading, refreshMissingFiles, refreshPreviewFields],
+    [project, selectedShotId, selectedShotIds, setSelectedShotId, selectShot, clearShotSelection, replaceProject, refreshProjectFromBridge, refreshProjectFromGeneration, reloadProject, newProjectAction, openProjectFromDialog, openProjectPath, closeProjectToHome, saveProjectAction, saveProjectAsAction, convertProjectAction, addShotAfterSelection, insertShotAtIndex, deleteSelectedShot, sendSelectedShotsToQueue, changeSelectedShotsScene, moveSelectedShot, reorderBoards, deleteActiveRefSegment, deleteRefSegmentUndoable, recordRefApply, undo, redo, undoStack, redoStack, syncSelectedShot, openSelectedShotSource, initialLoading, projectActionBusy, getDraft, editShotField, isShotDirty, dirtyShotIds, savingShots, saveShot, flushDirtyShots, visualEpoch, segmentRange, setSegmentAnchor, setSegmentEnd, pickSegmentShot, clearSegmentRange, activeAppliedSegmentId, setActiveAppliedSegmentId, clearActiveAppliedSegment, refSegmentInspectOpen, openRefSegmentInspect, closeRefSegmentInspect, dismissRefSegmentUi, refApplyUndoToken, lastError, clearError, reportError, missingFiles, missingFilesLoading, refreshMissingFiles, refreshPreviewFields],
   )
 
   return <ProjectContext.Provider value={value}>{children}</ProjectContext.Provider>
