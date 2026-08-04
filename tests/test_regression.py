@@ -84,7 +84,7 @@ class TestShotLifecycle(_ProjectFixture):
         self._add_shot(after_shot_id=anchor_id)
         new_ids = self._shot_ids()
         self.assertEqual(len(new_ids), len(initial_ids) + 1)
-        # anchor, NEW, second, ... ? second should have moved one position right
+        # anchor, NEW, second, ... — second should have moved one position right
         anchor_pos = new_ids.index(anchor_id)
         self.assertNotEqual(new_ids[anchor_pos + 1], second_id, "New shot should sit between anchor and second")
 
@@ -310,7 +310,7 @@ class TestMissingMediaOnOpen(unittest.TestCase):
 
 class TestExportWithMissingMedia(_ProjectFixture):
     def test_shot_list_export_succeeds_with_no_preview(self) -> None:
-        # Shot list is CSV metadata ? does not require image files
+        # Shot list is CSV metadata — does not require image files
         resp = _quiet(lambda: self._client.post("/api/export/shot-list"))
         self.assertEqual(resp.status_code, 200)
         self.assertIn("path", resp.json())
@@ -323,7 +323,7 @@ class TestExportWithMissingMedia(_ProjectFixture):
 
 
 # ---------------------------------------------------------------------------
-# Desktop-only CLI ? no --browser / --host / --port flags
+# Desktop-only CLI — no --browser / --host / --port flags
 # ---------------------------------------------------------------------------
 
 class TestDesktopOnlyCLI(unittest.TestCase):
@@ -349,7 +349,7 @@ class TestDesktopOnlyCLI(unittest.TestCase):
     def test_open_desktop_window_accepts_no_cli_args(self) -> None:
         sig = inspect.signature(desktop_module.open_desktop_window)
         param_names = list(sig.parameters.keys())
-        # Only app and optional title ? no host, port, browser
+        # Only app and optional title — no host, port, browser
         for forbidden in ("host", "port", "browser"):
             self.assertNotIn(forbidden, param_names)
 
