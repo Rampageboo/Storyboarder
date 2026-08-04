@@ -13,7 +13,7 @@ _DATE_FMT = "%Y-%m-%dT%H:%M:%S"
 def setup_logging(log_file: Path | None = None) -> None:
     """Configure structured file + console logging for the storyboard_tool package.
 
-    Safe to call multiple times ? skips setup if the logger already has handlers.
+    Safe to call multiple times — skips setup if the logger already has handlers.
     The file handler writes DEBUG+ to the log file; the console handler emits
     WARNING+ only, so debug noise never reaches the terminal.
     """
@@ -31,7 +31,7 @@ def setup_logging(log_file: Path | None = None) -> None:
         fh.setFormatter(logging.Formatter(_FMT, datefmt=_DATE_FMT))
         logger.addHandler(fh)
     except OSError:
-        pass  # read-only filesystem or permission denied ? skip file handler
+        pass  # read-only filesystem or permission denied — skip file handler
 
     ch = logging.StreamHandler()
     ch.setLevel(logging.WARNING)
