@@ -51,9 +51,9 @@ Review / verification / acceptance state, when assigned:
 
 ## Owner report
 
-State what changed, what was verified, what remains uncertain, and whether an
-Owner decision is needed. Mention model, role, packet IDs, hashes, map state,
-or Project Context only when they materially affected the task.
+`OWNER_HANDBOOK.md` defines what an Owner report answers. Mention model, role,
+packet IDs, hashes, map state, or Project Context only when they materially
+affected the task.
 
 Rare context, effort-upgrade, parallel-lease, and routing-evaluation records
 live in `packets-extended.md`.
