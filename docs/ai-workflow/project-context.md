@@ -2,14 +2,22 @@
 
 Read this module when creating, loading, or updating `project-context/`.
 
-Project Context is compact cross-session memory for durable goals, confirmed
-decisions, exact facts, active boundaries, and high-value risks that cannot be
-reliably derived from source. A current stage or next endpoint belongs only
-while it remains useful across sessions.
+Project Context is compact cross-session memory. An entry earns its place only
+if it passes both tests: it would still be true after the code was rewritten,
+and it cannot be recovered by reading source. In practice that leaves intent
+and non-goals, decisions and the reasons behind them, boundaries that must not
+be crossed, and failure modes with their consequence.
 
-It is not a transcript, backlog, task log, packet archive, or codebase map.
+Everything else belongs to the codebase map, to the task record, or nowhere.
 Repository structure and as-built architecture belong to an adopted map; when
-no map exists, inspect source on demand.
+no map exists, inspect source on demand. Write nothing to fill a heading — an
+empty module is honest, and a vague one costs a reader time while teaching
+nothing.
+
+Entries leave. Remove a risk once a regression test enforces it, compress a
+decision once it is settled, and drop state a later stage superseded. Context
+that only grows is accumulating task record; this memory should stay roughly
+constant in size.
 
 ```text
 project-context/
@@ -26,10 +34,21 @@ Use `PROJECT_CONTEXT_TEMPLATE/` to initialize the layout. Mark unknown content
 as missing rather than inventing it. Store only routing and validity metadata
 for maps or research; their generated artifacts stay with their providers.
 
-Update context only when a durable goal, decision, boundary, risk, or validity
-limit changes. Routine progress, commands, validation logs, and temporary
-findings remain in the task record. The implementer may propose a delta; the
-Owner or assigned context integrator applies it.
+## What rots, and checking it
+
+Intent, confirmed decisions, boundaries, and the mechanism behind a risk hold
+until the decision itself changes. Anything describing current stage, adopted
+tool state, or exact values is true only against the revision it was checked
+at, and that is the part that goes stale.
+
+So `exact-facts.yaml` and any state module record the revision they were
+verified against. Compare it with the current revision before relying on them;
+if relevant source has moved, treat that content as unverified and re-check
+rather than repeating it. A stale record that reads as current is worse than
+none, because it sends the next session to plan work that already exists.
+
+The implementer may propose a delta; the Owner or assigned context integrator
+applies it.
 
 Current Owner direction, the active task, source, and verified tests outrank
 stored context. Surface conflicts and mark stale material instead of silently

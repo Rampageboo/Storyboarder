@@ -1,12 +1,35 @@
 # Optional Research Integration
 
-Read this module when engineering work consumes the independently installed
+Read this module when engineering work is blocked on knowledge the repository
+cannot supply, or when it consumes the independently installed
 `run-chatgpt-research` Skill.
 
 The Skill owns research execution, sources, evaluation, and its packet format.
 The project owns the question, supplied context, permissions, budget, retention,
 and how results affect engineering decisions. Research is optional and never a
 prerequisite for ordinary project startup.
+
+## When to commission it
+
+Commission research when the remaining gap is external knowledge rather than
+local diagnosis: focused repair cycles have stopped producing new evidence and
+the unknown is third-party behavior, a version difference, or a current fact the
+repository cannot settle; several viable designs or algorithms need independent
+comparison against published practice before one is built on; a plan about to be
+committed to has no local reviewer able to contest it on evidence; or the work
+depends on a domain the project has never established, where guessing would be
+indistinguishable from deciding.
+
+Research is also the cheaper route when a question needs long external search
+and reasoning, because that depth is spent in the research host instead of the
+engineering context. That justifies delegating a genuine unknown; it is never a
+reason to manufacture one.
+
+Do not commission research for a fact one authoritative source settles, to avoid
+an ordinary engineering decision, or before the failure is reproduced and stated
+exactly. Write down the question, the verified facts, the constraints, and the
+decision it must unblock first. If those cannot be filled in, the work is
+under-diagnosed rather than blocked.
 
 Send only relevant context and approved source identities. Private content must
 stay within both the project's data policy and the Skill's transmission rules.
