@@ -1,0 +1,23 @@
+{
+  "schema_version": 1,
+  "version": "v4.1.1",
+  "source": "Rampageboo/ai_collaboration_protocol_v4@9433eed0c69452317b1b5356529c92b7c258cb3d",
+  "installed_at": "2026-08-04T06:49:00Z",
+  "files": {
+    "AGENTS.md": "df257bfefc640753546922ae34c29a53e48260a6cc60221d4056fb2d475e24aa",
+    "CLAUDE.md": "998e77b6344b468f0870396e2cb4736c38c91f4f6bb5cd735d0ce21c67e4c75c",
+    "OWNER_HANDBOOK.md": "5d1101f9680fcf2831abee2aa72c51a491e211f2b74f94802c9ecc4536efc6fd",
+    "docs/ai-workflow/capability-routing.md": "624dc65876690fe7fcd155cb380069b6fef7f68baa97eac7647a9192604d7b5d",
+    "docs/ai-workflow/codebase-map.md": "a57f2e033f5ba184b5592dbf0f5523487dcfc57f668069a3b791f1bfa99cfebe",
+    "docs/ai-workflow/codex-mcp-effort.md": "d648c7269cd6a05e912ad9515aab0459e2b7e976b6b75ac36191df4f05c273e7",
+    "docs/ai-workflow/codex-model-routing.md": "2d61b77c13fd2e711296298f23319e0a47d353cf9483495516678bc8b0e6011f",
+    "docs/ai-workflow/failure-and-debug.md": "05b9ea336851d8fc219d6723044c2d9ae7d5b208c30b8204fcc8713ee78f2bf8",
+    "docs/ai-workflow/git-execution.md": "13152aa131597d7dab38a7bef7c3b1affc783b8def51fc799c600dfd6da336d8",
+    "docs/ai-workflow/migrations/project-context-v2-to-v3.md": "dfb8e40ead0c252a1eb4968f72d8de535dbe7cfa8995ec1b3464cf69b2795597",
+    "docs/ai-workflow/packets-extended.md": "8d1979dab1839420286a9bd05bfb111ac338e0a4c8bb00c5596e3394c257b3cc",
+    "docs/ai-workflow/packets.md": "cabd3b2c0842abfff8718884248b074a756ffb07d2c085fa313e20bacbace6c5",
+    "docs/ai-workflow/project-context.md": "027cab21da2c9d1ef99ae7c98cbb53f267a43d5ac1f0d17852fe8dab59189204",
+    "docs/ai-workflow/research-integration.md": "98b36974fb2ff6ca26c719c17bf5a6fa42353dae7d1efe096b920bbf825f4045",
+    "docs/ai-workflow/security-and-destructive-actions.md": "5deb514d3a603064014dcd7bd93ae2cffe6727fe1ee32c49b10f8d2b01d80c72"
+  }
+}
