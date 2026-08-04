@@ -18,9 +18,11 @@
 
 ## Pending
 
-- **Owner GUI click-test.** Several completed backend changes carry an unclosed
-  manual verification. Backend evidence does not substitute for it; report it as
-  outstanding rather than implying the feature is accepted.
+- **Owner GUI click-test (unverified in repository).** The prior context records
+  an unclosed manual verification for completed backend changes, but the
+  repository has no authoritative acceptance record that can confirm whether
+  the Owner has since completed it. Backend evidence does not substitute for
+  that check; report this uncertainty rather than implying acceptance.
 - **`.sbd` flush cost.** A save is a full re-zip with no incremental path, and
   the Owner's documents live under OneDrive so each flush triggers a full
   re-upload. The Owner has said OneDrive is not a concern; revisit only if

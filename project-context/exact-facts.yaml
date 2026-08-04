@@ -1,7 +1,7 @@
 schema_version: 3
 metadata:
   last_updated: "2026-08-04"
-  updated_by: "Claude (V2-to-V3 migration; facts re-verified against source, not copied)"
+  updated_by: "Codex (context-staleness audit; claims re-verified against source)"
 git_environments:
   - host: "Windows 11 workstation (D:\\MyProjects\\Storyboarder)"
     client: "Codex desktop / Claude Code"
@@ -31,8 +31,13 @@ codebase_map:
   freshness_acceptor_role: integration-acceptor
   update_trigger: manual
   last_successful_update: "2026-08-04"
-  source_revision_represented: "cb77f98"
+  source_revision_represented: "9e15d3f54c4b0d50dbc2079a23bbded7cb720ffc"
+  source_file_count: 251
+  node_count: 4917
+  edge_count: 14255
+  community_count: 180
   health_result: "warning - 1085 dangling-endpoint edges, 24 self-loops, 548 collapsed edges"
+  serialized_graph_health_check: "OK - 0 missing-endpoint links, 0 self-loops, 0 duplicate undirected links"
   global_map_membership: none
 research:
   project_name: ""

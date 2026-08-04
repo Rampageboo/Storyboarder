@@ -6,8 +6,8 @@ project:
 metadata:
   last_updated: "2026-08-04"
   last_verified_branch: "main"
-  last_verified_commit: "cb77f98"
-  updated_by: "Claude (V2-to-V3 migration)"
+  last_verified_commit: "9e15d3f54c4b0d50dbc2079a23bbded7cb720ffc"
+  updated_by: "Codex (context-staleness audit)"
 modules:
   - id: product-intent
     source: sources/01-product-intent.md
