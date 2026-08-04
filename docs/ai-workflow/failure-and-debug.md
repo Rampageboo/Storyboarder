@@ -5,7 +5,8 @@ Codex integration.
 
 Read the exact error, inspect the relevant path, make a bounded repair, and
 rerun the failing check. If the same approach is not producing new evidence,
-change approach or stop with a concise Failure Packet. Escalate earlier when
+change approach, commission research under `research-integration.md`, or stop
+with a concise Failure Packet. Escalate earlier when
 the fix requires a product, architecture, security, migration, or data-risk
 decision.
 
