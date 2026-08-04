@@ -4,6 +4,14 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
+from .project_layout import (
+    LAYOUT_2,
+    metadata_path_for,
+    project_path_for,
+    scene2d_metadata_path,
+    scene3d_metadata_path,
+)
+
 
 SHOT_STATUSES = ("Draft", "In Progress", "Review", "Approved", "Final")
 
@@ -226,46 +234,65 @@ class Project:
     # selection, and sets this so exported board numbers stay the ones the user
     # sees in the strip instead of restarting at 1.
     board_numbers: list[int] = field(default_factory=list)
+    layout: int = 1
+    project_id: str = ""
+    storage_revision: int = 0
+    project_root_path: Path | None = None
+    converted_from: dict[str, Any] = field(default_factory=dict)
+
+    @property
+    def metadata_root(self) -> Path:
+        """Expanded metadata/work root (the historical ``root_path``)."""
+        return self.root_path
+
+    @property
+    def project_root(self) -> Path:
+        """Portable project folder; identical to ``root_path`` for Layout 1."""
+        return self.project_root_path or self.root_path
 
     @property
     def json_path(self) -> Path:
-        return self.root_path / "project.json"
+        return metadata_path_for(self, "manifest")
 
     @property
     def images_dir(self) -> Path:
-        return self.root_path / "images"
+        return project_path_for(self, "images_dir")
 
     @property
     def shots_dir(self) -> Path:
-        return self.root_path / "shots"
+        return project_path_for(self, "shots_dir")
 
     @property
     def references_dir(self) -> Path:
-        return self.root_path / "references"
+        return project_path_for(self, "references_dir")
 
     @property
     def scenes2d_dir(self) -> Path:
-        return self.root_path / "scenes2d"
+        if self.layout == LAYOUT_2:
+            return scene2d_metadata_path(self)
+        return project_path_for(self, "scenes2d_dir")
 
     @property
     def scenes3d_dir(self) -> Path:
-        return self.root_path / "scenes3d"
+        if self.layout == LAYOUT_2:
+            return scene3d_metadata_path(self)
+        return project_path_for(self, "scenes3d_dir")
 
     @property
     def exports_dir(self) -> Path:
-        return self.root_path / "exports"
+        return project_path_for(self, "exports_dir")
 
     @property
     def scripts_dir(self) -> Path:
-        return self.root_path / "scripts"
+        return project_path_for(self, "scripts_dir")
 
     @property
     def backups_dir(self) -> Path:
-        return self.root_path / "backups"
+        return project_path_for(self, "backups_dir")
 
     @property
     def settings_path(self) -> Path:
-        return self.root_path / "settings.json"
+        return metadata_path_for(self, "settings")
 
     @property
     def name(self) -> str:

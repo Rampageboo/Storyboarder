@@ -352,6 +352,10 @@ async function fitLayerToDocumentInModal(layer) {
 }
 
 async function resolveBoardBackgroundEntry(shotId) {
+  if (isExplicitAssetContext(lastPluginContext)) {
+    const item = findWorkItemByKey(`shot:${shotId}`, lastPluginContext);
+    return resolveAssetEntryForWorkItem(item, "board_background");
+  }
   const folder = await getShotFolderEntry(shotId);
   // The board background (`SB bg`) reference is ONLY the dedicated background
   // file. Never fall back to the shot's preview — that preview is the artist's

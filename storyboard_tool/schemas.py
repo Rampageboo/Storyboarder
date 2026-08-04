@@ -50,6 +50,13 @@ class PluginShotEventRequest(BaseModel):
     preview_image_path: str | None = None
 
 
+class PluginWriteIntentRequest(BaseModel):
+    """Request one short-lived, single-purpose plugin filesystem write."""
+
+    work_key: str
+    asset_role: str
+
+
 class PluginNextShotRequest(BaseModel):
     """Plugin request to advance from the current shot, optionally creating one."""
 
@@ -94,6 +101,12 @@ class PluginContextResponse(BaseModel):
     next_shot_id: str = ""
     paths: dict[str, str] = Field(default_factory=dict)
     bridge: dict[str, Any]
+    protocol_version: int = 1
+    required_capabilities: list[str] = Field(default_factory=list)
+    project_session_id: str = ""
+    context_revision: int = 0
+    path_mode: str = "legacy"
+    offline_write_allowed: bool = True
 
 
 class ProjectPathRequest(BaseModel):
@@ -104,6 +117,10 @@ class ProjectPathRequest(BaseModel):
 
 class OpenProjectRequest(BaseModel):
     project_json_path: str
+
+
+class SaveProjectAsRequest(BaseModel):
+    path: str
 
 
 class ShotUpdateRequest(BaseModel):
@@ -133,6 +150,13 @@ class GenerationRequestCreateRequest(BaseModel):
     destination: str = "queue"
     provider: str = "codex"
     mode: str = ""
+    clear_queue_on_result: bool = True
+
+
+class GenerationBatchDispatchRequest(BaseModel):
+    provider: str = "codex"
+    clear_queue_on_result: bool = True
+    scope: str = "auto"
 
 
 class GenerationCandidateAcceptRequest(BaseModel):
@@ -299,6 +323,32 @@ class AppSessionUpdateRequest(BaseModel):
 class RestoreShotRequest(BaseModel):
     shot: dict[str, Any]
     index: int = 0
+
+
+class ShotBatchUpdateItem(BaseModel):
+    shot_id: str
+    changes: dict[str, Any] = Field(default_factory=dict)
+
+
+class ShotBatchUpdateRequest(BaseModel):
+    updates: list[ShotBatchUpdateItem] = Field(default_factory=list)
+
+
+class ShotBatchDeleteRequest(BaseModel):
+    shot_ids: list[str] = Field(default_factory=list)
+
+
+class ShotBatchRestoreItem(BaseModel):
+    shot: dict[str, Any]
+    index: int = 0
+
+
+class ShotBatchRestoreRequest(BaseModel):
+    items: list[ShotBatchRestoreItem] = Field(default_factory=list)
+
+
+class GenerationBatchQueueRequest(BaseModel):
+    shot_ids: list[str] = Field(default_factory=list)
 
 
 class ReorderShotsRequest(BaseModel):

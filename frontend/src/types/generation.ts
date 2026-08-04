@@ -50,6 +50,7 @@ export interface GenerationRequest {
   destination: GenerationDestination
   provider?: GenerationProvider
   mode?: GenerationMode
+  clear_queue_on_result?: boolean
   status: GenerationRequestStatus
   created_at: string
   updated_at: string

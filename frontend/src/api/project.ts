@@ -4,6 +4,7 @@ import type {
   OpenProjectRequest,
   ProjectPathRequest,
   ProjectPayload,
+  SaveProjectAsRequest,
 } from '../types'
 
 export function getProject(): Promise<ProjectPayload> {
@@ -31,6 +32,20 @@ export function openProject(body: OpenProjectRequest): Promise<ProjectPayload> {
 export function saveProject(): Promise<ProjectPayload> {
   return requestJson<ProjectPayload>('/api/project/save', {
     method: 'POST',
+  })
+}
+
+export function saveProjectAs(body: SaveProjectAsRequest): Promise<ProjectPayload> {
+  return requestJson<ProjectPayload>('/api/project/save-as', {
+    method: 'POST',
+    body,
+  })
+}
+
+export function convertProject(body: SaveProjectAsRequest): Promise<ProjectPayload> {
+  return requestJson<ProjectPayload>('/api/project/convert', {
+    method: 'POST',
+    body,
   })
 }
 

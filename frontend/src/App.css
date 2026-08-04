@@ -49,8 +49,22 @@
   overflow: hidden;
 }
 
-.left-rail {
+.left-rail-dock {
   flex: 0 0 var(--left-rail-width);
+  width: var(--left-rail-width);
+  min-width: var(--left-rail-width);
+  height: 100%;
+  position: relative;
+  z-index: 40;
+}
+
+.left-rail-dock.is-auto-hide {
+  flex-basis: 14px;
+  width: 14px;
+  min-width: 14px;
+}
+
+.left-rail {
   width: var(--left-rail-width);
   min-width: var(--left-rail-width);
   height: 100%;
@@ -64,6 +78,19 @@
     linear-gradient(180deg, rgba(255, 255, 255, 0.025), transparent 18%),
     color-mix(in srgb, var(--bg-toolbar) 88%, #000);
   box-shadow: inset -1px 0 0 rgba(255, 255, 255, 0.025);
+}
+
+.left-rail-dock.is-auto-hide .left-rail {
+  position: absolute;
+  inset: 0 auto 0 0;
+  transform: translateX(calc(-100% + 14px));
+  transition: transform 180ms ease;
+  box-shadow: 12px 0 36px rgba(0, 0, 0, 0.34);
+}
+
+.left-rail-dock.is-auto-hide:hover .left-rail,
+.left-rail-dock.is-auto-hide:focus-within .left-rail {
+  transform: translateX(0);
 }
 
 .left-rail-logo {
@@ -149,16 +176,12 @@
 }
 
 .workspace-board {
-  grid-template-columns: minmax(0, 1fr) minmax(300px, var(--inspector-width)) var(--right-rail-width);
-}
-
-.workspace-board.is-inspector-collapsed {
-  grid-template-columns: minmax(0, 1fr) var(--inspector-collapsed-width) var(--right-rail-width);
+  grid-template-columns: minmax(0, 1fr) minmax(300px, var(--inspector-width)) 14px;
 }
 
 .workspace-scene2d,
 .workspace-scene3d {
-  grid-template-columns: minmax(0, 1fr) var(--right-rail-width);
+  grid-template-columns: minmax(0, 1fr) 14px;
 }
 
 .workspace-content {
@@ -177,10 +200,6 @@
   grid-template-columns: minmax(0, 1fr) minmax(300px, var(--inspector-width));
   min-width: 0;
   min-height: 0;
-}
-
-.workspace-content-board.is-inspector-collapsed {
-  grid-template-columns: minmax(0, 1fr) var(--inspector-collapsed-width);
 }
 
 .workspace-content-scene {
@@ -228,32 +247,39 @@
   scrollbar-width: thin;
 }
 
-.main-right.is-collapsed {
-  max-width: var(--inspector-collapsed-width);
-  align-items: center;
-  overflow: hidden;
+.right-rail-dock {
+  position: relative;
+  z-index: 40;
+  width: 14px;
+  min-width: 14px;
+  min-height: 0;
+  overflow: visible;
+  background: color-mix(in srgb, var(--bg-toolbar) 92%, #000);
+  border-left: 1px solid color-mix(in srgb, var(--color-border) 76%, transparent);
 }
 
-.inspector-size-toggle {
-  flex: 0 0 32px;
-  width: 32px;
-  min-width: 32px;
-  min-height: 32px;
-  margin: 8px 5px;
+.right-rail-handle {
+  position: absolute;
+  z-index: 2;
+  inset: 0;
+  width: 14px;
+  min-width: 14px;
+  min-height: 100%;
   padding: 0;
-  border: 1px solid var(--color-border);
-  border-radius: 8px;
-  background: color-mix(in srgb, var(--bg-elevated) 82%, transparent);
-  color: var(--color-text);
-  font-size: 22px;
-  line-height: 1;
-}
-
-.main-right.is-collapsed .inspector-size-toggle {
-  margin-top: 12px;
+  border: 0;
+  border-radius: 999px;
+  background:
+    linear-gradient(
+      180deg,
+      transparent 42%,
+      color-mix(in srgb, var(--color-accent) 44%, transparent) 42% 58%,
+      transparent 58%
+    );
 }
 
 .right-rail {
+  position: absolute;
+  inset: 0 0 0 auto;
   width: var(--right-rail-width);
   min-width: var(--right-rail-width);
   max-width: var(--right-rail-width);
@@ -267,6 +293,14 @@
   background:
     linear-gradient(180deg, rgba(255, 255, 255, 0.025), transparent 18%),
     color-mix(in srgb, var(--bg-toolbar) 90%, #000);
+  transform: translateX(calc(100% - 14px));
+  transition: transform 180ms ease;
+  box-shadow: -12px 0 36px rgba(0, 0, 0, 0.34);
+}
+
+.right-rail-dock:hover .right-rail,
+.right-rail-dock:focus-within .right-rail {
+  transform: translateX(0);
 }
 
 .right-rail-group {
@@ -421,7 +455,7 @@
 
 @media (max-width: 1500px) {
   .workspace-board {
-    grid-template-columns: minmax(0, 1fr) minmax(300px, 460px) var(--right-rail-width);
+    grid-template-columns: minmax(0, 1fr) minmax(300px, 460px) 14px;
   }
 
   .workspace-content-board {
@@ -431,7 +465,7 @@
 
 @media (max-width: 1280px) {
   .workspace-board {
-    grid-template-columns: minmax(0, 1fr) minmax(280px, 400px) var(--right-rail-width);
+    grid-template-columns: minmax(0, 1fr) minmax(280px, 400px) 14px;
   }
 
   .workspace-content-board {

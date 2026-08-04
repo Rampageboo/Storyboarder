@@ -15,20 +15,21 @@ from pathlib import Path
 
 from .image_utils import is_psd_path
 from .models import Project, Shot
+from .project_layout import resolve_project_path, resolve_shot_asset
 
 
 def get_shot_dir(project: Project, shot: Shot) -> Path:
-    """Return the canonical directory for a shot's files."""
-    return project.shots_dir / shot.shot_id
+    """Return the canonical shot-assets parent (shared in Layout 2)."""
+    return resolve_shot_asset(project, shot.shot_id, "preview").parent
 
 
 def shot_has_psd_canvas(project: Project, shot: Shot) -> bool:
     """True when the shot folder contains a linked Photoshop canvas."""
     if shot.source_file_path:
-        path = project.root_path / shot.source_file_path
+        path = resolve_project_path(project, shot.source_file_path)
         if path.is_file() and is_psd_path(path):
             return True
-    fallback = get_shot_dir(project, shot) / f"{shot.shot_id}.psd"
+    fallback = resolve_shot_asset(project, shot.shot_id, "source_psd")
     return fallback.is_file() and is_psd_path(fallback)
 
 
@@ -43,15 +44,8 @@ def resolve_project_relative_path(
     Raises ValueError for missing paths, path-traversal, or wrong extension.
     Does NOT check whether the path exists on disk.
     """
-    path_text = str(rel_path or "").strip()
-    if not path_text:
-        raise ValueError("Project-relative path is required.")
-    resolved = (project.root_path / path_text).resolve()
-    root = project.root_path.resolve()
-    if resolved != root and root not in resolved.parents:
-        raise ValueError("Path must be inside the project.")
-    if required_suffixes is not None:
-        suffixes = tuple(str(suffix).lower() for suffix in required_suffixes)
-        if resolved.suffix.lower() not in suffixes:
-            raise ValueError(f"Path must use one of these extensions: {', '.join(required_suffixes)}")
-    return resolved
+    return resolve_project_path(
+        project,
+        rel_path,
+        required_suffixes=required_suffixes,
+    )

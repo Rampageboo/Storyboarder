@@ -10,6 +10,16 @@ Photoshop panel for drawing storyboards without switching back to Storyboard Too
 4. Restart Photoshop
 5. Open **Plugins → Storyboard Bridge**
 
+## Protocol v2 and Layout 2
+
+Plugin 0.7.0 negotiates protocol v2 with `explicit_asset_paths_v2`. When a
+Layout 2 project is linked, every asset is opened or written through the exact
+role path supplied by Storyboarder; the plugin does not derive a shot folder or
+write project metadata offline. Preview exports use a short-lived backend write
+intent and transaction inbox. Native Photoshop saves remain available for an
+already-open canonical PSD; after Ctrl+S, the plugin reconnects the save to its
+work key and source role so Storyboarder can validate the canonical file.
+
 ## Recommended workflow (stay in Photoshop)
 
 1. Open Storyboard Tool once and open your project (for the shot list and canvas color).

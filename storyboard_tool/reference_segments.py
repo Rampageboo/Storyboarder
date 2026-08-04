@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any, BinaryIO, Callable
 
 from . import project_manager as pm
+from .file_transactions import atomic_copy_file, atomic_copy_stream
 from .image_utils import (
     board_background_filename,
     copy_and_convert_image_stream,
@@ -48,7 +49,7 @@ MAX_REF_UNDO_SNAPSHOTS = 20
 
 
 def _undo_root(project: Project) -> Path:
-    return project.root_path / "backups" / "ref_undo"
+    return pm.resolve_root_child(project.backups_dir, "ref_undo")
 
 
 def _prune_ref_undo_snapshots(project: Project, protect_token: str | None = None) -> None:
@@ -78,7 +79,7 @@ def _prune_ref_undo_snapshots(project: Project, protect_token: str | None = None
         pass
 
 
-def _board_bake_filenames(shot: Shot) -> list[str]:
+def _board_bake_assets(shot: Shot) -> list[tuple[str, str]]:
     """Files captured by the undo snapshot for a reference bake.
 
     Includes ``_preview.png`` so that undo can restore a shot that was baked
@@ -87,31 +88,37 @@ def _board_bake_filenames(shot: Shot) -> list[str]:
     so legacy undo tokens still work correctly.
     """
     return [
-        f"{shot.shot_id}_preview.png",
-        board_background_filename(shot.shot_id),
-        f"{shot.shot_id}_thumb.png",
+        ("preview", f"{shot.shot_id}_preview.png"),
+        ("board_background", board_background_filename(shot.shot_id)),
+        ("thumbnail", f"{shot.shot_id}_thumb.png"),
     ]
 
 
 def snapshot_boards_for_undo(project: Project, min_index: int, max_index: int) -> str:
     """Back up the boards a bake is about to overwrite; returns an undo token."""
     token = uuid.uuid4().hex
-    backup_root = _undo_root(project) / token
+    backup_root = pm.resolve_root_child(_undo_root(project), token)
     manifest: list[dict[str, Any]] = []
     for index in range(min_index, max_index + 1):
         shot = project.shots[index]
-        shot_dir = pm.get_shot_dir(project, shot)
-        shot_backup = backup_root / shot.shot_id
+        shot_backup = (
+            backup_root
+            if project.layout == pm.LAYOUT_2
+            else pm.resolve_root_child(backup_root, shot.shot_id)
+        )
         saved_files: list[str] = []
-        for name in _board_bake_filenames(shot):
-            source = shot_dir / name
+        for role, name in _board_bake_assets(shot):
+            source = pm.resolve_shot_asset(project, shot.shot_id, role)
             if source.is_file():
                 shot_backup.mkdir(parents=True, exist_ok=True)
-                shutil.copy2(source, shot_backup / name)
+                atomic_copy_file(source, pm.resolve_root_child(shot_backup, name))
                 saved_files.append(name)
         manifest.append({"shot_id": shot.shot_id, "shot": shot.to_dict(), "files": saved_files})
     backup_root.mkdir(parents=True, exist_ok=True)
-    (backup_root / "manifest.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+    pm._atomic_write_text(
+        pm.resolve_root_child(backup_root, "manifest.json"),
+        json.dumps(manifest, indent=2),
+    )
     _prune_ref_undo_snapshots(project, protect_token=token)
     return token
 
@@ -121,8 +128,8 @@ def restore_boards_from_undo(project: Project, token: str) -> dict[str, Any]:
     token = re.sub(r"[^a-f0-9]", "", str(token or ""))
     if not token:
         raise ValueError("Invalid undo token.")
-    backup_root = _undo_root(project) / token
-    manifest_path = backup_root / "manifest.json"
+    backup_root = pm.resolve_root_child(_undo_root(project), token)
+    manifest_path = pm.resolve_root_child(backup_root, "manifest.json")
     if not manifest_path.is_file():
         raise ValueError("Undo snapshot not found.")
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
@@ -133,13 +140,16 @@ def restore_boards_from_undo(project: Project, token: str) -> dict[str, Any]:
         current = shots_by_id.get(shot_id)
         if current is None:
             continue  # board was deleted since the bake; nothing to restore
-        shot_dir = pm.get_shot_dir(project, current)
         saved_files = set(entry.get("files", []))
-        for name in _board_bake_filenames(current):
-            target = shot_dir / name
-            backup_file = backup_root / shot_id / name
+        for role, name in _board_bake_assets(current):
+            target = pm.resolve_shot_asset(project, current.shot_id, role)
+            backup_file = (
+                pm.resolve_root_child(backup_root, name)
+                if project.layout == pm.LAYOUT_2
+                else pm.resolve_root_child(backup_root, str(shot_id), name)
+            )
             if name in saved_files and backup_file.is_file():
-                shutil.copy2(backup_file, target)
+                atomic_copy_file(backup_file, target)
             else:
                 target.unlink(missing_ok=True)  # file did not exist before the bake
         project.shots[project.shots.index(current)] = Shot.from_dict(entry.get("shot", {}))
@@ -269,14 +279,13 @@ def _shot_matches_segment_bake(shot: Shot, segment_ref_path: str, seg_id: str) -
 def _refresh_shot_preview_from_psd(project: Project, shot: Shot) -> None:
     from .image_utils import export_psd_composite_to_png
 
-    shot_dir = pm.get_shot_dir(project, shot)
     source_path: Path | None = None
     if shot.source_file_path:
-        candidate = project.root_path / shot.source_file_path
+        candidate = pm.resolve_project_path(project, shot.source_file_path)
         if candidate.is_file():
             source_path = candidate
     if source_path is None:
-        fallback = shot_dir / f"{shot.shot_id}.psd"
+        fallback = pm.resolve_shot_asset(project, shot.shot_id, "source_psd")
         if fallback.is_file():
             source_path = fallback
     if source_path is None:
@@ -284,7 +293,10 @@ def _refresh_shot_preview_from_psd(project: Project, shot: Shot) -> None:
         shot.image_path = ""
         shot.thumbnail_path = ""
         return
-    preview_path = export_psd_composite_to_png(source_path, shot_dir / f"{shot.shot_id}_preview.png")
+    preview_path = export_psd_composite_to_png(
+        source_path,
+        pm.resolve_shot_asset(project, shot.shot_id, "preview"),
+    )
     pm._set_shot_preview_paths(project, shot, preview_path)
 
 
@@ -313,8 +325,7 @@ def _restore_blank_canvas_preview(project: Project, shot: Shot) -> None:
 
     width, height = get_canvas_size(project)
     color = get_canvas_color(project)
-    shot_dir = pm.get_shot_dir(project, shot)
-    preview_path = shot_dir / f"{shot.shot_id}_preview.png"
+    preview_path = pm.resolve_shot_asset(project, shot.shot_id, "preview")
     create_solid_preview_png(preview_path, width, height, color)
     pm._set_shot_preview_paths(project, shot, preview_path)
 
@@ -340,6 +351,14 @@ def _shot_preview_is_legacy_baked(project: Project, shot: Shot) -> bool:
     return bool(str(cam.get("ref_segment_id", "") or "").strip())
 
 
+def _raw_capture_path(project: Project, shot: Shot) -> Path:
+    background = pm.resolve_shot_asset(project, shot.shot_id, "board_background")
+    candidate = background.with_name(f".{shot.shot_id}_ref_raw.png")
+    return pm.resolve_project_path(
+        project, pm.project_relative_posix(project, candidate)
+    )
+
+
 def _clear_ref_segment_bake_for_shot(
     project: Project,
     shot: Shot,
@@ -358,11 +377,10 @@ def _clear_ref_segment_bake_for_shot(
     shot.ref_video_time = 0.0
     shot.ref_segment_time = 0.0
 
-    shot_dir = pm.get_shot_dir(project, shot)
     # Always remove reference-owned assets.
-    (shot_dir / board_background_filename(shot.shot_id)).unlink(missing_ok=True)
-    (shot_dir / f"{shot.shot_id}_thumb.png").unlink(missing_ok=True)
-    (shot_dir / f"{shot.shot_id}_ref_raw.png").unlink(missing_ok=True)
+    pm.resolve_shot_asset(project, shot.shot_id, "board_background").unlink(missing_ok=True)
+    pm.resolve_shot_asset(project, shot.shot_id, "thumbnail").unlink(missing_ok=True)
+    _raw_capture_path(project, shot).unlink(missing_ok=True)
 
     if has_psd:
         # PSD-backed board: regenerate preview from the Photoshop document.
@@ -372,7 +390,7 @@ def _clear_ref_segment_bake_for_shot(
     if is_legacy_baked:
         # Legacy baked board (old model wrote the reference into preview directly):
         # safe to delete the preview so the board shows as blank after clearing.
-        (shot_dir / f"{shot.shot_id}_preview.png").unlink(missing_ok=True)
+        pm.resolve_shot_asset(project, shot.shot_id, "preview").unlink(missing_ok=True)
 
     # For non-PSD boards (new model or cleared legacy), do not recreate a
     # per-shot solid preview; the canvas background is a global UI backdrop.
@@ -652,28 +670,25 @@ def import_project_reference_stream(
     *,
     set_active_video: bool = False,
 ) -> dict[str, str]:
-    ref_dir = project.references_dir
-    ref_dir.mkdir(parents=True, exist_ok=True)
+    project.references_dir.mkdir(parents=True, exist_ok=True)
     suffix = Path(source_name or "").suffix.lower()
-    ref_id = uuid.uuid4().hex
+    ref_id = str(uuid.uuid4()) if project.layout == pm.LAYOUT_2 else uuid.uuid4().hex
     if suffix in REFERENCE_VIDEO_EXTENSIONS:
-        destination = ref_dir / f"ref_{ref_id}{suffix}"
-        with destination.open("wb") as file:
-            shutil.copyfileobj(source_stream, file)
+        destination = pm.resolve_reference_asset(project, ref_id, suffix)
+        atomic_copy_stream(source_stream, destination)
         media_type = "video"
     elif suffix in REFERENCE_IMAGE_EXTENSIONS:
-        destination = ref_dir / f"ref_{ref_id}.png"
+        destination = pm.resolve_reference_asset(project, ref_id, ".png")
         copy_and_convert_image_stream(source_stream, suffix, destination)
         media_type = "image"
     elif suffix in REFERENCE_MODEL_EXTENSIONS:
-        destination = ref_dir / f"ref_{ref_id}{suffix}"
-        with destination.open("wb") as file:
-            shutil.copyfileobj(source_stream, file)
+        destination = pm.resolve_reference_asset(project, ref_id, suffix)
+        atomic_copy_stream(source_stream, destination)
         media_type = "model"
     else:
         raise ValueError("Only image, video, or GLB/GLTF model references are supported.")
 
-    relative = destination.relative_to(project.root_path).as_posix()
+    relative = pm.project_relative_posix(project, destination)
     title = Path(source_name or destination.name).name or relative
     entry = {"id": ref_id, "title": title, "type": media_type, "path": relative}
     links = normalize_reference_links(project.settings.get("reference_links"))
@@ -695,9 +710,8 @@ def remove_project_reference(project: Project, ref_id: str) -> None:
     target = next((item for item in links if item["id"] == ref_id), None)
     if not target:
         raise ValueError("Reference not found.")
-    file_path = (project.root_path / target["path"]).resolve()
-    root = project.root_path.resolve()
-    if root in file_path.parents and file_path.is_file():
+    file_path = pm.resolve_project_path(project, target["path"])
+    if file_path.is_file():
         file_path.unlink()
     project.settings["reference_links"] = [item for item in links if item["id"] != ref_id]
     target_path = pm._normalize_rel_path(target["path"])
@@ -859,7 +873,7 @@ def import_reference_video_stream(
     source_name: str,
 ) -> Path:
     entry = import_project_reference_stream(project, source_stream, source_name, set_active_video=True)
-    return project.root_path / entry["path"]
+    return pm.resolve_project_path(project, entry["path"])
 
 
 def _validate_segment_reference(
@@ -887,9 +901,9 @@ def _validate_segment_reference(
         ref_type = "image"
     if ref_type != expected_type or not rel_path:
         raise ValueError(bind_messages[expected_type])
-    file_path = (project.root_path / rel_path).resolve()
-    root = project.root_path.resolve()
-    if root not in file_path.parents and file_path != root:
+    try:
+        file_path = pm.resolve_project_path(project, rel_path)
+    except ValueError:
         raise ValueError(outside_messages[expected_type])
     if not file_path.is_file():
         raise FileNotFoundError(f"{missing_messages[expected_type]}: {rel_path}")
@@ -924,7 +938,7 @@ def _persist_ref_segment_apply(
         project.settings["active_ref_segment_id"] = seg_id
     sync_ref_segment_settings(project)
     pm.save_settings(project)
-    save_shots(project.root_path, project.shots)
+    save_shots(project.metadata_root, project.shots)
 
 
 def _apply_ref_segment_template(
@@ -1063,8 +1077,7 @@ def apply_ref_segment_to_boards(
             video_time = min(video_time, max(0.0, state["video_duration"] - 0.001))
         else:
             video_time = 0.0
-        shot_dir = pm.get_shot_dir(project, shot)
-        raw_path = shot_dir / f"{shot.shot_id}_ref_raw.png"
+        raw_path = _raw_capture_path(project, shot)
         extract_video_frame_to_png(video_path, video_time, raw_path)
         try:
             pm._apply_reference_frame_to_shot(project, shot, raw_path, state["fit_mode"])
@@ -1134,7 +1147,7 @@ def apply_ref_segment_3d_to_boards(
             preview_rel = str(shot.preview_image_path or shot.image_path or "").strip()
             if not preview_rel:
                 continue
-            preview_path = (project.root_path / preview_rel).resolve()
+            preview_path = pm.resolve_project_path(project, preview_rel)
             if not preview_path.is_file() or is_solid_color_image(preview_path):
                 continue
             eligible_preview_indices.add(index)
@@ -1189,7 +1202,7 @@ def apply_ref_segment_3d_to_boards(
             preview_rel = str(shot.preview_image_path or shot.image_path or "").strip()
             if not preview_rel:
                 continue
-            preview_path = (project.root_path / preview_rel).resolve()
+            preview_path = pm.resolve_project_path(project, preview_rel)
             if not preview_path.is_file():
                 continue
             if index not in state["eligible_preview_indices"]:
@@ -1282,8 +1295,7 @@ def apply_model_captures_to_boards(
             anim_time = segment_time
         else:
             anim_time = max(0.0, float(animation_time))
-        shot_dir = pm.get_shot_dir(project, shot)
-        raw_path = shot_dir / f"{shot.shot_id}_ref_raw.png"
+        raw_path = _raw_capture_path(project, shot)
         try:
             save_png_data_url(str(capture.get("data_url") or ""), raw_path)
             pm._apply_model_capture_to_shot(project, shot, raw_path, fit_mode)
@@ -1429,5 +1441,5 @@ def delete_ref_segment(project: Project, segment_id: str) -> dict[str, Any]:
 
     sync_ref_segment_settings(project)
     pm.save_settings(project)
-    save_shots(project.root_path, project.shots)
+    save_shots(project.metadata_root, project.shots)
     return {"deleted_segment_id": seg_id, "cleared_boards": cleared}

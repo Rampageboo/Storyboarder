@@ -3,7 +3,7 @@
 Storage boundary
 ----------------
 Canonical store:
-  project.json   — lightweight manifest (version key only; NO inline shots).
+  project.json   — lightweight schema/layout manifest; NO inline shots.
   shots.json     — all shot metadata; the source of truth.  Written atomically
                    by save_shots_json / save_shots.  Read first in open_project.
   settings.json  — project-wide settings (canvas size, color, paths, etc.).
@@ -31,15 +31,18 @@ Ownership rules:
 from __future__ import annotations
 
 import json
+import logging
 import os
 import shutil
 import tempfile
 import threading
+import uuid
+from dataclasses import replace
 from pathlib import Path
 from typing import Any, BinaryIO
 
+from .file_transactions import atomic_copy_file
 from .image_utils import (
-    board_background_filename,
     compose_image_to_canvas,
     copy_and_convert_image,
     copy_and_convert_image_stream,
@@ -51,6 +54,21 @@ from .image_utils import (
 from .linked_sync import linked_mtime, sync_shot_from_linked_files
 from .models import Project, Shot
 from . import project_document
+from .project_layout import (
+    LAYOUT_1,
+    LAYOUT_2,
+    ensure_layout_enabled,
+    layout1_project_root,
+    parse_project_manifest,
+    project_relative_posix,
+    project_manifest,
+    resolve_project_child,
+    resolve_project_path,
+    resolve_reference_asset,
+    resolve_root_child,
+    resolve_shot_asset,
+    resolve_shot_metadata,
+)
 from .shot_store import (
     load_shots_csv,
     load_shots_json,
@@ -108,6 +126,10 @@ from .asset_validation import validate_project_integrity  # noqa: E402
 # different states. Hold this lock around any full persistence pass, and reuse it to
 # guard the reload-on-read swap in app_state so a save can't be torn by a reload.
 PROJECT_LOCK = threading.RLock()
+# Lifecycle transitions first quiesce background writers, then take
+# PROJECT_LOCK to drain/freeze request mutations. Keeping a dedicated outer
+# lock makes that ordering explicit and prevents two transitions from racing.
+PROJECT_TRANSITION_LOCK = threading.RLock()
 
 
 def create_project(
@@ -116,9 +138,7 @@ def create_project(
     canvas_width: int = 1920,
     canvas_height: int = 1080,
 ) -> Project:
-    root = parent_or_project_dir
-    if root.name != "Storyboard_Project":
-        root = root / "Storyboard_Project"
+    root = layout1_project_root(parent_or_project_dir)
 
     root.mkdir(parents=True, exist_ok=True)
     _ensure_project_dirs(root)
@@ -163,6 +183,132 @@ def create_document(
     return project
 
 
+def _layout2_creation_paths(requested: Path) -> tuple[Path, Path]:
+    """Resolve an unused portable project folder and its canonical document."""
+    from .project_save_as import _is_reparse  # noqa: PLC0415
+
+    requested_document = Path(requested).expanduser().absolute()
+    if requested_document.suffix.lower() != project_document.DOCUMENT_SUFFIX:
+        requested_document = requested_document.with_suffix(project_document.DOCUMENT_SUFFIX)
+    parent = requested_document.parent
+    if not parent.is_dir():
+        raise FileNotFoundError(f"Project parent folder not found: {parent}")
+    if _is_reparse(parent):
+        raise ValueError("Project destination parent cannot be a reparse point.")
+    requested_document = requested_document.resolve()
+    destination_root = requested_document.parent / requested_document.stem
+    destination_document = destination_root / f"{destination_root.name}.sbd"
+    folded_targets = {
+        destination_root.name.casefold(),
+        requested_document.name.casefold(),
+    }
+    for child in requested_document.parent.iterdir():
+        if child.name.casefold() in folded_targets:
+            raise FileExistsError(
+                f"Project destination collides by case with an existing path: {child.name}."
+            )
+    if (
+        destination_root.exists()
+        or requested_document.exists()
+        or destination_document.exists()
+    ):
+        raise FileExistsError("Project destination already exists; projects are never merged.")
+    return destination_root, destination_document
+
+
+def can_convert_to_layout2(project: Project) -> bool:
+    """Return whether the accepted Layout 1 document converter can handle this project."""
+    document = project.document_path
+    return bool(
+        project.layout == LAYOUT_1
+        and document is not None
+        and document.suffix.lower() == project_document.DOCUMENT_SUFFIX
+        and document.is_file()
+    )
+
+
+def create_layout2_document(
+    document_path: Path,
+    *,
+    canvas_width: int = 1920,
+    canvas_height: int = 1080,
+) -> Project:
+    """Atomically create a portable Layout 2 folder project."""
+    from . import scene2d, scene3d  # noqa: PLC0415
+
+    ensure_layout_enabled(LAYOUT_2)
+    destination_root, destination_document = _layout2_creation_paths(document_path)
+    operation = Path(
+        tempfile.mkdtemp(prefix=".sb-create-", dir=str(destination_root.parent))
+    )
+    stage = operation / destination_root.name
+    try:
+        stage.mkdir(parents=False, exist_ok=False)
+        for name in ("Images", "PSD", "Blender", "Exports"):
+            resolve_root_child(stage, name).mkdir()
+        work = resolve_root_child(stage, ".storyboarder", "work")
+        work.mkdir(parents=True)
+        width, height = normalize_canvas_size(canvas_width, canvas_height)
+        settings = DEFAULT_SETTINGS.copy()
+        settings["canvas_width"] = width
+        settings["canvas_height"] = height
+        project = Project(
+            root_path=work,
+            settings=settings,
+            document_path=resolve_root_child(stage, destination_document.name),
+            layout=LAYOUT_2,
+            project_id=str(uuid.uuid4()),
+            storage_revision=1,
+            project_root_path=stage,
+        )
+        save_project(project, flush_document=False)
+        scene2d.initialize_layout2_metadata(project)
+        scene3d.initialize_layout2_metadata(project)
+        save_project(project, flush_document=False)
+        project_document.commit_layout2_document(
+            stage,
+            document_path=project.document_path,
+        )
+        project_document.validate_layout2_source_lineage(
+            stage,
+            document_path=project.document_path,
+        )
+
+        folded_targets = {
+            destination_root.name.casefold(),
+            (destination_root.parent / f"{destination_root.name}.sbd").name.casefold(),
+        }
+        for child in destination_root.parent.iterdir():
+            if child != operation and child.name.casefold() in folded_targets:
+                raise FileExistsError(
+                    f"Project destination appeared during creation: {child.name}."
+                )
+        published_project = replace(
+            project,
+            project_root_path=destination_root,
+            root_path=resolve_root_child(destination_root, ".storyboarder", "work"),
+            document_path=destination_document,
+        )
+        os.rename(stage, destination_root)
+        try:
+            operation.rmdir()
+        except OSError:
+            try:
+                logging.getLogger(__name__).warning(
+                    "Layout 2 project was published but its empty staging directory "
+                    "could not be removed: %s",
+                    operation,
+                    exc_info=True,
+                )
+            except Exception:
+                pass
+        return published_project
+    except BaseException:
+        if operation.exists():
+            shutil.rmtree(operation, ignore_errors=True)
+        raise
+
+
 def reload_project_if_changed(project: Project, loaded_mtime: float) -> tuple[Project, float, bool]:
     """Reload project.json from disk when the plugin or another tool updated it."""
     disk_mtime = project_disk_mtime(project)
@@ -176,9 +322,26 @@ def reload_project_if_changed(project: Project, loaded_mtime: float) -> tuple[Pr
 def open_project(project_json_path: Path) -> Project:
     if project_json_path.suffix.lower() == project_document.DOCUMENT_SUFFIX:
         document_path = project_json_path.expanduser().resolve()
+        layout_spec = project_document.inspect_document_layout(document_path)
+        if layout_spec.layout == LAYOUT_2:
+            project_document.validate_layout2_document(document_path)
+            # The feature gate is deliberately checked before recovery creates
+            # or rewrites .storyboarder/work.
+            ensure_layout_enabled(layout_spec.layout)
+            project_root = document_path.parent
+            recovered = project_document.recover_layout2_work(
+                project_root,
+                document_path=document_path,
+            )
+            project = _open_expanded_project(
+                resolve_root_child(recovered.work_root, "project.json"),
+                project_root_path=project_root,
+            )
+            project.document_path = document_path
+            return project
         working_root = project_document.extract_document(document_path)
         try:
-            project = _open_expanded_project(working_root / "project.json")
+            project = _open_expanded_project(resolve_root_child(working_root, "project.json"))
         except Exception:
             shutil.rmtree(working_root, ignore_errors=True)
             raise
@@ -187,7 +350,11 @@ def open_project(project_json_path: Path) -> Project:
     return _open_expanded_project(project_json_path)
 
 
-def _open_expanded_project(project_json_path: Path) -> Project:
+def _open_expanded_project(
+    project_json_path: Path,
+    *,
+    project_root_path: Path | None = None,
+) -> Project:
     if not project_json_path.exists():
         raise FileNotFoundError(f"Project file not found: {project_json_path}")
 
@@ -196,8 +363,19 @@ def _open_expanded_project(project_json_path: Path) -> Project:
     except json.JSONDecodeError as exc:
         raise ValueError(f"Invalid project.json: {exc}") from exc
 
-    project = Project(root_path=project_json_path.parent)
-    _ensure_project_dirs(project.root_path)
+    layout_spec = parse_project_manifest(payload)
+    ensure_layout_enabled(layout_spec.layout)
+    project = Project(
+        root_path=project_json_path.parent,
+        layout=layout_spec.layout,
+        project_id=layout_spec.project_id,
+        storage_revision=layout_spec.storage_revision,
+        project_root_path=project_root_path,
+        converted_from=(
+            dict(payload["converted_from"]) if isinstance(payload.get("converted_from"), dict) else {}
+        ),
+    )
+    _ensure_project_dirs(project.metadata_root)
     project.settings = _load_settings(project)
     sync_ref_segment_settings(project)
 
@@ -210,8 +388,8 @@ def _open_expanded_project(project_json_path: Path) -> Project:
     # 4. Empty list  — brand-new project.
     # Migration is non-destructive: it only ADDS shots.json; it never deletes
     # the legacy sources (CSV, inline shots) until the project is saved normally.
-    json_path = shots_json_path(project.root_path)
-    csv_path = shots_csv_path(project.root_path)
+    json_path = shots_json_path(project.metadata_root)
+    csv_path = shots_csv_path(project.metadata_root)
     needs_json_migration = False
     if json_path.is_file():
         # Canonical path — shots.csv is intentionally not consulted.
@@ -236,12 +414,13 @@ def _open_expanded_project(project_json_path: Path) -> Project:
     # take the canonical path. Legacy sources (CSV, inline shots) are left on
     # disk until a full save_project() call regenerates them from canonical data.
     if needs_json_migration:
-        save_shots_json(project.root_path, project.shots)
+        save_shots_json(project.metadata_root, project.shots)
     save_settings(project)
     color = get_canvas_color(project)
     write_canvas_color_files(project, color)
     sync_canvas_color_to_shots(project, color)
-    ensure_project_blend_file(project)
+    if project.layout != LAYOUT_2:
+        ensure_project_blend_file(project)
     return project
 
 
@@ -255,18 +434,43 @@ def save_project(project: Project, *, flush_document: bool = True) -> None:
     relies on periodic autosave, manual save, and save-on-close to flush.
     """
     with PROJECT_LOCK:
-        _ensure_project_dirs(project.root_path)
+        ensure_layout_enabled(project.layout)
+        _ensure_project_dirs(project.metadata_root)
         if project.settings.get("backup_on_save", True):
             _write_backup(project)
-        # project.json is a lightweight manifest (version only); shots live in shots.json.
-        _atomic_write_json(project.json_path, {"version": PROJECT_JSON_VERSION})
+        # project.json is a lightweight layout manifest; shots live in shots.json.
+        _atomic_write_json(project.json_path, project_manifest(project))
         # Canonical shots.json + regenerated readable shots.csv compatibility snapshot.
         # Serialize a snapshot (list copy) so both files describe the same shot ordering
         # even if another thread mutates project.shots between the two writes.
-        save_shots(project.root_path, list(project.shots))
+        if project.layout == LAYOUT_2:
+            save_shots_json(project.metadata_root, list(project.shots))
+        else:
+            save_shots(project.metadata_root, list(project.shots))
         save_settings(project)
         if flush_document and project.document_path:
-            project_document.pack_document(project.root_path, project.document_path)
+            if project.layout == LAYOUT_2:
+                project_document.commit_layout2_document(project.project_root)
+            else:
+                project_document.pack_document(project.metadata_root, project.document_path)
+
+
+def validate_transition_candidate(project: Project) -> None:
+    """Reject an incomplete separately-opened candidate before activation.
+
+    Missing linked artwork remains a supported, repairable state, so this gate
+    is intentionally narrower than ``validate_project_integrity``.
+    """
+    root = project.metadata_root.resolve()
+    if not root.is_dir():
+        raise ValueError(f"Project root not found: {root}")
+    if not project.json_path.is_file():
+        raise ValueError(f"Project file not found: {project.json_path}")
+    if project.document_path is not None and not project.document_path.is_file():
+        raise ValueError(f"Project document not found: {project.document_path}")
+    shot_ids = [shot.shot_id for shot in project.shots]
+    if len(shot_ids) != len(set(shot_ids)):
+        raise ValueError("Project contains duplicate shot IDs.")
 
 
 def sync_document(project: Project) -> None:
@@ -274,14 +478,74 @@ def sync_document(project: Project) -> None:
     if not project.document_path:
         return
     with PROJECT_LOCK:
-        project_document.pack_document(project.root_path, project.document_path)
+        if project.layout == LAYOUT_2:
+            project_document.commit_layout2_document(project.project_root)
+        else:
+            project_document.pack_document(project.metadata_root, project.document_path)
+
+
+def save_project_as(project: Project, document_path: Path) -> Project:
+    """Save to a new `.sbd` and make that document the active project.
+
+    Existing document projects can keep their private expanded work tree. Legacy
+    folder projects are copied into a private work tree first so later saves no
+    longer mutate the original folder after Save As switches documents.
+    """
+    document = document_path.expanduser().resolve()
+    if project.layout == LAYOUT_2:
+        raise ValueError(
+            "Layout 2 Save As requires the transactional folder coordinator."
+        )
+    if document.suffix.lower() != project_document.DOCUMENT_SUFFIX:
+        document = document.with_suffix(project_document.DOCUMENT_SUFFIX)
+    root = project.metadata_root.resolve()
+    try:
+        document.relative_to(root)
+    except ValueError:
+        pass
+    else:
+        raise ValueError("Save As destination cannot be inside the active project folder.")
+
+    with PROJECT_LOCK:
+        save_project(project, flush_document=False)
+        if project.document_path:
+            project_document.pack_document(root, document)
+            project.document_path = document
+            project_document.write_session_marker(root, document)
+            return project
+
+        working_root = project_document.create_working_root(document)
+        try:
+            def ignore_unpacked(_directory: str, names: list[str]) -> set[str]:
+                return {
+                    name
+                    for name in names
+                    if name in {"backups", project_document.SESSION_MARKER}
+                }
+
+            shutil.copytree(
+                root,
+                working_root,
+                dirs_exist_ok=True,
+                ignore=ignore_unpacked,
+            )
+            saved_project = _open_expanded_project(
+                resolve_root_child(working_root, "project.json")
+            )
+            saved_project.document_path = document
+            project_document.pack_document(working_root, document)
+            project_document.write_session_marker(working_root, document)
+            return saved_project
+        except BaseException:
+            project_document.remove_working_root(working_root)
+            raise
 
 
 def cleanup_document_working_root(project: Project | None) -> bool:
     """Best-effort removal of a private expanded `.sbd` work tree."""
     if project is None or not project.document_path:
         return False
-    root = project.root_path.resolve()
+    root = project.metadata_root.resolve()
     temp_root = Path(tempfile.gettempdir()).resolve()
     if root.parent != temp_root or not root.name.startswith(project_document.WORKING_ROOT_PREFIX):
         return False
@@ -362,10 +626,12 @@ def move_shot_down(project: Project, index: int) -> int:
 
 
 def import_image_for_shot(project: Project, shot: Shot, source_path: Path) -> Path:
-    shot_dir = get_shot_dir(project, shot)
-    destination = shot_dir / f"{shot.shot_id}_preview.png"
+    destination = resolve_shot_asset(project, shot.shot_id, "preview")
     copied_path = copy_and_convert_image(source_path, destination)
-    _save_board_background_copy(copied_path, shot_dir / board_background_filename(shot.shot_id))
+    _save_board_background_copy(
+        copied_path,
+        resolve_shot_asset(project, shot.shot_id, "board_background"),
+    )
     _set_shot_preview_paths(project, shot, copied_path)
     return copied_path
 
@@ -376,17 +642,20 @@ def import_image_stream_for_shot(
     source_stream: BinaryIO,
     source_suffix: str,
 ) -> Path:
-    shot_dir = get_shot_dir(project, shot)
-    destination = shot_dir / f"{shot.shot_id}_preview.png"
+    destination = resolve_shot_asset(project, shot.shot_id, "preview")
     copied_path = copy_and_convert_image_stream(source_stream, source_suffix, destination)
-    _save_board_background_copy(copied_path, shot_dir / board_background_filename(shot.shot_id))
+    _save_board_background_copy(
+        copied_path,
+        resolve_shot_asset(project, shot.shot_id, "board_background"),
+    )
     _set_shot_preview_paths(project, shot, copied_path)
     return copied_path
 
 
 def remove_image_for_shot(project: Project, shot: Shot) -> None:
-    shot_dir = get_shot_dir(project, shot)
-    (shot_dir / board_background_filename(shot.shot_id)).unlink(missing_ok=True)
+    resolve_shot_asset(project, shot.shot_id, "board_background").unlink(
+        missing_ok=True
+    )
     shot.image_path = ""
     shot.preview_image_path = ""
     shot.thumbnail_path = ""
@@ -425,17 +694,25 @@ def recover_shot_source_psd(project: Project, shot: Shot, *, preserve_layers: bo
 
     if not shot.source_file_path:
         raise ValueError("No source PSD linked for this shot.")
-    source = project.root_path / shot.source_file_path
+    source = resolve_project_path(project, shot.source_file_path)
     if not source.is_file():
         raise FileNotFoundError("Source PSD file is missing.")
     if not psd_recovery.can_open_with_psd_tools(source):
         raise ValueError("The PSD is too damaged to read — it cannot be rebuilt.")
 
-    shot_dir = get_shot_dir(project, shot)
-    history = shot_dir / "_history"
+    if project.layout == LAYOUT_2:
+        history = resolve_root_child(project.backups_dir, "psd_recovery")
+        backup = resolve_root_child(
+            history, f"{shot.shot_id}.broken-{int(time.time())}.psd"
+        )
+    else:
+        history = resolve_project_child(project, "shots", shot.shot_id, "_history")
+        backup = resolve_project_child(
+            project, "shots", shot.shot_id, "_history",
+            f"{shot.shot_id}.broken-{int(time.time())}.psd",
+        )
     history.mkdir(parents=True, exist_ok=True)
-    backup = history / f"{shot.shot_id}.broken-{int(time.time())}.psd"
-    shutil.copy2(source, backup)
+    atomic_copy_file(source, backup)
     # PSD recovery is now rare (the old plugin's forced-save corruption that required it
     # is fixed), so keep only the most recent few broken-PSD backups. Best-effort.
     try:
@@ -451,17 +728,23 @@ def recover_shot_source_psd(project: Project, shot: Shot, *, preserve_layers: bo
 
     # Rebuild to a temp file first, then atomically swap it over the source so a
     # failed rebuild never destroys the (still backed-up) original.
-    temp = shot_dir / f"{shot.shot_id}.rebuilt.psd"
-    info = psd_recovery.rebuild_psd(source, temp, preserve_layers=preserve_layers)
-    os.replace(temp, source)
+    temp = resolve_project_path(
+        project, project_relative_posix(project, source.with_name(f".{shot.shot_id}.rebuilt.psd"))
+    )
+    try:
+        info = psd_recovery.rebuild_psd(source, temp, preserve_layers=preserve_layers)
+        os.replace(temp, source)
+    except BaseException:
+        temp.unlink(missing_ok=True)
+        raise
 
-    preview_path = shot_dir / f"{shot.shot_id}_preview.png"
+    preview_path = resolve_shot_asset(project, shot.shot_id, "preview")
     export_psd_composite_to_png(source, preview_path)
     _set_shot_preview_paths(project, shot, preview_path)
     shot.source_sync_mtime = linked_mtime(project, shot)
 
     return {
-        "backup": backup.relative_to(project.root_path).as_posix(),
+        "backup": project_relative_posix(project, backup),
         "method": info.get("method", "flatten"),
         "layers_recovered": info["layers_recovered"],
         "layers_skipped": info["layers_skipped"],
@@ -488,8 +771,7 @@ def _apply_reference_frame_to_shot(
 
     width, height = get_canvas_size(project)
     bg_color = get_canvas_color(project)
-    shot_dir = get_shot_dir(project, shot)
-    background_path = shot_dir / board_background_filename(shot.shot_id)
+    background_path = resolve_shot_asset(project, shot.shot_id, "board_background")
     background_path.parent.mkdir(parents=True, exist_ok=True)
     tmp_path = background_path.with_suffix(".tmp.png")
     try:
@@ -523,8 +805,7 @@ def _apply_model_capture_to_shot(
     from PIL import Image
 
     width, height = get_canvas_size(project)
-    shot_dir = get_shot_dir(project, shot)
-    background_path = shot_dir / board_background_filename(shot.shot_id)
+    background_path = resolve_shot_asset(project, shot.shot_id, "board_background")
     mode = normalize_reference_fit_mode(fit_mode)
     background_path.parent.mkdir(parents=True, exist_ok=True)
     tmp_path = background_path.with_suffix(".tmp.png")
@@ -553,12 +834,19 @@ def add_reference_image_stream(
     source_stream: BinaryIO,
     source_suffix: str,
 ) -> Path:
-    shot_dir = get_shot_dir(project, shot)
-    ref_dir = shot_dir / "references"
-    next_number = len(shot.reference_image_paths) + 1
-    destination = ref_dir / f"{shot.shot_id}_ref_{next_number:03d}.png"
+    if project.layout == LAYOUT_2:
+        destination = resolve_reference_asset(project, str(uuid.uuid4()), ".png")
+    else:
+        next_number = len(shot.reference_image_paths) + 1
+        destination = resolve_project_child(
+            project,
+            "shots",
+            shot.shot_id,
+            "references",
+            f"{shot.shot_id}_ref_{next_number:03d}.png",
+        )
     copied_path = copy_and_convert_image_stream(source_stream, source_suffix, destination)
-    shot.reference_image_paths.append(copied_path.relative_to(project.root_path).as_posix())
+    shot.reference_image_paths.append(project_relative_posix(project, copied_path))
     return copied_path
 
 
@@ -573,6 +861,10 @@ def collect_reference_image_paths(project: Project) -> set[str]:
             normalized = _normalize_rel_path(rel_path)
             if normalized:
                 referenced.add(normalized)
+    for link in project.settings.get("reference_links") or []:
+        normalized = _normalize_rel_path(link.get("path", "")) if isinstance(link, dict) else ""
+        if normalized:
+            referenced.add(normalized)
     return referenced
 
 
@@ -595,20 +887,23 @@ def set_reference_image_paths(project: Project, shot: Shot, paths: list[str]) ->
 
 
 def cleanup_orphan_reference_images(project: Project) -> list[str]:
-    root = project.root_path.resolve()
     referenced = collect_reference_image_paths(project)
     deleted: list[str] = []
-    shots_dir = project.shots_dir
-    if not shots_dir.is_dir():
-        return deleted
-    for ref_dir in shots_dir.glob("*/references"):
+    if project.layout == LAYOUT_2:
+        ref_dirs = [project.references_dir]
+    else:
+        shots_dir = project.shots_dir
+        if not shots_dir.is_dir():
+            return deleted
+        ref_dirs = list(shots_dir.glob("*/references"))
+    for ref_dir in ref_dirs:
         if not ref_dir.is_dir():
             continue
         for file_path in ref_dir.iterdir():
             if not file_path.is_file():
                 continue
             try:
-                rel_path = file_path.relative_to(root).as_posix()
+                rel_path = project_relative_posix(project, file_path)
             except ValueError:
                 continue
             if rel_path in referenced:
@@ -633,8 +928,14 @@ def import_source_file_stream(
     filename: str,
 ) -> Path:
     suffix = Path(filename).suffix or ".psd"
-    shot_dir = get_shot_dir(project, shot)
-    destination = shot_dir / f"{shot.shot_id}{suffix}"
+    if project.layout == LAYOUT_2 and suffix.lower() != ".psd":
+        raise ValueError("Layout 2 shot sources must be PSD files.")
+    destination = (
+        resolve_shot_asset(project, shot.shot_id, "source_psd")
+        if project.layout == LAYOUT_2
+        else resolve_project_child(project, "shots", shot.shot_id, f"{shot.shot_id}{suffix}")
+    )
+    destination.parent.mkdir(parents=True, exist_ok=True)
     tmp = destination.with_suffix(suffix + ".tmp")
     try:
         with tmp.open("wb") as file:
@@ -643,17 +944,22 @@ def import_source_file_stream(
     except BaseException:
         tmp.unlink(missing_ok=True)
         raise
-    shot.source_file_path = destination.relative_to(project.root_path).as_posix()
+    shot.source_file_path = project_relative_posix(project, destination)
     if is_psd_path(destination):
-        preview_path = export_psd_composite_to_png(destination, shot_dir / f"{shot.shot_id}_preview.png")
+        preview_path = export_psd_composite_to_png(
+            destination,
+            resolve_shot_asset(project, shot.shot_id, "preview"),
+        )
         _set_shot_preview_paths(project, shot, preview_path)
     shot.source_sync_mtime = linked_mtime(project, shot)
     return destination
 
 
 def save_drawing_for_shot(project: Project, shot: Shot, data_url: str) -> Path:
-    shot_dir = get_shot_dir(project, shot)
-    preview_path = save_png_data_url(data_url, shot_dir / f"{shot.shot_id}_preview.png")
+    preview_path = save_png_data_url(
+        data_url,
+        resolve_shot_asset(project, shot.shot_id, "preview"),
+    )
     _set_shot_preview_paths(project, shot, preview_path)
     return preview_path
 
@@ -670,15 +976,18 @@ def _require_index(project: Project, index: int) -> None:
 def _ensure_shot_files(project: Project, shot: Shot) -> None:
     shot_dir = get_shot_dir(project, shot)
     shot_dir.mkdir(parents=True, exist_ok=True)
-    (shot_dir / "references").mkdir(exist_ok=True)
+    if project.layout != LAYOUT_2:
+        resolve_project_child(project, "shots", shot.shot_id, "references").mkdir(exist_ok=True)
     if not shot.annotation_path:
-        annotation_path = shot_dir / f"{shot.shot_id}_annotations.json"
+        annotation_path = resolve_shot_metadata(project, shot.shot_id, "annotations")
+        annotation_path.parent.mkdir(parents=True, exist_ok=True)
         if not annotation_path.exists():
             _atomic_write_text(annotation_path, "[]")
-        shot.annotation_path = annotation_path.relative_to(project.root_path).as_posix()
-    notes_path = shot_dir / f"{shot.shot_id}_notes.json"
+        shot.annotation_path = project_relative_posix(project, annotation_path)
+    notes_path = resolve_shot_metadata(project, shot.shot_id, "notes")
+    notes_path.parent.mkdir(parents=True, exist_ok=True)
     if not notes_path.exists():
-        notes_path.write_text(json.dumps(shot.to_dict(), indent=2), encoding="utf-8")
+        _atomic_write_text(notes_path, json.dumps(shot.to_dict(), indent=2))
     relink_shot_preview_from_disk(project, shot)
 
 

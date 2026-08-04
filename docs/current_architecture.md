@@ -67,7 +67,7 @@ Storyboarder is a **desktop-only** storyboarding application. There is no hosted
 | Desktop shell | pywebview (Chromium WebView on Windows) |
 | App server | FastAPI + uvicorn, loopback-only (`127.0.0.1`) |
 | Frontend | React 19 + TypeScript, built with Vite |
-| 3D engine | Three.js (vendor bundle) + Scene3D workspace (compiled TypeScript) |
+| 3D engine | External Blender for authoring; Three.js for the automatic, read-only Scene3D preview |
 | Backend language | Python 3.11+ |
 | Image/media | Pillow, OpenCV-Python, psd-tools |
 
@@ -301,7 +301,7 @@ All shot business logic lives here. **No FastAPI or HTTP imports** — errors ar
 
 **Responsibilities**
 
-- Project lifecycle: legacy folder `create_project()`, single-file `create_document()`, `open_project()`, `save_project()`
+- Project lifecycle: default portable-folder `create_layout2_document()`, legacy folder `create_project()`, legacy single-file `create_document()`, `open_project()`, `save_project()`
 - Shot list CRUD: `add_shot()`, `duplicate_shot()`, `delete_shot()`, `restore_shot()`, `reorder_shots()`
 - Canonical file paths: `get_shot_dir()`, `resolve_shot_preview_path()`, `resolve_shot_thumbnail_path()`
 - Canvas management: `get_canvas_color()`, `create_canvas_for_shot()`
@@ -310,9 +310,15 @@ All shot business logic lives here. **No FastAPI or HTTP imports** — errors ar
 
 **Atomic save**
 
-`save_project()` and `save_settings()` use `_atomic_write_json()` so a crash or write error during save never leaves a partial or empty JSON file. New projects are user-visible `.sbd` ZIP documents. They are expanded into a private working directory while open, then `project_document.pack_document()` writes a sibling temporary archive and uses `os.replace()` so the visible document is never partially overwritten. Legacy folder projects remain readable.
+`save_project()` and `save_settings()` use `_atomic_write_json()` so a crash or write error during save never leaves a partial or empty JSON file. New Layout 2 projects are portable folders whose canonical `<name>.sbd` is a metadata-only ZIP. Editable assets stay visible under `Images/`, `PSD/`, `Blender/`, and `Exports/`; JSON work state is under `.storyboarder/work`. `create_layout2_document()` builds and validates the complete project in a same-volume staging directory, then publishes it with one refusing rename. `project_document.commit_layout2_document()` writes a sibling temporary archive and uses `os.replace()` so the document is never partially overwritten.
 
-**Expanded project structure (inside `.sbd`, or visible for a legacy folder project)**
+Layout 1 single-file and folder projects remain readable. `create_document()` is retained for compatibility and tests, while the user-facing `.sbd` new-project path now calls `create_layout2_document()`. The **Convert to Layout 2** UI is capability-gated to an existing Layout 1 `.sbd` and invokes `/api/project/convert`, which publishes a source-preserving sibling folder and switches only after validation. A legacy folder project must first use **Save Project As...** to become a Layout 1 `.sbd`; the conversion endpoint rejects folder projects before writer quiesce or staging.
+
+**Layout 2 project structure**
+
+`<name>/<name>.sbd`, `Images/`, `PSD/`, `Blender/`, `Exports/`, and `.storyboarder/{work,state.json}`. The `.sbd` contains allowlisted JSON metadata (and optional `cover.png`) only. Blender files are created lazily when a Scene 3D workflow needs them.
+
+**Legacy Layout 1 expanded structure (inside a single-file `.sbd`, or visible for a folder project)**
 
 ```
 Storyboard_Project/
@@ -519,16 +525,62 @@ When the plugin is linked and has a shot open as a tab, `method_open_source` swi
 
 ---
 
-## 14. Scene3D TypeScript Source and Generated Runtime Bundle
+## 14. Scene3D Blender Authoring and Automatic Preview
+
+The main Scene3D workspace now treats the project `.blend` file as its source of
+truth. All object, camera, target, light, and camera-path editing occurs in
+external Blender. Storyboarder's Scene3D workspace is a read-only Three.js
+preview with local orbit, pan, zoom, free-camera navigation, imported-camera
+locking, animation scrubbing, and capture-to-board.
+
+Clicking **Open Blender** transfers ownership instead of creating a second
+editor. Storyboarder launches the configured external Blender and injects the
+bundled camera-path and Storyboarder Link panels with `--python` for that process
+only. Nothing is installed into the external Blender profile. The session exchanges
+`storyboard_blender_bridge.json` and `storyboard_blender_heartbeat.json` in the
+local Storyboarder bridge directory. The heartbeat reports the exact `.blend`,
+active camera, dirty flag, preview revision, export status, and process identity.
+
+After the initial launch and every successful Blender save, the session plugin
+exports the active scene atomically to
+`scenes3d/<scene-id>/.preview/storyboarder_preview.glb`. This file is a disposable
+rendering cache, not a user-managed asset or source of truth. Storyboarder polls
+the preview revision and hot-reloads it while preserving preview time, selected
+camera, and display settings. A failed export leaves the last valid preview in
+place.
+
+While the external process or a fresh matching heartbeat owns the `.blend`,
+Storyboarder blocks
+project switching, Save As, Scene 3D switching/deletion/replacement, and working
+root cleanup. A fresh heartbeat is adopted after a Storyboarder restart.
+
+### Preview pipeline
+
+```text
+External Blender edits authoritative .blend
+  -> save_post handler in storyboarder_bridge.py
+  -> atomic preview GLB export
+  -> heartbeat exposes preview revision
+  -> Scene3DPanel polls revision
+  -> Scene3DEditor hot-reloads preview
+  -> local Three.js orbit/pan/zoom/camera view
+```
+
+The managed `BpyViewportManager` and background Blender worker remain in the
+tree as an experimental renderer, but they are not the main Scene3D workflow.
+Legacy manually imported GLB endpoints remain for compatibility; the main panel
+does not expose manual GLB import or reload controls.
 
 ### Pipeline overview
 
 ```
-User imports GLB   → /api/project/scene3d/import  → external_tools.import_scene3d_stream()
-                                                     → writes scene3d/scene.glb
-                                                     → updates settings.scene3d
-User opens Blender → /api/project/scene3d/open-blender → external_tools.open_blender_scene()
-                                                          → launches blender.exe
+User opens Blender → /api/project/scene3d/open-blender → stop built-in worker
+                                                          → publish bridge context
+                                                          → launch blender.exe with
+                                                            session-only add-on
+External Blender   → heartbeat (file/camera/dirty)      → ownership lock in UI/API
+Blender Save       → atomic preview GLB export          → revision heartbeat
+Storyboarder       → hot-reload local Three.js preview  → smooth read-only UX
 
  ┌── Scene3DPanel.tsx ──────────────────────────────────────────────────────┐
  │  Loads workspace bundle lazily via                                        │
@@ -785,6 +837,7 @@ Four per-shot files serve distinct roles and must not be conflated:
 
 | Flow | Files touched | Module | Transaction-safe? |
 |---|---|---|---|
+| `create_layout2_document` | staged portable folder + metadata-only `.sbd`, then one directory rename | `project_manager` / `project_document` | yes; failed staging is removed before publication |
 | `create_document` | private work tree + one visible `.sbd` archive | `project_manager` / `project_document` | atomic JSON plus atomic archive replacement |
 | `create_project` | legacy root dirs, project.json, settings.json | `project_manager` | atomic JSON writes only |
 | `add_shot` | `shots/<id>/` dir, optional blank canvas PSD | `project_manager` | no rollback needed — shot ID is new |

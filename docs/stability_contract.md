@@ -26,7 +26,8 @@ generated files are recovered, and what the manual smoke-test checklist covers.
 | `generation/candidates/**/*` | Unapproved generated candidates | Storyboarder MCP result submission; never treated as board artwork until approval |
 | `scenes2d/scenes2d.json` + scene meta | Scene title, location, time, shared setting/fixed details, perspectives | Scene 2D service only (atomic) |
 | `scenes3d/scenes3d.json` + scene meta | Scene 3D title, semantic keywords, GLB/GLTF preview path, attached `.blend` source path | Scene 3D service only (atomic) |
-| `<name>.sbd` | User-visible single-file document containing the expanded project tree | `project_document.pack_document` (sibling temp + `os.replace`) |
+| Layout 2 `<name>/<name>.sbd` | Metadata-only portable document; assets remain in the project folder | `project_document.commit_layout2_document` (sibling temp + `os.replace`) |
+| Legacy Layout 1 `<name>.sbd` | Single-file compatibility document containing the expanded project tree | `project_document.pack_document` (sibling temp + `os.replace`) |
 | `settings.json.character_bible_prompt` | Legacy project-wide identity compatibility data (not a primary UI field) | Project settings API only (atomic) |
 
 **Hard invariant:** `image_path` and `preview_image_path` on a `Shot` must NEVER

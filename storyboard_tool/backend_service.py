@@ -16,7 +16,10 @@ from fastapi import FastAPI, HTTPException
 
 from . import (
     app_state,
+    blender_bridge,
+    bpy_viewport,
     generation_service,
+    project_document,
     project_manager,
     project_transaction,
     recents,
@@ -32,6 +35,7 @@ from .external_tools import preheat_photoshop
 from .export_utils import missing_files
 from .image_utils import normalize_hex_color
 from .linked_sync import sync_project
+from .project_layout import LAYOUT_2, LayoutDisabledError, ensure_layout_enabled
 from .plugin_service import PluginBridgeService
 from .service_exports import ExportServiceMixin
 from .system_utils import (
@@ -286,16 +290,23 @@ class StoryboardBackendService(ExportServiceMixin):
         if project is None:
             return {"closed": False, "recents": self._recent_entries()}
         try:
-            if self.app.state.dirty:
-                project_manager.save_project(project)
-        except Exception as exc:
+            app_state.transition_active_project(
+                self.app,
+                action="closing this project",
+                candidate_factory=None,
+            )
+        except app_state.ProjectTransitionError as exc:
             logger.exception("Failed to save project while closing")
-            raise app_error(AppErrorCode.PROJECT_SAVE_FAILED, str(exc), status=500) from exc
-        self.app.state.dirty = False
-        self.app.state.project = None
-        self.app.state.project_disk_mtime = 0.0
-        project_manager.cleanup_document_working_root(project)
-        app_state._touch_live_bridge(self.app)
+            status = 409 if exc.stage in {
+                "writer_quiesce",
+                "external_blender_release",
+                "builtin_blender_release",
+            } else 500
+            raise app_error(
+                AppErrorCode.PROJECT_SAVE_FAILED,
+                str(exc.cause),
+                status=status,
+            ) from exc
         return {"closed": True, "recents": self._recent_entries()}
 
     def method_ui_ready(self) -> dict[str, Any]:
@@ -330,7 +341,7 @@ class StoryboardBackendService(ExportServiceMixin):
         if project is None:
             return {"ok": True, "status": "no_project"}
 
-        project_root = str(project.root_path.resolve()).replace("\\", "/")
+        project_root = str(project.project_root.resolve()).replace("\\", "/")
         existing = runtime_state.get_preview_analysis_job(self.app, project_root)
         if existing and existing["state"] == "running":
             return {
@@ -363,7 +374,13 @@ class StoryboardBackendService(ExportServiceMixin):
         def _run() -> None:
             decoded = 0
             try:
-                decoded = app_state._analyse_uncached_previews(captured_project)
+                with app_state.project_background_writer(
+                    app,
+                    f"preview_analysis:{task_id}",
+                ) as allowed:
+                    if not allowed:
+                        return
+                    decoded = app_state._analyse_uncached_previews(captured_project)
                 new_rev = prior_revision + 1 if decoded > 0 else prior_revision
                 logger.info("[analysis] task %s: %d decoded, revision %d→%d", task_id[:8], decoded, prior_revision, new_rev)
             except Exception as exc:
@@ -382,7 +399,7 @@ class StoryboardBackendService(ExportServiceMixin):
             # Only notify when work changed — zero-work jobs must not trigger project reloads
             if decoded > 0:
                 current = app.state.project
-                if current and str(current.root_path.resolve()).replace("\\", "/") == captured_root:
+                if current and str(current.project_root.resolve()).replace("\\", "/") == captured_root:
                     try:
                         app_state._touch_live_bridge(app)
                     except Exception:
@@ -402,7 +419,7 @@ class StoryboardBackendService(ExportServiceMixin):
         project = self.app.state.project
         if project is None:
             return {"ok": True, "status": "no_project", "job": None}
-        project_root = str(project.root_path.resolve()).replace("\\", "/")
+        project_root = str(project.project_root.resolve()).replace("\\", "/")
         job = runtime_state.get_preview_analysis_job(self.app, project_root)
         status = job["state"] if job else "idle"
         return {"ok": True, "status": status, "job": job}
@@ -451,48 +468,163 @@ class StoryboardBackendService(ExportServiceMixin):
     ) -> dict[str, Any]:
         root = Path(path).expanduser() if path else self.app.state.base_dir / "Untitled.sbd"
         try:
-            creator = project_manager.create_document if root.suffix.lower() == ".sbd" else project_manager.create_project
-            opened_project = creator(
-                root,
-                canvas_width=canvas_width if canvas_width is not None else 1920,
-                canvas_height=canvas_height if canvas_height is not None else 1080,
+            creator = (
+                project_manager.create_layout2_document
+                if root.suffix.lower() == ".sbd"
+                else project_manager.create_project
             )
-        except (FileNotFoundError, ValueError) as exc:
+            opened_project = app_state.transition_active_project(
+                self.app,
+                action="creating another project",
+                candidate_factory=lambda: creator(
+                    root,
+                    canvas_width=canvas_width if canvas_width is not None else 1920,
+                    canvas_height=canvas_height if canvas_height is not None else 1080,
+                ),
+            )
+        except app_state.ProjectTransitionError as exc:
             logger.exception("Failed to create project: %s", root)
-            raise app_error(AppErrorCode.PROJECT_OPEN_FAILED, str(exc)) from exc
-        previous_project = self.app.state.project
-        app_state._track_project(self.app, opened_project)
-        project_manager.cleanup_document_working_root(previous_project)
-        app_state._remember_recent(self.app.state.project)
-        app_state._persist_app_session(self.app)
-        app_state._touch_live_bridge(self.app)
-        self.app.state.dirty = False
-        return app_state._project_payload(self.app.state.project, self.app.state.dirty)
+            status = 409 if exc.stage in {
+                "writer_quiesce",
+                "external_blender_release",
+                "builtin_blender_release",
+            } else 400 if exc.stage in {"candidate_open", "candidate_validate"} else 500
+            raise app_error(
+                AppErrorCode.PROJECT_OPEN_FAILED,
+                str(exc.cause),
+                status=status,
+            ) from exc
+        return app_state._project_payload(opened_project, self.app.state.dirty)
 
     def method_open_project(self, project_json_path: str) -> dict[str, Any]:
         try:
-            opened_project = project_manager.open_project(Path(project_json_path).expanduser())
-        except (FileNotFoundError, ValueError) as exc:
+            opened_project = app_state.transition_active_project(
+                self.app,
+                action="opening another project",
+                candidate_factory=lambda: project_manager.open_project(
+                    Path(project_json_path).expanduser()
+                ),
+            )
+        except app_state.ProjectTransitionError as exc:
             logger.exception("Failed to open project: %s", project_json_path)
-            raise app_error(AppErrorCode.PROJECT_OPEN_FAILED, str(exc)) from exc
-        previous_project = self.app.state.project
-        app_state._track_project(self.app, opened_project)
-        project_manager.cleanup_document_working_root(previous_project)
-        app_state._remember_recent(self.app.state.project)
-        app_state._persist_app_session(self.app)
-        app_state._touch_live_bridge(self.app)
-        self.app.state.dirty = False
-        return app_state._project_payload(self.app.state.project, self.app.state.dirty)
+            status = 409 if exc.stage in {
+                "writer_quiesce",
+                "external_blender_release",
+                "builtin_blender_release",
+            } else 400 if exc.stage in {"candidate_open", "candidate_validate"} else 500
+            raise app_error(
+                AppErrorCode.PROJECT_OPEN_FAILED,
+                str(exc.cause),
+                status=status,
+            ) from exc
+        return app_state._project_payload(opened_project, self.app.state.dirty)
 
     def method_save_project(self) -> dict[str, Any]:
         project = app_state._require_project(self.app)
         try:
+            blender_bridge.status(self.app)
+            manager = bpy_viewport.manager_for_app(self.app)
+            bpy_viewport.require_current_context(self.app)
+            manager.save_if_running()
             project_manager.save_project(project)
         except Exception as exc:
             logger.exception("Failed to save project")
             raise app_error(AppErrorCode.PROJECT_SAVE_FAILED, str(exc), status=500) from exc
         self.app.state.dirty = False
         return app_state._project_payload(project, self.app.state.dirty)
+
+    def method_save_project_as(self, path: str) -> dict[str, Any]:
+        project = app_state._require_project(self.app)
+        try:
+            destination = validate_project_save_path(path)
+            if not destination:
+                raise ValueError("Save As destination is required.")
+        except Exception as exc:
+            raise app_error(AppErrorCode.PROJECT_SAVE_FAILED, str(exc), status=400) from exc
+
+        if project.layout == LAYOUT_2:
+            try:
+                saved_project = app_state.save_active_project_as_layout2(
+                    self.app,
+                    Path(destination),
+                )
+            except app_state.ProjectTransitionError as exc:
+                status = 409 if exc.stage in {
+                    "writer_quiesce",
+                    "external_blender_release",
+                    "builtin_blender_release",
+                } else 500
+                raise app_error(
+                    AppErrorCode.PROJECT_SAVE_FAILED,
+                    str(exc.cause),
+                    status=status,
+                ) from exc
+            return app_state._project_payload(saved_project, self.app.state.dirty)
+
+        try:
+            blender_bridge.require_released(self.app, "using Save As")
+        except ValueError as exc:
+            raise app_error(AppErrorCode.PROJECT_SAVE_FAILED, str(exc), status=409) from exc
+        bpy_viewport.stop_worker(self.app)
+        try:
+            saved_project = project_manager.save_project_as(project, Path(destination))
+        except Exception as exc:
+            logger.exception("Failed to save project as %s", path)
+            raise app_error(AppErrorCode.PROJECT_SAVE_FAILED, str(exc), status=500) from exc
+        if saved_project is not project:
+            app_state._track_project(self.app, saved_project)
+        app_state._remember_recent(self.app.state.project)
+        app_state._persist_app_session(self.app)
+        app_state._touch_live_bridge(self.app)
+        self.app.state.dirty = False
+        return app_state._project_payload(self.app.state.project, self.app.state.dirty)
+
+    def method_convert_project(self, path: str) -> dict[str, Any]:
+        project = app_state._require_project(self.app)
+        if project.layout == LAYOUT_2:
+            raise app_error(
+                AppErrorCode.PROJECT_SAVE_FAILED,
+                "Convert supports Layout 1 to Layout 2 only.",
+                status=409,
+            )
+        if not project_manager.can_convert_to_layout2(project):
+            raise app_error(
+                AppErrorCode.PROJECT_SAVE_FAILED,
+                "Convert requires an active Layout 1 .sbd document. "
+                "Use Save Project As first, then convert that document.",
+                status=409,
+            )
+        try:
+            ensure_layout_enabled(LAYOUT_2)
+        except LayoutDisabledError as exc:
+            raise app_error(
+                AppErrorCode.PROJECT_SAVE_FAILED, str(exc), status=409
+            ) from exc
+
+        try:
+            destination = validate_project_save_path(path)
+            if not destination:
+                raise ValueError("Convert destination is required.")
+        except Exception as exc:
+            raise app_error(AppErrorCode.PROJECT_SAVE_FAILED, str(exc), status=400) from exc
+
+        try:
+            converted = app_state.convert_active_project_to_layout2(
+                self.app,
+                Path(destination),
+            )
+        except app_state.ProjectTransitionError as exc:
+            status = 409 if exc.stage in {
+                "writer_quiesce",
+                "external_blender_release",
+                "builtin_blender_release",
+            } else 500
+            raise app_error(
+                AppErrorCode.PROJECT_SAVE_FAILED,
+                str(exc.cause),
+                status=status,
+            ) from exc
+        return app_state._project_payload(converted, self.app.state.dirty)
 
     def method_get_missing_files(self) -> dict[str, Any]:
         project = app_state._require_project(self.app)
@@ -518,23 +650,65 @@ class StoryboardBackendService(ExportServiceMixin):
     def method_plugin_heartbeat(self, payload: dict[str, Any] | None = None) -> dict[str, str]:
         return self._plugin_service().heartbeat(payload)
 
-    def method_plugin_context(self) -> dict[str, Any]:
-        return self._plugin_service().context()
+    def method_plugin_context(
+        self,
+        protocol: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        return self._plugin_service().context(protocol)
 
-    def _plugin_context_payload(self, project) -> dict[str, Any]:
-        return self._plugin_service().context_payload(project)
+    def _plugin_context_payload(
+        self,
+        project,
+        protocol: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        return self._plugin_service().context_payload(project, protocol)
 
-    def method_plugin_export_preview(self, shot_id: str, payload: dict[str, Any] | None = None) -> dict[str, Any]:
-        return self._plugin_service().export_preview(shot_id, payload)
+    def method_plugin_write_intent(
+        self,
+        work_key: str,
+        asset_role: str,
+        protocol: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        return self._plugin_service().issue_write_intent(
+            work_key,
+            asset_role,
+            protocol,
+        )
 
-    def method_plugin_psd_saved(self, shot_id: str, payload: dict[str, Any] | None = None) -> dict[str, Any]:
-        return self._plugin_service().psd_saved(shot_id, payload)
+    def method_plugin_export_preview(
+        self,
+        shot_id: str,
+        payload: dict[str, Any] | None = None,
+        protocol: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        return self._plugin_service().export_preview(shot_id, payload, protocol)
 
-    def method_plugin_focus_shot(self, shot_id: str) -> dict[str, Any]:
-        return self._plugin_service().focus_shot(shot_id)
+    def method_plugin_psd_saved(
+        self,
+        shot_id: str,
+        payload: dict[str, Any] | None = None,
+        protocol: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        return self._plugin_service().psd_saved(shot_id, payload, protocol)
 
-    def method_plugin_next_shot(self, current_shot_id: str | None = None, auto_add: bool = False) -> dict[str, Any]:
-        return self._plugin_service().next_shot(current_shot_id, auto_add)
+    def method_plugin_focus_shot(
+        self,
+        shot_id: str,
+        protocol: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        return self._plugin_service().focus_shot(shot_id, protocol)
+
+    def method_plugin_next_shot(
+        self,
+        current_shot_id: str | None = None,
+        auto_add: bool = False,
+        protocol: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        return self._plugin_service().next_shot(
+            current_shot_id,
+            auto_add,
+            protocol,
+        )
 
     def _plugin_shot_payload(self, project, shot) -> dict[str, Any]:
         return self._plugin_service().shot_payload(project, shot)
@@ -573,8 +747,125 @@ class StoryboardBackendService(ExportServiceMixin):
         app_state._autosave(self.app)
         return app_state._project_payload(project, self.app.state.dirty)
 
+    @staticmethod
+    def _unique_shot_ids(shot_ids: list[str]) -> list[str]:
+        unique: list[str] = []
+        seen: set[str] = set()
+        for raw_id in shot_ids:
+            shot_id = str(raw_id or "").strip()
+            if shot_id and shot_id not in seen:
+                seen.add(shot_id)
+                unique.append(shot_id)
+        if not unique:
+            raise ValueError("At least one shot is required.")
+        return unique
+
+    def method_update_shots_batch(self, updates: list[dict[str, Any]]) -> dict[str, Any]:
+        project = app_state._require_project(self.app)
+        if not isinstance(updates, list) or not updates:
+            raise app_error(AppErrorCode.INVALID_REQUEST, "At least one shot update is required.")
+        normalized: list[tuple[Any, dict[str, Any]]] = []
+        seen: set[str] = set()
+        try:
+            for item in updates:
+                shot_id = str(item.get("shot_id") or "").strip()
+                if not shot_id or shot_id in seen:
+                    raise ValueError("Batch shot ids must be non-empty and unique.")
+                seen.add(shot_id)
+                changes = item.get("changes")
+                if not isinstance(changes, dict):
+                    raise ValueError(f"Changes must be an object for shot: {shot_id}")
+                normalized.append((shot_service.find_shot(project, shot_id), changes))
+            with project_transaction.mutate_project(project):
+                for shot, changes in normalized:
+                    shot_service.update_shot(shot, changes)
+                app_state._autosave(self.app)
+        except ValueError as exc:
+            raise app_error(AppErrorCode.INVALID_REQUEST, str(exc)) from exc
+        return app_state._project_payload(project, self.app.state.dirty)
+
+    def method_delete_shots_batch(self, shot_ids: list[str]) -> dict[str, Any]:
+        project = app_state._require_project(self.app)
+        try:
+            ids = self._unique_shot_ids(shot_ids)
+            for shot_id in ids:
+                shot_service.find_shot(project, shot_id)
+            with project_transaction.mutate_project(project):
+                for shot_id in ids:
+                    shot_service.delete_shot(project, shot_id)
+                app_state._autosave(self.app)
+        except ValueError as exc:
+            raise app_error(AppErrorCode.INVALID_REQUEST, str(exc)) from exc
+        return app_state._project_payload(project, self.app.state.dirty)
+
+    def method_restore_shots_batch(self, items: list[dict[str, Any]]) -> dict[str, Any]:
+        project = app_state._require_project(self.app)
+        if not isinstance(items, list) or not items:
+            raise app_error(AppErrorCode.INVALID_REQUEST, "At least one shot is required.")
+        try:
+            normalized = sorted(
+                (
+                    (dict(item["shot"]), int(item.get("index", 0)))
+                    for item in items
+                    if isinstance(item, dict)
+                ),
+                key=lambda item: item[1],
+            )
+            if len(normalized) != len(items):
+                raise ValueError("Every restore item must contain a shot.")
+            restore_ids = [str(shot.get("shot_id") or "") for shot, _index in normalized]
+            if len(set(restore_ids)) != len(restore_ids) or any(not shot_id for shot_id in restore_ids):
+                raise ValueError("Restore shot ids must be non-empty and unique.")
+            existing_ids = {shot.shot_id for shot in project.shots}
+            if any(shot_id in existing_ids for shot_id in restore_ids):
+                raise ValueError("A restored shot already exists.")
+            with project_transaction.mutate_project(project):
+                for shot, index in normalized:
+                    project_manager.restore_shot(project, shot, index)
+                app_state._autosave(self.app)
+        except (KeyError, TypeError, ValueError) as exc:
+            raise app_error(AppErrorCode.INVALID_REQUEST, str(exc)) from exc
+        return app_state._project_payload(project, self.app.state.dirty)
+
+    def method_create_queue_batch_requests(self, shot_ids: list[str]) -> dict[str, Any]:
+        project = app_state._require_project(self.app)
+        requests: list[dict[str, Any]] = []
+        try:
+            ids = self._unique_shot_ids(shot_ids)
+            target_ids = set(ids)
+            target_shots = [shot for shot in project.shots if shot.shot_id in target_ids]
+            if len(target_shots) != len(ids):
+                missing = next(shot_id for shot_id in ids if shot_id not in {shot.shot_id for shot in target_shots})
+                raise ValueError(f"Shot not found: {missing}")
+            with project_transaction.mutate_project(project):
+                requests = [
+                    generation_service.create_request(project, shot, "queue", provider="codex")
+                    for shot in target_shots
+                ]
+                for shot, request in zip(target_shots, requests, strict=True):
+                    shot.generation_state.update({
+                        "execution_status": "queued",
+                        "review_status": "unreviewed",
+                        "freshness_status": "current",
+                        "active_output_id": "",
+                        "latest_attempt_id": request["request_id"],
+                    })
+                app_state._autosave(self.app)
+        except (OSError, ValueError) as exc:
+            raise app_error(AppErrorCode.GENERATION_REQUEST_FAILED, str(exc)) from exc
+        return {
+            "requests": generation_service.list_requests(project),
+            "project": app_state._project_payload(project, self.app.state.dirty),
+            "created_request_ids": [str(request["request_id"]) for request in requests],
+        }
+
     def method_create_generation_request(
-        self, shot_id: str, destination: str, provider: str = "codex", mode: str = ""
+        self,
+        shot_id: str,
+        destination: str,
+        provider: str = "codex",
+        mode: str = "",
+        clear_queue_on_result: bool = True,
     ) -> dict[str, Any]:
         project = app_state._require_project(self.app)
         shot = app_state._find_shot(project, shot_id)
@@ -582,7 +873,12 @@ class StoryboardBackendService(ExportServiceMixin):
         try:
             with project_transaction.mutate_project(project):
                 request = generation_service.create_request(
-                    project, shot, destination, provider=provider, mode=mode
+                    project,
+                    shot,
+                    destination,
+                    provider=provider,
+                    mode=mode,
+                    clear_queue_on_result=clear_queue_on_result,
                 )
                 shot.generation_state.update({
                     "execution_status": "queued",
@@ -599,9 +895,6 @@ class StoryboardBackendService(ExportServiceMixin):
         except (OSError, ValueError) as exc:
             raise app_error(AppErrorCode.GENERATION_REQUEST_FAILED, str(exc)) from exc
         assert request is not None
-        # Dispatching a shot to Codex removes its pending queue (staging) entry.
-        if request["destination"] == "codex":
-            generation_service.clear_pending_queue_requests(project, shot_id)
         response = {
             "request": request,
             "requests": generation_service.list_requests(project, shot_id=shot_id),
@@ -615,12 +908,54 @@ class StoryboardBackendService(ExportServiceMixin):
             )
         return response
 
-    def method_create_codex_batch_requests(self) -> dict[str, Any]:
+    def method_create_codex_batch_requests(
+        self,
+        provider: str = "codex",
+        clear_queue_on_result: bool = True,
+        scope: str = "auto",
+    ) -> dict[str, Any]:
         project = app_state._require_project(self.app)
+        pending_queue = generation_service.list_requests(
+            project,
+            destination="queue",
+            status="queued",
+        )
+        queued_shot_ids = {
+            str(request.get("shot_id") or "")
+            for request in pending_queue
+            if request.get("shot_id")
+        }
+        scope = str(scope or "").strip().lower()
+        if scope not in {"auto", "queued", "all"}:
+            raise app_error(
+                AppErrorCode.INVALID_REQUEST,
+                "Generation batch scope must be 'auto', 'queued', or 'all'.",
+            )
+        if scope == "all":
+            target_shots = list(project.shots)
+        elif scope == "queued":
+            target_shots = [shot for shot in project.shots if shot.shot_id in queued_shot_ids]
+            if not target_shots:
+                raise app_error(AppErrorCode.INVALID_REQUEST, "The generation queue is empty.")
+        else:
+            target_shots = (
+                [shot for shot in project.shots if shot.shot_id in queued_shot_ids]
+                if queued_shot_ids
+                else list(project.shots)
+            )
         try:
             with project_transaction.mutate_project(project):
-                requests = [generation_service.create_request(project, shot, "codex") for shot in project.shots]
-                for shot, request in zip(project.shots, requests, strict=True):
+                requests = [
+                    generation_service.create_request(
+                        project,
+                        shot,
+                        "codex",
+                        provider=provider,
+                        clear_queue_on_result=clear_queue_on_result,
+                    )
+                    for shot in target_shots
+                ]
+                for shot, request in zip(target_shots, requests, strict=True):
                     shot.generation_state.update({
                         "execution_status": "queued",
                         "review_status": "unreviewed",
@@ -631,15 +966,13 @@ class StoryboardBackendService(ExportServiceMixin):
                 app_state._autosave(self.app)
         except (OSError, ValueError) as exc:
             raise app_error(AppErrorCode.GENERATION_REQUEST_FAILED, str(exc)) from exc
-        # Sending every shot to Codex clears the pending queue (staging) entries.
-        for shot in project.shots:
-            generation_service.clear_pending_queue_requests(project, shot.shot_id)
         return {
             "requests": generation_service.list_requests(project),
             "project": app_state._project_payload(project, self.app.state.dirty),
             "created_request_ids": [str(request["request_id"]) for request in requests],
             "codex_prompt": generation_service.codex_batch_handoff_prompt(
                 [str(request["request_id"]) for request in requests],
+                provider=provider,
             ),
         }
 
@@ -1076,11 +1409,9 @@ class StoryboardBackendService(ExportServiceMixin):
         )
         if character_bible_changed:
             generation_service.mark_all_generated_shots_stale(project)
-            app_state._autosave(self.app)
-        else:
-            project_manager.save_settings(project)
+        project_manager.save_settings(project)
         project_manager.write_bridge_file(project)
-        project_manager.sync_document(project)
+        app_state.persist_project_mutation(self.app)
         app_state._touch_live_bridge(self.app)
         return app_state._project_payload(project, self.app.state.dirty)
 
@@ -1178,7 +1509,9 @@ class StoryboardBackendService(ExportServiceMixin):
         # of launching Photoshop again (which creates a confusing duplicate).
         plugin_linked, _age, open_shot_ids = app_state._plugin_link_state(self.app)
         if plugin_linked and shot_id in open_shot_ids:
-            source_native_path = str((project.root_path / shot.source_file_path).resolve()).replace("\\", "/")
+            source_native_path = str(
+                project_manager.resolve_project_path(project, shot.source_file_path)
+            ).replace("\\", "/")
             runtime_state.set_active_shot_context(
                 self.app,
                 shot_id,
@@ -1229,15 +1562,83 @@ class StoryboardBackendService(ExportServiceMixin):
 
     def method_open_blender_scene(self) -> dict[str, Any]:
         project = app_state._require_project(self.app)
+        existing = blender_bridge.status(self.app)
+        if existing["external_blender_owned"]:
+            opened = Path(str(existing["external_blender_blend_path"]))
+            try:
+                relative_path = project_manager.project_relative_posix(project, opened)
+            except ValueError:
+                relative_path = ""
+            return {
+                "path": str(opened),
+                "relative_path": relative_path,
+                "blender_bridge": existing,
+                **app_state._project_payload(project, self.app.state.dirty),
+            }
+        manager = bpy_viewport.manager_for_app(self.app)
         try:
-            opened = scene3d.open_blender_scene(project)
+            bpy_viewport.require_current_context(self.app)
+            manager.save_if_running()
+            bpy_viewport.stop_worker(self.app)
+            active_scene = scene3d.ensure_active_scene(project)
+            attached = str(active_scene.get("blend_file_path") or "").strip()
+            blend_path = (
+                project_manager.resolve_project_path(project, attached)
+                if attached
+                else project_manager.ensure_project_blend_file(
+                    project,
+                    scene_id=str(active_scene["id"]),
+                ).resolve()
+            )
+            active_scene = scene3d.configure_blend_preview(
+                project,
+                str(active_scene["id"]),
+                blend_path,
+            )
+            app_state.persist_project_mutation(self.app)
+            session = blender_bridge.begin_session(
+                self.app,
+                project,
+                active_scene,
+                blend_path,
+            )
+            bootstrap = (
+                Path(__file__).resolve().parent
+                / "blender_addon"
+                / "register_storyboarder_addon.py"
+            )
+            launch_path = Path(session["launch_path"])
+            launch_relative = project_manager.project_relative_posix(
+                project, launch_path
+            )
+            opened = project_manager.open_blender_scene(
+                project,
+                launch_relative,
+                python_script=bootstrap,
+                script_args=[
+                    "--storyboarder-bridge",
+                    session["bridge_path"],
+                    "--storyboarder-heartbeat",
+                    session["heartbeat_path"],
+                    "--storyboarder-session",
+                    session["session_id"],
+                ],
+                on_launch=lambda process: blender_bridge.attach_process(self.app, process),
+            )
         except (FileNotFoundError, ValueError) as exc:
+            blender_bridge.cancel_session(self.app)
             logger.exception("Failed to open Blender scene")
             raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except Exception:
+            blender_bridge.cancel_session(self.app)
+            raise
         app_state._touch_live_bridge(self.app)
         return {
             "path": str(opened),
-            "relative_path": opened.relative_to(project.root_path).as_posix() if opened.exists() else "",
+            "relative_path": (
+                project_manager.project_relative_posix(project, opened) if opened.exists() else ""
+            ),
+            "blender_bridge": blender_bridge.status(self.app),
             **app_state._project_payload(project, self.app.state.dirty),
         }
 
@@ -1256,7 +1657,7 @@ class StoryboardBackendService(ExportServiceMixin):
             )
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-        project_manager.sync_document(project)
+        app_state.persist_project_mutation(self.app)
         return payload
 
     def method_update_scene3d(self, scene3d_id: str, data: dict[str, Any]) -> dict[str, Any]:
@@ -1276,43 +1677,52 @@ class StoryboardBackendService(ExportServiceMixin):
             key in data and before_scene.get(key) != payload["scene"].get(key)
             for key in semantic_keys
         )
-        stale_ids = generation_service.mark_generated_shots_for_asset_keywords_stale(
+        generation_service.mark_generated_shots_for_asset_keywords_stale(
             project,
             [
                 *generation_service.semantic_asset_keywords(before_scene),
                 *generation_service.semantic_asset_keywords(payload["scene"]),
             ],
         ) if scene_changed else []
-        if stale_ids:
-            app_state._autosave(self.app)
-        else:
-            project_manager.sync_document(project)
+        app_state.persist_project_mutation(self.app)
         return payload
 
     def method_delete_scene3d(self, scene3d_id: str) -> dict[str, Any]:
         project = app_state._require_project(self.app)
+        try:
+            blender_bridge.require_released(self.app, "deleting a Scene 3D")
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
         try:
             payload = scene3d.delete_scene(project, scene3d_id)
         except FileNotFoundError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-        project_manager.sync_document(project)
+        app_state.persist_project_mutation(self.app)
         return payload
 
     def method_set_active_scene3d(self, scene3d_id: str) -> dict[str, Any]:
         project = app_state._require_project(self.app)
+        try:
+            blender_bridge.require_released(self.app, "switching the active Scene 3D")
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
         try:
             payload = scene3d.set_active(project, scene3d_id)
         except FileNotFoundError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-        project_manager.sync_document(project)
+        app_state.persist_project_mutation(self.app)
         return payload
 
     def method_import_scene3d_to_scene(self, scene3d_id: str, filename: str, data: list[int] | bytes | bytearray) -> dict[str, Any]:
         project = app_state._require_project(self.app)
+        try:
+            blender_bridge.require_released(self.app, "replacing a Scene 3D asset")
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
         try:
             before_scene = next(
                 (item for item in scene3d.list_scenes(project).get("scenes", []) if item.get("id") == scene3d_id),
@@ -1322,17 +1732,14 @@ class StoryboardBackendService(ExportServiceMixin):
         except (FileNotFoundError, ValueError) as exc:
             logger.exception("Failed to import Scene3D file: %s", filename)
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-        stale_ids = generation_service.mark_generated_shots_for_asset_keywords_stale(
+        generation_service.mark_generated_shots_for_asset_keywords_stale(
             project,
             [
                 *generation_service.semantic_asset_keywords(before_scene),
                 *generation_service.semantic_asset_keywords(payload["scene"]),
             ],
         )
-        if stale_ids:
-            app_state._autosave(self.app)
-        else:
-            project_manager.sync_document(project)
+        app_state.persist_project_mutation(self.app)
         return payload
 
     def method_get_scene3d_file(self, scene3d_id: str | None = None) -> dict[str, str]:
@@ -1366,7 +1773,7 @@ class StoryboardBackendService(ExportServiceMixin):
         except (FileNotFoundError, ValueError) as exc:
             logger.exception("Failed to create Scene 2D")
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-        project_manager.sync_document(project)
+        app_state.persist_project_mutation(self.app)
         app_state._touch_live_bridge(self.app)
         return {"scene": scene, "scenes": scenes}
 
@@ -1382,7 +1789,6 @@ class StoryboardBackendService(ExportServiceMixin):
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-        shots_changed = False
         context_keys = {"title", "description", "location", "time_of_day", "environment_prompt", "consistency_anchors"}
         scene_context_changed = before_scene is None or any(
             key in data and before_scene.get(key) != scene.get(key)
@@ -1393,14 +1799,9 @@ class StoryboardBackendService(ExportServiceMixin):
                 continue
             if "title" in data and shot.scene != scene["title"]:
                 shot.scene = scene["title"]
-                shots_changed = True
             if scene_context_changed and generation_service.has_generation_activity(shot):
                 shot.generation_state["freshness_status"] = "stale"
-                shots_changed = True
-        if shots_changed:
-            app_state._autosave(self.app)
-        else:
-            project_manager.sync_document(project)
+        app_state.persist_project_mutation(self.app)
         app_state._touch_live_bridge(self.app)
         return {"scene": scene, "scenes": scenes}
 
@@ -1416,7 +1817,6 @@ class StoryboardBackendService(ExportServiceMixin):
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-        unlinked = False
         for shot in project.shots:
             if shot.scene_id != scene_id:
                 continue
@@ -1425,11 +1825,7 @@ class StoryboardBackendService(ExportServiceMixin):
                 shot.scene = str(existing_scene.get("title") or "")
             if generation_service.has_generation_activity(shot):
                 shot.generation_state["freshness_status"] = "stale"
-            unlinked = True
-        if unlinked:
-            app_state._autosave(self.app)
-        else:
-            project_manager.sync_document(project)
+        app_state.persist_project_mutation(self.app)
         app_state._touch_live_bridge(self.app)
         return {"scenes": scenes}
 
@@ -1453,7 +1849,7 @@ class StoryboardBackendService(ExportServiceMixin):
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-        project_manager.sync_document(project)
+        app_state.persist_project_mutation(self.app)
         return {"scene": scene, "preview_exists": preview_exists, "message": message}
 
     def method_add_scene2d_to_references(self, scene_id: str) -> dict[str, Any]:
@@ -1464,7 +1860,7 @@ class StoryboardBackendService(ExportServiceMixin):
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-        project_manager.sync_document(project)
+        app_state.persist_project_mutation(self.app)
         app_state._touch_live_bridge(self.app)
         return {"reference": reference, "scene": scene, "project": app_state._project_payload(project, self.app.state.dirty)}
 
@@ -1502,7 +1898,7 @@ class StoryboardBackendService(ExportServiceMixin):
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-        project_manager.sync_document(project)
+        app_state.persist_project_mutation(self.app)
         return {"scene": scene, "perspective": perspective, "scenes": scenes}
 
     def method_duplicate_scene2d_perspective(self, scene_id: str, perspective_id: str) -> dict[str, Any]:
@@ -1513,7 +1909,7 @@ class StoryboardBackendService(ExportServiceMixin):
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-        project_manager.sync_document(project)
+        app_state.persist_project_mutation(self.app)
         return {"scene": scene, "perspective": perspective, "scenes": scenes}
 
     def method_reorder_scene2d_perspectives(self, scene_id: str, perspective_ids: list[str]) -> dict[str, Any]:
@@ -1524,7 +1920,7 @@ class StoryboardBackendService(ExportServiceMixin):
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-        project_manager.sync_document(project)
+        app_state.persist_project_mutation(self.app)
         return {"scene": scene, "scenes": scenes}
 
     def method_import_scene2d_perspective(
@@ -1549,7 +1945,7 @@ class StoryboardBackendService(ExportServiceMixin):
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-        project_manager.sync_document(project)
+        app_state.persist_project_mutation(self.app)
         return {"scene": scene, "perspective": perspective, "scenes": scenes}
 
     def method_update_scene2d_perspective(self, scene_id: str, perspective_id: str, data: dict[str, Any]) -> dict[str, Any]:
@@ -1560,7 +1956,7 @@ class StoryboardBackendService(ExportServiceMixin):
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-        project_manager.sync_document(project)
+        app_state.persist_project_mutation(self.app)
         return {"scene": scene, "perspective": perspective, "scenes": scenes}
 
     def method_delete_scene2d_perspective(self, scene_id: str, perspective_id: str) -> dict[str, Any]:
@@ -1571,7 +1967,7 @@ class StoryboardBackendService(ExportServiceMixin):
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-        project_manager.sync_document(project)
+        app_state.persist_project_mutation(self.app)
         return {"scene": scene, "scenes": scenes}
 
     def method_open_scene2d_perspective(self, scene_id: str, perspective_id: str) -> dict[str, Any]:
@@ -1592,12 +1988,16 @@ class StoryboardBackendService(ExportServiceMixin):
             raise HTTPException(status_code=400, detail="Only PSD Perspectives can be opened for editing.")
 
         source_rel = str(perspective.get("source_file_path") or "")
-        expected_source_rel = scene2d._source_rel(scene_id, perspective_id)
-        if source_rel != expected_source_rel:
-            raise HTTPException(status_code=400, detail="Perspective source path is not canonical.")
-        source_path = project.root_path / source_rel if source_rel else None
+        if Path(source_rel).suffix.lower() != ".psd":
+            raise HTTPException(status_code=400, detail="Perspective source must be a PSD.")
+        try:
+            source_path = project_manager.resolve_project_path(project, source_rel)
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=400, detail="Perspective source path is invalid."
+            ) from exc
 
-        if not source_path or not source_path.is_file():
+        if not source_path.is_file():
             raise HTTPException(status_code=400, detail=f"Source PSD not found: {source_rel}")
         opened = str(source_path)
         relative_path = source_rel
@@ -1626,7 +2026,7 @@ class StoryboardBackendService(ExportServiceMixin):
             except (FileNotFoundError, ValueError) as exc:
                 raise HTTPException(status_code=400, detail=str(exc)) from exc
             perspective = scene2d._find_perspective(sc, perspective_id)
-            source_path = project.root_path / relative_path
+            source_path = project_manager.resolve_project_path(project, relative_path)
             runtime_state.set_active_scene2d_context(
                 self.app,
                 scene_id,
@@ -1644,25 +2044,57 @@ class StoryboardBackendService(ExportServiceMixin):
             "work_context": runtime_state.active_work_context(self.app),
         }
 
-    def method_plugin_scene2d_export_preview(self, scene_id: str, perspective_id: str) -> dict[str, Any]:
-        return self._plugin_service().scene2d_export_preview(scene_id, perspective_id)
+    def method_plugin_scene2d_export_preview(
+        self,
+        scene_id: str,
+        perspective_id: str,
+        protocol: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        return self._plugin_service().scene2d_export_preview(
+            scene_id,
+            perspective_id,
+            protocol,
+        )
 
-    def method_plugin_scene2d_psd_saved(self, scene_id: str, perspective_id: str) -> dict[str, Any]:
-        return self._plugin_service().scene2d_psd_saved(scene_id, perspective_id)
+    def method_plugin_scene2d_psd_saved(
+        self,
+        scene_id: str,
+        perspective_id: str,
+        protocol: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        return self._plugin_service().scene2d_psd_saved(
+            scene_id,
+            perspective_id,
+            protocol,
+        )
 
-    def method_plugin_scene2d_next_perspective(self, scene_id: str, perspective_id: str) -> dict[str, Any]:
-        return self._plugin_service().scene2d_next_perspective(scene_id, perspective_id)
+    def method_plugin_scene2d_next_perspective(
+        self,
+        scene_id: str,
+        perspective_id: str,
+        protocol: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        return self._plugin_service().scene2d_next_perspective(
+            scene_id,
+            perspective_id,
+            protocol,
+        )
 
     def method_refresh_scene2d_perspective_preview(self, scene_id: str, perspective_id: str) -> dict[str, Any]:
         project = app_state._require_project(self.app)
         try:
             scene, perspective, _scenes = scene2d.refresh_perspective_preview(project, scene_id, perspective_id)
-            preview_exists = bool((project.root_path / perspective["preview_image_path"]).is_file())
+            preview_exists = bool(
+                project_manager.resolve_project_path(
+                    project,
+                    perspective["preview_image_path"],
+                ).is_file()
+            )
         except FileNotFoundError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-        project_manager.sync_document(project)
+        app_state.persist_project_mutation(self.app)
         return {
             "scene": scene,
             "perspective": perspective,
@@ -1678,7 +2110,7 @@ class StoryboardBackendService(ExportServiceMixin):
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-        project_manager.sync_document(project)
+        app_state.persist_project_mutation(self.app)
         return {"scene": scene, "scenes": scenes}
 
     def method_move_scene2d_perspective(self, scene_id: str, perspective_id: str, target_scene_id: str) -> dict[str, Any]:
@@ -1694,7 +2126,7 @@ class StoryboardBackendService(ExportServiceMixin):
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-        project_manager.sync_document(project)
+        app_state.persist_project_mutation(self.app)
         return {
             "source_scene": source_scene,
             "target_scene": target_scene,
@@ -1711,7 +2143,7 @@ class StoryboardBackendService(ExportServiceMixin):
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-        project_manager.sync_document(project)
+        app_state.persist_project_mutation(self.app)
         return {"reference": reference, "scene": scene, "project": app_state._project_payload(project, self.app.state.dirty)}
 
     def method_get_scene2d_perspective_preview(self, scene_id: str, perspective_id: str) -> dict[str, str]:
@@ -1838,10 +2270,15 @@ class StoryboardBackendService(ExportServiceMixin):
     def method_import_scene3d(self, filename: str, data: list[int] | bytes | bytearray) -> dict[str, Any]:
         project = app_state._require_project(self.app)
         try:
+            blender_bridge.require_released(self.app, "replacing the active Scene 3D asset")
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        try:
             scene_payload = scene3d.import_active_scene_file(project, str(filename or "scene.glb"), _normalize_upload_bytes(data))
         except (FileNotFoundError, ValueError) as exc:
             logger.exception("Failed to import Scene3D file: %s", filename)
             raise HTTPException(status_code=400, detail=str(exc)) from exc
+        app_state.persist_project_mutation(self.app)
         app_state._touch_live_bridge(self.app)
         payload = app_state._project_payload(project, self.app.state.dirty)
         return {"scene3d": project.settings.get("scene3d") or {}, "scenes3d": scene_payload, **payload}
@@ -1924,11 +2361,88 @@ class StoryboardBackendService(ExportServiceMixin):
 # _refresh_project_from_disk calls (which also take it) compose without deadlock.
 
 
+_LAYOUT2_TRANSACTIONAL_METHODS = frozenset(
+    {
+        "method_open_blender_scene",
+        "method_import_scene3d",
+        "method_import_scene3d_to_scene",
+        "method_create_scene3d",
+        "method_update_scene3d",
+        "method_delete_scene3d",
+        "method_set_active_scene3d",
+        "method_create_scene2d",
+        "method_update_scene2d",
+        "method_delete_scene2d",
+        "method_open_scene2d",
+        "method_add_scene2d_to_references",
+        "method_create_scene2d_perspective",
+        "method_update_scene2d_perspective",
+        "method_delete_scene2d_perspective",
+        "method_reorder_scene2d_perspectives",
+        "method_import_scene2d_perspective",
+        "method_duplicate_scene2d_perspective",
+        "method_set_primary_scene2d_perspective",
+        "method_refresh_scene2d_preview",
+        "method_refresh_scene2d_perspective_preview",
+        "method_move_scene2d_perspective",
+        "method_open_scene2d_perspective",
+        "method_add_scene2d_perspective_to_references",
+        "method_plugin_scene2d_export_preview",
+        "method_plugin_scene2d_psd_saved",
+        "method_plugin_scene2d_next_perspective",
+    }
+)
+
+
 def _serialized_mutation(method):
     @functools.wraps(method)
     def wrapper(self, *args, **kwargs):
+        if method.__name__ == "method_convert_project":
+            # The coordinator owns quiesce and the transition -> project lock order.
+            with project_manager.PROJECT_TRANSITION_LOCK:
+                return method(self, *args, **kwargs)
+
+        if method.__name__ == "method_save_project_as":
+            # Save As must serialize against all project transitions. Layout 2
+            # then acquires PROJECT_LOCK inside its coordinator, preserving the
+            # global transition-lock -> project-lock order; Layout 1 keeps its
+            # historical whole-method project lock.
+            with project_manager.PROJECT_TRANSITION_LOCK:
+                project = getattr(self.app.state, "project", None)
+                if project is not None and project.layout == LAYOUT_2:
+                    return method(self, *args, **kwargs)
+                with project_manager.PROJECT_LOCK:
+                    return method(self, *args, **kwargs)
+
         with project_manager.PROJECT_LOCK:
-            return method(self, *args, **kwargs)
+            project = getattr(self.app.state, "project", None)
+            if (
+                project is None
+                or project.layout != LAYOUT_2
+                or method.__name__ not in _LAYOUT2_TRANSACTIONAL_METHODS
+            ):
+                return method(self, *args, **kwargs)
+            revision_before = int(project.storage_revision)
+            app_state_before = {
+                name: getattr(self.app.state, name, None)
+                for name in (
+                    "dirty",
+                    "project_disk_mtime",
+                    "external_blender_context_revision",
+                )
+            }
+            try:
+                with project_document.layout2_mutation_transaction(
+                    project.project_root
+                ):
+                    with project_transaction.mutate_project(project):
+                        return method(self, *args, **kwargs)
+            except BaseException:
+                self.app.state.project = project
+                project.storage_revision = revision_before
+                for name, value in app_state_before.items():
+                    setattr(self.app.state, name, value)
+                raise
 
     return wrapper
 
@@ -1938,11 +2452,12 @@ def _serialized_mutation(method):
 # concurrent reads and media serving are never blocked by a mutation.
 _MUTATING_METHODS = (
     # Project lifecycle
-    "method_new_project", "method_open_project", "method_save_project",
+    "method_save_project", "method_save_project_as", "method_convert_project",
     # Shot CRUD / ordering
-    "method_add_shot", "method_duplicate_shot", "method_update_shot", "method_delete_shot",
+    "method_add_shot", "method_duplicate_shot", "method_update_shot", "method_update_shots_batch",
+    "method_delete_shot", "method_delete_shots_batch", "method_restore_shots_batch",
     "method_restore_shot", "method_reorder_shots", "method_move_shot_up", "method_move_shot_down",
-    "method_create_generation_request", "method_create_codex_batch_requests", "method_delete_generation_request", "method_pull_generation_results", "method_reconcile_generation_results",
+    "method_create_generation_request", "method_create_queue_batch_requests", "method_create_codex_batch_requests", "method_delete_generation_request", "method_pull_generation_results", "method_reconcile_generation_results",
     "method_accept_generation_candidate", "method_remove_fixed_layer",
     # Shot media / sources
     "method_import_image_path", "method_import_shot_image", "method_add_shot_reference_image",
@@ -1959,6 +2474,7 @@ _MUTATING_METHODS = (
     "method_apply_ref_segment_model_captures", "method_restore_ref_apply",
     "method_delete_ref_segment", "method_snapshot_ref_boards",
     # Scene 3D
+    "method_open_blender_scene",
     "method_import_scene3d", "method_import_scene3d_to_scene", "method_create_scene3d",
     "method_update_scene3d", "method_delete_scene3d", "method_set_active_scene3d",
     # Scene 2D
@@ -1968,9 +2484,12 @@ _MUTATING_METHODS = (
     "method_delete_scene2d_perspective", "method_reorder_scene2d_perspectives",
     "method_import_scene2d_perspective", "method_duplicate_scene2d_perspective",
     "method_set_primary_scene2d_perspective", "method_move_scene2d_perspective",
+    "method_refresh_scene2d_preview", "method_refresh_scene2d_perspective_preview",
     "method_open_scene2d_perspective", "method_add_scene2d_perspective_to_references",
     # Plugin-driven state updates
-    "method_plugin_psd_saved", "method_plugin_next_shot", "method_plugin_scene2d_psd_saved",
+    "method_plugin_write_intent", "method_plugin_export_preview", "method_plugin_psd_saved",
+    "method_plugin_focus_shot", "method_plugin_next_shot",
+    "method_plugin_scene2d_export_preview", "method_plugin_scene2d_psd_saved",
     "method_plugin_scene2d_next_perspective",
 )
 

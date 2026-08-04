@@ -8,14 +8,14 @@
 ## Context metadata
 
 ```text
-Last updated: 2026-07-26
-Last verified branch: main (uncommitted working tree)
-Last verified commit: efae970
-Updated by: Claude
-Context confidence: current
+Last updated: 2026-07-30
+Last verified branch: codex/local-updates-20260730
+Last verified commit: 29a07ac (implementation baseline; this context update is the next commit)
+Updated by: Codex (Owner-delegated; reconciled Codex Ultra + ChatGPT Pro architecture reviews)
+Context confidence: current for the Layout 2 decision and execution plan; historical working-state snapshots below remain reference-only
 
 Git execution environments:
-- Windows 11 / VSCode Claude Code extension | codex-user MCP | mode: unverified — verify before Git ops | Last verified: —
+- Windows 11 / Codex desktop | local shell | mode: codex-git | Last verified: 2026-07-30
 ```
 
 ## 1. What this project is
@@ -27,7 +27,8 @@ Storyboarder is a **Windows desktop-only** storyboard planning app:
 - **Frontend**: React 19 + TypeScript, built with Vite from `frontend/src/` into `storyboard_tool/web/dist/`. The prebuilt bundle is **committed** (required for Node-less `pip install` + `python main.py`). It had briefly been gitignored; re-tracked 2026-07-22 (commit f48c99c). Rebuild with `cd frontend && npm run build` after editing `frontend/src/**`.
 - **3D**: Three.js (pinned vendor copy) + a separately compiled Scene3D workspace bundle
 - **Photoshop integration**: a UXP plugin in `photoshop_uxp_plugin/` talks to `/api/plugin/*` and `/api/bridge/*`
-- **Storage**: projects are folders on disk (`project.json`, `settings.json`, `shots.json`, per-shot PNG/PSD files). No database, no cloud, no network features.
+- **Storage (current implementation)**: `.sbd` documents expand to a temporary working tree and are packed back into one archive. No database, no cloud, no network features.
+- **Storage (decided target, implementation pending)**: Layout 2 is a portable project folder containing a metadata-only `MyProject.sbd` plus external `Images/`, `PSD/`, `Blender/`, `Exports/`, and `.storyboarder/`. It avoids one directory per shot. The complete gated execution plan is in §2.
 
 Non-goals (do not add): browser mode, hosted server, cloud sync, audio, multi-window.
 
@@ -46,6 +47,302 @@ Last completed task: EXPORT feature. NEW video animatic (storyboard -> .mp4, H.2
 Current build/test status: full suite 726 passed, 1 skipped, 0 failed (the 2 previously-noted failures were fixed earlier this branch). Frontend tsc+vite build passes; lint at pre-existing baseline (8 errors, none new). GUI click-test by Owner pending.
 ```
 
+### Layout 2 storage migration — final execution decision (2026-07-30)
+
+```text
+STATUS: DECIDED, NOT IMPLEMENTED, FEATURE-GATED.
+
+Implementation baseline:
+- Branch: codex/local-updates-20260730
+- Commit: 29a07ac
+- Full baseline validation: 812 passed, 1 skipped, 2 warnings.
+- Frontend TypeScript/Vite build: passed.
+
+Independent review records:
+- Codex Ultra task: "裁决 Storyboarder 存储迁移"
+  Thread ID: 019fae64-6075-76a1-9dcc-223b75a7e25c
+  Result: Amend; reproduced a P0 dirty-project transition data-loss path.
+- ChatGPT Pro conversation: "Storyboarder Layout 2 审核"
+  https://chatgpt.com/c/6a6a1ce1-a2fc-83ec-95e1-b54caba30e79
+  Result: Amend with conditions; independently inspected the pushed GitHub branch.
+
+Final reconciliation:
+- Accept Ultra's transition gate, strict resolver, metadata-only .sbd, plugin
+  protocol v2, and transactional Save As/Convert design.
+- Accept Pro's requirement that Save As/Convert snapshot a frozen consistent
+  view and use one monotonic revision model for work-state recovery.
+- Do not require a project-wide filesystem watcher in the first implementation.
+  Images, PSDs, and Blender files are intentionally user-editable. The backend
+  must never trust a client-supplied path or ingest an unknown write as metadata;
+  a later integrity scanner may report forbidden legacy/plugin writes without
+  invalidating legitimate external asset edits.
+- Do not add Assets/External, generation-mode subfolders, or Blender/Cache in
+  Layout 2 v1. They weaken the simple stable layout. Generation mode belongs in
+  metadata; derived Blender previews remain under .storyboarder/cache/scene3d.
+```
+
+#### Gate 0 — mandatory transition-safety fix
+
+This is P0 and must land before any Layout 2 write path is enabled. Current code
+can lose dirty `.sbd` work when New/Open changes the active project before the
+old document is durably saved.
+
+```text
+ACTIVE PROJECT
+→ acquire one backend project-transition lock
+→ flush frontend drafts
+→ serialize complete backend state
+→ drain or freeze the transaction log
+→ apply plugin inbox writes, or mark them explicitly excluded/uncommitted
+→ quiesce background/plugin writers
+→ ask external Blender to save/release; abort on failure
+→ save/release built-in Blender writer; abort on failure
+→ durable-save source, or ABORT
+→ open and validate the candidate project separately
+→ atomically swap active app state
+→ rotate session/bridge identifiers
+→ clean the old runtime root last
+```
+
+Failure invariant: the old project stays active, its work root and dirty state
+remain intact, and its session ID is not changed. No cleanup may precede the
+successful app-state swap.
+
+Save As and Convert are deliberately different: they do not save back into the
+source. They freeze the current consistent in-memory/work-tree state, materialize
+that snapshot into the target, and leave the source document byte-for-byte
+unchanged.
+
+#### D1 — schema, path protocol, and compatibility
+
+- Advance `PROJECT_JSON_VERSION` from 3 to 4 when Layout 2 is introduced and
+  update all mirrored constants in the same slice.
+- A missing `layout` means Layout 1. Layout 2 requires `layout: 2`, stable
+  `project_id`, and `storage_revision`. Unknown layout/version values fail
+  closed; never guess.
+- Add `storyboard_tool/project_layout.py` as the only path authority. It must
+  distinguish `project_root` (portable folder) from `metadata_root` (expanded
+  metadata/work state).
+- Persist only project-root-relative POSIX paths. Reject absolute paths, drive
+  paths, UNC paths, leading slashes, backslashes, `..`, reparse-point escape,
+  and case-fold collisions.
+- A valid persisted path is data and wins. Layout defaults choose a path only
+  when its field is empty. A missing stored target is an integrity error; never
+  silently rebind it to a guessed canonical path.
+- Layout 1 must remain behaviorally identical while consumers are moved behind
+  the resolver. Layout 2 stays disabled until all consumers pass the gate.
+
+Layout 2 disk contract:
+
+```text
+MyProject/
+├─ MyProject.sbd
+├─ Images/
+│  ├─ Shots/
+│  │  ├─ <shot-id>_preview.png
+│  │  ├─ <shot-id>_background.png
+│  │  └─ <shot-id>_codex.png
+│  ├─ Scene2D/
+│  │  ├─ <perspective-uuid>.<image-ext>
+│  │  └─ <perspective-uuid>_preview.png
+│  ├─ References/<asset-uuid>.<image-ext>
+│  └─ Generated/<request-id>_<output-id>.<image-ext>
+├─ PSD/
+│  ├─ Shots/<shot-id>.psd
+│  └─ Scene2D/<perspective-uuid>.psd
+├─ Blender/
+│  ├─ <scene3d-id>.<blend|glb|gltf>
+│  └─ References/<asset-uuid>.<blend|glb|gltf>
+├─ Exports/
+└─ .storyboarder/
+   ├─ state.json
+   ├─ work/                         # JSON only
+   ├─ cache/
+   │  ├─ thumbnails/<shot-id>.png
+   │  └─ scene3d/<scene3d-id>/storyboarder_preview.glb
+   ├─ media/references/
+   ├─ backups/
+   ├─ recovery/
+   └─ transactions/
+```
+
+Layout 2 forbids `shots/<id>/`, root-level `project.json`,
+`storyboard_bridge.json`, and `canvas_color.txt`. Default `.blend` creation is
+lazy. Blender-owned external references use portable `//` relative paths.
+
+#### D2 — metadata-only `.sbd` and recovery revision
+
+The `.sbd` uses an explicit allowlist:
+
+- `project.json`, `settings.json`, `shots.json`
+- `annotations/**/*.json`, `notes/**/*.json`
+- `scenes2d/**/*.json`, `scenes3d/**/*.json`
+- `generation/requests/**/*.json`, `generation/state/**/*.json`,
+  `generation/results/**/*.json`
+- `cover.png`, stored uncompressed and no larger than 65,536 bytes
+
+It must contain no other PNG, PSD, BLEND, GLB/GLTF, video, export, thumbnail
+cache, backup, bridge, runtime, IPC, or transaction file.
+
+Use one authoritative monotonic revision:
+
+- `global_revision`: signed 64-bit monotonic integer.
+- `commit_id`: UUID for the committed snapshot.
+- Every accepted state mutation writes work state at revision N+1.
+- Committing `.sbd` writes that same revision, then records
+  `committed_revision`.
+- Startup recovers work state only when `work_revision > committed_revision`;
+  otherwise the `.sbd` is authoritative.
+- Invariant: `sbd_revision <= work_revision`; no competing revision counters.
+
+Because Layout 2 autosaves only JSON, each accepted mutation may durably flush
+work metadata. Binary assets are never repacked into `.sbd`.
+
+#### D3/D5 — Save As and Convert
+
+- Save As supports 1→1 and 2→2 only. It never changes layout implicitly.
+- Convert is the only 1→2 path. No 2→1 conversion.
+- Save As 2→2 copies the complete portable project folder from a frozen
+  consistent snapshot. It preserves unknown user files byte-for-byte but
+  excludes active runtime/session/transaction artifacts.
+- Convert 1→2 semantically classifies and rewrites known legacy members.
+  Unknown members cause failure plus an inventory report; they are not silently
+  moved into a miscellaneous bucket.
+- Both operations hard-block before staging while any external or built-in
+  Blender writer can still mutate project files.
+- Destination must not exist and is never merged. Reject destinations nested
+  inside the source.
+- Preflight available space, path collisions, locks, reparse points, and all
+  stored references.
+- Stage beside the destination on the same volume; write and validate the
+  complete target there, then use one atomic directory rename.
+- Before commit, verify source file hashes/sizes are unchanged, every rewritten
+  reference exists, the `.sbd` parses, its allowlist/cap holds, and file counts
+  reconcile.
+- Rename failure preserves the staging folder for recovery and reports it.
+  Activation failure preserves the completed target but leaves the source
+  active. No retry loop and no source deletion.
+- On success, Layout 2 `project.json` records `converted_from` with source path,
+  timestamp, source version, and source hash.
+
+#### D4 — Photoshop/Blender path migration contract
+
+Backend protocol v2 is mandatory for Layout 2. The current UXP plugin (0.6.7),
+or any client without protocol v2 plus `explicit_asset_paths_v2`, is "old".
+
+Compatibility matrix:
+
+- Layout 1 + old plugin: supported with existing linked/legacy behavior.
+- Layout 1 + new plugin: exact backend paths preferred; explicit legacy
+  standalone fallback remains available.
+- Layout 2 + old plugin: hard block. Context and mutation endpoints return 426
+  before disclosing a writable project root; prompt plugin upgrade.
+- Layout 2 + new plugin: online protocol-v2 operation only. Offline
+  plugin-managed project writes fail closed. Native Ctrl+S remains possible for
+  an already-open canonical PSD, followed by hash/role validation on reconnect.
+
+Protocol-v2 context sends exact paths per asset role plus
+`project_session_id`, `context_revision`, `path_mode=explicit-assets`, and
+`offline_write_allowed=false`. Every write sends protocol header, session ID,
+context revision, work key, asset role, and a short-lived single-purpose write
+intent token.
+
+The backend recomputes the canonical target from work key + role and ignores
+the client path as authority. Preview writes first land in
+`.storyboarder/transactions/.../plugin-inbox`; validate type, size, role,
+session, revision, and token; then same-volume `os.replace`; metadata commits
+last.
+
+`shot_folder` keeps its legacy meaning only for Layout 1. For Layout 2 it is
+empty and unsupported—never alias it to `Images/`, `PSD/`, or project root.
+Protocol-v1 Layout 2 responses must scrub project root, project JSON, shot
+folder, and source paths before returning 426.
+
+Per-shot plugin IPC becomes `PSD/<shot-id>_bridge.json` only if still required
+by the online protocol. Project canvas color belongs in
+`.storyboarder/canvas_color.txt`. Blender add-on and built-in viewport writers
+must use the same resolver/session/revision gate and store external `.blend`
+asset links as `//` paths.
+
+#### Non-negotiable invariants
+
+1. Only the transition coordinator may change the active project.
+2. Every persistent path resolves through `project_layout.py`.
+3. One revision is authoritative across work state, recovery, and `.sbd`.
+4. A snapshot begins only after all known writers are enumerated and quiesced.
+5. `.sbd` membership is allowlist-only; `cover.png` is the only binary.
+6. Backend metadata never trusts a plugin/client-supplied filesystem path.
+7. Convert never writes, renames, or deletes the source.
+8. Save As never merges with an existing destination.
+9. Plugin writes require current session/revision/role/token and an atomic
+   inbox-to-canonical commit.
+10. Unknown or legacy stray writes are reported; they are never silently
+    ingested, deleted, or used to invalidate legitimate user asset edits.
+
+#### Ordered implementation slices and acceptance gates
+
+0. Transition coordinator — `backend_service.py`, `app_state.py`,
+   `project_manager.py`, `bpy_viewport.py`, `ProjectContext.tsx`.
+   Gate: dirty A→New/Open B never loses data; fault injection at every stage;
+   writer enumeration and quiesce timeout; no early cleanup.
+1. `project_layout.py`, project-root model, strict resolver, schema v4.
+   Gate: Layout 1 zero behavior change; unknown version, absolute/UNC,
+   traversal, reparse, and case-collision tests; Layout 2 still off.
+2. Route every path consumer through the resolver.
+   Gate: Layout 1 shot/reference/generation/export/scene/Blender/plugin
+   regression suite passes with no duplicate path construction.
+3. Metadata-only `.sbd`, `.storyboarder/work`, revision recovery, cover/recents.
+   Gate: archive allowlist/cap tests, revision conflict/recovery tests, no
+   temporary binary asset tree for Layout 2.
+4. Backend Photoshop protocol/layout gate.
+   Gate: protocol-v1 Layout 2 returns 426 before path disclosure; legacy fields
+   scrubbed; stale session/revision/role/token rejected.
+5. UXP protocol v2.
+   Gate: no shot-path concatenation or fixed shared bridge files; offline writes
+   fail closed; native Ctrl+S canonical PSD reconnect validation; Node/UXP tests.
+6. Layout 2 shot/reference/generation/export assets.
+   Gate: no per-shot folders; exact role paths; atomic write-failure tests.
+7. Scene2D/Scene3D/Blender paths.
+   Gate: metadata-only scene moves, persisted paths preserved, lazy `.blend`,
+   built-in and external writer gates, portable `//` references.
+8. Transactional Save As 2→2.
+   Gate: snapshot determinism under concurrent activity; existing/nested
+   destination, disk-full, locked-file, hash, rename, and activation faults.
+9. Transactional Convert 1→2.
+   Gate: representative legacy fixtures; unknown/missing/collision/reparse/crash
+   reports; original source hash remains unchanged in every outcome.
+10. Enable Layout 2 creation/default/UI/docs.
+    Gate: full backend/frontend/UXP/Blender suite, real conversion fixtures, and
+    Windows/OneDrive/locked-file manual smoke before changing the default.
+
+The same execution task is authorized to complete Slices 0–10 sequentially.
+Each slice remains a separate reviewable commit. The agent must run and pass the
+slice gate before continuing, diagnose and repair ordinary failures, and must
+not skip, combine, or reorder slices merely to keep moving. A red gate pauses
+later slices until repaired. Layout 2 remains behind a disabled feature flag
+through Slice 9.
+
+Other-computer handoff:
+
+```powershell
+git clone https://github.com/Rampageboo/Storyboarder.git
+cd Storyboarder
+git fetch --prune origin
+git switch --create codex/local-updates-20260730 --track origin/codex/local-updates-20260730
+git status --short
+git log -2 --oneline
+```
+
+Then read AGENTS.md and this section in full. Create one fresh implementation
+branch from this baseline (for example `codex/layout2-storage-migration`) and
+complete Slices 0–10 in order on that branch. Before editing, re-run the baseline
+tests. After every slice, run its gate, review the actual diff, and create a
+separate commit before proceeding. Continue autonomously through ordinary
+implementation and test repairs. Stop only for a material architecture,
+persistence-contract, destructive-migration, or user-visible product decision
+not already resolved here. Do not pop or recreate the original machine's stash;
+it is intentionally not part of this handoff.
+
 ## 3. Generation handoff decision / next fork
 
 ```text
@@ -53,22 +350,23 @@ Decision: "Send to Codex" remains the single handoff to the Codex agent. Stable 
 Backend choices: explicit only - `codex` or `stable_diffusion`. Do not add `auto`.
 Workflow meaning:
 - `backend=codex`: Codex directly handles image generation.
-- `backend=stable_diffusion`: Codex prepares prompt/reference/size/seed settings and operates SD to generate the image.
+- `backend=stable_diffusion`: Codex MUST prepare prompt/reference/size/seed settings and operate Stable Diffusion to generate the image. The selected backend is an execution constraint, not a preference; prior conversation context must not override it and OpenAI imagegen/DALL-E/other generators are forbidden for that request.
 Status/detail strategy: generation precision should follow shot/status/mode. Draft should favor speed with proportional downscale, low resolution, possible upscale back to panel size, and rough/line-art storyboard output. Cleaner/final statuses can increase resolution, steps, refinement, and polish.
-Next fork: implement provider/mode fields in the generation request payload and UI selector while preserving the user-facing "Send to Codex" handoff semantics.
+Next fork: complete Layout 2 Slices 0–10 sequentially from the final execution decision in §2. Keep Layout 2 disabled through Slice 9 and preserve one commit plus one passing gate per slice.
 Owner input needed: no for the above semantics; yes only for later SD-specific runtime/configuration choices.
 
 Progress (2026-07-21):
 - DONE: `provider` field on the request snapshot (generation_service PROVIDERS={codex,stable_diffusion}, default codex, validated before any FS write). Backend Spark-authored slice, kept.
 - DONE: `provider` threaded end-to-end — GenerationRequestCreateRequest.provider, api create-generation-request route, method_create_generation_request(shot_id, destination, provider). Default codex, backward compatible.
-- DONE: codex_handoff_prompt(request_id, *, provider="codex", mode="") is provider+mode-aware; stable_diffusion variant instructs Codex to OPERATE Stable Diffusion per the request's generation_plan (build prompt from compiled_prompt, apply negative_prompt+references, preserve aspect, upscale back to panel) instead of generating directly.
+- DONE: single and batch Codex handoff prompts are provider-aware. The stable_diffusion variant states a mandatory backend requirement at the start, instructs Codex to OPERATE Stable Diffusion per the request's generation_plan, and explicitly forbids OpenAI imagegen, DALL-E, or any alternative image generator. Request snapshots also carry machine-readable `execution_constraints` with `required_backend`, `backend_is_mandatory`, and `forbid_alternative_image_generators`.
 - DONE: `mode` field (draft/clean/final) + per-mode `generation_plan` block. Owner spec 2026-07-21. Default mode derives from shot.status (Draft->draft, In Progress/Review->clean, Approved/Final->final); explicit `mode` overrides. Chosen default profile numbers (tunable, in generation_service._MODE_PROFILES): draft = longest-edge 768, steps 12, cfg 5.0, upscale_to_panel, overwrite_final False; clean = longest-edge 1024, steps 22, cfg 6.5, use_prior_frame_as_reference; final = full panel size, steps 32, cfg 7.0, overwrite_final True. generation_plan carries target_width/height, panel_width/height, steps, cfg_scale, style_hint, use_prior_frame_as_reference, output_policy{preserve_aspect_ratio, upscale_to_panel, overwrite_final}. These are ADVISORY payload guidance — no engine executes them yet.
 - Field mapping (Owner payload -> existing snapshot): target->destination, backend->provider; new: mode, generation_plan, generation_plan.output_policy. Existing snake_case field names NOT renamed.
 - DONE: generation_plan.prior_frame — for clean/final (use_prior_frame_as_reference), the request now carries the shot's accepted Codex layer (_codex.png) as {source, project_relative_path, absolute_path, exists}; null in draft or when no layer exists. SD handoff prompt says to use prior_frame as the img2img base. Advisory: the actual img2img/upscale/overwrite-final execution is still Codex/SD-operator side, not built here.
 - PERF: `.sbd` save = full re-zip of the whole working root on EVERY autosave (add-board etc.) via project_document.pack_document → cost scales with project size ("long wait"). Measured: 48 MB incompressible artwork = 1244 ms at DEFLATE-6. Fix shipped: STORE already-compressed imports (png/jpg/mp4…) + DEFLATE level 1 for the rest (PSD canvases stay compressible → ~1 MB not 91 MB). ~2x faster, negligible size change, backward compatible. STRUCTURAL FIX SHIPPED (Owner-approved 2026-07-23): interactive `_autosave` now writes metadata to the working tree but DEFERS the .sbd pack (`save_project(flush_document=False)`); Add board dropped 200-1200 ms → ~8 ms. The pack now runs on periodic autosave (frontend useAutosave hook, interval `autosave_interval_minutes` setting = 3/5/10, default 5), manual save (Ctrl+S / menu, already existed), and save-on-close (shutdown_reference_cleanup save_if_dirty). Folder projects unchanged (metadata write is already durable; not left dirty). .sbd projects are left dirty after edits until a flush. `backups/` is now EXCLUDED from the .sbd pack (project_document._UNPACKED_DIRS) — it is a local, write-only recovery snapshot set the app never reads back, so embedding it only bloated the document and slowed saves; for .sbd it now lives only in the temp working tree (session-local).
-- DONE: dispatching a shot to Codex clears its pending queue (staging) entry — generation_service.clear_pending_queue_requests, called by single Send to Codex and Send All to Codex (batch). Codex-destination requests stay (they track handoff + results). Fixes the duplicate Queue+Codex rows. Backend-only; the panel reloads after dispatch.
-- DONE (UI, revised per Owner): standalone Mode selector REMOVED — precision follows shot Status (backend derives; frontend `generationModeForStatus` mirrors it for display), no 'auto'. "Send to Codex" opens a confirmation popup with the Backend (Codex/Stable Diffusion) choice + shows Status→mode. Send to Queue sends provider=codex; Send All to Codex unchanged. Frontend sends no explicit mode (backend derives from status). tsc+vite build pass. PENDING: Owner GUI click-test.
-- Two pre-existing UNRELATED test failures on this branch (not from this work; proven via stash baseline): blender smoke mock arity; project_document .sbd missing shot .psd. Fix separately if desired.
+- DONE: dispatch does not immediately clear staged queue entries. The send popup records `clear_queue_on_result`; only successful result submission clears the matching staged queue entry when that option is enabled. If disabled, the queue remains available after results return.
+- DONE (UI, revised per Owner): Queue offers Current, Queued, and All send scopes through a shared popup. The popup selects Codex or Stable Diffusion, controls clear-after-result, and exposes Modify only as a disabled/coming-soon placeholder. Precision follows shot Status; frontend sends no explicit mode. Layers and Queue are separate floating islands. The far-right More rail auto-hides at the edge; Shot Inspector remains visible. PENDING: Owner GUI click-test.
+- NEXT FORK: complete §2 Slices 0–10 sequentially. The architecture review is complete; the execution task may continue autonomously after each passing gate, while Layout 2 remains disabled through Slice 9.
+- Validation for the latest generation-backend constraint change: 42 focused tests passed. The broader staged feature set previously passed 803 tests with 1 skipped and 33 subtests; frontend TypeScript/Vite build passed. Lint remains at the known baseline (9 errors, 2 warnings). Owner GUI click-test remains pending.
 ```
 
 ## 4. What's built — module map
@@ -153,14 +451,14 @@ Current execution target: Codex (codex-user MCP) available; integration into pro
 Codex MCP status: codex-user MCP tools present in session; see docs/codex-debug-solution.md for this env's verified quirks
 Current Codex thread ID: —
 Current configured effort: unknown — verify per docs/ai-workflow/codex-mcp-effort.md before relying on it
-Current task coordination mode: claude-routed
+Current task coordination mode: owner-direct
 Current capability policy:
 - Sub-agents: allowed
 - Delegation autonomy: bounded
-Active host/environment: Windows 11 / VSCode Claude Code extension
-Active MCP client: codex-user
-Active Git execution mode: unverified — verify before any Git operation
-Git mode last verified: —
+Active host/environment: Windows 11 / Codex desktop
+Active MCP client: local Codex tools
+Active Git execution mode: codex-git
+Git mode last verified: 2026-07-28
 Review mode: report-only
 ```
 

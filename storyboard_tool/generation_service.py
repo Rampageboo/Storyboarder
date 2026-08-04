@@ -23,6 +23,14 @@ from PIL import Image
 
 from . import shot_assets
 from .models import Project, Shot
+from .project_layout import (
+    LAYOUT_2,
+    ProjectPathError,
+    generation_metadata_path,
+    project_relative_posix,
+    resolve_project_child,
+    resolve_generation_asset,
+)
 from .project_storage import atomic_write_json
 from .shot_files import resolve_project_relative_path
 
@@ -120,8 +128,8 @@ def _prior_frame_ref(project: Project, path: Path | None) -> dict[str, Any] | No
     if path is None:
         return None
     try:
-        rel = path.resolve().relative_to(project.root_path.resolve()).as_posix()
-    except ValueError:
+        rel = project_relative_posix(project, path)
+    except ProjectPathError:
         rel = ""
     return {
         "source": "codex-layer",
@@ -140,23 +148,25 @@ def _new_id(prefix: str) -> str:
 
 
 def _generation_root(project: Project) -> Path:
-    return project.root_path / "generation"
+    return generation_metadata_path(project)
 
 
 def _requests_dir(project: Project) -> Path:
-    return _generation_root(project) / "requests"
+    return generation_metadata_path(project, "requests")
 
 
 def _results_dir(project: Project) -> Path:
-    return _generation_root(project) / "results"
+    return generation_metadata_path(project, "results")
 
 
 def _state_dir(project: Project) -> Path:
-    return _generation_root(project) / "state"
+    return generation_metadata_path(project, "state")
 
 
 def _candidates_dir(project: Project) -> Path:
-    return _generation_root(project) / "candidates"
+    if project.layout == LAYOUT_2:
+        return resolve_project_child(project, "Images", "Generated")
+    return resolve_project_child(project, "generation", "candidates")
 
 
 def _validate_id(value: str, label: str) -> str:
@@ -177,11 +187,15 @@ def _read_json_object(path: Path) -> dict[str, Any]:
 
 
 def _request_path(project: Project, request_id: str) -> Path:
-    return _requests_dir(project) / f"{_validate_id(request_id, 'request id')}.json"
+    return generation_metadata_path(
+        project, "requests", f"{_validate_id(request_id, 'request id')}.json"
+    )
 
 
 def _state_path(project: Project, request_id: str) -> Path:
-    return _state_dir(project) / f"{_validate_id(request_id, 'request id')}.json"
+    return generation_metadata_path(
+        project, "state", f"{_validate_id(request_id, 'request id')}.json"
+    )
 
 
 def _apply_request_state(project: Project, request: dict[str, Any]) -> dict[str, Any]:
@@ -496,6 +510,7 @@ def build_request_snapshot(
     *,
     provider: str = "codex",
     mode: str = "",
+    clear_queue_on_result: bool = True,
 ) -> dict[str, Any]:
     destination = str(destination or "").strip().lower()
     if destination not in DESTINATIONS:
@@ -566,12 +581,18 @@ def build_request_snapshot(
         "schema_version": SCHEMA_VERSION,
         "request_id": request_id,
         "project_name": project.name,
-        "project_root": str(project.root_path.resolve()),
+        "project_root": str(project.project_root.resolve()),
         "shot_id": shot.shot_id,
         "shot_number": shot_number,
         "destination": destination,
         "provider": provider,
         "mode": mode,
+        "execution_constraints": {
+            "required_backend": provider,
+            "backend_is_mandatory": True,
+            "forbid_alternative_image_generators": provider == "stable_diffusion",
+        },
+        "clear_queue_on_result": bool(clear_queue_on_result),
         "generation_plan": generation_plan,
         "status": "queued",
         "created_at": created_at,
@@ -618,8 +639,16 @@ def create_request(
     *,
     provider: str = "codex",
     mode: str = "",
+    clear_queue_on_result: bool = True,
 ) -> dict[str, Any]:
-    request = build_request_snapshot(project, shot, destination, provider=provider, mode=mode)
+    request = build_request_snapshot(
+        project,
+        shot,
+        destination,
+        provider=provider,
+        mode=mode,
+        clear_queue_on_result=clear_queue_on_result,
+    )
     if request["destination"] == "queue":
         queued = [
             row for row in list_requests(project, shot_id=shot.shot_id, destination="queue")
@@ -649,11 +678,21 @@ def clear_pending_queue_requests(project: Project, shot_id: str) -> list[str]:
     return removed
 
 
-def codex_batch_handoff_prompt(request_ids: list[str]) -> str:
+def codex_batch_handoff_prompt(request_ids: list[str], *, provider: str = "codex") -> str:
     cleaned_ids = [_validate_id(request_id, "request id") for request_id in request_ids]
     if not cleaned_ids:
         raise ValueError("No Codex generation requests were created.")
+    provider = str(provider or "").strip().lower()
+    backend_rule = (
+        "BACKEND REQUIREMENT: every request in this batch explicitly requires Stable Diffusion. "
+        "You MUST operate Stable Diffusion for image generation. Do NOT use OpenAI imagegen, "
+        "DALL-E, or any other image generator, even if earlier conversation context suggests one. "
+        "The request provider is an execution constraint, not a preference. "
+        if provider == "stable_diffusion"
+        else ""
+    )
     return (
+        backend_rule +
         "Use the Storyboarder MCP tools to fetch and generate one storyboard image for every request ID below. "
         "For each request, inspect every matched keyword asset before generating, then submit its image with "
         "storyboard_submit_generation_result. Do not edit shots.json directly.\n\n"
@@ -748,7 +787,9 @@ def list_requests(
 
 
 def _result_request_dir(project: Project, request_id: str) -> Path:
-    return _results_dir(project) / _validate_id(request_id, "request id")
+    return generation_metadata_path(
+        project, "results", _validate_id(request_id, "request id")
+    )
 
 
 def list_results(project: Project, request_id: str) -> list[dict[str, Any]]:
@@ -784,16 +825,24 @@ def result_inbox_revision(project: Project) -> int:
     return latest
 
 
-def _copy_image_artifact(source: Path, target: Path) -> None:
+def validate_image_artifact(source: Path) -> str:
+    """Validate an artifact against the canonical generation image contract."""
+    source = Path(source)
     if not source.is_file():
         raise ValueError(f"Artifact not found: {source}")
-    if source.suffix.lower() not in IMAGE_SUFFIXES:
+    suffix = source.suffix.lower()
+    if suffix not in IMAGE_SUFFIXES:
         raise ValueError(f"Unsupported artifact format: {source.suffix}")
     size = source.stat().st_size
     if size <= 0 or size > MAX_ARTIFACT_BYTES:
         raise ValueError("Artifact must be a non-empty image no larger than 64 MB.")
     with Image.open(source) as image:
         image.verify()
+    return suffix
+
+
+def _copy_image_artifact(source: Path, target: Path) -> None:
+    validate_image_artifact(source)
     target.parent.mkdir(parents=True, exist_ok=True)
     # Keep the temporary name short so atomic copies also work near Windows' legacy MAX_PATH limit.
     fd, tmp_name = tempfile.mkstemp(dir=str(target.parent), prefix=".tmp-", suffix=target.suffix)
@@ -824,16 +873,25 @@ def submit_result(
         raise ValueError(f"Provide between 1 and {MAX_ARTIFACTS} image artifacts.")
 
     result_id = _new_id("out")
-    candidate_dir = _candidates_dir(project) / request_id / result_id
+    candidate_dir = (
+        resolve_project_child(project, "generation", "candidates", request_id, result_id)
+        if project.layout != LAYOUT_2
+        else None
+    )
     artifacts: list[dict[str, Any]] = []
+    created_targets: list[Path] = []
     try:
         for index, source in enumerate(paths, start=1):
             suffix = source.suffix.lower()
-            target = candidate_dir / f"candidate_{index:03d}{suffix}"
+            target = resolve_generation_asset(
+                project, request_id, result_id, suffix, index=index
+            )
             _copy_image_artifact(source, target)
+            created_targets.append(target)
             artifacts.append({
                 "name": target.name,
-                "project_relative_path": target.relative_to(project.root_path).as_posix(),
+                "output_id": result_id if index == 1 else f"{result_id}_{index:03d}",
+                "project_relative_path": project_relative_posix(project, target),
                 "absolute_path": str(target.resolve()),
                 "media_type": suffix.lstrip("."),
             })
@@ -846,11 +904,21 @@ def submit_result(
             "summary": str(summary or "").strip(),
             "artifacts": artifacts,
         }
-        atomic_write_json(_result_request_dir(project, request_id) / f"{result_id}.json", result)
-        return result
+        atomic_write_json(
+            generation_metadata_path(
+                project, "results", request_id, f"{result_id}.json"
+            ),
+            result,
+        )
     except BaseException:
-        shutil.rmtree(candidate_dir, ignore_errors=True)
+        for target in created_targets:
+            target.unlink(missing_ok=True)
+        if candidate_dir is not None:
+            shutil.rmtree(candidate_dir, ignore_errors=True)
         raise
+    if bool(request.get("clear_queue_on_result", True)):
+        clear_pending_queue_requests(project, str(request.get("shot_id") or ""))
+    return result
 
 
 def reconcile_results(project: Project) -> dict[str, Any]:
@@ -949,8 +1017,19 @@ def accept_candidate_as_codex_layer(
     if artifact is None:
         raise ValueError("Generation artifact not found in this result.")
     source = resolve_project_relative_path(project, cleaned_path)
-    candidate_root = (_candidates_dir(project) / _validate_id(request_id, "request id") / result_id).resolve()
-    if candidate_root not in source.parents:
+    if project.layout == LAYOUT_2:
+        output_id = _validate_id(str(artifact.get("output_id") or ""), "output id")
+        expected = resolve_generation_asset(
+            project, request_id, output_id, source.suffix.lower(), index=1
+        )
+        valid_location = source == expected
+    else:
+        candidate_root = resolve_project_child(
+            project, "generation", "candidates",
+            _validate_id(request_id, "request id"), result_id,
+        )
+        valid_location = candidate_root in source.parents
+    if not valid_location:
         raise ValueError("Generation artifact is outside its candidate folder.")
     destination = shot_assets.save_codex_layer_from_path(project, shot, source)
     now = _utc_now()
@@ -981,6 +1060,10 @@ def codex_handoff_prompt(request_id: str, *, provider: str = "codex", mode: str 
     mode_label = mode if mode in MODES else "the request's"
     if provider == "stable_diffusion":
         return (
+            "BACKEND REQUIREMENT: this request explicitly requires Stable Diffusion. "
+            "You MUST operate Stable Diffusion for image generation. Do NOT use OpenAI imagegen, DALL-E, or any "
+            "other image generator, even if earlier conversation context suggests one. The request provider is an "
+            "execution constraint, not a preference. "
             "Use the Storyboarder MCP tools to fetch generation request "
             f"{request_id}. This request targets the Stable Diffusion provider in {mode_label} mode: operate "
             "Stable Diffusion to render the storyboard image rather than generating it directly. Follow the "

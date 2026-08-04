@@ -18,6 +18,7 @@ from pathlib import Path
 
 from .image_utils import board_background_filename, codex_layer_filename
 from .models import Project
+from .project_layout import ProjectPathError, resolve_project_path
 from .shot_files import get_shot_dir
 
 
@@ -30,8 +31,6 @@ def validate_project_integrity(project: Project) -> list[dict]:
     """
     issues: list[dict] = []
     seen_ids: set[str] = set()
-    root = project.root_path.resolve()
-
     for shot in project.shots:
         if shot.shot_id in seen_ids:
             issues.append({"kind": "duplicate_shot_id", "shot_id": shot.shot_id})
@@ -68,15 +67,15 @@ def validate_project_integrity(project: Project) -> list[dict]:
             if not value:
                 continue
             try:
-                resolved = (project.root_path / value).resolve()
-                if resolved != root and root not in resolved.parents:
-                    issues.append({
-                        "kind": "path_traversal",
-                        "shot_id": shot.shot_id,
-                        "field": field,
-                        "value": value,
-                    })
-            except (ValueError, OSError):
+                resolve_project_path(project, value, field_name=field)
+            except ProjectPathError:
+                issues.append({
+                    "kind": "path_traversal",
+                    "shot_id": shot.shot_id,
+                    "field": field,
+                    "value": value,
+                })
+            except OSError:
                 issues.append({
                     "kind": "invalid_path",
                     "shot_id": shot.shot_id,
@@ -86,7 +85,15 @@ def validate_project_integrity(project: Project) -> list[dict]:
 
         # source_file_path: warn if linked but file is missing on disk.
         if shot.source_file_path:
-            if not (project.root_path / shot.source_file_path).is_file():
+            try:
+                source_exists = resolve_project_path(
+                    project,
+                    shot.source_file_path,
+                    field_name="source_file_path",
+                ).is_file()
+            except ProjectPathError:
+                source_exists = False
+            if not source_exists:
                 issues.append({
                     "kind": "missing_source_file",
                     "shot_id": shot.shot_id,

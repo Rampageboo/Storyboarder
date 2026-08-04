@@ -12,6 +12,7 @@ with warnings.catch_warnings():
     from fastapi.testclient import TestClient
 
 from storyboard_tool import api as api_module
+from storyboard_tool import scene3d
 
 
 def _quiet(fn):
@@ -128,6 +129,26 @@ class Scene3DLibraryTests(unittest.TestCase):
         self.assertEqual(updated.json()["scene"]["keywords"], ["School", "campus"])
         project = _quiet(lambda: self.client.get("/api/project")).json()
         self.assertEqual(project["settings"]["scene3d"]["keywords"], ["School", "campus"])
+
+    def test_configure_blend_preview_makes_blend_authoritative_and_preview_disposable(self) -> None:
+        project = self.app.state.project
+        record = scene3d.ensure_active_scene(project)
+        blend_path = project.root_path / "scenes3d" / record["id"] / "scene.blend"
+        blend_path.parent.mkdir(parents=True, exist_ok=True)
+        blend_path.write_bytes(b"blend")
+
+        configured = scene3d.configure_blend_preview(
+            project,
+            record["id"],
+            blend_path,
+        )
+
+        self.assertEqual(configured["source_type"], "blender")
+        self.assertEqual(configured["blend_file_path"], f"scenes3d/{record['id']}/scene.blend")
+        self.assertEqual(
+            configured["file_path"],
+            f"scenes3d/{record['id']}/.preview/storyboarder_preview.glb",
+        )
 
     def test_scene2d_linked_scene3d_id_persists(self) -> None:
         scene3d = _quiet(lambda: self.client.post("/api/project/scenes3d", json={"title": "Street"})).json()["scene"]

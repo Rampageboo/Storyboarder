@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type DragEvent } from 'react'
+import { useEffect, useRef, useState, type DragEvent, type MouseEvent } from 'react'
 import { useProject } from '../state/useProject'
 import { shotDisplayLabel } from '../utils/shotDisplay'
 import {
@@ -21,7 +21,8 @@ export function BoardGrid() {
   const {
     project,
     selectedShotId,
-    setSelectedShotId,
+    selectedShotIds,
+    selectShot,
     addShotAfterSelection,
     isShotDirty,
     flushDirtyShots,
@@ -34,6 +35,16 @@ export function BoardGrid() {
   const [dragShotId, setDragShotId] = useState<string | null>(null)
   const [dropTarget, setDropTarget] = useState<{ id: string; after: boolean } | null>(null)
   const gridRef = useRef<HTMLDivElement | null>(null)
+  const selectedSet = new Set(selectedShotIds)
+
+  const handleSelect = (event: MouseEvent<HTMLButtonElement>, shotId: string) => {
+    const mode = event.shiftKey
+      ? 'range'
+      : event.ctrlKey || event.metaKey
+        ? 'toggle'
+        : 'replace'
+    selectShot(shotId, mode)
+  }
 
   useEffect(() => {
     if (!selectedShotId || !gridRef.current) return
@@ -86,7 +97,8 @@ export function BoardGrid() {
   return (
     <div className="board-grid" ref={gridRef} role="list" aria-label="Boards">
       {shots.map((shot, index) => {
-        const isSelected = selectedShotId === shot.shot_id
+        const isSelected = selectedSet.has(shot.shot_id)
+        const isPrimary = selectedShotId === shot.shot_id
         const label = shotDisplayLabel(shot)
         return (
           <button
@@ -94,9 +106,9 @@ export function BoardGrid() {
             type="button"
             role="listitem"
             data-shot-id={shot.shot_id}
-            draggable={!projectActionBusy}
-            className={`board-grid-tile ${isSelected ? 'is-selected' : ''} ${dragShotId === shot.shot_id ? 'is-dragging' : ''} ${dropTarget?.id === shot.shot_id ? (dropTarget.after ? 'drop-after' : 'drop-before') : ''}`}
-            onClick={() => setSelectedShotId(shot.shot_id)}
+            draggable={!projectActionBusy && selectedShotIds.length <= 1}
+            className={`board-grid-tile ${isSelected ? 'is-selected' : ''} ${isPrimary ? 'is-primary' : ''} ${dragShotId === shot.shot_id ? 'is-dragging' : ''} ${dropTarget?.id === shot.shot_id ? (dropTarget.after ? 'drop-after' : 'drop-before') : ''}`}
+            onClick={(event) => handleSelect(event, shot.shot_id)}
             onDragStart={(e) => handleDragStart(e, shot.shot_id)}
             onDragOver={(e) => handleCardDragOver(e, shot.shot_id)}
             onDrop={(e) => void handleCardDrop(e, shot.shot_id)}

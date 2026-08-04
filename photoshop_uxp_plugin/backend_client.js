@@ -15,6 +15,9 @@
 // A single mutable slot holding the current active work context.
 // Kind is "shot" | "scene2d". panel.js reads this for UI routing.
 let _activeWorkContext = null;
+const STORYBOARDER_PLUGIN_PROTOCOL = 2;
+const STORYBOARDER_PLUGIN_CAPABILITY = "explicit_asset_paths_v2";
+let _pluginProtocolContext = null;
 
 function activeWorkContext() {
   return _activeWorkContext;
@@ -71,6 +74,57 @@ function withStoryboardToken(headers, token) {
   return merged;
 }
 
+function rememberPluginProtocolContext(context) {
+  _pluginProtocolContext = context && typeof context === "object" ? context : null;
+}
+
+function pluginProtocolHeaders(path, headers = {}) {
+  const merged = { ...(headers || {}) };
+  if (!String(path || "").startsWith("/api/plugin/")) {
+    return merged;
+  }
+  merged["X-Storyboarder-Protocol"] = String(STORYBOARDER_PLUGIN_PROTOCOL);
+  merged["X-Storyboarder-Capabilities"] = STORYBOARDER_PLUGIN_CAPABILITY;
+  const session = String(_pluginProtocolContext?.project_session_id || "");
+  const revision = _pluginProtocolContext?.context_revision;
+  if (session) {
+    merged["X-Storyboarder-Project-Session"] = session;
+  }
+  if (Number.isInteger(revision)) {
+    merged["X-Storyboarder-Context-Revision"] = String(revision);
+  }
+  return merged;
+}
+
+function pluginWriteHeaders(workKey, assetRole, writeIntent) {
+  const headers = {};
+  if (workKey) headers["X-Storyboarder-Work-Key"] = String(workKey);
+  if (assetRole) headers["X-Storyboarder-Asset-Role"] = String(assetRole);
+  if (writeIntent) headers["X-Storyboarder-Write-Intent"] = String(writeIntent);
+  return headers;
+}
+
+function pluginRequiresScopedWrites(context = _pluginProtocolContext) {
+  return Boolean(
+    isExplicitAssetContext(context) &&
+    context?.offline_write_allowed === false,
+  );
+}
+
+async function pluginHttpError(response) {
+  let payload = null;
+  try {
+    payload = await response.json();
+  } catch {
+    payload = null;
+  }
+  const detail = String(payload?.detail || payload?.message || `HTTP ${response.status}`);
+  const error = new Error(detail);
+  error.status = response.status;
+  error.code = payload?.code || "";
+  return error;
+}
+
 async function storyboardApiOrigins() {
   const cache = await loadBridgeCache();
   const origins = [];
@@ -94,26 +148,48 @@ async function storyboardApiOrigins() {
 
 async function requestStoryboardApi(path, options = {}) {
   const token = await storyboardApiToken();
+  let lastError = null;
   for (const origin of await storyboardApiOrigins()) {
     try {
       const response = await fetch(`${origin}${path}`, {
         cache: "no-store",
         ...options,
         headers: withStoryboardToken(
-          {
+          pluginProtocolHeaders(path, {
             ...(options.body ? { "Content-Type": "application/json" } : {}),
             ...(options.headers || {}),
-          },
+          }),
           token,
         ),
       });
       if (!response.ok) {
+        const error = await pluginHttpError(response);
+        lastError = error;
+        if (
+          String(path || "").startsWith("/api/plugin/") &&
+          [400, 403, 409, 426].includes(response.status)
+        ) {
+          throw error;
+        }
         continue;
       }
       return await response.json();
-    } catch {
+    } catch (error) {
+      if (
+        String(path || "").startsWith("/api/plugin/") &&
+        [400, 403, 409, 426].includes(Number(error?.status || 0))
+      ) {
+        throw error;
+      }
+      lastError = error;
       // Try the next origin.
     }
+  }
+  if (
+    String(path || "").startsWith("/api/plugin/") &&
+    [400, 403, 409, 426].includes(Number(lastError?.status || 0))
+  ) {
+    throw lastError;
   }
   return null;
 }
@@ -161,7 +237,7 @@ function normalizeShotFromBackend(raw = {}) {
 
 function projectDataFromPluginContext(context) {
   return {
-    version: 3,
+    version: 4,
     name: String(context?.project_name || ""),
     settings: {},
     shots: Array.isArray(context?.shots)
@@ -172,13 +248,18 @@ function projectDataFromPluginContext(context) {
 
 async function requestPluginContext() {
   const payload = await requestStoryboardApi("/api/plugin/context");
-  return payload && Array.isArray(payload.shots) ? payload : null;
+  if (payload && Array.isArray(payload.shots)) {
+    rememberPluginProtocolContext(payload);
+    return payload;
+  }
+  return null;
 }
 
 function applyPluginContext(context) {
   if (!context) {
     return;
   }
+  rememberPluginProtocolContext(context);
   if (typeof lastPluginContext !== "undefined") {
     lastPluginContext = context;
   }
@@ -225,6 +306,52 @@ function applyPluginContext(context) {
     setSelectedShotId(shotId);
   }
   renderCurrentShotCard();
+}
+
+async function requestPluginWriteIntent(workKey, assetRole) {
+  if (!pluginRequiresScopedWrites()) {
+    return null;
+  }
+  const payload = await requestStoryboardApi("/api/plugin/write-intents", {
+    method: "POST",
+    body: JSON.stringify({
+      work_key: String(workKey || ""),
+      asset_role: String(assetRole || ""),
+    }),
+  });
+  if (!payload?.token || !payload?.write_path) {
+    throw new Error("Storyboarder did not authorize the project write.");
+  }
+  return payload;
+}
+
+async function notifyPluginPsdSaved(workContext, intent) {
+  const ctx = workContext || activeWorkContext();
+  if (!ctx?.key) {
+    throw new Error("No linked work item is active.");
+  }
+  const headers = pluginWriteHeaders(ctx.key, "source_psd", intent?.token || "");
+  let path = "";
+  if (ctx.kind === "shot") {
+    path = `/api/plugin/shots/${encodeURIComponent(ctx.shot_id)}/psd-saved`;
+  } else if (ctx.kind === "scene2d") {
+    path = `/api/plugin/scenes2d/${encodeURIComponent(ctx.scene_id)}/perspectives/${encodeURIComponent(ctx.perspective_id)}/psd-saved`;
+  } else {
+    throw new Error("The active document is not a writable Storyboarder work item.");
+  }
+  const payload = await requestStoryboardApi(path, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({
+      source_file_path: assetProjectRelativePathForRole(ctx, "source_psd"),
+    }),
+  });
+  if (payload?.context) {
+    applyPluginContext(payload.context);
+  } else if (payload?.work_context) {
+    applyWorkContext(payload.work_context);
+  }
+  return payload;
 }
 
 async function refreshProjectDataFromBackend() {
@@ -298,10 +425,14 @@ async function requestShotSync(shotId, force = true) {
 
 // â”€â”€ Scene 2D API helpers (Part 9 / 10) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
-async function requestScene2DPsdSaved(sceneId, perspectiveId) {
+async function requestScene2DPsdSaved(sceneId, perspectiveId, intent = null) {
+  const key = `scene2d:${sceneId}:${perspectiveId}`;
   return requestStoryboardApi(
     `/api/plugin/scenes2d/${encodeURIComponent(sceneId)}/perspectives/${encodeURIComponent(perspectiveId)}/psd-saved`,
-    { method: "POST" }
+    {
+      method: "POST",
+      headers: pluginWriteHeaders(key, "source_psd", intent?.token || ""),
+    }
   );
 }
 

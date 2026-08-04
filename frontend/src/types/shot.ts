@@ -140,6 +140,18 @@ export interface RestoreShotRequest {
   index?: number
 }
 
+export interface ShotBatchUpdateRequest {
+  updates: Array<{ shot_id: string; changes: ShotUpdate }>
+}
+
+export interface ShotBatchDeleteRequest {
+  shot_ids: string[]
+}
+
+export interface ShotBatchRestoreRequest {
+  items: Array<{ shot: Shot; index: number }>
+}
+
 export interface ReorderShotsRequest {
   shot_ids: string[]
 }

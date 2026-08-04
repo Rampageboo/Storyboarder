@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   createScene3D,
+  getBpyViewportStatus,
   getProject,
   importScene3DToScene,
   listScene3D,
@@ -19,10 +20,12 @@ import {
   loadScene3DEditorClass,
   type Scene3DEditorInstance,
 } from '../scene3d/workspace/loadScene3DEditor'
+import { BpyViewport } from './BpyViewport'
 import './Scene3DPanel.css'
 import './Scene3DPanel.tune.css'
 
 type Scene3DSettings = Record<string, unknown>
+const BUILT_IN_BPY_VIEWPORT = false
 
 type CameraState = {
   position?: unknown
@@ -145,6 +148,7 @@ export function Scene3DPanel({ active }: { active: boolean }) {
   const [busy, setBusy] = useState(false)
   const [note, setNote] = useState('')
   const [editorReady, setEditorReady] = useState(false)
+  const [externalBlenderOwned, setExternalBlenderOwned] = useState(false)
   const [scene3ds, setScene3ds] = useState<Scene3DRecord[]>([])
   const [activeScene3dId, setActiveScene3dId] = useState('')
   const inputRef = useRef<HTMLInputElement | null>(null)
@@ -157,6 +161,7 @@ export function Scene3DPanel({ active }: { active: boolean }) {
   const projectRef = useRef<ProjectPayload | null>(null)
   const selectedShotIdRef = useRef<string | null>(null)
   const activeScene3dIdRef = useRef('')
+  const previewRevisionRef = useRef(0)
   const wasActiveRef = useRef(false)
 
   useEffect(() => {
@@ -178,9 +183,11 @@ export function Scene3DPanel({ active }: { active: boolean }) {
   )
   const scenePath = typeof scene.file_path === 'string' ? scene.file_path : ''
   const sceneName = activeScene3d?.title || (typeof scene.file_name === 'string' && scene.file_name) || (scenePath ? fileName(scenePath) : '')
-  const hasLinkedGlb = !!scenePath
+  const hasBlenderPreview = activeScene3d?.source_type === 'blender' || scene.source === 'blender'
   const disabled = busy || projectActionBusy
+  const sceneMutationDisabled = disabled || externalBlenderOwned
   const currentSceneKey = useMemo(() => sceneKey(project), [project])
+  const projectJsonPath = project?.project_json_path || ''
 
   const loadScene3DList = useCallback(async () => {
     if (!project) {
@@ -343,13 +350,59 @@ export function Scene3DPanel({ active }: { active: boolean }) {
     try {
       await flushDirtyShots()
       setProject(await openBlenderScene())
-      setNote('Opened project scene in Blender.')
+      setNote('Blender opened. Save there to update this read-only preview automatically.')
     } catch (error) {
       reportError(error)
     } finally {
       setBusy(false)
     }
   }, [flushDirtyShots, reportError, setProject])
+
+  const handleExternalOwnershipChange = useCallback((owned: boolean) => {
+    setExternalBlenderOwned(owned)
+  }, [])
+
+  useEffect(() => {
+    previewRevisionRef.current = 0
+  }, [activeScene3dId, projectJsonPath])
+
+  useEffect(() => {
+    if (!active || !projectJsonPath) return
+    let cancelled = false
+    let timer = 0
+
+    const poll = async () => {
+      try {
+        const status = await getBpyViewportStatus()
+        if (cancelled) return
+        const owned = status.owner === 'external' || !!status.external_blender_owned
+        setExternalBlenderOwned(owned)
+        const revision = Number(status.preview_revision || 0)
+        if (status.preview_error) {
+          setNote(`Blender preview export failed: ${status.preview_error}`)
+        } else if (status.preview_exporting) {
+          setNote('Blender is updating the Storyboarder preview...')
+        }
+        if (revision && revision !== previewRevisionRef.current) {
+          previewRevisionRef.current = revision
+          if (editorRef.current?.reloadBlenderScene) {
+            await editorRef.current.reloadBlenderScene()
+            if (!cancelled) setNote('Preview updated from Blender.')
+          }
+        }
+      } catch {
+        // Keep the last usable preview during a transient status failure.
+      } finally {
+        if (!cancelled) timer = window.setTimeout(() => void poll(), 1200)
+      }
+    }
+
+    void poll()
+    return () => {
+      cancelled = true
+      window.clearTimeout(timer)
+    }
+  }, [active, projectJsonPath])
 
   const importSceneAsset = useCallback(
     async (file: File | undefined) => {
@@ -474,6 +527,31 @@ export function Scene3DPanel({ active }: { active: boolean }) {
     }
   }, [currentShot, flushDirtyShots, reportError, setProject])
 
+  const captureBpyToBoard = useCallback(
+    async (image: Blob) => {
+      const shot = currentShot()
+      if (!shot) {
+        setNote('Select a board before capture.')
+        return
+      }
+      setBusy(true)
+      try {
+        await flushDirtyShots()
+        const file = new File([image], `${shot.shot_id}_bpy_frame.jpg`, {
+          type: image.type || 'image/jpeg',
+        })
+        const payload = await uploadShotImage(shot.shot_id, file)
+        setProject(payload)
+        setNote(`Captured built-in Blender view to ${shotDisplayLabel(shot)}.`)
+      } catch (error) {
+        reportError(error)
+      } finally {
+        setBusy(false)
+      }
+    },
+    [currentShot, flushDirtyShots, reportError, setProject],
+  )
+
   const ensureEditorLoaded = useCallback(async () => {
     if (editorRef.current) return editorRef.current
     if (!editorRootRef.current) throw new Error('3D editor root is not mounted.')
@@ -513,8 +591,16 @@ export function Scene3DPanel({ active }: { active: boolean }) {
     const nextScene = sceneSettings(projectRef.current)
     const nextKey = sceneKey(projectRef.current)
     if (loadedSceneKeyRef.current !== nextKey) {
-      await editor.loadSceneData(Object.keys(nextScene).length ? nextScene : null)
-      loadedSceneKeyRef.current = nextKey
+      try {
+        await editor.loadSceneData(Object.keys(nextScene).length ? nextScene : null)
+        loadedSceneKeyRef.current = nextKey
+      } catch (error) {
+        if (nextScene.source === 'blender') {
+          setNote('Waiting for Blender to create the first preview...')
+          return
+        }
+        throw error
+      }
     } else {
       editor.applyDisplaySettings?.(nextScene)
     }
@@ -525,39 +611,21 @@ export function Scene3DPanel({ active }: { active: boolean }) {
     requestAnimationFrame(() => editor._resize?.())
   }, [ensureEditorLoaded, getShotScene3dTime])
 
-  const reloadGlb = useCallback(async () => {
-    if (!editorRef.current?.reloadBlenderScene) {
-      setNote('Open the Scene 3D workspace before reloading GLB.')
-      return
-    }
-    await editorRef.current.reloadBlenderScene()
-  }, [])
-
-  const saveScene = useCallback(async () => {
-    const sceneData = editorRef.current?.exportSceneData?.()
-    if (!sceneData) {
-      setNote('Open the Scene 3D workspace before saving scene data.')
-      return
-    }
-    setBusy(true)
-    try {
-      await persistSceneSettings(sceneData)
-    } catch (error) {
-      reportError(error)
-    } finally {
-      setBusy(false)
-    }
-  }, [persistSceneSettings, reportError])
-
   useEffect(() => {
+    if (BUILT_IN_BPY_VIEWPORT) {
+      wasActiveRef.current = active
+      return
+    }
     if (active) {
       wasActiveRef.current = true
-      void loadEditorScene()
-        .then(() => {
-          requestAnimationFrame(() => requestAnimationFrame(() => editorRef.current?._resize?.()))
-        })
-        .catch(reportError)
-      return
+      const request = window.requestAnimationFrame(() => {
+        void loadEditorScene()
+          .then(() => {
+            requestAnimationFrame(() => requestAnimationFrame(() => editorRef.current?._resize?.()))
+          })
+          .catch(reportError)
+      })
+      return () => window.cancelAnimationFrame(request)
     }
     if (!wasActiveRef.current) return
     persistReferenceView()
@@ -612,7 +680,7 @@ export function Scene3DPanel({ active }: { active: boolean }) {
                 className="scene3d-workspace-select"
                 value={activeScene3dId}
                 onChange={(event) => void activate3dScene(event.target.value)}
-                disabled={disabled || scene3ds.length === 0}
+                disabled={sceneMutationDisabled || scene3ds.length === 0}
                 aria-label="Active Scene 3D"
               >
                 {scene3ds.length ? (
@@ -629,34 +697,46 @@ export function Scene3DPanel({ active }: { active: boolean }) {
                 <Scene3DKeywordEditor
                   key={`${activeScene3d.id}:${activeScene3d.updated_at}`}
                   scene={activeScene3d}
-                  disabled={disabled}
+                  disabled={sceneMutationDisabled}
                   onSave={(keywords) => saveSceneKeywords(activeScene3d.id, keywords)}
                 />
               ) : null}
-              <button type="button" onClick={() => void create3dScene()} disabled={disabled}>
+              <button type="button" onClick={() => void create3dScene()} disabled={sceneMutationDisabled}>
                 Add 3D Scene
               </button>
-              <button type="button" onClick={() => inputRef.current?.click()} disabled={disabled}>
-                Import GLB
-              </button>
-              <button type="button" onClick={() => blendInputRef.current?.click()} disabled={disabled}>
+              <button type="button" onClick={() => blendInputRef.current?.click()} disabled={sceneMutationDisabled}>
                 Attach .blend
               </button>
-              <button type="button" onClick={() => void openBlender()} disabled={disabled}>
-                Open Blender
+              <button type="button" onClick={() => void openBlender()} disabled={disabled || externalBlenderOwned}>
+                {externalBlenderOwned ? 'Blender Connected' : 'Open Blender'}
               </button>
-              <button type="button" onClick={() => void reloadGlb()} disabled={!editorReady || !hasLinkedGlb}>
-                Reload GLB
-              </button>
-              <button type="button" onClick={() => void captureToBoard()} disabled={!editorReady || !selectedShotId || disabled}>
-                Capture to board
-              </button>
-              <button type="button" onClick={() => void saveScene()} disabled={!editorReady || disabled}>
-                Save scene
-              </button>
+              {!BUILT_IN_BPY_VIEWPORT ? (
+                <button type="button" onClick={() => void captureToBoard()} disabled={!editorReady || !selectedShotId || disabled}>
+                  Capture to board
+                </button>
+              ) : null}
             </div>
           </div>
-          <div className="scene3d-editor-root" ref={editorRootRef} />
+          {BUILT_IN_BPY_VIEWPORT ? (
+            <BpyViewport
+              key={`${project.project_json_path}:${activeScene3dId}`}
+              active={active}
+              disabled={disabled}
+              canCapture={!!selectedShotId}
+              onCapture={captureBpyToBoard}
+              onMessage={setNote}
+              onError={reportError}
+              onExternalOwnershipChange={handleExternalOwnershipChange}
+            />
+          ) : (
+            hasBlenderPreview ? (
+              <div className="scene3d-editor-root" ref={editorRootRef} />
+            ) : (
+              <div className="scene3d-preview-empty">
+                Open Blender to create this Scene 3D. Storyboarder will show a smooth, read-only preview after Blender saves.
+              </div>
+            )
+          )}
       </section>
     </>
   )

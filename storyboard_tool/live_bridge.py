@@ -9,6 +9,7 @@ from typing import Any
 
 from .canvas_settings import get_canvas_size
 from .models import Project, Shot
+from .project_layout import LAYOUT_2, resolve_project_child
 from .project_manager import get_canvas_color, get_shot_dir
 
 LIVE_BRIDGE_VERSION = 1
@@ -97,10 +98,11 @@ def build_payload(
     if project and selected_shot_id:
         shot = next((item for item in project.shots if item.shot_id == selected_shot_id), None)
 
-    project_root = str(project.root_path) if project else ""
+    legacy_paths_allowed = bool(project is not None and project.layout != LAYOUT_2)
+    project_root = str(project.project_root) if legacy_paths_allowed else ""
     shot_folder = ""
     source_file_path = ""
-    if project and shot is not None:
+    if project and shot is not None and legacy_paths_allowed:
         shot_folder = str(get_shot_dir(project, shot))
         source_file_path = shot.source_file_path or ""
 
@@ -114,11 +116,15 @@ def build_payload(
 
     # Generic focus request: carries kind/key/source_file_path + legacy shot_id
     fwc = focus_work_context or {}
+    active_context = dict(work_context or {})
+    if not legacy_paths_allowed:
+        active_context.pop("source_file_path", None)
+        active_context.pop("source_native_path", None)
     focus_request: dict[str, Any] = {
         "kind": str(fwc.get("kind") or "shot"),
         "key": str(fwc.get("key") or ""),
-        "source_file_path": str(fwc.get("source_file_path") or ""),
-        "source_native_path": str(fwc.get("source_native_path") or ""),
+        "source_file_path": str(fwc.get("source_file_path") or "") if legacy_paths_allowed else "",
+        "source_native_path": str(fwc.get("source_native_path") or "") if legacy_paths_allowed else "",
         "scene_id": str(fwc.get("scene_id") or ""),
         "perspective_id": str(fwc.get("perspective_id") or ""),
         # Legacy field: non-empty only for shot focus so old plugins keep working
@@ -138,7 +144,7 @@ def build_payload(
         "shared_bridge_path": shared_path,
         "plugin_heartbeat_path": str(plugin_heartbeat_file_path()),
         "project_root": project_root,
-        "project_json_path": str(project.json_path) if project else "",
+        "project_json_path": str(project.json_path) if legacy_paths_allowed else "",
         "project_name": project.name if project else "",
         "canvas_background_color": get_canvas_color(project) if project else "#E8E8E8",
         "canvas_width": canvas_width,
@@ -146,9 +152,11 @@ def build_payload(
         "selected_shot_id": selected_shot_id if project else "",
         "shot_folder": shot_folder,
         "source_file_path": source_file_path,
+        "layout": project.layout if project else 0,
+        "plugin_protocol_required": 2 if project and project.layout == LAYOUT_2 else 1,
         "shot_count": len(project.shots) if project else 0,
         # Active work context (shot or scene2d)
-        "work_context": work_context or {},
+        "work_context": active_context,
         # One-shot request asking the plugin to focus/open a tab. The plugin acts
         # only when `token` increases, so passive polls never yank tabs.
         "focus_request": focus_request,
@@ -163,8 +171,8 @@ def write_payload_files(base_dir: Path, project: Project | None, payload: dict[s
     _try_write_bridge_file(global_bridge_file_path(), text)
     _try_write_bridge_file(shared_bridge_file_path(), text)
 
-    if project is not None:
-        _try_write_bridge_file(project.root_path / LIVE_BRIDGE_FILENAME, text)
+    if project is not None and project.layout != LAYOUT_2:
+        _try_write_bridge_file(resolve_project_child(project, LIVE_BRIDGE_FILENAME), text)
 
 
 def _try_write_bridge_file(path: Path, text: str) -> bool:

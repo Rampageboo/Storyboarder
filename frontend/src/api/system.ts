@@ -117,7 +117,7 @@ export function browseProjectJson(): Promise<BrowseResult> {
   return requestJson<BrowseResult>('/api/system/browse-project-json', { method: 'POST' })
 }
 
-/** Opens the native Save As picker for a new single-file Storyboarder document. */
+/** Opens the native picker for a new project destination or Save As target. */
 export function browseProjectSave(): Promise<BrowseResult> {
   return requestJson<BrowseResult>('/api/system/browse-project-save', { method: 'POST' })
 }

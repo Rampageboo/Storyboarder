@@ -16,11 +16,18 @@ import uuid
 from pathlib import Path
 from typing import Any
 
+from .project_layout import resolve_root_child
+
 logger = logging.getLogger(__name__)
 
 
 def _cache_file(project_root: Path) -> Path:
-    return project_root / "workspace" / "cache" / "preview_analysis.json"
+    return resolve_root_child(
+        project_root,
+        "workspace",
+        "cache",
+        "preview_analysis.json",
+    )
 
 
 def load_cache(project_root: Path) -> dict[str, Any]:

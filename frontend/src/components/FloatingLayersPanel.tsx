@@ -9,11 +9,18 @@ import {
   reconcileGenerationRequests,
 } from '../api'
 import { useProject } from '../state/useProject'
-import type { GenerationDestination, GenerationMode, GenerationProvider, GenerationRequest, Shot } from '../types'
+import type {
+  GenerationDestination,
+  GenerationMode,
+  GenerationProvider,
+  GenerationRequest,
+  Shot,
+} from '../types'
 import { shotDisplayLabel } from '../utils/shotDisplay'
 import './FloatingLayersPanel.css'
 
 export type CanvasLayerId = 'background' | 'codex' | 'artwork'
+type DispatchScope = 'current' | 'queued' | 'all'
 
 // Display mirror of the backend generation_service._default_mode_for_status: the
 // precision mode is driven by the shot's status, not chosen separately.
@@ -31,9 +38,12 @@ interface FloatingLayersPanelProps {
   hasCodexLayer: boolean
   hasBackground: boolean
   disabled: boolean
+  showLayers: boolean
+  showQueue: boolean
   onToggleLayer: (layerId: CanvasLayerId) => void
   onRemoveLayer: (layerId: 'background' | 'codex') => void
-  onClose: () => void
+  onCloseLayers: () => void
+  onCloseQueue: () => void
 }
 
 function formatTime(value: string) {
@@ -118,18 +128,30 @@ export function FloatingLayersPanel({
   hasCodexLayer,
   hasBackground,
   disabled,
+  showLayers,
+  showQueue,
   onToggleLayer,
   onRemoveLayer,
-  onClose,
+  onCloseLayers,
+  onCloseQueue,
 }: FloatingLayersPanelProps) {
-  const { project, selectedShotId, flushDirtyShots, replaceProject, reportError } = useProject()
+  const {
+    project,
+    selectedShotId,
+    selectedShotIds,
+    flushDirtyShots,
+    replaceProject,
+    sendSelectedShotsToQueue,
+    reportError,
+  } = useProject()
   const [requests, setRequests] = useState<GenerationRequest[]>([])
   const [loadedProjectPath, setLoadedProjectPath] = useState('')
   const [loading, setLoading] = useState(true)
   const [dispatchingTo, setDispatchingTo] = useState<GenerationDestination | null>(null)
   const [dispatchingAllToCodex, setDispatchingAllToCodex] = useState(false)
   const [provider, setProvider] = useState<GenerationProvider>('codex')
-  const [codexConfirmOpen, setCodexConfirmOpen] = useState(false)
+  const [clearQueueOnResult, setClearQueueOnResult] = useState(true)
+  const [dispatchDialogScope, setDispatchDialogScope] = useState<DispatchScope | null>(null)
   const [acceptingArtifact, setAcceptingArtifact] = useState('')
   const [deletingRequestId, setDeletingRequestId] = useState('')
   const [notice, setNotice] = useState('')
@@ -172,6 +194,15 @@ export function FloatingLayersPanel({
 
   const visibleRequests = loadedProjectPath === projectPath ? requests : []
   const queueLoading = loading || loadedProjectPath !== projectPath
+  const pendingQueueShotCount = useMemo(() => {
+    if (loadedProjectPath !== projectPath) return 0
+    return new Set(
+      requests
+        .filter((request) => request.destination === 'queue' && request.status === 'queued')
+        .map((request) => request.shot_id),
+    ).size
+  }, [loadedProjectPath, projectPath, requests])
+  const allShotCount = project?.shots.length ?? 0
   const requestShotNumbers = useMemo(() => {
     const numbers = new Map<string, number>()
     const usedNumbers = new Set<number>()
@@ -211,18 +242,29 @@ export function FloatingLayersPanel({
   const dispatchGeneration = async (
     destination: GenerationDestination,
     requestProvider: GenerationProvider = 'codex',
+    shouldClearQueueOnResult = true,
   ) => {
     setDispatchingTo(destination)
     setNotice('')
     try {
+      if (destination === 'queue' && selectedShotIds.length > 1) {
+        await sendSelectedShotsToQueue()
+        await loadRequests(true)
+        setNotice(`${selectedShotIds.length} selected shots added to Queue.`)
+        return
+      }
       await flushDirtyShots()
       // Omit mode: the backend derives the precision mode from the shot's status.
-      const response = await createGenerationRequest(shot.shot_id, destination, { provider: requestProvider })
+      const response = await createGenerationRequest(shot.shot_id, destination, {
+        provider: requestProvider,
+        clearQueueOnResult: shouldClearQueueOnResult,
+      })
       replaceWithCurrentSelection(response.project)
       await loadRequests(true)
       if (destination === 'codex' && response.codex_prompt) {
         const copied = await copyTextWithTimeout(response.codex_prompt)
-        setNotice(copied ? 'Codex handoff ready and copied.' : `Codex handoff ready: ${response.request.request_id}`)
+        const backendName = requestProvider === 'stable_diffusion' ? 'Stable Diffusion' : 'Codex'
+        setNotice(copied ? `${backendName} handoff ready and copied.` : `${backendName} handoff ready: ${response.request.request_id}`)
       } else {
         setNotice('Queue updated for this shot.')
       }
@@ -233,26 +275,50 @@ export function FloatingLayersPanel({
     }
   }
 
-  const dispatchAllToCodex = async () => {
+  const dispatchBatchToCodex = async (
+    requestProvider: GenerationProvider,
+    shouldClearQueueOnResult: boolean,
+    scope: 'queued' | 'all',
+  ) => {
     setDispatchingAllToCodex(true)
     setNotice('')
     try {
       await flushDirtyShots()
-      const response = await createCodexBatchRequests()
+      const response = await createCodexBatchRequests(
+        requestProvider,
+        shouldClearQueueOnResult,
+        scope,
+      )
       replaceWithCurrentSelection(response.project)
       setRequests(response.requests)
       setLoadedProjectPath(projectPath)
       const copied = await copyTextWithTimeout(response.codex_prompt)
+      const backendName = requestProvider === 'stable_diffusion' ? 'Stable Diffusion' : 'Codex'
       setNotice(
         copied
-          ? `${response.created_request_ids.length} shot handoffs copied for Codex.`
-          : `${response.created_request_ids.length} shot handoffs are ready for Codex.`,
+          ? `${response.created_request_ids.length} ${backendName} shot handoffs copied.`
+          : `${response.created_request_ids.length} ${backendName} shot handoffs are ready.`,
       )
     } catch (error) {
       reportError(error)
     } finally {
       setDispatchingAllToCodex(false)
     }
+  }
+
+  const openDispatchDialog = (scope: DispatchScope) => {
+    setNotice('')
+    setDispatchDialogScope(scope)
+  }
+
+  const confirmDispatch = async () => {
+    if (!dispatchDialogScope) return
+    if (dispatchDialogScope === 'current') {
+      await dispatchGeneration('codex', provider, clearQueueOnResult)
+    } else {
+      await dispatchBatchToCodex(provider, clearQueueOnResult, dispatchDialogScope)
+    }
+    setDispatchDialogScope(null)
   }
 
   const refreshResults = async () => {
@@ -320,18 +386,20 @@ export function FloatingLayersPanel({
   }
 
   return (
-    <aside className="floating-layers-panel" aria-label="Layers and generation queue">
+    <div className={`floating-panel-stack ${showLayers && showQueue ? 'is-split' : 'is-single'}`}>
+      {showLayers ? (
+      <aside className="floating-island floating-layers-island" aria-label="Layers">
       <header className="floating-panel-header">
         <div>
-          <strong>Layers &amp; Queue</strong>
+          <strong>Layers</strong>
           <span title={shot.shot_id}>{shotDisplayLabel(shot)}</span>
         </div>
-        <button type="button" onClick={onClose} aria-label="Close Layers and Queue" title="Close panel">Close</button>
+        <button type="button" onClick={onCloseLayers} aria-label="Close Layers" title="Close Layers">Close</button>
       </header>
 
       <section className="floating-panel-section" aria-labelledby="floating-layers-heading">
         <div className="floating-section-heading">
-          <span id="floating-layers-heading">Layers</span>
+          <span id="floating-layers-heading">Layer stack</span>
           <small>Top to bottom</small>
         </div>
         <div className="floating-layer-list">
@@ -346,7 +414,7 @@ export function FloatingLayersPanel({
           />
           <LayerRow
             id="codex"
-            name="Codex image"
+            name="Generated image"
             visible={layerVisibility.codex}
             available={hasCodexLayer}
             disabled={disabled}
@@ -364,77 +432,89 @@ export function FloatingLayersPanel({
           />
         </div>
       </section>
+      </aside>
+      ) : null}
 
+      {showQueue ? (
+      <aside className="floating-island floating-queue-island" aria-label="Generation queue">
       <section className="floating-panel-section floating-queue-section" aria-labelledby="floating-queue-heading">
         <div className="floating-section-heading floating-queue-heading">
           <span id="floating-queue-heading">Queue</span>
-          <button type="button" onClick={() => void refreshResults()} disabled={queueLoading}>
-            {queueLoading ? 'Refreshing...' : 'Refresh'}
-          </button>
+          <div className="floating-heading-actions">
+            <button type="button" onClick={() => void refreshResults()} disabled={queueLoading}>
+              {queueLoading ? 'Refreshing...' : 'Refresh'}
+            </button>
+            <button type="button" onClick={onCloseQueue} aria-label="Close Queue" title="Close Queue">Close</button>
+          </div>
         </div>
-        <div className="floating-queue-actions">
+        <div className="floating-action-group">
+          <div className="floating-action-title">
+            <span>Stage shots</span>
+            <small>Prepare snapshots without generating</small>
+          </div>
           <button
             type="button"
             className="queue-primary"
             disabled={disabled || dispatchingTo !== null}
             onClick={() => void dispatchGeneration('queue')}
           >
-            {dispatchingTo === 'queue' ? 'Updating...' : 'Send to Queue'}
-          </button>
-          <button
-            type="button"
-            disabled={disabled || dispatchingTo !== null || codexConfirmOpen}
-            onClick={() => { setNotice(''); setCodexConfirmOpen(true) }}
-          >
-            Send to Codex…
-          </button>
-          <button
-            type="button"
-            className="queue-batch-codex"
-            disabled={disabled || dispatchingTo !== null || dispatchingAllToCodex || codexConfirmOpen}
-            onClick={() => void dispatchAllToCodex()}
-          >
-            {dispatchingAllToCodex ? 'Preparing all...' : 'Send All to Codex'}
+            {dispatchingTo === 'queue'
+              ? 'Updating Queue...'
+              : selectedShotIds.length > 1
+                ? `Add ${selectedShotIds.length} Selected to Queue`
+                : 'Add Current Shot to Queue'}
           </button>
         </div>
-        {codexConfirmOpen ? (
-          <div className="floating-codex-confirm" role="group" aria-label="Send to Codex options">
-            <div className="floating-codex-confirm-title">Send to Codex</div>
-            <label className="floating-codex-field">
-              <span>Backend</span>
-              <select
-                value={provider}
-                disabled={dispatchingTo !== null}
-                onChange={(event) => setProvider(event.target.value as GenerationProvider)}
-              >
-                <option value="codex">Codex</option>
-                <option value="stable_diffusion">Stable Diffusion</option>
-              </select>
-            </label>
-            <p className="floating-codex-mode">
-              Precision follows this shot&rsquo;s status{' '}
-              <strong>{shot.status}</strong>{' → '}
-              <strong>{generationModeForStatus(shot.status)}</strong>
-            </p>
-            <div className="floating-codex-confirm-actions">
-              <button
-                type="button"
-                className="queue-primary"
-                disabled={dispatchingTo !== null}
-                onClick={() => { setCodexConfirmOpen(false); void dispatchGeneration('codex', provider) }}
-              >
-                {dispatchingTo === 'codex' ? 'Preparing...' : 'Send'}
-              </button>
-              <button
-                type="button"
-                disabled={dispatchingTo !== null}
-                onClick={() => setCodexConfirmOpen(false)}
-              >
-                Cancel
-              </button>
-            </div>
+
+        <div className="floating-action-group floating-generate-group">
+          <div className="floating-action-title">
+            <span>Send for generation</span>
+            <small>Configure each send in the popup</small>
           </div>
-        ) : null}
+          <p className="floating-codex-mode">
+            Current shot precision: <strong>{shot.status}</strong>{' → '}
+            <strong>{generationModeForStatus(shot.status)}</strong>
+          </p>
+          <div className="floating-generate-actions">
+            <button
+              type="button"
+              className="queue-primary"
+              disabled={disabled || dispatchingTo !== null || dispatchingAllToCodex}
+              onClick={() => openDispatchDialog('current')}
+            >
+              {dispatchingTo === 'codex' ? 'Preparing...' : 'Send Current...'}
+            </button>
+            <button
+              type="button"
+              disabled={
+                disabled
+                || dispatchingTo !== null
+                || dispatchingAllToCodex
+                || pendingQueueShotCount === 0
+              }
+              onClick={() => openDispatchDialog('queued')}
+            >
+              {dispatchingAllToCodex
+                ? `Preparing ${pendingQueueShotCount}...`
+                : `Send ${pendingQueueShotCount} Queued...`}
+            </button>
+            <button
+              type="button"
+              className="floating-send-all"
+              disabled={
+                disabled
+                || dispatchingTo !== null
+                || dispatchingAllToCodex
+                || allShotCount === 0
+              }
+              onClick={() => openDispatchDialog('all')}
+            >
+              {dispatchingAllToCodex
+                ? `Preparing ${allShotCount}...`
+                : `Send All ${allShotCount}...`}
+            </button>
+          </div>
+        </div>
         {notice ? <div className="floating-queue-notice" role="status">{notice}</div> : null}
         <div className="floating-queue-list">
           {visibleRequests.length > 0 ? visibleRequests.map((request) => (
@@ -494,6 +574,112 @@ export function FloatingLayersPanel({
           )}
         </div>
       </section>
-    </aside>
+      </aside>
+      ) : null}
+      {dispatchDialogScope ? (
+        <div
+          className="floating-generation-dialog-backdrop"
+          role="presentation"
+          onMouseDown={(event) => {
+            if (event.currentTarget === event.target) setDispatchDialogScope(null)
+          }}
+        >
+          <section
+            className="floating-generation-dialog"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="floating-generation-dialog-title"
+          >
+            <header>
+              <div>
+                <span>Generation setup</span>
+                <strong id="floating-generation-dialog-title">
+                  {dispatchDialogScope === 'current'
+                    ? 'Send Current Shot'
+                    : dispatchDialogScope === 'queued'
+                      ? `Send ${pendingQueueShotCount} Queued Shots`
+                      : `Send All ${allShotCount} Shots`}
+                </strong>
+              </div>
+              <button type="button" onClick={() => setDispatchDialogScope(null)} aria-label="Close generation setup">
+                Close
+              </button>
+            </header>
+
+            <div className="floating-generation-dialog-body">
+              <label className="floating-codex-field">
+                <span>Backend</span>
+                <select
+                  value={provider}
+                  onChange={(event) => setProvider(event.target.value as GenerationProvider)}
+                >
+                  <option value="codex">Codex</option>
+                  <option value="stable_diffusion">Stable Diffusion</option>
+                </select>
+              </label>
+
+              <fieldset className="floating-operation-field">
+                <legend>Action</legend>
+                <label className="is-selected">
+                  <input
+                    type="radio"
+                    name="generation-operation"
+                    value="generate"
+                    checked
+                    readOnly
+                  />
+                  <span>
+                    <strong>Generate</strong>
+                    <small>Create a new image from the shot brief.</small>
+                  </span>
+                </label>
+                <label className="is-disabled" title="Modify will be available in a future update">
+                  <input
+                    type="radio"
+                    name="generation-operation"
+                    value="modify"
+                    disabled
+                    readOnly
+                  />
+                  <span>
+                    <strong>Modify · Coming soon</strong>
+                    <small>Placeholder for editing an existing shot image.</small>
+                  </span>
+                </label>
+              </fieldset>
+
+              <label className="floating-clear-queue-field">
+                <input
+                  type="checkbox"
+                  checked={clearQueueOnResult}
+                  onChange={(event) => setClearQueueOnResult(event.target.checked)}
+                />
+                <span>
+                  <strong>Clear from Queue after result returns</strong>
+                  <small>Queue staging stays visible while generation is running.</small>
+                </span>
+              </label>
+
+              <p className="floating-codex-mode">
+                Precision follows shot status: <strong>{shot.status}</strong>{' → '}
+                <strong>{generationModeForStatus(shot.status)}</strong>
+              </p>
+            </div>
+
+            <footer>
+              <button type="button" onClick={() => setDispatchDialogScope(null)}>Cancel</button>
+              <button
+                type="button"
+                className="queue-primary"
+                disabled={dispatchingTo !== null || dispatchingAllToCodex}
+                onClick={() => void confirmDispatch()}
+              >
+                {dispatchingTo !== null || dispatchingAllToCodex ? 'Preparing...' : 'Send'}
+              </button>
+            </footer>
+          </section>
+        </div>
+      ) : null}
+    </div>
   )
 }

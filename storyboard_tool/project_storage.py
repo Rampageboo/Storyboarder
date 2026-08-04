@@ -20,9 +20,8 @@ from pathlib import Path
 from typing import Any
 
 from .models import Project
+from .project_layout import PROJECT_JSON_VERSION, resolve_root_child
 from .shot_store import shots_csv_mtime, shots_json_mtime
-
-PROJECT_JSON_VERSION = 3
 
 DEFAULT_SETTINGS: dict = {
     "autosave": True,
@@ -54,7 +53,7 @@ def ensure_project_dirs(root: Path) -> None:
     """Create the standard project directory structure under *root*."""
     root.mkdir(parents=True, exist_ok=True)
     for dirname in ("shots", "references", "exports", "scripts", "backups", "scene3d", "scenes2d", "scenes3d"):
-        (root / dirname).mkdir(exist_ok=True)
+        resolve_root_child(root, dirname).mkdir(exist_ok=True)
 
 
 def atomic_write_text(path: Path, text: str) -> None:
@@ -123,18 +122,18 @@ def project_disk_mtime(project: Project) -> float:
     """
     manifest_mtime = project.json_path.stat().st_mtime if project.json_path.is_file() else 0.0
     settings_mtime = project.settings_path.stat().st_mtime if project.settings_path.is_file() else 0.0
-    shots_mtime = shots_json_mtime(project.root_path)
+    shots_mtime = shots_json_mtime(project.metadata_root)
     # shots.csv only matters for legacy projects that have not migrated to shots.json yet.
     if shots_mtime <= 0.0:
-        shots_mtime = shots_csv_mtime(project.root_path)
-    scenes2d_dir = project.root_path / "scenes2d"
+        shots_mtime = shots_csv_mtime(project.metadata_root)
+    scenes2d_dir = project.scenes2d_dir
     scenes2d_index = scenes2d_dir / "scenes2d.json"
     scenes2d_mtime = scenes2d_index.stat().st_mtime if scenes2d_index.is_file() else 0.0
     if scenes2d_dir.is_dir():
         for meta_path in scenes2d_dir.glob("*/*_meta.json"):
             if meta_path.is_file():
                 scenes2d_mtime = max(scenes2d_mtime, meta_path.stat().st_mtime)
-    scenes3d_dir = project.root_path / "scenes3d"
+    scenes3d_dir = project.scenes3d_dir
     scenes3d_index = scenes3d_dir / "scenes3d.json"
     scenes3d_mtime = scenes3d_index.stat().st_mtime if scenes3d_index.is_file() else 0.0
     if scenes3d_dir.is_dir():

@@ -7,6 +7,7 @@ from pathlib import Path
 from PIL import Image, ImageDraw, ImageFont
 
 from .models import Project, Shot
+from .project_layout import project_relative_posix, resolve_project_child, resolve_project_path
 from .shot_assets import render_shot_composite_image
 
 
@@ -112,7 +113,11 @@ def export_timing_json(project: Project, output_path: Path) -> Path:
 def export_image_sequence(project: Project, output_dir: Path) -> Path:
     output_dir.mkdir(parents=True, exist_ok=True)
     for number, shot in numbered_shots(project):
-        target = output_dir / f"board_{number:04d}.png"
+        target = resolve_project_child(
+            project,
+            project_relative_posix(project, output_dir),
+            f"board_{number:04d}.png",
+        )
         composite = render_shot_composite_image(project, shot)
         if composite is not None:
             composite.save(target, "PNG")
@@ -164,10 +169,10 @@ def missing_files(project: Project) -> list[dict]:
             "annotation_path": shot.annotation_path,
         }
         for field, rel_path in checks.items():
-            if rel_path and not (project.root_path / rel_path).exists():
+            if rel_path and not resolve_project_path(project, rel_path).exists():
                 rows.append({"shot_id": shot.shot_id, "field": field, "path": rel_path})
         for rel_path in shot.reference_image_paths:
-            if rel_path and not (project.root_path / rel_path).exists():
+            if rel_path and not resolve_project_path(project, rel_path).exists():
                 rows.append({"shot_id": shot.shot_id, "field": "reference_image_paths", "path": rel_path})
     return rows
 
@@ -176,7 +181,7 @@ def _shot_image_path(project: Project, shot: Shot) -> Path | None:
     rel_path = shot.preview_image_path or shot.image_path
     if not rel_path:
         return None
-    return project.root_path / rel_path
+    return resolve_project_path(project, rel_path)
 
 
 def _placeholder_image(target: Path, label: str) -> None:

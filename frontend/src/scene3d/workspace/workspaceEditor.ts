@@ -298,8 +298,7 @@ export class Scene3DEditor {
           <div class="scene3d-blender-panel">
             <div class="scene3d-file-name" data-blend-name>scene3d/scene.blend</div>
             <button type="button" data-action="open-blender" class="scene3d-import-btn">在 Blender 中打开</button>
-            <button type="button" data-action="import-blender" class="scene3d-import-btn">导入 GLB / GLTF</button>
-            <button type="button" data-action="reload-glb" class="scene3d-import-btn">刷新 GLB</button>
+            <div class="scene3d-light-status">在 Blender 保存后自动更新预览</div>
             <label class="scene3d-check">
               <input type="checkbox" data-follow-camera checked />
               跟随相机视角
@@ -387,7 +386,7 @@ export class Scene3DEditor {
             <span data-time-display>0.0s / 0.0s</span>
           </div>
           <div class="scene3d-hint" data-hint>
-            空格播放/暂停 · ←→ 步进 0.1s（Shift 0.5s）· Home 回开头 · F5 刷新 GLB · 播完停在最后一帧
+            拖动旋转 · 滚轮缩放 · 右键平移 · 自由视角/相机视角 · Blender 保存后自动更新
           </div>
         </div>
       </div>
@@ -715,7 +714,7 @@ export class Scene3DEditor {
 
   async reloadBlenderScene(): Promise<void> {
     if (!this.sceneMeta?.file_path) {
-      this.callbacks.onMessage?.('当前项目没有 GLB，请先 Import GLB')
+      this.callbacks.onMessage?.('Blender 尚未生成预览，请在 Blender 中保存场景。')
       return
     }
     const savedTime = this.animationTime
@@ -735,10 +734,10 @@ export class Scene3DEditor {
       if (savedTime > 0) {
         this.setAnimationTime(resolveReloadAnimationTime(savedTime, this.animationDuration))
       }
-      this.callbacks.onMessage?.('已刷新 GLB（保留时间与显示设置）')
+      this.callbacks.onMessage?.('已更新 Blender 预览（保留时间与显示设置）')
     } catch (error: unknown) {
       this.callbacks.onMessage?.(
-        `刷新 GLB 失败：${error instanceof Error ? error.message : String(error)}`,
+        `更新 Blender 预览失败：${error instanceof Error ? error.message : String(error)}`,
       )
     } finally {
       this._suppressViewChange = false

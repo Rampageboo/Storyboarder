@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import secrets
 import time
 import threading
 from typing import Any
@@ -26,11 +27,49 @@ def init_bridge_state(app: FastAPI, bridge_port: int) -> None:
     app.state.plugin_active_work_key = ""
     app.state.plugin_open_work_keys = []
     app.state.plugin_change = {}
+    app.state.plugin_write_intents = {}
     app.state.generation_result_revision = 0
     app.state.generation_result_condition = threading.Condition()
 
+    # External Blender ownership is tracked separately from the Photoshop link.
+    app.state.external_blender_session_id = ""
+    app.state.external_blender_blend_path = ""
+    app.state.external_blender_target_path = ""
+    app.state.external_blender_scene3d_id = ""
+    app.state.external_blender_project_session_id = ""
+    app.state.external_blender_context_revision = -1
+    app.state.external_blender_launched_at = 0.0
+    app.state.external_blender_process = None
+    app.state.external_blender_initial_mtime_ns = 0
+    app.state.external_blender_observed_mtime_ns = 0
+
     # Per-project preview-analysis jobs: norm_root → job dict
     app.state.preview_analysis_jobs = {}
+    app.state.project_session_id = secrets.token_urlsafe(24)
+
+
+def rotate_project_session(app: FastAPI) -> str:
+    """Invalidate all project-scoped bridge state after an atomic swap."""
+    session_id = secrets.token_urlsafe(24)
+    app.state.project_session_id = session_id
+    app.state.live_selected_shot_id = ""
+    app.state.plugin_last_seen = 0.0
+    app.state.plugin_open_shot_ids = []
+    app.state.plugin_selected_shot_id = ""
+    app.state.plugin_last_exported_preview = {}
+    app.state.plugin_project_revision = 0
+    app.state.live_focus_shot_id = ""
+    app.state.live_focus_token = 0
+    app.state.active_work_context = {}
+    app.state.focus_work_context = {}
+    app.state.focus_token = 0
+    app.state.plugin_active_work_key = ""
+    app.state.plugin_open_work_keys = []
+    app.state.plugin_change = {}
+    app.state.plugin_write_intents = {}
+    app.state.generation_result_revision = 0
+    app.state.preview_analysis_jobs = {}
+    return session_id
 
 
 def live_selected_shot_id(app: FastAPI) -> str:

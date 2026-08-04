@@ -16,7 +16,16 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
-from . import app_state, generation_service, logging_config, project_manager, runtime_state
+from . import (
+    app_state,
+    blender_bridge,
+    bpy_viewport,
+    bpy_viewport_api,
+    generation_service,
+    logging_config,
+    project_manager,
+    runtime_state,
+)
 from .backend_service import StoryboardBackendService
 from .errors import AppErrorCode
 from .logging_config import setup_logging
@@ -31,6 +40,8 @@ from .schemas import (
     CommentResolveRequest,
     DrawingSaveRequest,
     GenerationCandidateAcceptRequest,
+    GenerationBatchQueueRequest,
+    GenerationBatchDispatchRequest,
     GenerationRequestCreateRequest,
     ImportImagePathRequest,
     LiveBridgeUpdateRequest,
@@ -42,6 +53,7 @@ from .schemas import (
     PluginHeartbeatRequest,
     PluginNextShotRequest,
     PluginShotEventRequest,
+    PluginWriteIntentRequest,
     ProjectPathRequest,
     RecentForgetRequest,
     RefSegment3dCapture,
@@ -50,6 +62,7 @@ from .schemas import (
     ReorderShotsRequest,
     RestoreRefApplyRequest,
     RestoreShotRequest,
+    SaveProjectAsRequest,
     Scene2DCreateRequest,
     Scene2DPerspectiveCreateRequest,
     Scene2DPerspectiveMoveRequest,
@@ -61,6 +74,9 @@ from .schemas import (
     SetReferencePathsRequest,
     SettingsUpdateRequest,
     ShotUpdateRequest,
+    ShotBatchDeleteRequest,
+    ShotBatchRestoreRequest,
+    ShotBatchUpdateRequest,
 )
 
 # Photoshop plugin treats bridge files older than ~8s as stale (see BRIDGE_STALE_MS in panel.js).
@@ -131,6 +147,39 @@ def _model_captures_payload(captures: list[RefSegment3dCapture]) -> list[dict[st
     return [capture.model_dump() for capture in captures]
 
 
+def _plugin_protocol_headers(request: Request) -> dict[str, Any]:
+    raw_version = request.headers.get("x-storyboarder-protocol", "").strip()
+    raw_revision = request.headers.get("x-storyboarder-context-revision", "").strip()
+    try:
+        version = int(raw_version)
+    except ValueError:
+        version = None
+    try:
+        context_revision = int(raw_revision)
+    except ValueError:
+        context_revision = None
+    capabilities = [
+        item.strip()
+        for item in request.headers.get("x-storyboarder-capabilities", "").split(",")
+        if item.strip()
+    ]
+    return {
+        "version": version,
+        "capabilities": capabilities,
+        "project_session_id": request.headers.get(
+            "x-storyboarder-project-session",
+            "",
+        ).strip(),
+        "context_revision": context_revision,
+        "work_key": request.headers.get("x-storyboarder-work-key", "").strip(),
+        "asset_role": request.headers.get("x-storyboarder-asset-role", "").strip(),
+        "write_intent": request.headers.get(
+            "x-storyboarder-write-intent",
+            "",
+        ).strip(),
+    }
+
+
 async def _read_upload(file: UploadFile, fallback_name: str) -> tuple[str, bytes]:
     chunks: list[bytes] = []
     total = 0
@@ -163,7 +212,12 @@ def create_app(base_dir: Path, bridge_port: int = 8000) -> FastAPI:
 
             while not stop_event.wait(_BRIDGE_REFRESH_SECONDS):
                 try:
-                    app_state._touch_live_bridge(app)
+                    with app_state.project_background_writer(
+                        app,
+                        "live_bridge",
+                    ) as allowed:
+                        if allowed:
+                            app_state._touch_live_bridge(app)
                 except Exception:
                     # Keep the loop alive; bridge file writes are best-effort, but a
                     # persistent failure should be visible in the log, not silent.
@@ -178,7 +232,7 @@ def create_app(base_dir: Path, bridge_port: int = 8000) -> FastAPI:
                 project = app.state.project
                 if project is None:
                     continue
-                project_key = str(project.root_path.resolve())
+                project_key = str(project.project_root.resolve())
                 revision = generation_service.result_inbox_revision(project)
                 previous = observed_revisions.get(project_key)
                 if previous is not None and revision <= previous:
@@ -187,12 +241,18 @@ def create_app(base_dir: Path, bridge_port: int = 8000) -> FastAPI:
                     observed_revisions[project_key] = revision
                     continue
                 try:
-                    with project_manager.PROJECT_LOCK:
-                        # Do not let a result from a project just closed or replaced
-                        # get applied to whichever project became active meanwhile.
-                        if app.state.project is not project:
+                    with app_state.project_background_writer(
+                        app,
+                        "generation_results",
+                    ) as allowed:
+                        if not allowed:
                             continue
-                        result = _svc().method_pull_generation_results()
+                        with project_manager.PROJECT_LOCK:
+                            # Do not let a result from a project just closed or replaced
+                            # get applied to whichever project became active meanwhile.
+                            if app.state.project is not project:
+                                continue
+                            result = _svc().method_pull_generation_results()
                     if result["updated_shot_ids"] or result["accepted_request_ids"]:
                         runtime_state.mark_generation_results_changed(app)
                         app_state._touch_live_bridge(app)
@@ -223,8 +283,10 @@ def create_app(base_dir: Path, bridge_port: int = 8000) -> FastAPI:
             yield
         finally:
             app_state.stop_background_loops(app)
+            bpy_viewport.stop_worker(app)
             _shutdown_reference_cleanup(app)
-            project_manager.cleanup_document_working_root(app.state.project)
+            if not blender_bridge.owns_scene(app):
+                project_manager.cleanup_document_working_root(app.state.project)
 
     app = FastAPI(title="Storyboard Tool", lifespan=lifespan)
     app.state.base_dir = base_dir
@@ -234,6 +296,7 @@ def create_app(base_dir: Path, bridge_port: int = 8000) -> FastAPI:
     app.state.main_window = None
     app.state.api_token = _read_launch_token()
     runtime_state.init_bridge_state(app, bridge_port)
+    bpy_viewport_api.register_bpy_viewport_routes(app)
 
     def _svc() -> StoryboardBackendService:
         return StoryboardBackendService(app)
@@ -440,40 +503,101 @@ def create_app(base_dir: Path, bridge_port: int = 8000) -> FastAPI:
         return _svc().method_plugin_heartbeat(payload.model_dump() if payload is not None else {})
 
     @app.get("/api/plugin/context")
-    def plugin_context() -> dict[str, Any]:
-        return _svc().method_plugin_context()
+    def plugin_context(request: Request) -> dict[str, Any]:
+        return _svc().method_plugin_context(_plugin_protocol_headers(request))
+
+    @app.post("/api/plugin/write-intents")
+    def plugin_write_intent(
+        request: PluginWriteIntentRequest,
+        http_request: Request,
+    ) -> dict[str, Any]:
+        return _svc().method_plugin_write_intent(
+            request.work_key,
+            request.asset_role,
+            _plugin_protocol_headers(http_request),
+        )
 
     @app.post("/api/plugin/heartbeat")
     def plugin_api_heartbeat(payload: PluginHeartbeatRequest | None = None) -> dict[str, str]:
         return _svc().method_plugin_heartbeat(payload.model_dump() if payload is not None else {})
 
     @app.post("/api/plugin/shots/{shot_id}/export-preview")
-    def plugin_export_preview(shot_id: str, request: PluginShotEventRequest | None = None) -> dict[str, Any]:
-        return _svc().method_plugin_export_preview(shot_id, request.model_dump() if request is not None else {})
+    def plugin_export_preview(
+        shot_id: str,
+        http_request: Request,
+        request: PluginShotEventRequest | None = None,
+    ) -> dict[str, Any]:
+        return _svc().method_plugin_export_preview(
+            shot_id,
+            request.model_dump() if request is not None else {},
+            _plugin_protocol_headers(http_request),
+        )
 
     @app.post("/api/plugin/shots/{shot_id}/psd-saved")
-    def plugin_psd_saved(shot_id: str, request: PluginShotEventRequest | None = None) -> dict[str, Any]:
-        return _svc().method_plugin_psd_saved(shot_id, request.model_dump() if request is not None else {})
+    def plugin_psd_saved(
+        shot_id: str,
+        http_request: Request,
+        request: PluginShotEventRequest | None = None,
+    ) -> dict[str, Any]:
+        return _svc().method_plugin_psd_saved(
+            shot_id,
+            request.model_dump() if request is not None else {},
+            _plugin_protocol_headers(http_request),
+        )
 
     @app.post("/api/plugin/shots/{shot_id}/focus")
-    def plugin_focus_shot(shot_id: str) -> dict[str, Any]:
-        return _svc().method_plugin_focus_shot(shot_id)
+    def plugin_focus_shot(shot_id: str, request: Request) -> dict[str, Any]:
+        return _svc().method_plugin_focus_shot(
+            shot_id,
+            _plugin_protocol_headers(request),
+        )
 
     @app.post("/api/plugin/shots/next")
-    def plugin_next_shot(request: PluginNextShotRequest) -> dict[str, Any]:
-        return _svc().method_plugin_next_shot(request.current_shot_id, request.auto_add)
+    def plugin_next_shot(
+        request: PluginNextShotRequest,
+        http_request: Request,
+    ) -> dict[str, Any]:
+        return _svc().method_plugin_next_shot(
+            request.current_shot_id,
+            request.auto_add,
+            _plugin_protocol_headers(http_request),
+        )
 
     @app.post("/api/plugin/scenes2d/{scene_id}/perspectives/{perspective_id}/export-preview")
-    def plugin_scene2d_export_preview(scene_id: str, perspective_id: str) -> dict[str, Any]:
-        return _svc().method_plugin_scene2d_export_preview(scene_id, perspective_id)
+    def plugin_scene2d_export_preview(
+        scene_id: str,
+        perspective_id: str,
+        request: Request,
+    ) -> dict[str, Any]:
+        return _svc().method_plugin_scene2d_export_preview(
+            scene_id,
+            perspective_id,
+            _plugin_protocol_headers(request),
+        )
 
     @app.post("/api/plugin/scenes2d/{scene_id}/perspectives/{perspective_id}/psd-saved")
-    def plugin_scene2d_psd_saved(scene_id: str, perspective_id: str) -> dict[str, Any]:
-        return _svc().method_plugin_scene2d_psd_saved(scene_id, perspective_id)
+    def plugin_scene2d_psd_saved(
+        scene_id: str,
+        perspective_id: str,
+        request: Request,
+    ) -> dict[str, Any]:
+        return _svc().method_plugin_scene2d_psd_saved(
+            scene_id,
+            perspective_id,
+            _plugin_protocol_headers(request),
+        )
 
     @app.post("/api/plugin/scenes2d/{scene_id}/perspectives/{perspective_id}/next-perspective")
-    def plugin_scene2d_next_perspective(scene_id: str, perspective_id: str) -> dict[str, Any]:
-        return _svc().method_plugin_scene2d_next_perspective(scene_id, perspective_id)
+    def plugin_scene2d_next_perspective(
+        scene_id: str,
+        perspective_id: str,
+        request: Request,
+    ) -> dict[str, Any]:
+        return _svc().method_plugin_scene2d_next_perspective(
+            scene_id,
+            perspective_id,
+            _plugin_protocol_headers(request),
+        )
 
     @app.get("/api/project/missing-files")
     def missing_project_files() -> dict[str, Any]:
@@ -490,6 +614,14 @@ def create_app(base_dir: Path, bridge_port: int = 8000) -> FastAPI:
     @app.post("/api/project/save")
     def save_project() -> dict[str, Any]:
         return _svc().method_save_project()
+
+    @app.post("/api/project/save-as")
+    def save_project_as(request: SaveProjectAsRequest) -> dict[str, Any]:
+        return _svc().method_save_project_as(request.path)
+
+    @app.post("/api/project/convert")
+    def convert_project(request: SaveProjectAsRequest) -> dict[str, Any]:
+        return _svc().method_convert_project(request.path)
 
     @app.get("/api/system/blender-candidates")
     def blender_candidates() -> dict[str, Any]:
@@ -733,6 +865,26 @@ def create_app(base_dir: Path, bridge_port: int = 8000) -> FastAPI:
     def add_shot(request: AddShotRequest = AddShotRequest()) -> dict[str, Any]:
         return _svc().method_add_shot(request.after_shot_id)
 
+    @app.patch("/api/shots/batch")
+    def update_shots_batch(request: ShotBatchUpdateRequest) -> dict[str, Any]:
+        return _svc().method_update_shots_batch(
+            [item.model_dump() for item in request.updates]
+        )
+
+    @app.delete("/api/shots/batch")
+    def delete_shots_batch(request: ShotBatchDeleteRequest) -> dict[str, Any]:
+        return _svc().method_delete_shots_batch(request.shot_ids)
+
+    @app.post("/api/shots/batch/restore")
+    def restore_shots_batch(request: ShotBatchRestoreRequest) -> dict[str, Any]:
+        return _svc().method_restore_shots_batch(
+            [item.model_dump() for item in request.items]
+        )
+
+    @app.post("/api/shots/batch/generation-requests")
+    def create_queue_batch_requests(request: GenerationBatchQueueRequest) -> dict[str, Any]:
+        return _svc().method_create_queue_batch_requests(request.shot_ids)
+
     @app.post("/api/shots/{shot_id}/duplicate")
     def duplicate_shot(shot_id: str) -> dict[str, Any]:
         return _svc().method_duplicate_shot(shot_id)
@@ -744,12 +896,22 @@ def create_app(base_dir: Path, bridge_port: int = 8000) -> FastAPI:
     @app.post("/api/shots/{shot_id}/generation-requests")
     def create_generation_request(shot_id: str, request: GenerationRequestCreateRequest) -> dict[str, Any]:
         return _svc().method_create_generation_request(
-            shot_id, request.destination, request.provider, request.mode
+            shot_id,
+            request.destination,
+            request.provider,
+            request.mode,
+            request.clear_queue_on_result,
         )
 
     @app.post("/api/generation/requests/codex-batch")
-    def create_codex_batch_requests() -> dict[str, Any]:
-        return _svc().method_create_codex_batch_requests()
+    def create_codex_batch_requests(
+        request: GenerationBatchDispatchRequest = GenerationBatchDispatchRequest(),
+    ) -> dict[str, Any]:
+        return _svc().method_create_codex_batch_requests(
+            request.provider,
+            request.clear_queue_on_result,
+            request.scope,
+        )
 
     @app.get("/api/generation/requests")
     def list_generation_requests(

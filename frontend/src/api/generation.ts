@@ -13,10 +13,17 @@ import type {
   GenerationRequestResponse,
 } from '../types'
 
+export interface QueueBatchRequestResponse {
+  requests: GenerationRequest[]
+  project: import('../types').ProjectPayload
+  created_request_ids: string[]
+}
+
 export interface CreateGenerationRequestOptions {
   provider?: GenerationProvider
   // Empty string lets the backend derive the mode from the shot's status.
   mode?: GenerationMode | ''
+  clearQueueOnResult?: boolean
 }
 
 export function createGenerationRequest(
@@ -28,19 +35,32 @@ export function createGenerationRequest(
     destination: GenerationDestination
     provider?: GenerationProvider
     mode?: GenerationMode
+    clear_queue_on_result?: boolean
   } = { destination }
   if (options.provider) body.provider = options.provider
   if (options.mode) body.mode = options.mode
+  if (options.clearQueueOnResult !== undefined) body.clear_queue_on_result = options.clearQueueOnResult
   return requestJson<GenerationRequestResponse>(
     `/api/shots/${encodeURIComponent(shotId)}/generation-requests`,
     { method: 'POST', body },
   )
 }
 
-export function createCodexBatchRequests(): Promise<GenerationBatchRequestResponse> {
+export function createCodexBatchRequests(
+  provider: GenerationProvider = 'codex',
+  clearQueueOnResult = true,
+  scope: 'auto' | 'queued' | 'all' = 'auto',
+): Promise<GenerationBatchRequestResponse> {
   return requestJson<GenerationBatchRequestResponse>(
     '/api/generation/requests/codex-batch',
-    { method: 'POST' },
+    { method: 'POST', body: { provider, clear_queue_on_result: clearQueueOnResult, scope } },
+  )
+}
+
+export function createQueueBatchRequests(shotIds: string[]): Promise<QueueBatchRequestResponse> {
+  return requestJson<QueueBatchRequestResponse>(
+    '/api/shots/batch/generation-requests',
+    { method: 'POST', body: { shot_ids: shotIds } },
   )
 }
 

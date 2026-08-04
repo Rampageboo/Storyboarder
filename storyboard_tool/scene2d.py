@@ -15,9 +15,19 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from . import project_manager
+from . import project_document, project_manager
+from .file_transactions import (
+    atomic_copy_file,
+    quarantined_deletions,
+    rollback_paths,
+)
 from .image_utils import create_blank_psd
 from .models import Project
+from .project_layout import (
+    LAYOUT_2,
+    scene2d_asset_relative,
+    scene2d_metadata_path,
+)
 
 SCENE2D_ROOT = "scenes2d"
 SCENE2D_INDEX = "scenes2d.json"
@@ -56,19 +66,19 @@ def new_uuid() -> str:
 
 
 def _root_dir(project: Project) -> Path:
-    return project.root_path / SCENE2D_ROOT
+    return scene2d_metadata_path(project)
 
 
 def _index_path(project: Project) -> Path:
-    return _root_dir(project) / SCENE2D_INDEX
+    return scene2d_metadata_path(project, SCENE2D_INDEX)
 
 
 def _journal_path(project: Project) -> Path:
-    return _root_dir(project) / UUID_MIGRATION_JOURNAL
+    return scene2d_metadata_path(project, UUID_MIGRATION_JOURNAL)
 
 
 def _backup_root(project: Project) -> Path:
-    return _root_dir(project) / UUID_MIGRATION_BACKUP_ROOT
+    return scene2d_metadata_path(project, UUID_MIGRATION_BACKUP_ROOT)
 
 
 def _validate_scene_id(scene_id: str) -> str:
@@ -101,35 +111,44 @@ def _validate_perspective_id_for_load(perspective_id: str) -> str:
 
 def _scene_dir(project: Project, scene_id: str) -> Path:
     _validate_scene_id(scene_id)
-    return _root_dir(project) / scene_id
+    return scene2d_metadata_path(project, scene_id)
 
 
 def _meta_path(project: Project, scene_id: str) -> Path:
-    return _scene_dir(project, scene_id) / f"{scene_id}_meta.json"
+    return scene2d_metadata_path(project, scene_id, f"{scene_id}_meta.json")
 
 
-def _source_rel(scene_id: str, perspective_id: str) -> str:
+def _source_rel(scene_id: str, perspective_id: str, project: Project | None = None) -> str:
+    if project is not None:
+        return scene2d_asset_relative(project, scene_id, perspective_id, "source_psd")
     return f"{SCENE2D_ROOT}/{scene_id}/perspectives/{perspective_id}/source.psd"
 
 
-def _preview_rel(scene_id: str, perspective_id: str) -> str:
+def _preview_rel(scene_id: str, perspective_id: str, project: Project | None = None) -> str:
+    if project is not None:
+        return scene2d_asset_relative(project, scene_id, perspective_id, "preview")
     return f"{SCENE2D_ROOT}/{scene_id}/perspectives/{perspective_id}/preview.png"
 
 
-def _image_source_rel(scene_id: str, perspective_id: str, suffix: str) -> str:
+def _image_source_rel(
+    scene_id: str,
+    perspective_id: str,
+    suffix: str,
+    project: Project | None = None,
+) -> str:
     suffix = suffix if suffix in IMAGE_EXTENSIONS else ".png"
+    if project is not None:
+        return scene2d_asset_relative(
+            project, scene_id, perspective_id, "source_image", suffix
+        )
     return f"{SCENE2D_ROOT}/{scene_id}/perspectives/{perspective_id}/source{suffix}"
 
 
 def _safe_rel_path(project: Project, relative_path: str) -> Path:
-    rel = project_manager._normalize_rel_path(str(relative_path or "").strip())
+    rel = str(relative_path or "").strip()
     if not rel:
         raise ValueError("Scene 2D path is empty.")
-    resolved = (project.root_path / rel).resolve()
-    root = project.root_path.resolve()
-    if resolved != root and root not in resolved.parents:
-        raise ValueError("Scene 2D path escapes the project.")
-    return resolved
+    return project_manager.resolve_project_path(project, rel)
 
 
 def _write_binary_atomic(path: Path, data: bytes) -> None:
@@ -153,17 +172,41 @@ def _normalize_perspective(
     scene_id: str,
     fallback_id: str = "persp_001",
     legacy: bool = False,
+    project: Project | None = None,
 ) -> dict[str, Any]:
     perspective_id = str(raw.get("id") or fallback_id).strip()
     perspective_id = _validate_perspective_id_for_load(perspective_id) if legacy else _validate_perspective_id(perspective_id)
     title = str(raw.get("title") or "").strip() or ("Main perspective" if perspective_id.startswith("persp_") else "Untitled Perspective")
-    source = project_manager._normalize_rel_path(str(raw.get("source_file_path") or _source_rel(scene_id, perspective_id)).strip())
+    source_value = raw.get("source_file_path") or _source_rel(
+        scene_id, perspective_id, project
+    )
+    if project is not None and project.layout == LAYOUT_2:
+        if not isinstance(source_value, str):
+            raise ValueError("Layout 2 Scene 2D source path must be a string.")
+        source_path = _safe_rel_path(project, source_value)
+        if source_path.suffix.lower() not in PSD_EXTENSIONS | IMAGE_EXTENSIONS:
+            raise ValueError(
+                "Layout 2 Scene 2D source path has an invalid file type."
+            )
+    source = project_manager._normalize_rel_path(str(source_value).strip())
     perspective_type = str(raw.get("type") or "").strip().lower()
     if perspective_type not in {"psd", "image"}:
         perspective_type = "psd" if Path(source).suffix.lower() == ".psd" else "image"
-    preview = project_manager._normalize_rel_path(str(raw.get("preview_image_path") or "").strip())
+    preview_value = raw.get("preview_image_path") or ""
+    if project is not None and project.layout == LAYOUT_2 and preview_value:
+        if not isinstance(preview_value, str):
+            raise ValueError("Layout 2 Scene 2D preview path must be a string.")
+        preview_path = _safe_rel_path(project, preview_value)
+        allowed_preview_suffixes = (
+            IMAGE_EXTENSIONS if perspective_type == "image" else {".png"}
+        )
+        if preview_path.suffix.lower() not in allowed_preview_suffixes:
+            raise ValueError(
+                "Layout 2 Scene 2D preview path has an invalid file type."
+            )
+    preview = project_manager._normalize_rel_path(str(preview_value).strip())
     if not preview:
-        preview = source if perspective_type == "image" else _preview_rel(scene_id, perspective_id)
+        preview = source if perspective_type == "image" else _preview_rel(scene_id, perspective_id, project)
     created_at = str(raw.get("created_at") or "").strip() or _now_iso()
     updated_at = str(raw.get("updated_at") or created_at).strip() or created_at
     view = raw.get("linked_scene3d_view")
@@ -202,7 +245,11 @@ def _with_legacy_aliases(scene: dict[str, Any]) -> dict[str, Any]:
     return scene
 
 
-def _normalize_scene(raw: dict[str, Any], *, legacy: bool = False) -> dict[str, Any]:
+def _normalize_scene(
+    raw: dict[str, Any],
+    *, legacy: bool = False,
+    project: Project | None = None,
+) -> dict[str, Any]:
     scene_id = _validate_scene_id_for_load(raw.get("id", "")) if legacy else _validate_scene_id(raw.get("id", ""))
     title = str(raw.get("title") or "").strip() or ("Untitled Scene" if is_uuid(scene_id) else scene_id)
     created_at = str(raw.get("created_at") or "").strip() or _now_iso()
@@ -210,7 +257,13 @@ def _normalize_scene(raw: dict[str, Any], *, legacy: bool = False) -> dict[str, 
     raw_perspectives = raw.get("perspectives")
     if isinstance(raw_perspectives, list):
         perspectives = [
-            _normalize_perspective(item, scene_id=scene_id, fallback_id=f"persp_{index + 1:03d}", legacy=legacy)
+            _normalize_perspective(
+                item,
+                scene_id=scene_id,
+                fallback_id=f"persp_{index + 1:03d}",
+                legacy=legacy,
+                project=project,
+            )
             for index, item in enumerate(raw_perspectives)
             if isinstance(item, dict)
         ]
@@ -222,8 +275,8 @@ def _normalize_scene(raw: dict[str, Any], *, legacy: bool = False) -> dict[str, 
                     "id": fallback_perspective_id,
                     "title": "Main perspective",
                     "type": "psd",
-                    "source_file_path": raw.get("source_file_path") or _source_rel(scene_id, fallback_perspective_id),
-                    "preview_image_path": raw.get("preview_image_path") or _preview_rel(scene_id, fallback_perspective_id),
+                    "source_file_path": raw.get("source_file_path") or _source_rel(scene_id, fallback_perspective_id, project),
+                    "preview_image_path": raw.get("preview_image_path") or _preview_rel(scene_id, fallback_perspective_id, project),
                     "linked_scene3d_id": raw.get("linked_scene3d_id") or "",
                     "linked_scene3d_view": None,
                     "created_at": created_at,
@@ -231,6 +284,7 @@ def _normalize_scene(raw: dict[str, Any], *, legacy: bool = False) -> dict[str, 
                 },
                 scene_id=scene_id,
                 legacy=legacy,
+                project=project,
             )
         ]
     seen: set[str] = set()
@@ -379,7 +433,7 @@ def _remove_backup_area(project: Project) -> None:
 
 
 def _project_rel(project: Project, path: Path) -> str:
-    return path.resolve().relative_to(project.root_path.resolve()).as_posix()
+    return project_manager.project_relative_posix(project, path)
 
 
 def _backup_rel_for_original(original_rel: str) -> str:
@@ -439,31 +493,56 @@ def _restore_original_files(project: Project, original_files: list[dict[str, Any
 
 
 def _safe_project_rel(project: Project, rel_path: str) -> Path:
-    rel = project_manager._normalize_rel_path(rel_path)
+    rel = str(rel_path or "").strip()
     if not rel:
         raise ValueError("Scene 2D migration path is empty.")
-    path = (project.root_path / rel).resolve()
-    root = project.root_path.resolve()
-    if path != root and root not in path.parents:
-        raise ValueError("Scene 2D migration path escapes the project.")
-    return path
+    return project_manager.resolve_project_path(project, rel)
 
 
 def _move_root(project: Project) -> Path:
-    return _root_dir(project) / PERSPECTIVE_MOVE_ROOT
+    return project_manager.resolve_project_child(
+        project,
+        SCENE2D_ROOT,
+        PERSPECTIVE_MOVE_ROOT,
+    )
 
 
-def _move_journal_path(tx_dir: Path) -> Path:
-    return tx_dir / PERSPECTIVE_MOVE_JOURNAL
+def _move_journal_path(tx_dir: Path, *, project: Project | None = None) -> Path:
+    if project is None:
+        return project_manager.resolve_root_child(tx_dir, PERSPECTIVE_MOVE_JOURNAL)
+    return project_manager.resolve_project_child(
+        project,
+        SCENE2D_ROOT,
+        PERSPECTIVE_MOVE_ROOT,
+        tx_dir.name,
+        PERSPECTIVE_MOVE_JOURNAL,
+    )
 
 
-def _write_move_journal(tx_dir: Path, payload: dict[str, Any]) -> None:
+def _write_move_journal(
+    tx_dir: Path,
+    payload: dict[str, Any],
+    *,
+    project: Project | None = None,
+) -> None:
     tx_dir.mkdir(parents=True, exist_ok=True)
-    project_manager._atomic_write_json(_move_journal_path(tx_dir), {"version": 2, **payload, "updated_at": _now_iso()})
+    project_manager._atomic_write_json(
+        _move_journal_path(tx_dir, project=project),
+        {"version": 2, **payload, "updated_at": _now_iso()},
+    )
 
 
 def _move_backup_root_rel(project: Project, tx_dir: Path) -> str:
-    return _project_rel(project, tx_dir / "backup")
+    return _project_rel(
+        project,
+        project_manager.resolve_project_child(
+            project,
+            SCENE2D_ROOT,
+            PERSPECTIVE_MOVE_ROOT,
+            tx_dir.name,
+            "backup",
+        ),
+    )
 
 
 def _move_backup_rel(project: Project, tx_dir: Path, name: str) -> str:
@@ -579,6 +658,7 @@ def _rollback_perspective_move(project: Project, tx_dir: Path, journal: dict[str
                         "verified": result.verified,
                     },
                 },
+                project=project,
             )
         except Exception:
             LOGGER.exception("Failed to write rollback_failed journal.")
@@ -593,7 +673,7 @@ def _raw_scene_records(project: Project) -> list[dict[str, Any]]:
     raw_scenes = data.get("scenes") if isinstance(data, dict) else data
     if not isinstance(raw_scenes, list):
         raise ValueError("Scene 2D perspective move verification failed: invalid scenes2d.json.")
-    return [_normalize_scene(item) for item in raw_scenes if isinstance(item, dict)]
+    return [_normalize_scene(item, project=project) for item in raw_scenes if isinstance(item, dict)]
 
 
 def _scene_by_id(scenes: list[dict[str, Any]], scene_id: str) -> dict[str, Any]:
@@ -630,7 +710,7 @@ def _assert_scene_meta_agrees(project: Project, scene: dict[str, Any], perspecti
     meta_path = _meta_path(project, scene["id"])
     if not meta_path.is_file():
         raise ValueError("Scene 2D perspective move verification failed: scene meta JSON is missing.")
-    meta = _normalize_scene(_read_json(meta_path))
+    meta = _normalize_scene(_read_json(meta_path), project=project)
     if meta["id"] != scene["id"]:
         raise ValueError("Scene 2D perspective move verification failed: scene meta id mismatch.")
     if meta.get("primary_perspective_id") != scene.get("primary_perspective_id"):
@@ -796,8 +876,12 @@ def _recover_perspective_moves(project: Project) -> bool:
         if state == "metadata_committing":
             try:
                 _verify_perspective_move_commit(project, journal)
-                _write_move_journal(tx_dir, {**journal, "state": "metadata_committed"})
-                _write_move_journal(tx_dir, {**journal, "state": "verified"})
+                _write_move_journal(
+                    tx_dir,
+                    {**journal, "state": "metadata_committed"},
+                    project=project,
+                )
+                _write_move_journal(tx_dir, {**journal, "state": "verified"}, project=project)
                 _cleanup_move_tx(tx_dir)
             except Exception:
                 _rollback_perspective_move(project, tx_dir, journal)
@@ -806,7 +890,7 @@ def _recover_perspective_moves(project: Project) -> bool:
         if state == "metadata_committed":
             try:
                 _verify_perspective_move_commit(project, journal)
-                _write_move_journal(tx_dir, {**journal, "state": "verified"})
+                _write_move_journal(tx_dir, {**journal, "state": "verified"}, project=project)
                 _cleanup_move_tx(tx_dir)
                 continue
             except Exception:
@@ -946,7 +1030,7 @@ def _verify_uuid_payload(project: Project, expected_scene_ids: set[str] | None =
     for item in raw_scenes:
         if not isinstance(item, dict):
             raise ValueError("Scene 2D UUID migration verification failed: invalid scene record.")
-        scene = _normalize_scene(item)
+        scene = _normalize_scene(item, project=project)
         for perspective in scene.get("perspectives") or []:
             if not _safe_rel_path(project, perspective["source_file_path"]).is_file():
                 raise ValueError("Scene 2D UUID migration verification failed: missing source file.")
@@ -1084,12 +1168,12 @@ def _copy_if_present(project: Project, source_rel: str, dest_rel: str, created_s
 
 def _legacy_scene_roots(project: Project, scenes: list[dict[str, Any]]) -> list[Path]:
     roots: list[Path] = []
-    project_root = project.root_path.resolve()
+    project_root = project.project_root.resolve()
     for scene in scenes:
         old_id = str(scene.get("id") or "")
         if is_uuid(old_id):
             continue
-        candidate = (_root_dir(project) / old_id).resolve()
+        candidate = project_manager.resolve_project_child(project, SCENE2D_ROOT, old_id)
         if candidate.is_dir() and candidate != project_root and project_root in candidate.parents:
             roots.append(candidate)
     return roots
@@ -1142,7 +1226,9 @@ def _migrate_scene2d_storage(project: Project, scenes: list[dict[str, Any]]) -> 
     created_scene_dirs: set[Path] = set()
     created_rel_paths: set[str] = set()
     legacy_roots = _legacy_scene_roots(project, scenes)
-    legacy_root_rels = [path.relative_to(project.root_path).as_posix() for path in legacy_roots]
+    legacy_root_rels = [
+        project_manager.project_relative_posix(project, path) for path in legacy_roots
+    ]
     original_index = _read_bytes_if_exists(_index_path(project))
     original_settings = _read_bytes_if_exists(project.settings_path)
     original_settings_memory = dict(project.settings)
@@ -1152,7 +1238,12 @@ def _migrate_scene2d_storage(project: Project, scenes: list[dict[str, Any]]) -> 
         if is_uuid(scene["id"]):
             path = _meta_path(project, scene["id"])
         else:
-            path = _root_dir(project) / scene["id"] / f"{scene['id']}_meta.json"
+            path = project_manager.resolve_project_child(
+                project,
+                SCENE2D_ROOT,
+                scene["id"],
+                f"{scene['id']}_meta.json",
+            )
         original_meta[path] = _read_bytes_if_exists(path)
         original_paths.append(path)
     original_files = _create_migration_backups(project, original_paths)
@@ -1182,11 +1273,11 @@ def _migrate_scene2d_storage(project: Project, scenes: list[dict[str, Any]]) -> 
                         raise ValueError(f"Scene 2D migration path collision: {destination}")
                     planned_destinations.add(destination)
                 _copy_if_present(project, perspective["source_file_path"], source_rel, created_scene_dirs, required=True)
-                if (project.root_path / new_scene_dir_rel).is_dir():
+                if project_manager.resolve_project_path(project, new_scene_dir_rel).is_dir():
                     created_rel_paths.add(new_scene_dir_rel)
                 if preview_rel != source_rel:
                     _copy_if_present(project, perspective.get("preview_image_path", ""), preview_rel, created_scene_dirs, required=False)
-                    if (project.root_path / new_scene_dir_rel).is_dir():
+                    if project_manager.resolve_project_path(project, new_scene_dir_rel).is_dir():
                         created_rel_paths.add(new_scene_dir_rel)
                 perspective_preview_map[(old_scene_id, old_perspective_id)] = preview_rel
                 new_perspective = dict(perspective)
@@ -1198,15 +1289,19 @@ def _migrate_scene2d_storage(project: Project, scenes: list[dict[str, Any]]) -> 
                 new_primary_id = new_perspectives[0]["id"]
             new_scene = dict(scene)
             new_scene.update({"id": new_scene_id, "primary_perspective_id": new_primary_id or "", "perspectives": new_perspectives})
-            new_scenes.append(_normalize_scene(new_scene))
+            new_scenes.append(_normalize_scene(new_scene, project=project))
 
-        created_rel_paths.update(path.relative_to(project.root_path).as_posix() for path in created_scene_dirs if path.exists())
+        created_rel_paths.update(
+            project_manager.project_relative_posix(project, path)
+            for path in created_scene_dirs
+            if path.exists()
+        )
         _write_journal(project, {"state": "files_staged", **journal_base, "created_paths": sorted(created_rel_paths)})
 
         new_settings, settings_changed = _migrated_settings_payload(project.settings, scene_map, perspective_map, perspective_preview_map)
         root = _root_dir(project)
         root.mkdir(parents=True, exist_ok=True)
-        normalized = _sort_scenes([_normalize_scene(scene) for scene in new_scenes])
+        normalized = _sort_scenes([_normalize_scene(scene, project=project) for scene in new_scenes])
 
         # Compute settings verification fields so crash recovery can validate them.
         if settings_changed:
@@ -1278,7 +1373,7 @@ def _load_from_meta(project: Project) -> list[dict[str, Any]]:
         try:
             data = _read_json(meta_path)
             if isinstance(data, dict):
-                scenes.append(_normalize_scene(data, legacy=True))
+                scenes.append(_normalize_scene(data, legacy=True, project=project))
         except (OSError, ValueError, json.JSONDecodeError):
             continue
     return _sort_scenes(scenes)
@@ -1288,45 +1383,123 @@ def _sort_scenes(scenes: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return sorted((_with_legacy_aliases(scene) for scene in scenes), key=lambda scene: (scene.get("created_at", ""), scene.get("title", ""), scene["id"]))
 
 
+def _list_layout2_scenes(project: Project) -> list[dict[str, Any]]:
+    index = _index_path(project)
+    if not index.is_file():
+        raise FileNotFoundError("Layout 2 Scene 2D index is missing.")
+    try:
+        data = _read_json(index)
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ValueError("Layout 2 Scene 2D index is unreadable.") from exc
+    if not isinstance(data, dict) or not isinstance(data.get("scenes"), list):
+        raise ValueError("Layout 2 Scene 2D index must contain a scenes list.")
+    scenes: list[dict[str, Any]] = []
+    scene_ids: set[str] = set()
+    perspective_ids: set[str] = set()
+    for item in data["scenes"]:
+        if not isinstance(item, dict):
+            raise ValueError("Layout 2 Scene 2D index contains an invalid entry.")
+        raw_perspectives = item.get("perspectives")
+        if not isinstance(raw_perspectives, list) or any(
+            not isinstance(perspective, dict) for perspective in raw_perspectives
+        ):
+            raise ValueError(
+                "Layout 2 Scene 2D perspectives must be a list of objects."
+            )
+        raw_perspective_ids = [
+            str(perspective.get("id") or "") for perspective in raw_perspectives
+        ]
+        if len(raw_perspective_ids) != len(set(raw_perspective_ids)):
+            raise ValueError("Layout 2 Scene 2D contains duplicate perspective IDs.")
+        scene = _normalize_scene(item, project=project)
+        if scene["id"] in scene_ids:
+            raise ValueError("Layout 2 Scene 2D index contains duplicate scene IDs.")
+        if perspective_ids.intersection(raw_perspective_ids):
+            raise ValueError("Layout 2 Scene 2D contains duplicate perspective IDs.")
+        perspective_ids.update(raw_perspective_ids)
+        primary_id = str(item.get("primary_perspective_id") or "")
+        if (raw_perspectives and not primary_id) or (
+            primary_id and primary_id not in set(raw_perspective_ids)
+        ):
+            raise ValueError("Layout 2 Scene 2D primary perspective is invalid.")
+        meta = _meta_path(project, scene["id"])
+        if not meta.is_file():
+            raise FileNotFoundError(
+                f"Layout 2 Scene 2D mirror metadata is missing: {scene['id']}."
+            )
+        try:
+            meta_payload = _read_json(meta)
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise ValueError(
+                "Layout 2 Scene 2D mirror metadata is unreadable."
+            ) from exc
+        if meta_payload != item:
+            raise ValueError("Layout 2 Scene 2D index and mirror metadata differ.")
+        _normalize_scene(meta_payload, project=project)
+        scene_ids.add(scene["id"])
+        scenes.append(scene)
+    return _sort_scenes(scenes)
+
+
 def list_scenes(project: Project) -> list[dict[str, Any]]:
     _recover_perspective_moves(project)
+    if project.layout == LAYOUT_2:
+        return _list_layout2_scenes(project)
     recovered_staged = _recover_uuid_migration(project)
     index = _index_path(project)
     if not index.is_file():
         scenes = _load_from_meta(project)
-        return _sort_scenes(scenes) if recovered_staged else _migrate_scene2d_storage(project, scenes)
+        if recovered_staged or project.layout == LAYOUT_2:
+            return _sort_scenes(scenes)
+        return _migrate_scene2d_storage(project, scenes)
     try:
         data = _read_json(index)
     except (OSError, json.JSONDecodeError):
         scenes = _load_from_meta(project)
-        return _sort_scenes(scenes) if recovered_staged else _migrate_scene2d_storage(project, scenes)
+        if recovered_staged or project.layout == LAYOUT_2:
+            return _sort_scenes(scenes)
+        return _migrate_scene2d_storage(project, scenes)
     raw_scenes = data.get("scenes") if isinstance(data, dict) else data
     if not isinstance(raw_scenes, list):
         scenes = _load_from_meta(project)
-        return _sort_scenes(scenes) if recovered_staged else _migrate_scene2d_storage(project, scenes)
+        if recovered_staged or project.layout == LAYOUT_2:
+            return _sort_scenes(scenes)
+        return _migrate_scene2d_storage(project, scenes)
     scenes: list[dict[str, Any]] = []
     seen: set[str] = set()
     for item in raw_scenes:
         if not isinstance(item, dict):
             continue
-        scene = _normalize_scene(item, legacy=True)
+        scene = _normalize_scene(item, legacy=True, project=project)
         if scene["id"] in seen:
             continue
         seen.add(scene["id"])
         scenes.append(scene)
     scenes = _sort_scenes(scenes)
-    return scenes if recovered_staged else _migrate_scene2d_storage(project, scenes)
+    if recovered_staged or project.layout == LAYOUT_2:
+        return scenes
+    return _migrate_scene2d_storage(project, scenes)
 
 
 def _save_scenes(project: Project, scenes: list[dict[str, Any]]) -> None:
     root = _root_dir(project)
     root.mkdir(parents=True, exist_ok=True)
-    normalized = _sort_scenes([_normalize_scene(scene) for scene in scenes])
+    normalized = _sort_scenes([_normalize_scene(scene, project=project) for scene in scenes])
     project_manager._atomic_write_json(_index_path(project), {"scenes": normalized})
     for scene in normalized:
         scene_dir = _scene_dir(project, scene["id"])
         scene_dir.mkdir(parents=True, exist_ok=True)
         project_manager._atomic_write_json(_meta_path(project, scene["id"]), scene)
+
+
+def initialize_layout2_metadata(project: Project) -> None:
+    """Create and validate the canonical empty Scene 2D index."""
+    if project.layout != LAYOUT_2:
+        raise ValueError("Scene 2D Layout 2 initialization requires Layout 2.")
+    if _index_path(project).exists():
+        _list_layout2_scenes(project)
+        return
+    _save_scenes(project, [])
 
 
 def _find_scene(project: Project, scene_id: str) -> tuple[dict[str, Any], list[dict[str, Any]]]:
@@ -1351,9 +1524,15 @@ def _replace_scene(scenes: list[dict[str, Any]], scene: dict[str, Any]) -> list[
 
 
 def _create_psd(project: Project, relative_path: str) -> None:
+    target = _safe_rel_path(project, relative_path)
+    if project.layout == LAYOUT_2:
+        project_document.enlist_layout2_mutation_paths(
+            project.project_root,
+            (target,),
+        )
     width, height = project_manager.get_canvas_size(project)
     background = project_manager.get_canvas_color(project)
-    create_blank_psd(_safe_rel_path(project, relative_path), width, height, background_color=background)
+    create_blank_psd(target, width, height, background_color=background)
 
 
 def create_scene(
@@ -1374,8 +1553,8 @@ def create_scene(
             "id": perspective_id,
             "title": "Main perspective",
             "type": "psd",
-            "source_file_path": _source_rel(scene_id, perspective_id),
-            "preview_image_path": _preview_rel(scene_id, perspective_id),
+            "source_file_path": _source_rel(scene_id, perspective_id, project),
+            "preview_image_path": _preview_rel(scene_id, perspective_id, project),
             "created_at": timestamp,
             "updated_at": timestamp,
         },
@@ -1396,7 +1575,8 @@ def create_scene(
             "updated_at": timestamp,
             "can_be_reference": True,
             "perspectives": [perspective],
-        }
+        },
+        project=project,
     )
     _scene_dir(project, scene_id).mkdir(parents=True, exist_ok=True)
     _create_psd(project, perspective["source_file_path"])
@@ -1443,15 +1623,62 @@ def update_scene(project: Project, scene_id: str, changes: dict[str, Any]) -> tu
     return _with_legacy_aliases(scene), scenes
 
 
+def _delete_scene_layout2(project: Project, scene_id: str) -> list[dict[str, Any]]:
+    scene, scenes = _find_scene(project, scene_id)
+    assets = {
+        _safe_rel_path(project, relative)
+        for perspective in scene.get("perspectives") or []
+        for relative in (
+            str(perspective.get("source_file_path") or ""),
+            str(perspective.get("preview_image_path") or ""),
+        )
+        if relative
+    }
+    assets.add(_scene_dir(project, scene["id"]))
+    project_document.enlist_layout2_mutation_paths(
+        project.project_root,
+        assets,
+    )
+    remaining = [item for item in scenes if item["id"] != scene["id"]]
+    links = project_manager.normalize_reference_links(
+        project.settings.get("reference_links")
+    )
+    filtered = [
+        link
+        for link in links
+        if str(link.get("source_scene2d_id") or "") != scene["id"]
+    ]
+    settings_before = copy.deepcopy(project.settings)
+    try:
+        with rollback_paths((_root_dir(project), project.settings_path)):
+            with quarantined_deletions(project.project_root, assets):
+                _save_scenes(project, remaining)
+                if filtered != links:
+                    project.settings["reference_links"] = filtered
+                    project_manager.save_settings(project)
+    except BaseException:
+        project.settings = settings_before
+        raise
+    return remaining
+
+
 def delete_scene(project: Project, scene_id: str) -> list[dict[str, Any]]:
+    if project.layout == LAYOUT_2:
+        return _delete_scene_layout2(project, scene_id)
     scene, scenes = _find_scene(project, scene_id)
     scenes = [item for item in scenes if item["id"] != scene["id"]]
     _save_scenes(project, scenes)
     scene_dir = _scene_dir(project, scene["id"])
     if scene_dir.is_dir():
         shutil.rmtree(scene_dir)
-    links = project_manager.normalize_reference_links(project.settings.get("reference_links"))
-    filtered = [link for link in links if str(link.get("source_scene2d_id") or "") != scene["id"]]
+    links = project_manager.normalize_reference_links(
+        project.settings.get("reference_links")
+    )
+    filtered = [
+        link
+        for link in links
+        if str(link.get("source_scene2d_id") or "") != scene["id"]
+    ]
     if filtered != links:
         project.settings["reference_links"] = filtered
         project_manager.save_settings(project)
@@ -1501,14 +1728,14 @@ def create_perspective(
     perspective_id = new_uuid()
     timestamp = _now_iso()
     title = title.strip() or f"Perspective {len(scene.get('perspectives') or []) + 1}"
-    source_rel = _source_rel(scene["id"], perspective_id)
+    source_rel = _source_rel(scene["id"], perspective_id, project)
     perspective = _normalize_perspective(
         {
             "id": perspective_id,
             "title": title,
             "type": "psd",
             "source_file_path": source_rel,
-            "preview_image_path": _preview_rel(scene["id"], perspective_id),
+            "preview_image_path": _preview_rel(scene["id"], perspective_id, project),
             "linked_scene3d_id": linked_scene3d_id,
             "linked_scene3d_view": linked_scene3d_view,
             "created_at": timestamp,
@@ -1540,10 +1767,23 @@ def import_perspective(
     perspective_id = new_uuid()
     timestamp = _now_iso()
     title = title.strip() or Path(filename or "").stem or f"Perspective {len(scene.get('perspectives') or []) + 1}"
-    source_rel = _source_rel(scene["id"], perspective_id) if suffix in PSD_EXTENSIONS else _image_source_rel(scene["id"], perspective_id, suffix)
-    _write_binary_atomic(_safe_rel_path(project, source_rel), bytes(data))
+    source_rel = (
+        _source_rel(scene["id"], perspective_id, project)
+        if suffix in PSD_EXTENSIONS
+        else _image_source_rel(scene["id"], perspective_id, suffix, project)
+    )
+    source_path = _safe_rel_path(project, source_rel)
+    project_document.enlist_layout2_mutation_paths(
+        project.project_root,
+        (source_path,),
+    )
+    _write_binary_atomic(source_path, bytes(data))
     perspective_type = "psd" if suffix in PSD_EXTENSIONS else "image"
-    preview_rel = source_rel if perspective_type == "image" else _preview_rel(scene["id"], perspective_id)
+    preview_rel = (
+        source_rel
+        if perspective_type == "image"
+        else _preview_rel(scene["id"], perspective_id, project)
+    )
     perspective = _normalize_perspective(
         {
             "id": perspective_id,
@@ -1614,7 +1854,63 @@ def update_perspective(
     return _with_legacy_aliases(scene), perspective, scenes
 
 
+def _delete_perspective_layout2(
+    project: Project,
+    scene_id: str,
+    perspective_id: str,
+) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    scene, scenes = _find_scene(project, scene_id)
+    perspective = _find_perspective(scene, perspective_id)
+    assets = {
+        _safe_rel_path(project, relative)
+        for relative in (
+            str(perspective.get("source_file_path") or ""),
+            str(perspective.get("preview_image_path") or ""),
+        )
+        if relative
+    }
+    project_document.enlist_layout2_mutation_paths(
+        project.project_root,
+        assets,
+    )
+    scene["perspectives"] = [
+        item for item in scene["perspectives"] if item["id"] != perspective["id"]
+    ]
+    if scene.get("primary_perspective_id") == perspective["id"]:
+        scene["primary_perspective_id"] = (
+            scene["perspectives"][0]["id"] if scene["perspectives"] else ""
+        )
+    scene["updated_at"] = _now_iso()
+    scenes = _replace_scene(scenes, _with_legacy_aliases(scene))
+    links = project_manager.normalize_reference_links(
+        project.settings.get("reference_links")
+    )
+    filtered = [
+        link
+        for link in links
+        if not (
+            str(link.get("source_scene2d_id") or "") == scene["id"]
+            and str(link.get("source_scene2d_perspective_id") or "")
+            == perspective["id"]
+        )
+    ]
+    settings_before = copy.deepcopy(project.settings)
+    try:
+        with rollback_paths((_root_dir(project), project.settings_path)):
+            with quarantined_deletions(project.project_root, assets):
+                _save_scenes(project, scenes)
+                if filtered != links:
+                    project.settings["reference_links"] = filtered
+                    project_manager.save_settings(project)
+    except BaseException:
+        project.settings = settings_before
+        raise
+    return _with_legacy_aliases(scene), scenes
+
+
 def delete_perspective(project: Project, scene_id: str, perspective_id: str) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    if project.layout == LAYOUT_2:
+        return _delete_perspective_layout2(project, scene_id, perspective_id)
     scene, scenes = _find_scene(project, scene_id)
     perspective = _find_perspective(scene, perspective_id)
     scene["perspectives"] = [item for item in scene["perspectives"] if item["id"] != perspective["id"]]
@@ -1687,7 +1983,7 @@ def _verify_perspective_duplicate(
     if index_scene_raw is None:
         raise ValueError(f"Duplicate verify: scene {scene_id!r} missing from scenes2d.json.")
     try:
-        index_scene = _normalize_scene(index_scene_raw, legacy=True)
+        index_scene = _normalize_scene(index_scene_raw, legacy=True, project=project)
     except (ValueError, KeyError) as exc:
         raise ValueError(f"Duplicate verify: scenes2d.json scene is invalid: {exc}") from exc
 
@@ -1702,7 +1998,7 @@ def _verify_perspective_duplicate(
     if not isinstance(meta_raw, dict):
         raise ValueError("Duplicate verify: scene meta file is not a JSON object.")
     try:
-        meta_scene = _normalize_scene(meta_raw, legacy=True)
+        meta_scene = _normalize_scene(meta_raw, legacy=True, project=project)
     except (ValueError, KeyError) as exc:
         raise ValueError(f"Duplicate verify: scene meta is invalid: {exc}") from exc
     if index_scene != meta_scene:
@@ -1773,11 +2069,118 @@ def _verify_perspective_duplicate(
         raise ValueError("Duplicate verify: reference links changed during duplication.")
 
 
+def _duplicate_perspective_layout2(
+    project: Project,
+    scene_id: str,
+    perspective_id: str,
+) -> tuple[dict[str, Any], dict[str, Any], list[dict[str, Any]]]:
+    scene, scenes = _find_scene(project, scene_id)
+    source = _find_perspective(scene, perspective_id)
+    source_file = _safe_rel_path(project, source["source_file_path"])
+    if not source_file.is_file():
+        raise FileNotFoundError(
+            f"Source perspective file not found: {source['source_file_path']}"
+        )
+
+    new_id = new_uuid()
+    source_type = str(source.get("type") or "psd")
+    if source_type == "image":
+        suffix = source_file.suffix.lower()
+        new_source_rel = _image_source_rel(scene_id, new_id, suffix, project)
+        new_preview_rel = new_source_rel
+    else:
+        new_source_rel = _source_rel(scene_id, new_id, project)
+        new_preview_rel = _preview_rel(scene_id, new_id, project)
+
+    source_preview_rel = str(source.get("preview_image_path") or "")
+    source_preview = (
+        _safe_rel_path(project, source_preview_rel)
+        if source_preview_rel and source_preview_rel != source["source_file_path"]
+        else None
+    )
+    new_source = _safe_rel_path(project, new_source_rel)
+    new_preview = (
+        _safe_rel_path(project, new_preview_rel)
+        if new_preview_rel != new_source_rel
+        else None
+    )
+    project_document.enlist_layout2_mutation_paths(
+        project.project_root,
+        tuple(
+            path for path in (new_source, new_preview) if path is not None
+        ),
+    )
+    index_path = _index_path(project)
+    meta_path = _meta_path(project, scene_id)
+    index_bytes = _read_bytes_if_exists(index_path)
+    meta_bytes = _read_bytes_if_exists(meta_path)
+    original_scene = copy.deepcopy(scene)
+    created: list[Path] = []
+    timestamp = _now_iso()
+    try:
+        atomic_copy_file(source_file, new_source)
+        created.append(new_source)
+        if source_preview is not None and source_preview.is_file() and new_preview is not None:
+            atomic_copy_file(source_preview, new_preview)
+            created.append(new_preview)
+        duplicate = _normalize_perspective(
+            {
+                "id": new_id,
+                "title": _duplicate_perspective_title(
+                    scene, str(source.get("title") or "")
+                ),
+                "type": source_type,
+                "source_file_path": new_source_rel,
+                "preview_image_path": new_preview_rel,
+                "linked_scene3d_id": str(source.get("linked_scene3d_id") or ""),
+                "linked_scene3d_view": copy.deepcopy(
+                    source.get("linked_scene3d_view")
+                ),
+                "created_at": timestamp,
+                "updated_at": timestamp,
+            },
+            scene_id=scene_id,
+        )
+        source_index = next(
+            index
+            for index, item in enumerate(scene["perspectives"])
+            if item["id"] == perspective_id
+        )
+        scene["perspectives"].insert(source_index + 1, duplicate)
+        scene["updated_at"] = timestamp
+        scenes = _replace_scene(scenes, _with_legacy_aliases(scene))
+        _save_scenes(project, scenes)
+
+        verified_scenes = list_scenes(project)
+        verified_scene = next(item for item in verified_scenes if item["id"] == scene_id)
+        verified_duplicate = next(
+            item
+            for item in verified_scene.get("perspectives") or []
+            if item["id"] == new_id
+        )
+        if verified_duplicate["source_file_path"] != new_source_rel:
+            raise ValueError("Duplicate verify: source path was not preserved.")
+        if new_source.read_bytes() != source_file.read_bytes():
+            raise ValueError("Duplicate verify: copied source differs from original.")
+        return _with_legacy_aliases(verified_scene), verified_duplicate, verified_scenes
+    except BaseException:
+        _restore_bytes(index_path, index_bytes)
+        _restore_bytes(meta_path, meta_bytes)
+        scene.clear()
+        scene.update(original_scene)
+        for path in created:
+            path.unlink(missing_ok=True)
+        raise
+
+
 def duplicate_perspective(
     project: Project,
     scene_id: str,
     perspective_id: str,
 ) -> tuple[dict[str, Any], dict[str, Any], list[dict[str, Any]]]:
+    if project.layout == LAYOUT_2:
+        return _duplicate_perspective_layout2(project, scene_id, perspective_id)
+
     scene, scenes = _find_scene(project, scene_id)
     source = _find_perspective(scene, perspective_id)
 
@@ -1813,10 +2216,27 @@ def duplicate_perspective(
 
     new_title = _duplicate_perspective_title(scene, source.get("title") or "")
 
-    perspectives_parent = _scene_dir(project, scene_id) / "perspectives"
+    perspectives_parent = project_manager.resolve_project_child(
+        project,
+        SCENE2D_ROOT,
+        scene_id,
+        "perspectives",
+    )
     operation_id = uuid.uuid4().hex
-    staging_dir = perspectives_parent / f".duplicate-{operation_id}"
-    new_dir = perspectives_parent / new_id
+    staging_dir = project_manager.resolve_project_child(
+        project,
+        SCENE2D_ROOT,
+        scene_id,
+        "perspectives",
+        f".duplicate-{operation_id}",
+    )
+    new_dir = project_manager.resolve_project_child(
+        project,
+        SCENE2D_ROOT,
+        scene_id,
+        "perspectives",
+        new_id,
+    )
 
     index_path = _index_path(project)
     meta_path = _meta_path(project, scene_id)
@@ -1825,9 +2245,29 @@ def duplicate_perspective(
 
     try:
         staging_dir.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(source_file, staging_dir / Path(new_source_rel).name)
+        shutil.copy2(
+            source_file,
+            project_manager.resolve_project_child(
+                project,
+                SCENE2D_ROOT,
+                scene_id,
+                "perspectives",
+                f".duplicate-{operation_id}",
+                Path(new_source_rel).name,
+            ),
+        )
         if copy_preview:
-            shutil.copy2(source_preview_path, staging_dir / "preview.png")
+            shutil.copy2(
+                source_preview_path,
+                project_manager.resolve_project_child(
+                    project,
+                    SCENE2D_ROOT,
+                    scene_id,
+                    "perspectives",
+                    f".duplicate-{operation_id}",
+                    "preview.png",
+                ),
+            )
 
         staging_dir.rename(new_dir)
 
@@ -1897,6 +2337,94 @@ def duplicate_perspective(
     return _with_legacy_aliases(verified_scene), verified_duplicate, verified_scenes
 
 
+def _move_perspective_metadata_only(
+    project: Project,
+    scenes: list[dict[str, Any]],
+    source_scene: dict[str, Any],
+    target_scene: dict[str, Any],
+    perspective: dict[str, Any],
+) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any], list[dict[str, Any]]]:
+    """Move Layout 2 ownership without renaming its UUID-addressed assets."""
+    index_path = _index_path(project)
+    source_meta = _meta_path(project, source_scene["id"])
+    target_meta = _meta_path(project, target_scene["id"])
+    settings_path = project.settings_path
+    originals = {
+        path: _read_bytes_if_exists(path)
+        for path in (index_path, source_meta, target_meta, settings_path)
+    }
+    settings_memory = copy.deepcopy(project.settings)
+    original_source = copy.deepcopy(source_scene)
+    original_target = copy.deepcopy(target_scene)
+    original_perspective = copy.deepcopy(perspective)
+    try:
+        source_scene["perspectives"] = [
+            item
+            for item in source_scene.get("perspectives", [])
+            if item["id"] != perspective["id"]
+        ]
+        target_scene.setdefault("perspectives", []).append(perspective)
+        timestamp = _now_iso()
+        perspective["updated_at"] = timestamp
+        source_scene["updated_at"] = timestamp
+        target_scene["updated_at"] = timestamp
+        if source_scene.get("primary_perspective_id") == perspective["id"]:
+            source_scene["primary_perspective_id"] = (
+                source_scene["perspectives"][0]["id"]
+                if source_scene["perspectives"]
+                else ""
+            )
+        if not target_scene.get("primary_perspective_id"):
+            target_scene["primary_perspective_id"] = perspective["id"]
+
+        links = project_manager.normalize_reference_links(
+            project.settings.get("reference_links")
+        )
+        changed_links = False
+        for link in links:
+            if (
+                str(link.get("source_scene2d_perspective_id") or "")
+                == perspective["id"]
+                and str(link.get("source_scene2d_id") or "")
+                in {"", source_scene["id"]}
+            ):
+                link["source_scene2d_id"] = target_scene["id"]
+                link["source_scene2d_perspective_id"] = perspective["id"]
+                changed_links = True
+        if changed_links:
+            project.settings["reference_links"] = links
+            project_manager.save_settings(project)
+
+        scenes = _replace_scene(scenes, _with_legacy_aliases(source_scene))
+        scenes = _replace_scene(scenes, _with_legacy_aliases(target_scene))
+        _save_scenes(project, scenes)
+    except BaseException:
+        rollback_errors: list[BaseException] = []
+        for path, data in originals.items():
+            try:
+                _restore_bytes(path, data)
+            except BaseException as rollback_error:
+                rollback_errors.append(rollback_error)
+        project.settings = settings_memory
+        source_scene.clear()
+        source_scene.update(original_source)
+        target_scene.clear()
+        target_scene.update(original_target)
+        perspective.clear()
+        perspective.update(original_perspective)
+        if rollback_errors:
+            raise RuntimeError(
+                "Layout 2 Scene 2D move failed and metadata rollback was incomplete."
+            ) from rollback_errors[0]
+        raise
+    return (
+        _with_legacy_aliases(source_scene),
+        _with_legacy_aliases(target_scene),
+        perspective,
+        scenes,
+    )
+
+
 def move_perspective(
     project: Project,
     scene_id: str,
@@ -1915,8 +2443,22 @@ def move_perspective(
         raise FileNotFoundError("Scene 2D not found.")
 
     perspective = _find_perspective(source_scene, perspective_id)
+    if project.layout == LAYOUT_2:
+        return _move_perspective_metadata_only(
+            project,
+            scenes,
+            source_scene,
+            target_scene,
+            perspective,
+        )
     source_dir = _safe_rel_path(project, perspective["source_file_path"]).parent
-    target_dir = _root_dir(project) / target_scene["id"] / "perspectives" / perspective["id"]
+    target_dir = project_manager.resolve_project_child(
+        project,
+        SCENE2D_ROOT,
+        target_scene["id"],
+        "perspectives",
+        perspective["id"],
+    )
     if not source_dir.is_dir():
         raise FileNotFoundError("Scene 2D perspective folder not found.")
     if target_dir.exists():
@@ -1947,7 +2489,12 @@ def move_perspective(
                 }
             )
 
-    tx_dir = _move_root(project) / uuid.uuid4().hex
+    tx_dir = project_manager.resolve_project_child(
+        project,
+        SCENE2D_ROOT,
+        PERSPECTIVE_MOVE_ROOT,
+        uuid.uuid4().hex,
+    )
     source_file_path = _safe_rel_path(project, perspective["source_file_path"])
     preview_file_path = _safe_rel_path(project, perspective["preview_image_path"])
     operation_id = tx_dir.name
@@ -1974,10 +2521,14 @@ def move_perspective(
     try:
         original_files = _backup_move_metadata(project, tx_dir, source_scene["id"], target_scene["id"])
         journal_base = {**journal_base, "original_files": original_files}
-        _write_move_journal(tx_dir, journal_base)
+        _write_move_journal(tx_dir, journal_base, project=project)
         target_dir.parent.mkdir(parents=True, exist_ok=True)
         shutil.move(str(source_dir), str(target_dir))
-        _write_move_journal(tx_dir, {**journal_base, "state": "files_moved"})
+        _write_move_journal(
+            tx_dir,
+            {**journal_base, "state": "files_moved"},
+            project=project,
+        )
 
         source_scene["perspectives"] = [
             item for item in source_scene.get("perspectives", []) if item["id"] != perspective["id"]
@@ -2005,7 +2556,11 @@ def move_perspective(
                 link["source_scene2d_perspective_id"] = perspective["id"]
                 link["path"] = expected_preview
                 changed_links = True
-        _write_move_journal(tx_dir, {**journal_base, "state": "metadata_committing"})
+        _write_move_journal(
+            tx_dir,
+            {**journal_base, "state": "metadata_committing"},
+            project=project,
+        )
         if changed_links:
             project.settings["reference_links"] = project_manager.normalize_reference_links(links)
             project_manager.save_settings(project)
@@ -2015,14 +2570,18 @@ def move_perspective(
         _save_scenes(project, scenes)
         final_journal = {**journal_base, "state": "metadata_committed"}
         _verify_perspective_move_commit(project, final_journal)
-        _write_move_journal(tx_dir, final_journal)
-        _write_move_journal(tx_dir, {**journal_base, "state": "verified"})
+        _write_move_journal(tx_dir, final_journal, project=project)
+        _write_move_journal(
+            tx_dir,
+            {**journal_base, "state": "verified"},
+            project=project,
+        )
         _cleanup_move_tx(tx_dir)
     except BaseException as operation_error:
         journal = {**journal_base}
         try:
-            if _move_journal_path(tx_dir).is_file():
-                loaded = _read_json(_move_journal_path(tx_dir))
+            if _move_journal_path(tx_dir, project=project).is_file():
+                loaded = _read_json(_move_journal_path(tx_dir, project=project))
                 if isinstance(loaded, dict):
                     journal = loaded
             _rollback_perspective_move(project, tx_dir, journal)
@@ -2053,6 +2612,10 @@ def _ensure_perspective_source(project: Project, perspective: dict[str, Any]) ->
     source = _safe_rel_path(project, perspective["source_file_path"])
     if source.is_file():
         return False
+    if project.layout == LAYOUT_2:
+        raise FileNotFoundError(
+            f"Scene 2D perspective file not found: {perspective['source_file_path']}"
+        )
     if perspective["type"] == "psd":
         _create_psd(project, perspective["source_file_path"])
         return True

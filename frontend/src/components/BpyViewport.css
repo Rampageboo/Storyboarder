@@ -1,0 +1,139 @@
+.bpy-workspace {
+  min-height: 0;
+  height: 100%;
+  display: grid;
+  grid-template-rows: auto minmax(320px, 1fr) auto;
+  background: #17191d;
+  color: #d7dbe2;
+}
+
+.bpy-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 38px;
+  padding: 6px 9px;
+  border-bottom: 1px solid #343942;
+  background: #202329;
+  flex-wrap: wrap;
+}
+
+.bpy-toolbar button,
+.bpy-toolbar input {
+  height: 28px;
+  border: 1px solid #444a55;
+  border-radius: 4px;
+  background: #292d34;
+  color: #e8ebf0;
+}
+
+.bpy-toolbar button {
+  padding: 0 10px;
+  cursor: pointer;
+}
+
+.bpy-toolbar button:hover:not(:disabled),
+.bpy-toolbar button.active {
+  border-color: #65d788;
+  background: #24452f;
+}
+
+.bpy-toolbar button:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.bpy-toolbar label {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 12px;
+}
+
+.bpy-toolbar label input {
+  width: 68px;
+  padding: 0 6px;
+}
+
+.bpy-target-label {
+  margin-left: 4px;
+  font-size: 12px;
+  color: #aeb4be;
+}
+
+.bpy-toolbar .bpy-coordinate {
+  width: 58px;
+  padding: 0 6px;
+}
+
+.bpy-external-status {
+  padding: 5px 9px;
+  border: 1px solid #8b713a;
+  border-radius: 4px;
+  background: #3b321f;
+  color: #e9cb83;
+  font-size: 12px;
+}
+
+.bpy-external-status.is-connected {
+  border-color: #44955d;
+  background: #203b29;
+  color: #8be5a5;
+}
+
+.bpy-viewport {
+  position: relative;
+  min-height: 320px;
+  overflow: hidden;
+  background:
+    linear-gradient(45deg, #202329 25%, transparent 25%),
+    linear-gradient(-45deg, #202329 25%, transparent 25%),
+    linear-gradient(45deg, transparent 75%, #202329 75%),
+    linear-gradient(-45deg, transparent 75%, #202329 75%),
+    #1a1c20;
+  background-size: 32px 32px;
+  background-position: 0 0, 0 16px, 16px -16px, -16px 0;
+}
+
+.bpy-viewport img,
+.bpy-viewport canvas {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+}
+
+.bpy-viewport img {
+  object-fit: contain;
+  user-select: none;
+}
+
+.bpy-viewport canvas {
+  cursor: grab;
+  touch-action: none;
+}
+
+.bpy-viewport canvas:active {
+  cursor: grabbing;
+}
+
+.bpy-viewport.is-drawing canvas {
+  cursor: crosshair;
+}
+
+.bpy-placeholder {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  color: #9299a5;
+  font-size: 13px;
+}
+
+.bpy-help {
+  padding: 6px 10px;
+  border-top: 1px solid #343942;
+  color: #9fa6b1;
+  font-size: 12px;
+  background: #202329;
+}

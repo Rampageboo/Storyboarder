@@ -30,7 +30,47 @@
     return String(value.nativePath || value.fsName || value.path || "");
   }
 
+  function isExplicitAssetContext(context) {
+    return String(context?.path_mode || "") === "explicit-assets";
+  }
+
+  function offlineWriteAllowed(context) {
+    return context?.offline_write_allowed !== false;
+  }
+
+  function requireOfflineWriteAllowed(context, action = "write project files") {
+    if (!offlineWriteAllowed(context)) {
+      throw new Error(
+        `Cannot ${action} while Storyboarder is offline. Reconnect to refresh the project session.`,
+      );
+    }
+  }
+
+  function assetPathForRole(item, role) {
+    const paths = item?.asset_paths;
+    const value = paths && typeof paths === "object" ? paths[role] : null;
+    return value && typeof value === "object" ? value : null;
+  }
+
+  function assetNativePathForRole(item, role) {
+    return String(assetPathForRole(item, role)?.native_path || "");
+  }
+
+  function assetProjectRelativePathForRole(item, role) {
+    return String(assetPathForRole(item, role)?.project_relative_path || "");
+  }
+
+  function sourceNativePathForWorkItem(item, context, fallbackRoot = "") {
+    const exact = assetNativePathForRole(item, "source_psd");
+    if (exact) return exact;
+    const direct = String(item?.source_native_path || "");
+    if (direct) return direct;
+    if (isExplicitAssetContext(context)) return "";
+    return projectRelativeNativePath(context, item?.source_file_path, fallbackRoot);
+  }
+
   function projectRelativeNativePath(context, relPath, fallbackRoot = "") {
+    if (isExplicitAssetContext(context)) return "";
     const root = String(context?.project_root || fallbackRoot || "").trim();
     const rel = String(relPath || "").trim();
     if (!root || !rel) return "";
@@ -52,6 +92,9 @@
       source_file_path: item.source_file_path || "",
       source_native_path: item.source_native_path || "",
       preview_image_path: item.preview_image_path || "",
+      asset_paths: item.asset_paths && typeof item.asset_paths === "object"
+        ? item.asset_paths
+        : {},
       index: item.index,
       count: item.count,
       previous_key: item.previous_key || "",
@@ -63,10 +106,18 @@
     if (!nativePath) return null;
     const items = Array.isArray(context?.work_items) ? context.work_items : [];
     for (const item of items) {
-      if (sameNativePath(nativePath, item.source_native_path)) return item;
-      if (sameNativePath(nativePath, projectRelativeNativePath(context, item.source_file_path, fallbackRoot))) return item;
+      if (sameNativePath(nativePath, sourceNativePathForWorkItem(item, context, fallbackRoot))) {
+        return item;
+      }
     }
     return null;
+  }
+
+  function findWorkItemByKey(key, context) {
+    const wanted = String(key || "");
+    if (!wanted) return null;
+    const items = Array.isArray(context?.work_items) ? context.work_items : [];
+    return items.find((item) => String(item?.key || "") === wanted) || null;
   }
 
   function deriveActiveWorkKey(workContext) {
@@ -194,9 +245,17 @@
     normalizeNativePath,
     sameNativePath,
     nativePathFromEntryLike,
+    isExplicitAssetContext,
+    offlineWriteAllowed,
+    requireOfflineWriteAllowed,
+    assetPathForRole,
+    assetNativePathForRole,
+    assetProjectRelativePathForRole,
+    sourceNativePathForWorkItem,
     projectRelativeNativePath,
     workContextFromItem,
     findWorkItemByNativePath,
+    findWorkItemByKey,
     deriveActiveWorkKey,
     filterKnownOpenWorkKeys,
     displayPerspectiveIndex,

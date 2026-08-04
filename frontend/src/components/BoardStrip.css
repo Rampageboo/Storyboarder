@@ -537,6 +537,13 @@
     0 10px 24px rgba(0, 0, 0, 0.28);
 }
 
+.board-strip-card.is-primary {
+  box-shadow:
+    inset 0 0 0 1px var(--color-accent),
+    0 0 0 2px var(--color-accent),
+    0 10px 24px rgba(0, 0, 0, 0.28);
+}
+
 .board-strip-thumb {
   position: relative;
   flex: 0 0 var(--board-strip-thumb-height);

@@ -195,6 +195,16 @@
   overflow: hidden;
 }
 
+.scene3d-preview-empty {
+  min-height: 320px;
+  display: grid;
+  place-items: center;
+  padding: 32px;
+  color: #9fa6b1;
+  background: #17191d;
+  text-align: center;
+}
+
 .scene3d-editor-root .scene3d-layout {
   height: 100%;
   min-height: 0;

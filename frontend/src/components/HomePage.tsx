@@ -148,7 +148,7 @@ export function HomePage() {
           Open
         </button>
         <div className="home-sidebar-note">
-          <p>Boards, artwork, and references live together in one .sbd document.</p>
+          <p>Each project is a portable folder with a lightweight .sbd document and editable assets.</p>
         </div>
       </aside>
 

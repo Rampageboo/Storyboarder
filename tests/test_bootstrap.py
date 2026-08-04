@@ -102,21 +102,22 @@ class BootstrapTests(unittest.TestCase):
             with contextlib.redirect_stderr(io.StringIO()):
                 created = client.post("/api/project/new", json={"path": document})
             self.assertEqual(created.status_code, 200)
+            canonical = created.json()["document_path"]
 
             with contextlib.redirect_stderr(io.StringIO()):
                 resp = client.get("/api/app/recents")
             self.assertEqual(resp.status_code, 200)
             entries = resp.json()["recents"]
-            entry = next(item for item in entries if item["path"] == document)
+            entry = next(item for item in entries if item["path"] == canonical)
             self.assertTrue(entry["exists"])
             self.assertEqual(entry["kind"], "document")
             self.assertEqual(entry["name"], "Board")
-            self.assertEqual(entry["open_path"], document)
+            self.assertEqual(entry["open_path"], canonical)
 
             with contextlib.redirect_stderr(io.StringIO()):
-                forgotten = client.post("/api/app/recents/forget", json={"path": document})
+                forgotten = client.post("/api/app/recents/forget", json={"path": canonical})
             self.assertEqual(forgotten.status_code, 200)
-            self.assertNotIn(document, [item["path"] for item in forgotten.json()["recents"]])
+            self.assertNotIn(canonical, [item["path"] for item in forgotten.json()["recents"]])
 
     def test_close_project_returns_to_home(self) -> None:
         """Closing flushes the document and clears it from app state."""
@@ -126,12 +127,13 @@ class BootstrapTests(unittest.TestCase):
             with contextlib.redirect_stderr(io.StringIO()):
                 created = client.post("/api/project/new", json={"path": document})
             self.assertEqual(created.status_code, 200)
+            canonical = Path(created.json()["document_path"])
 
             with contextlib.redirect_stderr(io.StringIO()):
                 closed = client.post("/api/app/close-project")
             self.assertEqual(closed.status_code, 200)
             self.assertTrue(closed.json()["closed"])
-            self.assertTrue(Path(document).is_file())
+            self.assertTrue(canonical.is_file())
 
             with contextlib.redirect_stderr(io.StringIO()):
                 resp = client.get("/api/app/bootstrap")
