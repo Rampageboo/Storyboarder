@@ -33,3 +33,8 @@ frontend/dist-tauri/
 scripts/_pyinstaller_dist/
 scripts/_pyinstaller_work/
 scripts/*.spec
+
+# Codebase map: derived artifact, rebuilt on demand.
+# GRAPH_REPORT.md is kept because it is small, readable, and diffs meaningfully.
+graphify-out/*
+!graphify-out/GRAPH_REPORT.md

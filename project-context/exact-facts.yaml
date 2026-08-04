@@ -1,0 +1,72 @@
+schema_version: 3
+metadata:
+  last_updated: "2026-08-04"
+  updated_by: "Claude (V2-to-V3 migration; facts re-verified against source, not copied)"
+git_environments:
+  - host: "Windows 11 workstation (D:\\MyProjects\\Storyboarder)"
+    client: "Codex desktop / Claude Code"
+    git_execution_mode: codex-git
+    verified: "2026-08-04"
+workflow:
+  task_coordination_mode: owner-direct
+  codex_routing_target: unknown
+  codex_model_id: ""
+  codex_thread_id: ""
+  reasoning_effort: unknown
+  git_execution_mode: codex-git
+  review_mode: report-only
+codebase_map:
+  status: adopted
+  provider: graphify
+  provider_version: "graphifyy via uv tool (version string not exposed by package)"
+  project_map_root: "graphify-out/"
+  corpus_scope:
+    - "code only: 251 source files"
+    - "excluded: node_modules/, __pycache__/, vendor/, dist/, build/"
+    - "excluded: protocol files, docs/, agent-workflows/, all images"
+  build_mode: "AST structural extraction only; no semantic pass, no LLM tokens"
+  data_boundary: "fully local; nothing transmitted to any external service"
+  artifact_git_policy: "graphify-out/* ignored; GRAPH_REPORT.md tracked"
+  map_maintainer_role: implementer
+  freshness_acceptor_role: integration-acceptor
+  update_trigger: manual
+  last_successful_update: "2026-08-04"
+  source_revision_represented: "cb77f98"
+  health_result: "warning - 1085 dangling-endpoint edges, 24 self-loops, 548 collapsed edges"
+  global_map_membership: none
+research:
+  project_name: ""
+  project_reference: ""
+  memory_mode: unknown
+  approved_source_classes: []
+  private_content_transmission: ask-each-time
+  last_verified: ""
+paths:
+  - "main.py -> storyboard_tool/main.py - create_app() and open_desktop_window()"
+  - "storyboard_tool/api.py - all FastAPI routes; no business logic"
+  - "storyboard_tool/backend_service.py - StoryboardBackendService, single business-logic entry"
+  - "frontend/src/ - React/TS source; built bundle committed to storyboard_tool/web/dist/"
+  - "photoshop_uxp_plugin/ - UXP plugin, vanilla JS"
+  - "scripts/verify_dev.py - the validation gate"
+  - "docs/current_architecture.md - authoritative module and endpoint map"
+  - "docs/stability_contract.md - per-shot files, saves, recovery"
+commands:
+  - "python main.py - run the desktop window; do not open the URL in a browser"
+  - "python scripts/verify_dev.py - full validation gate, required before merging"
+  - "python scripts/verify_dev.py --backend | --frontend | --fast"
+  - "python -m pytest tests/ - full backend suite"
+  - "python -m pytest tests/test_smoke.py - fast subset"
+  - "cd frontend && npm.cmd run lint - Windows needs npm.cmd"
+  - "cd frontend && npm.cmd run build - tsc -b, vite build, build:workspace"
+versions:
+  - "Python 3.11+; dependencies in requirements.txt; .venv/ exists in-repo"
+  - "React 19 + TypeScript, built with Vite"
+  - "pywebview 6.2.1 (window.events.closing verified present)"
+identifiers:
+  - "storyboard_live_bridge.json - Photoshop bridge file name, part of the frozen plugin contract"
+  - ".storyboarder-session.json - work-tree marker, excluded from the pack"
+active_exact_constraints:
+  - "There is no CI. verify_dev.py is the gate and runs locally."
+  - "npm run lint is red at a known baseline on main; compare, do not expect green."
+  - "Rebuild and commit storyboard_tool/web/dist/** after editing frontend/src/**."
+  - "Stop background loops before deleting any work tree."
