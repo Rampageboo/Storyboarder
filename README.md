@@ -1,6 +1,10 @@
-# Storyboard Tool
+# Storyboarder
 
-A minimal local storyboard planning app with a React + Vite frontend and a Python FastAPI backend.
+Storyboarder is an open-source desktop pre-production and storyboard management application for filmmakers, animators, game developers, and independent creators.
+
+It provides a structured workspace for planning shots, managing visual references, coordinating Photoshop-based drawing workflows, reviewing boards, assembling simple animatics, and exporting production-ready storyboard materials. The project is designed to keep creative decisions explicit, editable, and locally controlled.
+
+> Storyboarder is currently a storyboard production and management tool. Optional AI-assisted planning and workflow automation are part of the future roadmap, not current shipped functionality.
 
 ## Developer Documentation
 
@@ -38,7 +42,7 @@ A minimal local storyboard planning app with a React + Vite frontend and a Pytho
 - Export storyboard PDFs with one-shot, two-shot, or thumbnail layouts
 - Export shot lists, contact sheets, image sequences, and timing JSON
 
-This version treats Photoshop as the drawing surface and this app as the storyboard manager. It creates project-local PSD source files plus PNG previews, opens PSDs in Photoshop when configured, and auto-syncs previews when linked files change on disk. Blender or Unreal live capture, video export, cloud sync, and audio features are not implemented.
+This version treats Photoshop as the drawing surface and Storyboarder as the production manager. It creates project-local PSD source files plus PNG previews, opens PSDs in Photoshop when configured, and auto-syncs previews when linked files change on disk. Blender or Unreal live capture, video export, cloud sync, audio features, and AI-assisted features are not currently implemented.
 
 ## Photoshop UXP Bridge
 
@@ -53,10 +57,10 @@ shot_001_preview.png
 
 Basic workflow:
 
-1. In Storyboard Tool, select a shot.
+1. In Storyboarder, select a shot.
 2. Click `+` on a board in the filmstrip or `Ps` to create/open the PSD in Photoshop.
 3. Draw and save in Photoshop.
-4. Return to Storyboard Tool. The preview auto-syncs on window focus, shot change, or every few seconds.
+4. Return to Storyboarder. The preview auto-syncs on window focus, shot change, or every few seconds.
 
 Optional UXP workflow:
 
@@ -87,7 +91,7 @@ for a legacy single-file `.sbd`, use **More > Convert to Layout 2** to create a
 source-preserving Layout 2 copy. For a legacy folder project, first use
 **Save Project As...** to create a Layout 1 `.sbd`, then convert that document.
 
-## Canvas color
+## Canvas Color
 
 Open **Canvas** in the top bar to choose a grayscale canvas color with the black-to-white brightness slider and hex input (default `#E8E8E8`). The color is saved in `settings.json`, used for new PSD canvases, shown on the in-app drawing canvas, and shared with the Photoshop UXP plugin via `.storyboard_bridge.json`.
 
@@ -98,6 +102,29 @@ pip install -r requirements.txt
 python main.py
 ```
 
-This opens a **desktop app window** (via pywebview). The local FastAPI server is an internal implementation detail — do not open the app in a system browser.
+This opens a **desktop app window** via pywebview. The local FastAPI server is an internal implementation detail; do not open the app in a system browser.
 
 The app stores new projects as a portable folder containing a metadata-only `.sbd` plus editable asset directories. New/Open Project dialogs use native file pickers handled by the internal server.
+
+## Roadmap
+
+Planned areas of development include:
+
+- Stronger project validation, recovery, and automated test coverage
+- Improved review, annotation, and shot-status workflows
+- More robust packaging and cross-platform installation
+- Expanded import and export interoperability
+- Optional Blender and Unreal Engine integration
+- Optional AI-assisted shot breakdown, planning, continuity checks, metadata drafting, and workflow automation
+
+AI-assisted features will be designed as reviewable production aids rather than black-box replacements for creative decisions.
+
+## Contributing
+
+Contributions, issue reports, documentation improvements, and workflow feedback are welcome. Before submitting a substantial change, open an issue describing the problem, proposed behavior, and expected user workflow.
+
+Please keep contributions focused on reproducible production workflows, clear local project data, and creator control. See [CONTRIBUTING.md](CONTRIBUTING.md) for the initial contribution guidelines.
+
+## License
+
+Storyboarder is released under the [MIT License](LICENSE).
