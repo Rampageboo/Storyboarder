@@ -20,7 +20,8 @@ risk.
 Claude may act as the orchestra: clarify the goal, coordinate work, and assess
 the result. Material code changes should normally go to Codex for inspection,
 implementation, and verification. Claude may implement directly when the task
-is truly small, handoff costs more than it saves, or Codex is unavailable.
+is truly small, handoff costs more than it saves, or Codex is unavailable. Name
+which one applied; an exemption that is never named has replaced the default.
 
 ## Persistent information
 
@@ -28,6 +29,10 @@ is truly small, handoff costs more than it saves, or Codex is unavailable.
 and active boundaries that code cannot establish. It is not a process log,
 backlog, or codebase map. Use an adopted map such as Graphify for repository
 topology and impact navigation, then verify exact behavior in source.
+
+When asked which protocol version is running, read `.protocol-lock.json` at the
+repository root and report its `version` and `source`. The distributor writes
+that file; memory cannot establish it and the changelog does not carry it.
 
 ## On-demand modules
 

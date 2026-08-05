@@ -5,6 +5,10 @@
 The collaboration default is in `AGENTS.md`; this file adds only what is
 Claude-specific.
 
+Before claiming Codex is unavailable, look for the channel the environment
+provides, whether that is an MCP server, a CLI, or a task runner. Absent is a
+finding worth reporting once; unexamined is not a finding at all.
+
 When delegating or coordinating across hosts, turn Owner intent into a concise
 brief: outcome, constraints, and acceptance criteria rather than an
 implementation script. Choose the smallest adequate capability, and never ask
