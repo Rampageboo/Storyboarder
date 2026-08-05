@@ -27,8 +27,11 @@ project-context/
 ```
 
 Read `index.yaml` first, then only modules whose `read_when` matches the task.
-Read `exact-facts.yaml` only when exact values matter. Never store secrets or
-personal data; reference their approved storage location.
+During route preflight, inspect only the lightweight adoption/routing metadata
+in `exact-facts.yaml` when needed to discover a declared map, research path, or
+specialized channel; do not load source modules merely to inventory them. Read
+exact fact values only when they matter. Never store secrets or personal data;
+reference their approved storage location.
 
 ## When to adopt it
 
@@ -57,10 +60,33 @@ tool state, or exact values is true only against the revision it was checked
 at, and that is the part that goes stale.
 
 So `exact-facts.yaml` and any state module record the revision they were
-verified against. Compare it with the current revision before relying on them;
-if relevant source has moved, treat that content as unverified and re-check
-rather than repeating it. A stale record that reads as current is worse than
-none, because it sends the next session to plan work that already exists.
+verified against. A handwritten `status: current` is descriptive only and is
+never freshness evidence. Before relying on a revision-bound fact, run:
+
+```text
+python tools/validate_project_context.py project-context/exact-facts.yaml --repo .
+```
+
+The validator compares every `source_revision_represented` in the file with the
+applicable Git revision, not only the record being edited. A mismatch is stale
+and fails closed: refresh the record or treat it as unverified. Operational
+failure to obtain the revision also fails the automatic check. For facts that
+cannot be revision-compared, record a non-manual refresh trigger, an explicit
+validity condition, or a finite `valid_until`; important facts remain
+unverified until that condition is checked, while advisory facts may continue
+only with the warning stated.
+
+A codebase map keeps its revision under its own `represented_revision` key and
+is deliberately outside that comparison, because an `on-query` rebuild makes the
+map current when it is read: a value that lags between sessions is expected
+rather than stale. The record is still covered where it matters — a map claiming
+`status: current` with a manual `update_trigger` has no checkable revision and
+fails the same check.
+
+After editing an exact-facts file, validate the whole file and review adjacent
+facts affected by the same environment or revision change. A stale record that
+reads as current is worse than none, because it sends the next session to plan
+work that already exists.
 
 Current Owner direction, the active task, source, and verified tests outrank
 stored context. Surface conflicts and mark stale material instead of silently

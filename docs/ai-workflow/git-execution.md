@@ -40,6 +40,11 @@ and distribution never overwrites a managed file whose provenance it cannot
 prove, so every later release blocks until the lock exists. Resolve it once
 rather than treating the repository as up to date.
 
+An update that lands while a task is running does not apply to that task.
+Finish under the version it started from and re-read at the next task boundary.
+Adopting new rules halfway leaves finished and unfinished work under different
+ones, which is worse than being one version behind.
+
 A behind branch is not dangerous to merge — files it never touched keep the
 default branch's version. The cost falls on the work done under stale rules,
 which is why this is checked when work starts rather than when a pull request

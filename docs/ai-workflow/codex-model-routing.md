@@ -15,9 +15,9 @@ to the judgment model; a large mechanical change may belong to the executor.
 
 Escalate when the executor cannot establish the cause, repeats the same failure,
 needs materially broader scope, or reaches an architecture, compatibility,
-migration, security, or data-risk decision. Carry forward verified work,
-repository state, failures, constraints, and acceptance criteria rather than
-starting over.
+migration, security, or data-risk decision. Carry forward the minimum sufficient
+contract in `capability-routing.md` plus the verified work the replacement would
+otherwise repeat, rather than starting over.
 
 Model choice does not change engineering role or authority. Parallel workers
 still follow `capability-routing.md`.

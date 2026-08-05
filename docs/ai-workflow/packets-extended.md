@@ -10,9 +10,9 @@ host should read.
 
 ## Effort upgrade
 
-Record the original goal, previous/new thread configuration, repository and
-Git state, completed/remaining work, decisions, commands/results, failures,
-risks, and evidence needed to continue without repeating verified work.
+Record only the material goal, decisions, state, failures, risks, and evidence
+the replacement thread needs to continue without repeating verified work. Do
+not turn continuity context into a prescribed solution.
 
 ## Parallel lease
 
