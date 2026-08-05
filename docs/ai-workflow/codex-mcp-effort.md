@@ -15,6 +15,7 @@ Supported tiers depend on the model/account and may include
 
 Effort is set when a thread is created through
 `config.model_reasoning_effort`. Continuing a thread does not change its model
-or effort. To upgrade, start a new thread with a compact handoff containing the
-goal, completed and remaining work, repository state, decisions, tests,
-failures, and artifacts. Do not repeat verified work.
+or effort. To upgrade, start a new thread with the minimum contract and material
+continuity state defined in `capability-routing.md`. Preserve decisions and
+verified evidence that cannot be efficiently recovered; do not prescribe the
+new thread's reasoning path or repeat recoverable background.

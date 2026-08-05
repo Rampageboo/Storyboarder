@@ -5,6 +5,8 @@ cannot supply, or when it consumes the independently installed
 `run-chatgpt-research` Skill.
 
 The Skill owns research execution, sources, evaluation, and its packet format.
+The Research Packet is the final research delivery format, not the default for
+intermediate collaboration or engineering handoffs.
 The project owns the question, supplied context, permissions, budget, retention,
 and how results affect engineering decisions. Research is optional and never a
 prerequisite for ordinary project startup.
