@@ -13,6 +13,25 @@ If validation cannot run, report the command, blocker, reasoning performed, and
 remaining uncertainty. External research may help with missing knowledge but
 does not replace reproduction or validation.
 
+## Cycles and improvement
+
+One repair followed by a meaningful rerun against the same hypothesis is one
+cycle. A cycle improved when an acceptance-relevant result moved toward its
+threshold — a required failing test passes, a reproduced defect stops
+reproducing, a failure count falls. A different error or a changed test count is
+new evidence, which may justify a new hypothesis but is not improvement.
+
+After two cycles without improvement, stop changing code on that hypothesis.
+State the evidence for and against it, and make the next action an experiment
+that distinguishes the credible alternatives rather than another variation of
+the same repair.
+
+After a third failed cycle, or when no bounded discriminating experiment exists,
+stop and obtain review from outside the frame that produced the approach. The
+point is to break the framing, so rerunning the checks does not satisfy it.
+
+Where a coordinating role exists, it enforces this stop.
+
 ## Qualifying evidence
 
 Outcome evidence shows that a test passes, a symptom stopped, or an output was

@@ -28,6 +28,26 @@ exactly. Write down the question, the verified facts, the constraints, and the
 decision it must unblock first. If those cannot be filled in, the work is
 under-diagnosed rather than blocked.
 
+## Order on a stuck task
+
+Repeated failure reaches research last, not first. Run the smallest
+repository-local discriminating experiment from `failure-and-debug.md`, then
+classify what is actually blocking:
+
+| Blocker | Route |
+|---|---|
+| Framing, scope, or an untested local hypothesis | Independent review, not research |
+| Third-party behavior, a version difference, or a current fact the repository cannot settle | Research is eligible |
+| Product, cost, risk, or authorization | Owner decides |
+
+A hypothesis that keeps failing is usually framed wrong, and framing is settled
+by reasoning against repository evidence. Sending it out returns something true
+and irrelevant, one round trip later.
+
+Repeated failure is also not authorization to send repository content outside
+the execution boundary. That is a disclosure decision under
+`security-and-destructive-actions.md` and it belongs to the Owner.
+
 Send only relevant context and approved source identities. Private content must
 stay within both the project's data policy and the Skill's transmission rules.
 

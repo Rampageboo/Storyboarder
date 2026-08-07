@@ -49,6 +49,28 @@ Git/handoff state:
 Review / verification / acceptance state, when assigned:
 ```
 
+## Verification evidence
+
+Evidence is attached to a state and to whoever produced it:
+
+```text
+Verifier identity:
+Separate execution context from the implementer: yes / no
+Target-state identity:
+Target-state status:  confirmed | unconfirmed | changed
+Verification inputs changed, when applicable:
+```
+
+A separate verifier can execute checks and report their results even when it
+knows the implementer's diagnosis. That does not make its review of the
+diagnosis independent, so those are separate claims and the report says which
+one it supports.
+
+A target state that is `unconfirmed` or `changed` gives an observation about
+behaviour rather than verification of a specified state. Where the implementer
+verified its own work, say so: `Self-verification completed; verification by a
+separate context was not performed.` That is often sufficient for low-risk work.
+
 ## Owner report
 
 `OWNER_HANDBOOK.md` defines what an Owner report answers. Mention model, role,

@@ -15,6 +15,21 @@ maps, automation, and cross-project data should be adopted only when useful.
 Their provider, data boundary, retention, cost, artifacts, and update policy
 belong to the consuming project.
 
+Before execution starts on work worth delegating, the Owner reads the acceptance
+criteria once and answers one question: if the executor satisfies exactly these
+and nothing more, is that the wanted result?
+
+That read is the last cheap moment to catch criteria that can all be met while
+the goal is still missed, and a goal aimed at the wrong problem. Afterwards the
+work is spent, and sunk cost argues for accepting it. Nothing downstream closes
+this gap: the executor is told the brief is authoritative and can only contest
+what contradicts evidence it can see, and insufficiency is an absence.
+
+A standing authorization can cover a class of routine work instead of a fresh
+approval each time. It is itself an Owner decision, so record it, and reopen the
+gate when scope, risk, cost, external disclosure, or product direction changes
+materially.
+
 At completion, the useful questions are simple:
 
 1. What changed?

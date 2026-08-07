@@ -9,6 +9,10 @@ Route by whether a material decision remains:
   are already decided.
 - `gpt-5.6-sol` at `medium`, `high`, or `xhigh`: architecture, ambiguity,
   difficult diagnosis, cross-module judgment, or consequential risk.
+- `gpt-5.6-spark` at `xhigh`: verification runs — reproduction, tests, builds,
+  and checks against a stated expected result. Effort is not lowered because the
+  commands are mechanical; judging whether a check actually tests the stated
+  acceptance criterion is not.
 
 Task size is not the deciding factor. A small unresolved design choice belongs
 to the judgment model; a large mechanical change may belong to the executor.
