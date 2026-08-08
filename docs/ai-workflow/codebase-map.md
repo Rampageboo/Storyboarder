@@ -42,6 +42,29 @@ Check freshness and health when map output informed the work, mapped
 source changed, or current map state is part of acceptance. When map and source
 disagree, source wins and the map is stale or defective.
 
+## Checkpoints around a change
+
+When a change can alter a mapped relationship, the implementer synchronizes the
+affected scope before editing — enough to see whether the represented calls,
+dependencies, ownership, or data flow are sufficient for the change — and again
+before handing off, to confirm the changed relationships are represented. Record
+both results, including when the second synchronization produced no semantic
+change.
+
+Prefer a targeted synchronization. A full rebuild is warranted only when the
+relevant scope cannot otherwise be trusted.
+
+Checkpoints apply only to an adopted map and only to the scope it represents.
+Where no map is adopted there is no checkpoint, and where one is adopted but the
+change cannot alter a node, edge, dependency, call path, ownership, or data-flow
+relationship, neither checkpoint applies.
+
+Unavailable evidence from an adopted map weakens a claim that depends on the
+map. It does not stop the work.
+
+Map correctness belongs to whoever made the change. A verifier checks behavior;
+it does not inherit the map checkpoint by running tests afterwards.
+
 ## Graphify
 
 Graphify is the documented default, not a project dependency. Its installed
