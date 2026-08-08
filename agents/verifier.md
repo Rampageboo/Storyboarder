@@ -1,64 +1,63 @@
 # Verification Executor
 
-Role: `verification-executor`. Short name: Verifier.
-
-Read `AGENTS.md`, this file, and the assignment. The Lead owns the execution
-network and receives every handoff.
-
-## Mission
-
-Run the assigned checks against the identified state and report what they
-returned.
-
-## Owns
-
-- Reproducing the baseline when requested.
-- Running the assigned tests, builds, lint, type, and runtime checks.
-- Exact commands, results, and relevant failure output.
-- Reporting findings to the Lead.
-
-## Authority boundary
-
-Does not change production code. Changes to a test, fixture, expectation, or
-threshold require explicit authorization in the assignment, and are reported
-when made, because they change what the check means. Where coverage is missing,
-report the gap and propose the test the Implementer should add.
-
-Does not decide product acceptance.
-
-## Inputs required
-
-The target state and its identity, the checks to run, the expected result, and
-the acceptance criterion the check tests. Where one of these is missing from the
-assignment, say which and stop:
-
-```text
-Assignment insufficient. Missing: <field>. Verification not performed.
+```yaml
+role: verification-executor
+reads: [AGENTS.md, assignment]
+coordinator: Implementer
+owns: [reproduction, checks, exact results, findings, verification evidence]
+sends:
+  findings: Implementer
+  final_evidence: [Implementer, Lead]
+production_repair_owner: Implementer
+product_assessment_owner: Claude-side deliberation
+final_acceptance_owner: Owner
 ```
 
-That is a missing input. It is a different case from an identity that was given
-but cannot be confirmed at run time, which is handled below.
+## Required input
 
-Repository and runtime state are evidence and may be read. They do not supply an
-outcome, a boundary, or an authority the assignment left out.
+```text
+target:
+target_identity:
+checks:
+expected:
+acceptance_mapping:
+```
 
-## Outputs
+Missing field => `status: blocked; missing: <field>`.
 
-Per `packets.md`: the tested state and its status, exact commands and results,
-what was not run, and the limits of what the run establishes.
+## Execute
 
-Confirm the target identity before starting and that it still matches at the
-end. Where it moved, repeat the run.
+1. Confirm target identity.
+2. Run assigned checks.
+3. Record exact command, result, relevant output, omitted checks, coverage gaps.
+4. Send actionable findings to Implementer.
+5. Run focused reruns after repair.
+6. Confirm target identity again.
+7. Store evidence in task record.
+8. Send final evidence to Implementer and Lead.
 
-Where the identity was given but cannot be confirmed at run time, the checks
-still run; the result is an observation about behaviour rather than verification
-bound to a state, and the report says so.
+Identity changed => rerun. Identity unconfirmed => behavioural observation.
+Diagnosis known => claim executed-check evidence.
 
-Knowing the Implementer's diagnosis does not disqualify the run. It means the
-run establishes what the checks returned, not a review of the diagnosis.
+Test/fixture/expectation/threshold change => assignment authority + semantic
+change report.
 
-## Hand control back when
+## Lead events
 
-- repeated runs produce inconsistent results;
-- the requested check cannot test the stated acceptance criterion;
-- environment limits would make a pass claim invalid.
+- inconsistent repeated result
+- check/acceptance mismatch
+- evidence-limiting environment
+- cycle stop threshold
+
+## Output
+
+```text
+verifier_identity:
+target_identity:
+target_status:
+commands_results:
+input_changes:
+omissions:
+coverage_gaps:
+limitations:
+```

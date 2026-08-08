@@ -1,135 +1,133 @@
 # Capability and Host Routing
 
-Read this module for delegation, parallel work, specialized tools, or
+Load for delegation, parallel work, specialized capability, route failure, or
 independent review.
 
-## Independent Judgment in Collaboration
+## Handoff contract
 
-Claude, Codex, and the Researcher are collaborating reasoning systems. The
-protocol default is that Claude plans, coordinates, and assesses while Codex
-implements and performs initial verification. That assignment decides
-responsibility, not Codex's implementation method or conclusion.
+Claude, Codex, and Researcher are reasoning systems. Role, host, and authority
+remain separate.
 
-This is the canonical brief definition. A handoff provides the minimum
-sufficient contract:
+A handoff carries the minimum sufficient contract:
 
-- the problem or desired outcome;
-- confirmed facts, decisions, and constraints;
-- relevant repository or execution state;
-- required evidence or acceptance conditions; and
-- authority, safety, and risk boundaries.
+```yaml
+outcome: <desired result>
+facts_constraints: <confirmed>
+state: <repository|execution identity>
+acceptance_evidence: <required>
+authority_risk: <boundary>
+```
 
-Omit an item when it has no material effect. Specify outcomes and boundaries,
-not the receiver's reasoning path. Do not prescribe an implementation sequence,
-analytical framework, file-level changes, or expected conclusion unless it is
-already a binding decision.
+Add scope, invariants, exclusions, and stop conditions when material. Specify
+outcome and boundaries; receiver owns method and conclusion. Omit immaterial
+fields.
 
-Suggestions, suspected causes, proposed steps, and referenced files are inputs
-for evaluation, not established facts. The receiver independently determines
-whether they are correct, necessary, and proportionate. Add detail only when it
-preserves a decided invariant, prevents a concrete error, or supplies evidence
-the receiver cannot efficiently recover.
+Receiver treatment of sender input:
 
-## Defaults
+```text
+binding decision -> obey within authority; surface contradiction
+fact             -> verify when material
+suggestion       -> hypothesis
+suspected cause  -> hypothesis
+proposed step    -> candidate method
+referenced file  -> candidate evidence
+```
 
-Role, host, and authority are separate. Claude normally owns task framing,
-coordination, and integration assessment; Codex normally owns implementation
-and initial verification. Within decided outcomes and invariants, Codex chooses
-the implementation sequence, analytical method, and file-level changes. Change
-the host assignment when capability, context, availability, or handoff cost
-makes another route better. A substituted host receives only the authority
-needed for its task.
+Add detail when it preserves an invariant, prevents a concrete error, or
+supplies expensive-to-recover evidence.
 
-The precedence for executor selection is: latest explicit Owner assignment,
-then project-specific delegation rules, then these defaults. "Start now" or
-"just do it" waives another confirmation but is not an executor assignment.
-An explicit assignment changes the host, not the task's permissions or evidence
-standard.
+## Defaults and selection
 
-Delegate when work is independently bounded or needs a capability the current
-host lacks. Keep small, sequential, or tightly coupled work together. The main
-host integrates the result and returns one coherent report.
+```text
+Claude: task framing | coordination | integration assessment
+Codex:  implementation | initial verification
+executor precedence: explicit Owner assignment > project rule > protocol default
+```
 
-## How much structure the work earns
+An explicit assignment changes executor, preserving permissions and evidence
+requirements. Generic start language removes confirmation only. Substitute a
+host when capability, context, availability, or handoff cost requires it; grant
+task-scoped authority.
 
-Separate implementation and verification contexts, formal packets, and map
-checkpoints all cost real tokens and wall-clock. Spend them against risk, not
-against habit.
+Delegate independently bounded work or work requiring another capability. Keep
+small, sequential, or tightly coupled work together. The coordinating host
+integrates one report.
 
-Verification in a context that did not write the change is an evidence
-preference, and an acceptance requirement when a task's risk calls for one. It
-is not the only legal path, and it is available only where the environment can
-provide it.
+## Structure by risk
 
-Prefer a separate verification context when the work touches architecture, a
-public interface, dependencies, schema, migration, security, authorization,
-privacy, or destructive actions; when several components are affected; when no
-deterministic focused check exists; or when a mapped relationship can change.
-Where it is unavailable, self-verification proceeds and says so (`packets.md`),
-unless the acceptance criteria required otherwise — which is an Owner decision.
+Use separate implementation/verification contexts, formal packets, and map
+checkpoints when risk justifies their cost. Strong triggers for separation:
 
-Size does not select the path: a one-line authorization change is material, a
-multi-file mechanical rename may not be. Name the path taken.
+- architecture or public interface;
+- dependency, schema, or migration;
+- security, authorization, privacy, or destructive action;
+- multi-component impact;
+- no deterministic focused check;
+- mapped relationship change.
 
-## Route selection and fallback
+Self-verification remains valid when a separate context is unavailable and the
+report identifies it. Acceptance criteria may require separation. Task size is
+not the selector: materiality and evidence risk are. Record the selected path.
 
-For a capability, channel, map, or data source designated by the project or
-task:
+## Route state
 
-1. Examine the route and its required inputs. Unexamined is not unavailable.
-2. If it is available and sufficiently fresh, use it.
-3. If it can be refreshed at reasonable cost, refresh it and use it.
-4. If a credible fallback preserves the required evidence, declare the
-   fallback and continue.
-5. If the fallback would materially weaken required evidence or exceed
-   delegated authority, report the block.
+For a project/task-designated capability, channel, map, or data source:
 
-Handle ordinary route failures without asking the Owner; escalate only decisions
-that meet the Owner boundary in `OWNER_HANDBOOK.md`.
+```text
+examine route + inputs
+  -> fresh: use
+  -> refreshable at reasonable cost: refresh, use
+  -> evidence-equivalent fallback: declare, use
+  -> weakened evidence or exceeded authority: blocked
+```
 
-## The peer challenge round
+Ordinary route failures stay with the executor. Owner receives decisions that
+meet the boundary in `OWNER_HANDBOOK.md`.
 
-When material framing remains unsettled and a peer route is available, run one
-read-only challenge before execution and, where possible, before acceptance
-criteria are settled. Send the outcome, evidence, constraints, draft acceptance
-conditions, and known risks or open questions. The peer identifies what the
-evidence supports, unverified assumptions, the simplest credible approach,
-material alternatives, and falsifiable conditions. Carry material changes into
-the brief; send unresolved product, risk, or cost choices to the Owner. Skip the
-round when the framing is settled or a settled brief already covers the work.
-One exchange is normally enough; continue only while a material issue remains.
+## Claude-side peer review
 
-## Before delegation
+Trigger: material uncertainty in framing, architecture, or acceptance and an
+available peer route.
 
-Give the receiver the minimum sufficient contract above. Confirm access to the
-needed files, tools, permissions, and return channel. Narrow or stop the
-delegation if those conditions are unclear; do not compensate by writing the
-receiver's solution for it.
+Run before execution and, where possible, before acceptance is settled.
 
-Read the finished brief once as the receiver. It is sufficient if it says what
-to do without this conversation, and safe if it still leaves room to reach the
-opposite conclusion.
+Input: outcome, evidence, constraints, draft acceptance, risks, open questions,
+open conclusion.
 
-## Parallel work
+Peer returns: evidence-supported claims, unverified assumptions, simplest
+credible approach, material alternatives, falsifiable conditions.
 
-Parallel work must use either non-overlapping write scopes or isolated
-alternatives. Do not let two workers modify the same state owner. Name one
-integration owner and stop a worker when scope overlaps, the base revision
-drifts, or isolation is lost. Use the lease in `packets-extended.md` only when
-that coordination needs an explicit record.
+The Claude-side peer discussion settles the execution handoff. Unresolved
+product, risk, or cost choices remain Owner decisions; carry disagreement with
+evidence and decision boundary. One exchange is normal; continue only for a
+remaining material issue. A settled handoff closes the round.
 
-For independent review, provide the evidence and question needed for judgment,
-and withhold the sender's preferred conclusion unless the task explicitly asks
-the receiver to evaluate that proposal. Separate verifiable facts (repository
-state, exact diff or revision, constraints, and test results) from prior
-hypotheses or conclusions.
+## Delegation gate
 
-For implementation of an approved decision, provide the binding decision and
-its invariants. The receiver follows that decision but surfaces material
-contradictions, unsafe assumptions, unnecessary complexity, or evidence that it
-will not achieve the stated outcome. Ordinary implementation handoffs are not
-blind reviews, but prior suggestions still do not become facts.
+Proceed with confirmed files, tools, permissions, required inputs, and return
+channel. Receiver reads the handoff once: it must stand alone and preserve room
+for an evidence-supported contrary conclusion.
 
-The external Research Skill is not a coding sub-agent and does not edit the
-working tree or determine engineering completion. Its results enter through
-`research-integration.md`.
+## Parallelism and judgment
+
+Parallel writers use non-overlapping scopes or isolated alternatives. Name one
+integration owner. Scope overlap, base drift, or isolation loss ends the
+affected worker. Use the lease in `packets-extended.md` when coordination needs
+a durable record.
+
+Independent review input carries evidence, question, repository state, exact
+revision/diff, constraints, and test results. Sender preference is included only
+when proposal evaluation is the task.
+
+Approved implementation input carries the binding decision and invariants. The
+receiver follows them and reports contradictions, unsafe assumptions,
+unnecessary complexity, or contrary evidence.
+
+External Research Skill contract:
+
+```yaml
+route: research-integration.md
+output: evidence
+working_tree_owner: engineering executor
+completion_owner: engineering coordinator
+```
