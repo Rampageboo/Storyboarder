@@ -44,13 +44,32 @@ The precedence for executor selection is: latest explicit Owner assignment,
 then project-specific delegation rules, then these defaults. "Start now" or
 "just do it" waives another confirmation but is not an executor assignment.
 An explicit assignment changes the host, not the task's permissions or evidence
-standard. Record the designated route as examined and the Owner assignment as
-the reason for bypassing it; report that detail only when it materially affects
-the handoff or result.
+standard.
 
 Delegate when work is independently bounded or needs a capability the current
 host lacks. Keep small, sequential, or tightly coupled work together. The main
 host integrates the result and returns one coherent report.
+
+## How much structure the work earns
+
+Separate implementation and verification contexts, formal packets, and map
+checkpoints all cost real tokens and wall-clock. Spend them against risk, not
+against habit.
+
+Verification in a context that did not write the change is an evidence
+preference, and an acceptance requirement when a task's risk calls for one. It
+is not the only legal path, and it is available only where the environment can
+provide it.
+
+Prefer a separate verification context when the work touches architecture, a
+public interface, dependencies, schema, migration, security, authorization,
+privacy, or destructive actions; when several components are affected; when no
+deterministic focused check exists; or when a mapped relationship can change.
+Where it is unavailable, self-verification proceeds and says so (`packets.md`),
+unless the acceptance criteria required otherwise — which is an Owner decision.
+
+Size does not select the path: a one-line authorization change is material, a
+multi-file mechanical rename may not be. Name the path taken.
 
 ## Route selection and fallback
 
@@ -65,10 +84,20 @@ task:
 5. If the fallback would materially weaken required evidence or exceed
    delegated authority, report the block.
 
-Never silently bypass a designated route. Distinguish unexamined, unavailable,
-stale, explicitly exempted, Owner-overridden, and blocked for insufficient
-evidence. Handle ordinary route failures without asking the Owner; escalate
-only decisions that meet the Owner boundary in `OWNER_HANDBOOK.md`.
+Handle ordinary route failures without asking the Owner; escalate only decisions
+that meet the Owner boundary in `OWNER_HANDBOOK.md`.
+
+## The peer challenge round
+
+When material framing remains unsettled and a peer route is available, run one
+read-only challenge before execution and, where possible, before acceptance
+criteria are settled. Send the outcome, evidence, constraints, draft acceptance
+conditions, and known risks or open questions. The peer identifies what the
+evidence supports, unverified assumptions, the simplest credible approach,
+material alternatives, and falsifiable conditions. Carry material changes into
+the brief; send unresolved product, risk, or cost choices to the Owner. Skip the
+round when the framing is settled or a settled brief already covers the work.
+One exchange is normally enough; continue only while a material issue remains.
 
 ## Before delegation
 

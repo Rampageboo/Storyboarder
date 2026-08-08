@@ -15,6 +15,11 @@ maps, automation, and cross-project data should be adopted only when useful.
 Their provider, data boundary, retention, cost, artifacts, and update policy
 belong to the consuming project.
 
+For material delegated work not covered by a standing authorization, the Owner
+confirms before execution that satisfying the acceptance criteria would produce
+the wanted result. Record standing authorizations and reopen this gate when
+scope, risk, cost, external disclosure, or product direction changes materially.
+
 At completion, the useful questions are simple:
 
 1. What changed?
