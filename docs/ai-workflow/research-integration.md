@@ -57,5 +57,5 @@ release approval, or permission for an external/destructive action. Verify
 consequential exact facts before implementation and store only durable decisions
 or validity limits in Project Context.
 
-Claude and Codex may commission the same Skill contract. Research does not
-route coding work or change engineering roles.
+Research does not grant implementation, release, Git, or external-action
+authority.

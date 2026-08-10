@@ -1,4 +1,4 @@
-# Updating the Protocol
+# Updating the Project Policy Release
 
 Updates arrive as pull requests. Tagging a SemVer release in the source
 repository runs the protocol distributor, which opens one pull request per
@@ -17,20 +17,20 @@ that installs.
 
 ## Why a repository gets blocked
 
-`.protocol-lock.json` records the hash of every managed file as installed. A
-file matching its lock hash is unmodified and is replaced; a file that differs
-was changed locally and is never overwritten. A file present without a lock
-entry has unknown provenance and is also left alone.
+`.protocol-lock.json` records `package_id`, release identity, and normalized
+hashes for managed files. A matching file may update; a locally modified or
+unknown file is never overwritten.
 
-So a project whose protocol predates the lock blocks on first contact. Clear it
-once by removing the managed files on a branch and letting the next release
-install them cleanly, or by resolving each path and writing the lock by hand.
+The current package id is `project-policy`. A legacy lock with `retired: true`
+retired the old project-installed collaboration package, not this new package.
+Its hashes remain provenance for safe replacement/deletion during the first
+project-policy update. A successful update writes a non-retired project-policy
+lock, so later releases update normally.
 
 ## What the distributor will not do
 
-It does not touch source, `project-context/`, project documentation, or any
-path outside the managed set, and it does not migrate Project Context. When a
-release changes the context schema or storage boundary, follow the relevant
-guide under `docs/ai-workflow/migrations/`.
+It does not touch source, custom project documentation, `project-context/`,
+plugin installation state, or any path outside the managed set. It does not
+migrate Project Context automatically.
 
 The independent Research Skill updates through its own repository.
