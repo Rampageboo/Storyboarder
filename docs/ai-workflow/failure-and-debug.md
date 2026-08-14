@@ -1,12 +1,11 @@
-# Failure Resolution and Codex Debug
+# Failure Resolution
 
-Read this module for repeated failure, blocked validation, or an unresponsive
-Codex integration.
+Read this module for repeated failure or blocked validation.
 
 Read the exact error, inspect the relevant path, make a bounded repair, and
 rerun the failing check. If the same approach is not producing new evidence,
 change approach, commission research under `research-integration.md`, or stop
-with a Failure Packet. Escalate earlier when the fix requires a product,
+with the evidence and unresolved decision. Escalate earlier when the fix requires a product,
 architecture, security, migration, or data-risk decision.
 
 If validation cannot run, report the command, blocker, reasoning performed, and
@@ -27,11 +26,14 @@ that distinguishes the credible alternatives rather than another variation of
 the same repair.
 
 After a third failed cycle, or when no bounded discriminating experiment exists,
-stop and obtain review from outside the frame that produced the approach. The
-point is to break the framing, so rerunning the checks does not satisfy it. Use
-a fresh reviewer when the normal reviewer materially shaped that framing.
+stop and obtain review outside the frame that produced the approach. Rerunning
+the same checks does not satisfy this stop.
 
-Where a coordinating role exists, it enforces this stop.
+When a premise turns out to be false, withdraw what rested on it rather than
+repairing around it. Stop the work that depended on it, say which conclusions
+still have independent support and which are now unestablished, and re-derive
+from the earliest affected decision. The question is not whether the original
+conclusion can be salvaged — it is whether it stands without the premise.
 
 ## Qualifying evidence
 
@@ -53,7 +55,3 @@ For performance, time, memory, VRAM, or throughput claims, record the build
 mode, machine or material hardware, concurrent load, cold/warm state, sample or
 repeat count, and statistic used. An uncontrolled measurement is an
 observation, not a regression claim.
-
-For Codex integration failures, use `docs/codex-debug-solution.md` when it
-matches the environment; otherwise use the same evidence-driven failure flow.
-Do not ask the Owner to diagnose a technical failure.
