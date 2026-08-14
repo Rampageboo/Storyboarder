@@ -45,7 +45,7 @@ reasoning are still in the conversation. What earns the directory is a decision
 whose reason would otherwise be lost, or a boundary a later session would
 otherwise cross without knowing it existed.
 
-Whoever holds that fact writes it down. The implementer may propose it; the
+Whoever holds that fact writes it down. The code owner may propose it; the
 Owner or assigned context integrator applies it.
 
 Use `PROJECT_CONTEXT_TEMPLATE/` to initialize the layout. Mark unknown content
