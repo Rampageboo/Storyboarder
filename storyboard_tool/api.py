@@ -685,6 +685,12 @@ def create_app(base_dir: Path, bridge_port: int = 8000) -> FastAPI:
     def comic_prompt_preview(shot_id: str) -> dict[str, Any]:
         return _svc().method_comic_prompt_preview(shot_id)
 
+    @app.get("/api/shots/{shot_id}/prompt-preview")
+    def shot_prompt_preview(shot_id: str) -> dict[str, Any]:
+        # Same read-only request snapshot as the comic preview; storyboard boards
+        # simply have no comic context, so the compiled prompt is the board's own.
+        return _svc().method_comic_prompt_preview(shot_id)
+
     @app.post("/api/project/story-graph/branch")
     def create_story_branch(request: StoryGraphBranchRequest) -> dict[str, Any]:
         return _svc().method_create_story_branch(request.route_id, request.from_shot_id, request.title)

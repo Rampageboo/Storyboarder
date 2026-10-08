@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
+import { BookOpen, FilmSlate, FilmStrip, FolderOpen, MagnifyingGlass, WarningCircle, X } from '@phosphor-icons/react'
 import { forgetRecent, listRecents } from '../api'
 import type { RecentProject } from '../api/system'
 import { useProject } from '../state/useProject'
@@ -31,42 +32,50 @@ function RecentCard({
   onForget: () => void
 }) {
   const boards = entry.shot_count === 1 ? '1 board' : `${entry.shot_count} boards`
-  const meta = [entry.exists ? boards : 'Not found', formatSize(entry.size_bytes), formatModified(entry.modified_ms)]
-    .filter(Boolean)
-    .join(' · ')
+  const meta = [boards, formatSize(entry.size_bytes), formatModified(entry.modified_ms)].filter(Boolean).join(' · ')
+
+  if (!entry.exists) {
+    return (
+      <div className="home-card is-missing">
+        <div className="home-card-thumb is-missing">
+          <WarningCircle size={22} />
+          <span>Not found</span>
+        </div>
+        <div className="home-card-body">
+          <span className="home-card-name">{entry.name}</span>
+          <span className="home-card-location" title={entry.path}>{entry.location}</span>
+          <div className="home-card-actions">
+            <button type="button" className="ghost" onClick={onForget} disabled={disabled}>Remove from recent</button>
+          </div>
+        </div>
+      </div>
+    )
+  }
 
   return (
-    <div className={`home-card${entry.exists ? '' : ' is-missing'}`}>
-      <button
-        type="button"
-        className="home-card-open"
-        onClick={onOpen}
-        disabled={disabled || !entry.exists}
-        title={entry.exists ? entry.path : `Missing: ${entry.path}`}
-      >
+    <div className="home-card">
+      <button type="button" className="home-card-open" onClick={onOpen} disabled={disabled} title={entry.path}>
         <span className="home-card-thumb">
-          {entry.thumbnail ? (
-            <img src={entry.thumbnail} alt="" loading="lazy" />
-          ) : (
-            <span className="home-card-thumb-empty" aria-hidden="true">
-              {entry.kind === 'folder' ? '▤' : '▦'}
-            </span>
-          )}
-          <span className="home-card-kind">{entry.kind === 'folder' ? 'FOLDER' : 'SBD'}</span>
+          {entry.thumbnail ? <img src={entry.thumbnail} alt="" loading="lazy" /> : <FilmSlate size={26} className="home-card-thumb-empty" />}
         </span>
-        <span className="home-card-name">{entry.name}</span>
-        <span className="home-card-meta">{meta}</span>
-        <span className="home-card-location">{entry.location}</span>
+        <span className="home-card-body">
+          <span className="home-card-title-row">
+            <span className="home-card-name">{entry.name}</span>
+            <span className="home-card-kind">{entry.kind === 'folder' ? 'FOLDER' : 'SBD'}</span>
+          </span>
+          <span className="home-card-meta">{meta}</span>
+          <span className="home-card-location">{entry.location}</span>
+        </span>
       </button>
       <button
         type="button"
-        className="home-card-forget"
+        className="ghost icon-btn home-card-forget"
         onClick={onForget}
         disabled={disabled}
         aria-label={`Remove ${entry.name} from recent`}
         title="Remove from recent"
       >
-        &times;
+        <X size={14} />
       </button>
     </div>
   )
@@ -80,6 +89,7 @@ export function HomePage() {
   const { newProject, openProjectFromDialog, openProjectPath, projectActionBusy, reportError } = useProject()
   const [recents, setRecents] = useState<RecentProject[]>([])
   const [loading, setLoading] = useState(true)
+  const [filter, setFilter] = useState('')
 
   const refresh = useCallback(() => listRecents()
     .then(result => setRecents(result.recents))
@@ -91,9 +101,9 @@ export function HomePage() {
     void refresh()
   }, [refresh])
 
-  const handleNew = useCallback(async () => {
+  const handleNew = useCallback(async (projectType: 'video' | 'comic') => {
     try {
-      await newProject({ path: null, ...DEFAULT_CANVAS })
+      await newProject({ path: null, ...DEFAULT_CANVAS, project_type: projectType })
     } catch {
       // surfaced via the app error banner
     }
@@ -132,34 +142,58 @@ export function HomePage() {
     [reportError],
   )
 
+  const visible = filter.trim()
+    ? recents.filter((entry) => `${entry.name} ${entry.location}`.toLowerCase().includes(filter.trim().toLowerCase()))
+    : recents
+
   return (
     <div className="home-page">
       <aside className="home-sidebar">
-        <button type="button" className="home-action primary" onClick={() => void handleNew()} disabled={projectActionBusy}>
-          New file
-        </button>
-        <button type="button" className="home-action" onClick={() => void handleOpen()} disabled={projectActionBusy}>
-          Open
-        </button>
-        <div className="home-sidebar-note">
-          <p>Each project is a portable folder with a lightweight .sbd document and editable assets.</p>
+        <div>
+          <h1 className="home-title">Start a project</h1>
+          <p className="home-lede">A project is a portable folder: one .sbd document plus the PSDs, previews and references it links.</p>
+        </div>
+        <div className="home-actions">
+          <button type="button" className="home-action is-primary" onClick={() => void handleNew('video')} disabled={projectActionBusy}>
+            <FilmStrip size={20} />
+            <span><strong>New storyboard</strong><small>Boards, routes and animatic</small></span>
+            <span className="kbd">Ctrl N</span>
+          </button>
+          <button type="button" className="home-action" onClick={() => void handleNew('comic')} disabled={projectActionBusy}>
+            <BookOpen size={20} />
+            <span><strong>New comic</strong><small>Chapters, pages and long scrolls</small></span>
+          </button>
+          <button type="button" className="home-action" onClick={() => void handleOpen()} disabled={projectActionBusy}>
+            <FolderOpen size={20} />
+            <span><strong>Open project…</strong><small>.sbd file or project folder</small></span>
+            <span className="kbd">Ctrl O</span>
+          </button>
         </div>
       </aside>
 
-      <section className="home-main">
-        <h1 className="home-title">Welcome to Storyboarder</h1>
+      <section className="home-main" aria-labelledby="home-recent-title">
         <div className="home-recent-head">
-          <h2>Recent</h2>
+          <h2 id="home-recent-title">Recent</h2>
           {recents.length > 0 ? <span className="home-recent-count">{recents.length}</span> : null}
+          {recents.length > 3 ? (
+            <label className="home-filter">
+              <MagnifyingGlass size={15} />
+              <input value={filter} onChange={(event) => setFilter(event.target.value)} placeholder="Filter projects" aria-label="Filter recent projects" />
+            </label>
+          ) : null}
         </div>
 
         {loading ? (
-          <p className="home-empty">Loading recent documents...</p>
+          <p className="home-empty">Loading recent projects…</p>
         ) : recents.length === 0 ? (
-          <p className="home-empty">No recent documents yet. Create one with New file, or open an existing .sbd.</p>
+          <div className="home-empty-state">
+            <FilmSlate size={30} />
+            <p>No recent projects yet.</p>
+            <p className="home-empty">Create a storyboard or comic, or open an existing .sbd.</p>
+          </div>
         ) : (
           <div className="home-grid">
-            {recents.map((entry) => (
+            {visible.map((entry) => (
               <RecentCard
                 key={entry.path}
                 entry={entry}

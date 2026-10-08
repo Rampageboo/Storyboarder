@@ -1,11 +1,17 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react'
+import { ArrowClockwise, ChatCircle, Check } from '@phosphor-icons/react'
 import {
+  addComment,
   createScene2D,
   listScene2D,
   listScene3D,
+  previewShotPrompt,
+  resolveComment,
+  type ShotPromptPreview,
 } from '../api'
 import { useProject } from '../state/useProject'
-import type { Scene2D, Scene3DRecord, Shot, ShotContinuity, ShotDesign } from '../types'
+import type { ProjectPayload, Scene2D, Scene3DRecord, Shot, ShotComment, ShotContinuity, ShotDesign } from '../types'
+import { statusStyle } from '../utils/status'
 import { KeywordTextarea, type KeywordAssetHint } from './KeywordTextarea'
 import './ShotInspector.css'
 
@@ -17,6 +23,15 @@ const CONTINUITY_MODES: { value: ShotContinuity['mode']; label: string }[] = [
   { value: 'time-jump', label: 'Time jump' },
   { value: 'reset', label: 'Continuity reset' },
 ]
+
+// Suggestions only: the fields stay free text because the prompt compiler reads them verbatim.
+const SHOT_SIZES = ['Extreme wide', 'Wide', 'Full', 'Medium wide', 'Medium', 'Medium close-up', 'Close-up', 'Extreme close-up', 'Insert']
+const CAMERA_ANGLES = ['Eye level', 'High angle', 'Low angle', 'Bird’s-eye', 'Worm’s-eye', 'Dutch angle', 'Over the shoulder', 'POV']
+const CAMERA_HEIGHTS = ['Ground', 'Knee', 'Waist', 'Shoulder', 'Eye', 'Overhead']
+const CAMERA_MOVES = ['Static', 'Pan', 'Tilt', 'Push in', 'Pull out', 'Dolly', 'Truck', 'Crane', 'Handheld', 'Zoom']
+const LENSES = ['Wide 18–24mm', 'Normal 35mm', 'Normal 50mm', 'Portrait 85mm', 'Telephoto 135mm+']
+
+type InspectorTab = 'shot' | 'camera' | 'continuity' | 'prompt' | 'notes' | 'advanced'
 
 function toCommaList(values: string[] | undefined) {
   return (values || []).join(', ')
@@ -67,8 +82,13 @@ function keywordAssetHints(scenes: Scene3DRecord[]): KeywordAssetHint[] {
   })
 }
 
-export function ShotInspector() {
+function Datalist({ id, options }: { id: string; options: string[] }) {
+  return <datalist id={id}>{options.map((option) => <option key={option} value={option} />)}</datalist>
+}
+
+export function ShotInspector({ advanced }: { advanced?: ReactNode }) {
   const { project, selectedShotId } = useProject()
+  const [tab, setTab] = useState<InspectorTab>('shot')
 
   const shot = useMemo(() => {
     if (!project || !selectedShotId) return null
@@ -77,34 +97,81 @@ export function ShotInspector() {
 
   if (!project) return null
 
-  if (!shot) {
-    return (
-      <section className="inspector">
-        <div className="inspector-empty">
-          <p>Select or add a shot</p>
-          <p className="inspector-empty-hint">Storyboard details and continuity will appear here.</p>
-        </div>
-      </section>
-    )
-  }
+  const openNotes = (shot?.comments ?? []).filter((comment) => !comment.resolved).length
+  const tabs: { id: InspectorTab; label: string }[] = [
+    { id: 'shot', label: 'Shot' },
+    { id: 'camera', label: 'Camera' },
+    { id: 'continuity', label: 'Continuity' },
+    { id: 'prompt', label: 'Prompt' },
+    { id: 'notes', label: openNotes ? `Notes · ${openNotes}` : 'Notes' },
+  ]
 
   return (
-    <ShotInspectorEditor
-      key={shot.shot_id}
-      shot={shot}
-      statuses={project.statuses || []}
-    />
+    <section className="inspector">
+      <div className="tab-row inspector-tabs" role="tablist" aria-label="Board details">
+        {tabs.map((item) => (
+          <button key={item.id} type="button" role="tab" aria-selected={tab === item.id} onClick={() => setTab(item.id)}>
+            {item.label}
+          </button>
+        ))}
+      </div>
+      {tab === 'advanced' ? (
+        <div className="inspector-body inspector-advanced">
+          <div className="inspector-section-title">
+            <span className="section-label">Advanced</span>
+            <button type="button" className="ghost" onClick={() => setTab('shot')}>Back</button>
+          </div>
+          {advanced}
+        </div>
+      ) : shot ? (
+        <ShotInspectorEditor key={shot.shot_id} shot={shot} statuses={project.statuses || []} tab={tab} />
+      ) : (
+        <div className="inspector-empty">
+          <p>Select or add a board</p>
+          <p className="inspector-empty-hint">Story, camera and continuity details appear here.</p>
+        </div>
+      )}
+      {shot ? (
+        <InspectorFooter shot={shot} advancedOpen={tab === 'advanced'} hasAdvanced={!!advanced}
+          onToggleAdvanced={() => setTab((current) => current === 'advanced' ? 'shot' : 'advanced')} />
+      ) : null}
+    </section>
+  )
+}
+
+function InspectorFooter({ shot, advancedOpen, hasAdvanced, onToggleAdvanced }: {
+  shot: Shot
+  advancedOpen: boolean
+  hasAdvanced: boolean
+  onToggleAdvanced: () => void
+}) {
+  const { isShotDirty, savingShots, saveShot } = useProject()
+  const dirty = isShotDirty(shot.shot_id)
+  const saving = !!savingShots[shot.shot_id]
+  return (
+    <footer className="inspector-footer">
+      <span className="inspector-footer-id" title={shot.shot_id}>{shot.shot_id.slice(0, 8)}</span>
+      <span className={'inspector-footer-state' + (dirty || saving ? ' is-dirty' : '')}>{saving ? 'Saving…' : dirty ? 'Unsaved' : 'Saved'}</span>
+      {dirty ? (
+        <button type="button" className="ghost" onClick={() => void saveShot(shot.shot_id)} disabled={saving}>Save now</button>
+      ) : null}
+      {hasAdvanced ? (
+        <button type="button" className="ghost" aria-pressed={advancedOpen} onClick={onToggleAdvanced}>Advanced</button>
+      ) : null}
+    </footer>
   )
 }
 
 function ShotInspectorEditor({
   shot,
   statuses,
+  tab,
 }: {
   shot: Shot
   statuses: string[]
+  tab: InspectorTab
 }) {
-  const { project, getDraft, editShotField, isShotDirty, savingShots, saveShot, reportError } = useProject()
+  const { project, getDraft, editShotField, reportError } = useProject()
   const [tagsText, setTagsText] = useState(() => toCommaList(shot.tags))
   const [dependencyText, setDependencyText] = useState(() => toCommaList(shot.continuity.depends_on_shot_ids))
   const [preserveText, setPreserveText] = useState(() => toLineList(shot.continuity.preserve))
@@ -115,14 +182,13 @@ function ShotInspectorEditor({
 
   const shotId = shot.shot_id
   const draft = getDraft(shotId)
-  const saving = !!savingShots[shotId]
-  const dirty = isShotDirty(shotId)
   const design = draft?.shot_design ?? shot.shot_design
   const continuity = draft?.continuity ?? shot.continuity
   const sceneLabel = String(draft?.scene ?? shot.scene ?? '')
   const sceneId = String(draft?.scene_id ?? shot.scene_id ?? '')
   const description = draft?.description ?? shot.description
   const actionNote = draft?.action_note ?? shot.action_note
+  const status = String(draft?.status ?? shot.status ?? 'Draft')
   const storyAndAction = design.story_beat || [description, actionNote]
     .map((value) => value.trim())
     .filter((value, index, values) => value && values.indexOf(value) === index)
@@ -198,172 +264,335 @@ function ShotInspectorEditor({
     updateContinuity('intentional_changes', fromLineList(value))
   }
 
-  return (
-    <section className="inspector">
-      <div className="inspector-header">
-        <div>
-          <div className="inspector-title">Shot Inspector</div>
-          <div className="inspector-subtitle">
-            {dirty ? 'Unsaved changes' : 'All changes saved'}
-            {saving ? ' | Saving...' : ''}
-          </div>
-        </div>
-        <div className="inspector-actions">
-          <button type="button" onClick={() => void saveShot(shotId)} disabled={!dirty || saving}>
-            {saving ? 'Saving...' : 'Save shot'}
-          </button>
-        </div>
-      </div>
-
+  if (tab === 'shot') {
+    return (
       <div className="inspector-body">
-        <>
-            <label className="shot-title-field">
-              <div className="field-label">Title</div>
-              <input value={draft?.title ?? shot.title} onChange={(event) => editShotField(shotId, 'title', event.target.value)} />
-            </label>
-
-            <div className="section-heading shot-detail-heading shot-content-heading">
-              <span>Shot content</span>
-              <small className="shot-detail-scope is-ai">Used for generation</small>
-            </div>
-            <label>
-              <div className="field-label">Story &amp; action</div>
-              <KeywordTextarea assets={assetHints} rows={4} value={storyAndAction} onValueChange={updateStoryAndAction} placeholder="What happens in this shot? Include the key movement in one clear description." />
-              <span className="field-hint">Replaces separate Description, Story beat, and Action inputs.</span>
-            </label>
-
-            <details className="shot-details" open>
-              <summary>Shot details</summary>
-              <div className="field-grid shot-details-grid">
-              <label>
-                <div className="field-label">Scene</div>
-                <div className="scene-picker-row">
-                  <select value={sceneId} onChange={(event) => updateScene(event.target.value)}>
-                    <option value="">{sceneLabel ? `Unlinked: ${sceneLabel}` : 'No scene'}</option>
-                    {scenes.map((scene) => <option key={scene.id} value={scene.id}>{scene.title}</option>)}
-                  </select>
-                  <button type="button" onClick={() => void createAndLinkScene()} disabled={creatingScene}>
-                    {creatingScene ? 'Creating...' : 'New'}
-                  </button>
-                </div>
-              </label>
-              <label>
-                <div className="field-label">Sequence</div>
-                <input value={draft?.sequence ?? shot.sequence} onChange={(event) => editShotField(shotId, 'sequence', event.target.value)} />
-              </label>
-              <label>
-                <div className="field-label">Status</div>
-                <select value={String(draft?.status ?? shot.status ?? 'Draft')} onChange={(event) => editShotField(shotId, 'status', event.target.value)}>
-                  {statuses.map((status) => <option key={status} value={status}>{status}</option>)}
-                </select>
-              </label>
-              <label>
-                <div className="field-label">Duration (seconds)</div>
-                <input type="number" step="any" min="0.000001" value={String(draft?.duration_seconds ?? shot.duration_seconds ?? 3)} onChange={(event) => editShotField(shotId, 'duration_seconds', Number(event.target.value))} />
-              </label>
-              <label>
-                <div className="field-label">Tags</div>
-                <input value={tagsText} onChange={(event) => onTagsChange(event.target.value)} placeholder="tag1, tag2" />
-              </label>
-              </div>
-            </details>
-
-            <div className="field-grid">
-              <label>
-                <div className="field-label">Characters</div>
-                <KeywordTextarea assets={assetHints} rows={3} value={draft?.character_note ?? shot.character_note} onValueChange={(value) => editShotField(shotId, 'character_note', value)} placeholder="Who is visible, appearance, expression..." />
-              </label>
-              <label>
-                <div className="field-label">Dialogue</div>
-                <KeywordTextarea assets={assetHints} rows={3} value={draft?.dialogue ?? shot.dialogue} onValueChange={(value) => editShotField(shotId, 'dialogue', value)} />
-              </label>
-              <label>
-                <div className="field-label">Camera &amp; composition</div>
-                <KeywordTextarea assets={assetHints} rows={3} value={draft?.camera_note ?? shot.camera_note} onValueChange={(value) => editShotField(shotId, 'camera_note', value)} placeholder="One clear visual direction for this shot." />
-              </label>
-              <label>
-                <div className="field-label">Lighting</div>
-                <KeywordTextarea assets={assetHints} rows={3} value={draft?.lighting_note ?? shot.lighting_note} onValueChange={(value) => editShotField(shotId, 'lighting_note', value)} />
-              </label>
-            </div>
-
-            <div className="section-heading shot-detail-heading">
-              <span>Production notes</span>
-              <small className="shot-detail-scope is-project">Production only</small>
-            </div>
-            <div className="field-grid shot-detail-production">
-              <label>
-                <div className="field-label">Transition</div>
-                <textarea rows={2} value={draft?.transition_note ?? shot.transition_note} onChange={(event) => editShotField(shotId, 'transition_note', event.target.value)} placeholder="Cut, dissolve, match cut, editorial note..." />
-              </label>
-              <label>
-                <div className="field-label">Shot ID</div>
-                <input value={shot.shot_id} readOnly />
-              </label>
-            </div>
-            <div className="reference-summary">
-              <span>{shot.reference_image_paths.length}</span>
-              <div><strong>Shot references attached</strong><small>Reference images for this storyboard shot.</small></div>
-            </div>
-        </>
-
-        <section className="inspector-section" aria-labelledby="continuity-section-title">
-          <div className="section-heading inspector-section-heading">
-            <span id="continuity-section-title">Continuity</span>
-            <small>Connections between shots</small>
-          </div>
-            <div className="inspector-callout">
-              Expected is authored intent. Observed describes the generated image. Resolved is the canonical state inherited downstream.
-            </div>
-            <div className="field-grid">
-              <label>
-                <div className="field-label">Continuity mode</div>
-                <select value={continuity.mode} onChange={(event) => updateContinuity('mode', event.target.value as ShotContinuity['mode'])}>
-                  {CONTINUITY_MODES.map((mode) => <option key={mode.value} value={mode.value}>{mode.label}</option>)}
-                </select>
-              </label>
-              <label>
-                <div className="field-label">Primary continuity source shot</div>
-                <input value={continuity.primary_continuity_source_shot_id} onChange={(event) => updateContinuity('primary_continuity_source_shot_id', event.target.value)} placeholder="Shot ID" />
-              </label>
-            </div>
-            <label>
-              <div className="field-label">Depends on shot IDs</div>
-              <input value={dependencyText} onChange={(event) => onDependenciesChange(event.target.value)} placeholder="shot_a, shot_b" />
-            </label>
-
-            <div className="section-heading"><span>Authored continuity</span><small>Intent before generation</small></div>
-            <div className="field-grid">
-              <label>
-                <div className="field-label">Expected in</div>
-                <KeywordTextarea assets={assetHints} rows={5} value={continuity.expected_in} onValueChange={(value) => updateContinuity('expected_in', value)} />
-              </label>
-              <label>
-                <div className="field-label">Expected out</div>
-                <KeywordTextarea assets={assetHints} rows={5} value={continuity.expected_out} onValueChange={(value) => updateContinuity('expected_out', value)} />
-              </label>
-              <label>
-                <div className="field-label">Preserve (one per line)</div>
-                <KeywordTextarea assets={assetHints} rows={5} value={preserveText} onValueChange={onPreserveChange} />
-              </label>
-              <label>
-                <div className="field-label">Intentional changes (one per line)</div>
-                <KeywordTextarea assets={assetHints} rows={5} value={intentionalChangesText} onValueChange={onIntentionalChangesChange} />
-              </label>
-            </div>
-
-            <div className="section-heading"><span>Review and canon</span><small>Observed drift never becomes canonical automatically</small></div>
-            <label>
-              <div className="field-label">Observed output</div>
-              <textarea rows={5} value={continuity.observed_out} onChange={(event) => updateContinuity('observed_out', event.target.value)} placeholder="What the generated candidate actually contains" />
-            </label>
-            <label>
-              <div className="field-label">Resolved canonical output</div>
-              <textarea rows={5} value={continuity.resolved_out} onChange={(event) => updateContinuity('resolved_out', event.target.value)} placeholder="Approved state inherited by downstream shots" />
-            </label>
-        </section>
-
+        <label className="field">
+          <span className="field-label">Title</span>
+          <input value={draft?.title ?? shot.title} onChange={(event) => editShotField(shotId, 'title', event.target.value)} placeholder="Untitled board" />
+        </label>
+        <label className="field">
+          <span className="field-label-row"><span className="field-label">Story &amp; action</span><span className="field-flag">Feeds generation</span></span>
+          <KeywordTextarea assets={assetHints} rows={4} value={storyAndAction} onValueChange={updateStoryAndAction} placeholder="What happens in this shot? Include the key movement in one clear description." />
+        </label>
+        <label className="field">
+          <span className="field-label">Dialogue</span>
+          <KeywordTextarea assets={assetHints} rows={2} value={draft?.dialogue ?? shot.dialogue} onValueChange={(value) => editShotField(shotId, 'dialogue', value)} />
+        </label>
+        <div className="field-grid">
+          <label className="field">
+            <span className="field-label">Scene</span>
+            <span className="scene-picker-row">
+              <select value={sceneId} onChange={(event) => updateScene(event.target.value)}>
+                <option value="">{sceneLabel ? `Unlinked: ${sceneLabel}` : 'No scene'}</option>
+                {scenes.map((scene) => <option key={scene.id} value={scene.id}>{scene.title}</option>)}
+              </select>
+              <button type="button" className="ghost" title="Create a new scene and link it" onClick={() => void createAndLinkScene()} disabled={creatingScene}>
+                {creatingScene ? '…' : 'New'}
+              </button>
+            </span>
+          </label>
+          <label className="field">
+            <span className="field-label">Status</span>
+            <span className="status-select" style={statusStyle(status)}>
+              <span className="status-dot" />
+              <select value={status} onChange={(event) => editShotField(shotId, 'status', event.target.value)}>
+                {statuses.map((option) => <option key={option} value={option}>{option}</option>)}
+              </select>
+            </span>
+          </label>
+          <label className="field">
+            <span className="field-label">Duration</span>
+            <span className="input-suffix">
+              <input type="number" step="any" min="0.000001" value={String(draft?.duration_seconds ?? shot.duration_seconds ?? 3)} onChange={(event) => editShotField(shotId, 'duration_seconds', Number(event.target.value))} />
+              <span>sec</span>
+            </span>
+          </label>
+          <label className="field">
+            <span className="field-label">Sequence</span>
+            <input value={draft?.sequence ?? shot.sequence} onChange={(event) => editShotField(shotId, 'sequence', event.target.value)} />
+          </label>
+        </div>
+        <label className="field">
+          <span className="field-label">Characters</span>
+          <KeywordTextarea assets={assetHints} rows={2} value={draft?.character_note ?? shot.character_note} onValueChange={(value) => editShotField(shotId, 'character_note', value)} placeholder="Who is visible, appearance, expression…" />
+        </label>
+        <label className="field">
+          <span className="field-label">Transition</span>
+          <input value={draft?.transition_note ?? shot.transition_note} onChange={(event) => editShotField(shotId, 'transition_note', event.target.value)} placeholder="Cut, dissolve, match cut…" />
+        </label>
+        <label className="field">
+          <span className="field-label">Tags</span>
+          <input value={tagsText} onChange={(event) => onTagsChange(event.target.value)} placeholder="Comma separated" />
+        </label>
+        <p className="inspector-intro">
+          {shot.reference_image_paths.length} reference image{shot.reference_image_paths.length === 1 ? '' : 's'} attached · manage them in References.
+        </p>
       </div>
-    </section>
+    )
+  }
+
+  if (tab === 'camera') {
+    const listId = (name: string) => `inspector-${name}-${shotId}`
+    return (
+      <div className="inspector-body">
+        <p className="inspector-intro">Structured camera intent. Every field feeds the generation prompt; leave blank what doesn’t matter.</p>
+        <div className="field-grid">
+          <label className="field">
+            <span className="field-label">Shot size</span>
+            <input list={listId('size')} value={design.shot_size} onChange={(event) => updateDesign('shot_size', event.target.value)} />
+            <Datalist id={listId('size')} options={SHOT_SIZES} />
+          </label>
+          <label className="field">
+            <span className="field-label">Angle</span>
+            <input list={listId('angle')} value={design.camera_angle} onChange={(event) => updateDesign('camera_angle', event.target.value)} />
+            <Datalist id={listId('angle')} options={CAMERA_ANGLES} />
+          </label>
+          <label className="field">
+            <span className="field-label">Height</span>
+            <input list={listId('height')} value={design.camera_height} onChange={(event) => updateDesign('camera_height', event.target.value)} />
+            <Datalist id={listId('height')} options={CAMERA_HEIGHTS} />
+          </label>
+          <label className="field">
+            <span className="field-label">Movement</span>
+            <input list={listId('move')} value={design.camera_movement} onChange={(event) => updateDesign('camera_movement', event.target.value)} />
+            <Datalist id={listId('move')} options={CAMERA_MOVES} />
+          </label>
+          <label className="field">
+            <span className="field-label">Lens</span>
+            <input list={listId('lens')} value={design.lens_intent} onChange={(event) => updateDesign('lens_intent', event.target.value)} />
+            <Datalist id={listId('lens')} options={LENSES} />
+          </label>
+          <label className="field">
+            <span className="field-label">Position</span>
+            <input value={design.camera_position} onChange={(event) => updateDesign('camera_position', event.target.value)} placeholder="e.g. doorway" />
+          </label>
+        </div>
+        <label className="field">
+          <span className="field-label">Composition</span>
+          <textarea rows={2} value={design.composition} onChange={(event) => updateDesign('composition', event.target.value)} placeholder="Where things sit in frame" />
+        </label>
+        <div className="field-grid is-three">
+          <label className="field">
+            <span className="field-label">Foreground</span>
+            <input value={design.foreground} onChange={(event) => updateDesign('foreground', event.target.value)} />
+          </label>
+          <label className="field">
+            <span className="field-label">Midground</span>
+            <input value={design.midground} onChange={(event) => updateDesign('midground', event.target.value)} />
+          </label>
+          <label className="field">
+            <span className="field-label">Background</span>
+            <input value={design.background} onChange={(event) => updateDesign('background', event.target.value)} />
+          </label>
+        </div>
+        <div className="field-grid">
+          <label className="field">
+            <span className="field-label">Focal point</span>
+            <input value={design.focal_point} onChange={(event) => updateDesign('focal_point', event.target.value)} />
+          </label>
+          <label className="field">
+            <span className="field-label">Subject movement</span>
+            <input value={design.subject_movement} onChange={(event) => updateDesign('subject_movement', event.target.value)} />
+          </label>
+        </div>
+        <label className="field">
+          <span className="field-label">Axis of action</span>
+          <input value={design.axis_of_action} onChange={(event) => updateDesign('axis_of_action', event.target.value)} placeholder="Who looks at whom, and which side the camera stays on" />
+        </label>
+        <label className="check-field">
+          <input type="checkbox" checked={!!design.intentional_axis_crossing} onChange={(event) => updateDesign('intentional_axis_crossing', event.target.checked)} />
+          Intentional axis crossing
+        </label>
+        <label className="field">
+          <span className="field-label">Camera notes</span>
+          <KeywordTextarea assets={assetHints} rows={2} value={draft?.camera_note ?? shot.camera_note} onValueChange={(value) => editShotField(shotId, 'camera_note', value)} placeholder="Anything the fields above don’t capture" />
+        </label>
+        <label className="field">
+          <span className="field-label">Lighting</span>
+          <KeywordTextarea assets={assetHints} rows={2} value={draft?.lighting_note ?? shot.lighting_note} onValueChange={(value) => editShotField(shotId, 'lighting_note', value)} />
+        </label>
+      </div>
+    )
+  }
+
+  if (tab === 'continuity') {
+    return (
+      <div className="inspector-body">
+        <p className="inspector-intro">Expected is authored intent. Observed describes the generated image. Resolved is the canonical state inherited downstream.</p>
+        <div className="field-grid">
+          <label className="field">
+            <span className="field-label">Mode</span>
+            <select value={continuity.mode} onChange={(event) => updateContinuity('mode', event.target.value as ShotContinuity['mode'])}>
+              {CONTINUITY_MODES.map((mode) => <option key={mode.value} value={mode.value}>{mode.label}</option>)}
+            </select>
+          </label>
+          <label className="field">
+            <span className="field-label">Primary source shot</span>
+            <input className="is-mono" value={continuity.primary_continuity_source_shot_id} onChange={(event) => updateContinuity('primary_continuity_source_shot_id', event.target.value)} placeholder="Shot ID" />
+          </label>
+        </div>
+        <label className="field">
+          <span className="field-label">Depends on shot IDs</span>
+          <input className="is-mono" value={dependencyText} onChange={(event) => onDependenciesChange(event.target.value)} placeholder="shot_a, shot_b" />
+        </label>
+
+        <div className="inspector-section-title"><span className="section-label">Authored</span><small>Intent before generation</small></div>
+        <label className="field">
+          <span className="field-label">Expected in</span>
+          <KeywordTextarea assets={assetHints} rows={3} value={continuity.expected_in} onValueChange={(value) => updateContinuity('expected_in', value)} />
+        </label>
+        <label className="field">
+          <span className="field-label">Expected out</span>
+          <KeywordTextarea assets={assetHints} rows={3} value={continuity.expected_out} onValueChange={(value) => updateContinuity('expected_out', value)} />
+        </label>
+        <label className="field">
+          <span className="field-label">Preserve · one per line</span>
+          <KeywordTextarea assets={assetHints} rows={3} value={preserveText} onValueChange={onPreserveChange} />
+        </label>
+        <label className="field">
+          <span className="field-label">Intentional changes · one per line</span>
+          <KeywordTextarea assets={assetHints} rows={3} value={intentionalChangesText} onValueChange={onIntentionalChangesChange} />
+        </label>
+
+        <div className="inspector-section-title"><span className="section-label">Review &amp; canon</span><small>Observed drift never becomes canonical automatically</small></div>
+        <label className="field">
+          <span className="field-label">Observed output</span>
+          <textarea rows={3} value={continuity.observed_out} onChange={(event) => updateContinuity('observed_out', event.target.value)} placeholder="What the generated candidate actually contains" />
+        </label>
+        <label className="field">
+          <span className="field-label">Resolved canonical output</span>
+          <textarea rows={3} value={continuity.resolved_out} onChange={(event) => updateContinuity('resolved_out', event.target.value)} placeholder="Approved state inherited by downstream shots" />
+        </label>
+      </div>
+    )
+  }
+
+  if (tab === 'prompt') return <PromptPreview shot={shot} />
+  return <ShotNotes shot={shot} />
+}
+
+function PromptPreview({ shot }: { shot: Shot }) {
+  const { isShotDirty, saveShot, reportError } = useProject()
+  const [preview, setPreview] = useState<ShotPromptPreview | null>(null)
+  const [loading, setLoading] = useState(false)
+  const [failed, setFailed] = useState('')
+  const dirty = isShotDirty(shot.shot_id)
+
+  const refresh = useCallback(async () => {
+    setLoading(true)
+    setFailed('')
+    try {
+      // The preview is compiled from saved fields, so persist pending edits first.
+      if (dirty) await saveShot(shot.shot_id)
+      setPreview(await previewShotPrompt(shot.shot_id))
+    } catch (error) {
+      setFailed(error instanceof Error ? error.message : 'The prompt could not be compiled.')
+      reportError(error)
+    } finally {
+      setLoading(false)
+    }
+  }, [dirty, reportError, saveShot, shot.shot_id])
+
+  useEffect(() => {
+    let cancelled = false
+    previewShotPrompt(shot.shot_id)
+      .then((result) => { if (!cancelled) setPreview(result) })
+      .catch((error) => { if (!cancelled) setFailed(error instanceof Error ? error.message : 'The prompt could not be compiled.') })
+    return () => { cancelled = true }
+  }, [shot.shot_id])
+
+  const prompt = preview?.prompt
+  return (
+    <div className="inspector-body">
+      <div className="inspector-section-title">
+        <span className="section-label">Assembled prompt</span>
+        <button type="button" className="ghost" onClick={() => void refresh()} disabled={loading}>
+          <ArrowClockwise size={14} />{loading ? 'Compiling…' : dirty ? 'Save & refresh' : 'Refresh'}
+        </button>
+      </div>
+      {failed ? <div className="notice is-danger">{failed}</div> : null}
+      {prompt ? (
+        <>
+          <pre className="prompt-block">{prompt.compiled_prompt || 'Nothing to send yet — add story, camera or scene details.'}</pre>
+          {prompt.negative_prompt ? (
+            <div className="field">
+              <span className="field-label">Negative</span>
+              <pre className="prompt-block is-negative">{prompt.negative_prompt}</pre>
+            </div>
+          ) : null}
+          <div className="prompt-facts">
+            <span>Aspect <b>{prompt.aspect_ratio}</b></span>
+            <span>Variants <b>{prompt.variant_count}</b></span>
+            {prompt.layers?.scene ? <span>Scene <b>{prompt.layers.scene}</b></span> : null}
+          </div>
+          <p className="inspector-intro">This preview queues nothing. Use <b>Generate</b> in the board toolbar to send a request.</p>
+        </>
+      ) : !failed ? <p className="inspector-intro">Compiling…</p> : null}
+    </div>
+  )
+}
+
+function formatCommentDate(value: unknown): string {
+  if (typeof value !== 'string' || !value) return ''
+  const date = new Date(value)
+  return Number.isNaN(date.getTime()) ? '' : date.toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })
+}
+
+function ShotNotes({ shot }: { shot: Shot }) {
+  const { replaceProject, reportError, selectedShotId } = useProject()
+  const [text, setText] = useState('')
+  const [busy, setBusy] = useState(false)
+  const comments: ShotComment[] = [...(shot.comments ?? [])].sort((a, b) => Number(!!a.resolved) - Number(!!b.resolved) || b.id - a.id)
+
+  const run = async (action: () => Promise<ProjectPayload>) => {
+    setBusy(true)
+    try {
+      replaceProject(await action(), selectedShotId)
+      return true
+    } catch (error) {
+      reportError(error)
+      return false
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const submit = async () => {
+    const value = text.trim()
+    if (!value || busy) return
+    if (await run(() => addComment(shot.shot_id, { text: value }))) setText('')
+  }
+
+  return (
+    <div className="inspector-body">
+      <div className="note-composer">
+        <textarea rows={2} value={text} onChange={(event) => setText(event.target.value)} placeholder="Add a review note…" aria-label="New note"
+          onKeyDown={(event) => { if (event.key === 'Enter' && (event.ctrlKey || event.metaKey)) { event.preventDefault(); void submit() } }} />
+        <button type="button" className="primary" onClick={() => void submit()} disabled={busy || !text.trim()}>Add note</button>
+      </div>
+      {comments.length ? (
+        <ul className="note-list">
+          {comments.map((comment) => {
+            const when = formatCommentDate(comment.created_at)
+            return (
+              <li key={comment.id} className={'note' + (comment.resolved ? ' is-resolved' : '')}>
+                <div className="note-meta">
+                  <ChatCircle size={13} />
+                  <span>{comment.resolved ? 'Resolved' : 'Open'}{when ? ` · ${when}` : ''}</span>
+                </div>
+                <p>{comment.text}</p>
+                <button type="button" className="ghost" disabled={busy}
+                  onClick={() => void run(() => resolveComment(shot.shot_id, comment.id, { resolved: !comment.resolved }))}>
+                  {comment.resolved ? 'Reopen' : <><Check size={13} />Resolve</>}
+                </button>
+              </li>
+            )
+          })}
+        </ul>
+      ) : (
+        <p className="inspector-intro">No notes on this board yet. Notes are review feedback; they never feed generation.</p>
+      )}
+    </div>
   )
 }

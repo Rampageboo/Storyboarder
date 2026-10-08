@@ -1,4 +1,4 @@
-.comic-workspace { display: grid; grid-template-columns: min(var(--comic-structure-width, 205px), 28%) minmax(220px, 1fr) min(var(--comic-properties-width, 300px), 40%); grid-template-rows: 48px minmax(0, 1fr); width: 100%; height: 100%; min-height: 0; background: var(--color-bg); color: var(--color-text); font-size: 12px; }
+.comic-workspace { display: grid; grid-template-columns: min(var(--comic-structure-width, var(--nav-w)), 28%) minmax(220px, 1fr) min(var(--comic-properties-width, var(--inspector-w)), 40%); grid-template-rows: var(--toolbar-h) minmax(0, 1fr); width: 100%; height: 100%; min-height: 0; background: var(--bg-0); color: var(--text-1); font-size: 12.5px; }
 .comic-structure { grid-column: 1; grid-row: 2; }
 .comic-center { grid-column: 2; grid-row: 2; }
 .comic-properties { grid-column: 3; grid-row: 2; }
@@ -7,24 +7,32 @@
 .comic-workspace > .comic-properties-resize { grid-column: 3; justify-self: start; }
 .comic-workspace > .comic-properties-height-resize { display: none; }
 .comic-workspace button, .comic-workspace input, .comic-workspace select, .comic-workspace textarea { font: inherit; min-width: 0; }
-.comic-workspace button { min-height: 28px; padding: 4px 8px; }
-.comic-toolbar { grid-column: 1 / -1; display: flex; align-items: center; gap: 8px; padding: 7px 12px; border-bottom: 1px solid var(--color-border); background: var(--color-surface); }
-.comic-toolbar > strong { font-size: 14px; margin-right: 8px; }
-.comic-tabs { display: flex; gap: 3px; }
-.comic-workspace button.is-active { color: var(--color-accent); border-color: var(--color-accent); background: color-mix(in srgb, var(--color-accent) 10%, transparent); }
-.comic-save-state { margin-left: auto; font-size: 11px; color: var(--color-muted); white-space: nowrap; }
-.comic-structure, .comic-properties { min-height: 0; overflow-y: auto; padding: 12px; background: var(--color-surface); }
-.comic-structure { border-right: 1px solid var(--color-border); }
-.comic-properties { border-left: 1px solid var(--color-border); }
-.comic-heading { display: flex; gap: 8px; align-items: center; justify-content: space-between; margin: 5px 0 12px; padding-bottom: 8px; border-bottom: 1px solid var(--color-border); }
+.comic-workspace button { min-height: 28px; padding: 0 10px; }
+.comic-toolbar { grid-column: 1 / -1; }
+.comic-toolbar .seg-group > button, .comic-toolbar .icon-btn { min-height: var(--control-h-sm); }
+.comic-toolbar .icon-btn { width: var(--control-h); }
+.comic-export-trigger { display: inline-flex; align-items: center; gap: 6px; height: var(--control-h); padding: 0 10px; border-radius: var(--radius-sm); border: 1px solid var(--line-2); background: var(--bg-3); font-size: 12.5px; font-weight: 500; cursor: pointer; white-space: nowrap; }
+.comic-export-trigger:hover { background: var(--bg-4); }
+.comic-export-trigger.is-disabled { opacity: 0.45; pointer-events: none; }
+.comic-workspace button.is-active { background: var(--bg-selected); border-color: var(--line-3); color: var(--text-1); }
+.comic-save-state { font-size: 11.5px; color: var(--text-4); white-space: nowrap; }
+.comic-structure, .comic-properties { min-height: 0; overflow-y: auto; padding: 14px; background: var(--bg-1); }
+.comic-structure { border-right: 1px solid var(--line); }
+.comic-properties { border-left: 1px solid var(--line); }
+.comic-heading { display: flex; gap: 8px; align-items: center; justify-content: space-between; margin: 0 0 12px; font-size: 11px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: var(--text-4); }
+.comic-heading button { text-transform: none; letter-spacing: 0; color: var(--text-1); }
 .comic-heading:not(:first-child) { margin-top: 18px; }
-.comic-workspace label { display: flex; flex-direction: column; gap: 5px; margin-bottom: 10px; font-size: 11px; color: var(--color-muted); }
-.comic-workspace input, .comic-workspace select, .comic-workspace textarea { width: 100%; box-sizing: border-box; padding: 6px 7px; color: var(--color-text); }
+.comic-workspace label { display: flex; flex-direction: column; gap: 6px; margin-bottom: 12px; font-size: 11px; font-weight: 500; color: var(--text-3); }
+.comic-workspace input, .comic-workspace select, .comic-workspace textarea { width: 100%; box-sizing: border-box; color: var(--text-1); font-weight: 400; }
 .comic-workspace textarea { min-height: 78px; resize: vertical; line-height: 1.5; }
 .comic-add-pages { display: flex; flex-wrap: wrap; gap: 5px; margin-bottom: 14px; }
 .comic-workspace ol { list-style: none; margin: 0; padding: 0; }
 .comic-page-list { margin-bottom: 20px !important; }
-.comic-page-list button { width: 100%; display: flex; text-align: left; gap: 9px; padding: 9px; margin-bottom: 5px; background: transparent; }
+.comic-page-list button { width: 100%; display: flex; justify-content: flex-start; text-align: left; gap: 10px; padding: 8px; margin-bottom: 2px; min-height: 0; height: auto; border-color: transparent; background: transparent; white-space: normal; font-weight: 400; }
+.comic-page-list button:hover:not(:disabled) { background: var(--bg-3); }
+.comic-page-list button.is-active { background: var(--bg-selected); border-color: transparent; }
+.comic-page-list button.is-active .comic-layout-preview { box-shadow: 0 0 0 2px var(--accent); }
+.comic-page-list button > span:first-child { font: 500 11px var(--font-mono); color: var(--text-4); }
 .comic-page-list button > span:last-child { overflow: hidden; text-overflow: ellipsis; }
 .comic-page-list button > span:nth-child(2) { flex: 1; min-width: 0; }
 .comic-page-list .comic-layout-preview { width: 36px; height: 46px; flex: 0 0 36px; align-self: center; }
@@ -35,11 +43,11 @@
 .comic-center > .canvas { flex: 1; min-height: 0; }
 .comic-empty { margin: auto; max-width: 380px; padding: 32px; line-height: 1.6; }
 .comic-empty h2 { font-size: 20px; font-weight: 600; }
-.comic-reading-surface { overflow: auto; min-height: 0; flex: 1; padding: 24px; background: var(--color-bg); }
+.comic-reading-surface { overflow: auto; min-height: 0; flex: 1; padding: 28px 40px; background: var(--bg-well); }
 .comic-page-host { width: 100%; max-width: 960px; margin: 0 auto 24px; }
 .comic-page-caption { display: flex; justify-content: space-between; gap: 12px; margin-bottom: 9px; font-size: 11px; color: var(--color-muted); }
 .comic-page-caption span { white-space: nowrap; }
-.comic-sheet { position: relative; width: 100%; background: #fff; box-shadow: 0 5px 24px #0003; overflow: hidden; container-type: inline-size; }
+.comic-sheet { position: relative; width: 100%; background: #fff; box-shadow: 0 0 0 1px var(--line-2), var(--shadow-pop); overflow: hidden; container-type: inline-size; }
 .comic-spine { position: absolute; top: 0; bottom: 0; left: 50%; transform: translateX(-50%); background: #77889918; border-inline: 1px dashed #8c949f; pointer-events: none; z-index: 2; }
 .comic-workspace .comic-panel { position: absolute; display: block; background: white; padding: 0; margin: 0; min-height: 0; border: 0; border-radius: 0; outline: none; touch-action: none; overflow: hidden; cursor: move; }
 .comic-panel-frame { position: absolute; }

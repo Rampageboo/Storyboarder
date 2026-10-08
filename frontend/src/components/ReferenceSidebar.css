@@ -1,33 +1,30 @@
 .ref-drawer-backdrop {
   position: fixed;
-  top: var(--topbar-height, 56px);
+  top: var(--topbar-h);
   right: 0;
   bottom: 0;
-  left: var(--left-rail-width, 76px);
+  left: 0;
   z-index: 34;
-  background: rgba(0, 0, 0, 0.36);
-  backdrop-filter: blur(1px);
+  background: rgba(0, 0, 0, 0.32);
 }
 
 .ref-sidebar {
   position: fixed;
-  left: var(--left-rail-width, 76px);
-  top: var(--topbar-height, 48px);
+  right: 0;
+  top: var(--topbar-h);
   bottom: 0;
   z-index: 35;
-  width: min(var(--reference-drawer-width, var(--reference-sidebar-width)), calc(100vw - 100px));
+  width: min(var(--reference-drawer-width, 420px), calc(100vw - 100px));
   min-width: 0;
   max-width: calc(100vw - 100px);
   display: flex;
   flex-direction: column;
   overflow: hidden;
-  background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.03), transparent 20%),
-    color-mix(in srgb, var(--color-surface) 94%, #000);
-  border-right: 1px solid color-mix(in srgb, var(--color-border) 82%, transparent);
-  box-shadow: 16px 0 42px rgba(0, 0, 0, 0.38);
-  transform: translateX(calc(-100% - var(--left-rail-width, 76px)));
-  transition: transform 0.2s ease;
+  background: var(--bg-1);
+  border-left: 1px solid var(--line-2);
+  box-shadow: -18px 0 48px rgba(0, 0, 0, 0.45);
+  transform: translateX(calc(100% + 24px));
+  transition: transform 0.18s ease-out;
   pointer-events: none;
 }
 

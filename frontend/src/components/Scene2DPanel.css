@@ -90,15 +90,13 @@
   display: flex;
   flex-direction: column;
   overflow: hidden;
-  background:
-    radial-gradient(circle at 50% 0%, color-mix(in srgb, var(--color-accent) 9%, transparent), transparent 34%),
-    var(--color-surface);
+  background: var(--bg-0);
 }
 
 /* ── Two-column root grid: scene list | right column ───────────────── */
 .scene2d-workspace {
   display: grid;
-  grid-template-columns: min(var(--scene2d-list-width, 240px), 30%) minmax(0, 1fr);
+  grid-template-columns: min(var(--scene2d-list-width, var(--nav-w)), 30%) minmax(0, 1fr) min(var(--scene2d-inspector-width, var(--inspector-w)), 40%);
   flex: 1 1 auto;
   min-height: 0;
   overflow: hidden;
@@ -113,9 +111,10 @@
   min-height: 0;
   overflow-y: auto;
   overflow-x: hidden;
-  padding: 12px;
-  border-right: 1px solid color-mix(in srgb, var(--color-border) 80%, transparent);
-  background: color-mix(in srgb, var(--bg-toolbar) 90%, #000);
+  padding: 14px 8px;
+  gap: 2px;
+  border-right: 1px solid var(--line);
+  background: var(--bg-1);
   scrollbar-width: thin;
 }
 
@@ -182,26 +181,27 @@
   display: flex;
   flex-direction: column;
   align-items: flex-start;
-  gap: 3px;
-  padding: 9px;
-  margin-bottom: 7px;
-  border-radius: 9px;
-  border: 1px solid color-mix(in srgb, var(--color-border) 78%, transparent);
-  background: color-mix(in srgb, var(--bg-panel) 84%, transparent);
-  color: var(--color-text);
+  gap: 2px;
+  min-height: 0;
+  height: auto;
+  padding: 7px 10px;
+  margin: 0;
+  border-radius: var(--radius-sm);
+  border: 0;
+  background: transparent;
+  color: var(--text-2);
   cursor: pointer;
 }
 
 .scene2d-scene-list button:hover:not(.is-selected) {
-  border-color: color-mix(in srgb, var(--color-accent) 35%, var(--color-border));
-  background: color-mix(in srgb, var(--color-accent) 7%, var(--bg-panel));
+  background: var(--bg-3);
+  color: var(--text-1);
 }
 
 .scene2d-scene-list button.is-selected {
-  border-color: var(--color-accent);
-  background:
-    linear-gradient(90deg, color-mix(in srgb, var(--color-accent) 16%, transparent), transparent),
-    var(--color-accent-soft);
+  background: var(--bg-selected);
+  color: var(--text-1);
+  box-shadow: inset 2px 0 0 var(--accent);
 }
 
 .scene2d-scene-list button span {
@@ -209,13 +209,14 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: 12px;
-  font-weight: 700;
+  font-size: 12.5px;
+  font-weight: 500;
 }
 
 .scene2d-scene-list button small {
-  color: var(--color-muted);
-  font-size: 10px;
+  color: var(--text-4);
+  font-size: 11px;
+  font-weight: 400;
 }
 
 .scene2d-scene-list .scene2d-scene-add-tile {
@@ -257,9 +258,9 @@
   gap: 9px;
   overflow-x: auto;
   overflow-y: hidden;
-  padding: 10px 12px 10px;
-  border-bottom: 1px solid color-mix(in srgb, var(--color-border) 72%, transparent);
-  background: color-mix(in srgb, var(--bg-toolbar) 88%, #000);
+  padding: 12px 16px;
+  border-top: 1px solid var(--line);
+  background: var(--bg-1);
   scrollbar-width: thin;
 }
 
@@ -356,13 +357,7 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  background:
-    radial-gradient(circle at 50% 42%, color-mix(in srgb, var(--color-accent) 6%, transparent), transparent 40%),
-    linear-gradient(45deg, rgba(255, 255, 255, 0.02) 25%, transparent 25%),
-    linear-gradient(-45deg, rgba(255, 255, 255, 0.02) 25%, transparent 25%),
-    #101217;
-  background-position: center, 0 0, 0 10px;
-  background-size: auto, 20px 20px, 20px 20px;
+  background: var(--bg-well);
 }
 
 /* ── Canvas title overlay (top-left, non-blocking) ──────────────────── */
@@ -429,101 +424,17 @@
   to   { opacity: 1; transform: translateX(-50%) translateY(0); }
 }
 
-/* ── Floating Inspector island (top-right) ──────────────────────────── */
-/* 25% larger than original 300px = 375px; 24px inset from edges */
-.scene2d-inspector {
-  position: absolute;
-  top: 24px;
-  right: 24px;
-  z-index: 10;
-  width: min(var(--scene2d-inspector-width, 375px), calc(100% - 48px));
-  height: var(--scene2d-inspector-height, auto);
-  max-height: calc(100% - 80px);
+/* ── Inspector column ───────────────────────────────────────────────── */
+.scene2d-inspector-col {
+  grid-column: 3;
+  grid-row: 1;
+  position: relative;
+  min-width: 0;
+  min-height: 0;
   display: flex;
   flex-direction: column;
-  border-radius: 14px;
-  background: color-mix(in srgb, var(--bg-panel) 96%, transparent);
-  border: 1px solid color-mix(in srgb, var(--color-border) 80%, transparent);
-  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.36), 0 2px 10px rgba(0, 0, 0, 0.2);
-}
-
-/* Collapsed pill state */
-.scene2d-inspector.is-collapsed {
-  width: auto;
-  height: auto;
-  max-height: none;
-  border-radius: 999px;
-  background: color-mix(in srgb, var(--bg-panel) 90%, transparent);
-}
-
-.scene2d-inspector-pill {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 7px 14px;
-  border: none;
-  background: transparent;
-  color: var(--color-text);
-  cursor: pointer;
-  font: inherit;
-  font-size: 12px;
-  border-radius: 999px;
-  white-space: nowrap;
-  max-width: min(340px, calc(100vw - 48px));
-}
-
-.scene2d-inspector-pill:hover {
-  background: color-mix(in srgb, var(--bg-elevated) 60%, transparent);
-}
-
-.scene2d-inspector-pill-label {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-weight: 600;
-}
-
-.scene2d-inspector-pill-icon {
-  flex: 0 0 auto;
-  font-size: 14px;
-  color: var(--color-muted);
-}
-
-/* Inspector header */
-.scene2d-inspector-header {
-  flex: 0 0 auto;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 12px 14px 10px;
-  border-bottom: 1px solid color-mix(in srgb, var(--color-border) 55%, transparent);
-}
-
-.scene2d-inspector-heading {
-  font-size: 10px;
-  font-weight: 700;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  color: var(--color-muted);
-}
-
-.scene2d-inspector-close {
-  width: 24px;
-  height: 24px;
-  display: grid;
-  place-items: center;
-  border-radius: 50%;
-  border: 1px solid transparent;
-  background: transparent;
-  color: var(--color-muted);
-  cursor: pointer;
-  font-size: 15px;
-  line-height: 1;
-}
-
-.scene2d-inspector-close:hover {
-  background: color-mix(in srgb, var(--color-border) 60%, transparent);
-  color: var(--color-text);
+  background: var(--bg-1);
+  border-left: 1px solid var(--line);
 }
 
 /* Inspector scrollable body */
@@ -546,9 +457,9 @@
 }
 
 .scene2d-insp-section-label {
-  font-size: 9px;
-  font-weight: 800;
-  letter-spacing: 0.12em;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
   text-transform: uppercase;
   color: var(--color-muted);
   margin-bottom: 14px;

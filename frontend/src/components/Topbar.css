@@ -1,132 +1,149 @@
 .topbar {
+  height: var(--topbar-h);
   flex-shrink: 0;
-  height: var(--topbar-height);
   display: grid;
-  grid-template-columns: minmax(240px, 1fr) minmax(180px, auto) minmax(220px, 1fr);
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
   align-items: center;
-  gap: 14px;
-  padding: 0 16px;
-  border-bottom: 1px solid color-mix(in srgb, var(--color-border) 78%, transparent);
-  background: var(--topbar-bg);
-  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.18);
+  gap: 16px;
+  padding: 0 12px 0 14px;
+  border-bottom: 1px solid var(--line);
+  background: var(--bg-0);
 }
 
-.topbar-left {
-  min-width: 0;
+.topbar-left,
+.topbar-right {
   display: flex;
   align-items: center;
-  gap: 12px;
-}
-
-.topbar-project-mark {
-  width: 34px;
-  height: 34px;
-  flex: 0 0 34px;
-  display: grid;
-  place-items: center;
-  border: 1px solid color-mix(in srgb, var(--color-accent) 45%, var(--color-border));
-  border-radius: 9px;
-  background:
-    radial-gradient(circle at 35% 25%, color-mix(in srgb, var(--color-accent) 34%, transparent), transparent 50%),
-    var(--bg-elevated);
-  color: var(--color-accent);
-  font-size: 10px;
-  font-weight: 800;
-}
-
-.topbar-project-copy {
+  gap: 8px;
   min-width: 0;
-}
-
-.topbar-title {
-  color: var(--color-text);
-  font-weight: 700;
-  font-size: 14px;
-  letter-spacing: 0.01em;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.topbar-subtitle {
-  margin-top: 1px;
-  color: var(--color-muted);
-  font-size: 11px;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.topbar-center {
-  justify-self: center;
-  min-width: 0;
-}
-
-.topbar-context {
-  display: inline-flex;
-  align-items: center;
-  min-height: 30px;
-  padding: 0 16px;
-  border: 1px solid color-mix(in srgb, var(--color-border) 76%, transparent);
-  border-radius: 999px;
-  background: color-mix(in srgb, var(--bg-input) 82%, transparent);
-  color: var(--color-muted);
-  font-size: 12px;
-  font-weight: 600;
-  white-space: nowrap;
 }
 
 .topbar-right {
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+.topbar-center {
+  display: flex;
+  justify-content: center;
+}
+
+.brand-mark {
+  width: 26px;
+  height: 26px;
+  flex-shrink: 0;
+  border-radius: var(--radius-sm);
+  background: var(--accent);
+  display: grid;
+  place-items: center;
+}
+
+.brand-mark svg {
+  width: 14px;
+  height: 14px;
+  fill: none;
+  stroke: var(--accent-ink);
+  stroke-width: 1.8;
+}
+
+.topbar-app-name {
+  font-weight: 600;
+}
+
+.topbar-project-menu {
   min-width: 0;
+}
+
+.topbar-project-name {
   display: flex;
   align-items: center;
-  justify-content: flex-end;
-  gap: 8px;
-}
-
-.topbar button {
-  border-radius: 8px;
-}
-
-.topbar-ps-status {
-  max-width: 250px;
-  min-height: 30px;
-  padding: 5px 10px;
-  border: 1px solid color-mix(in srgb, var(--color-border) 75%, transparent);
-  border-radius: 999px;
-  background: color-mix(in srgb, var(--bg-input) 80%, transparent);
-  color: var(--color-muted);
-  font-size: 11px;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-button.topbar-ps-status {
-  cursor: default;
-}
-
-button.topbar-ps-status.is-preheat-countdown {
+  gap: 6px;
+  height: var(--control-h);
+  padding: 0 6px;
+  border-radius: var(--radius-sm);
+  font-weight: 600;
   cursor: pointer;
-  color: var(--color-danger);
-  border-color: color-mix(in srgb, var(--color-danger) 46%, transparent);
-  background: color-mix(in srgb, var(--color-danger) 11%, transparent);
+  min-width: 0;
 }
 
-button.topbar-ps-status.is-preheating {
-  color: var(--color-accent);
-  border-color: color-mix(in srgb, var(--color-accent) 42%, transparent);
-  background: color-mix(in srgb, var(--color-accent) 13%, transparent);
+.topbar-project-name > span {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  max-width: 280px;
 }
 
-.topbar-ps-status.is-linked {
-  color: var(--color-success);
-  border-color: color-mix(in srgb, var(--color-success) 42%, transparent);
-  background: color-mix(in srgb, var(--color-success) 10%, transparent);
+.topbar-project-name > svg {
+  color: var(--text-4);
+  flex-shrink: 0;
 }
 
-@media (max-width: 1300px) {
-  .topbar {
-    grid-template-columns: minmax(210px, 1fr) auto minmax(180px, 1fr);
+.topbar-project-name:hover,
+.topbar-project-menu[open] > .topbar-project-name {
+  background: var(--bg-3);
+}
+
+.topbar-save {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11.5px;
+  color: var(--text-4);
+  white-space: nowrap;
+}
+
+.topbar-save-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--ok);
+}
+
+.topbar-save.is-dirty .topbar-save-dot,
+.topbar-save.is-saving .topbar-save-dot {
+  background: var(--warn);
+}
+
+.topbar-divider {
+  width: 1px;
+  height: 20px;
+  margin: 0 4px;
+  background: var(--line);
+}
+
+.topbar-bridge-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  box-sizing: border-box;
+  border: 1.5px solid var(--text-4);
+}
+
+.topbar-bridge.is-on .topbar-bridge-dot {
+  border: 0;
+  background: var(--ok);
+}
+
+.topbar-bridge.is-pending {
+  color: var(--warn-text);
+}
+
+.topbar-bridge.is-pending .topbar-bridge-dot {
+  border-color: var(--warn);
+}
+
+.topbar-bridge-count {
+  font: 500 10.5px var(--font-mono);
+  color: var(--text-3);
+}
+
+.topbar-right > button.is-active {
+  background: var(--bg-4);
+  border-color: var(--line-3);
+}
+
+@media (max-width: 1100px) {
+  .topbar-save {
+    display: none;
   }
 }

@@ -16,6 +16,7 @@ function isTypingTarget(target: EventTarget | null): boolean {
  * - R : sync selected board from Photoshop
  * - O : open selected board's source in Photoshop (creates a canvas first if needed)
  * - N : add a board after the selected one
+ * - Ctrl/Cmd+N / Ctrl/Cmd+O : new / open project (also from Home)
  */
 export function useGlobalShortcuts() {
   const {
@@ -36,6 +37,8 @@ export function useGlobalShortcuts() {
     openSelectedShotSource,
     undo,
     redo,
+    newProject,
+    openProjectFromDialog,
   } = useProject()
 
   const runningRef = useRef(false)
@@ -63,8 +66,20 @@ export function useGlobalShortcuts() {
       if (document.body.classList.contains('storyboard-drawing-active')) return
       const { project, activeAppliedSegmentId } = stateRef.current
       const selectedShotId = stateRef.current.selectedShotId
-      if (!project) return
       const mod = event.ctrlKey || event.metaKey
+
+      if (mod && !event.shiftKey && !event.altKey && (event.key === 'n' || event.key === 'N' || event.key === 'o' || event.key === 'O')) {
+        if (document.querySelector('dialog[open]')) return
+        event.preventDefault()
+        if (stateRef.current.projectActionBusy) return
+        const action = event.key.toLowerCase() === 'n'
+          ? () => newProject({ path: null, canvas_width: 1920, canvas_height: 1080 })
+          : openProjectFromDialog
+        void action().catch((error) => reportError(error))
+        return
+      }
+
+      if (!project) return
 
       if (mod && (event.key === 's' || event.key === 'S')) {
         event.preventDefault()
@@ -165,5 +180,7 @@ export function useGlobalShortcuts() {
     openSelectedShotSource,
     undo,
     redo,
+    newProject,
+    openProjectFromDialog,
   ])
 }

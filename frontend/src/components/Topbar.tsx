@@ -1,62 +1,56 @@
 import { useCallback, useEffect, useState } from 'react'
+import { CaretDown, DownloadSimple, GearSix, Images } from '@phosphor-icons/react'
 import { preheatPhotoshop } from '../api'
 import { useProject } from '../state/useProject'
-import { bridgeStatusLabel, useBridgeStatus } from '../state/liveBridgeUtils'
+import { useBridgeStatus } from '../state/liveBridgeUtils'
+import { canConvertProjectToLayout2 } from '../projectCapabilities'
+import { useDetailsMenu } from '../hooks/useDetailsMenu'
 import './Topbar.css'
 
 const PREHEAT_COUNTDOWN_SECONDS = 10
 let preheatSessionState: 'ready' | 'countdown' | 'cancelled' | 'attempted' = 'ready'
 
-type WorkspaceMode = 'board' | 'comic' | 'scene2d' | 'scene3d'
+export type WorkspaceMode = 'board' | 'comic' | 'scene2d' | 'scene3d'
 
-const workspaceLabels: Record<WorkspaceMode, string> = {
-  board: 'Board workspace',
-  comic: 'Comic workspace',
-  scene2d: 'Scene library',
-  scene3d: 'Scene 3D workspace',
-}
+const WORKSPACES: { mode: WorkspaceMode; label: string; title: string }[] = [
+  { mode: 'board', label: 'Story', title: 'Boards, routes and animatic' },
+  { mode: 'comic', label: 'Comic', title: 'Pages, spreads and long scrolls' },
+  { mode: 'scene2d', label: 'Scenes', title: 'Scene library and perspectives' },
+  { mode: 'scene3d', label: '3D', title: 'Blender scene and cameras' },
+]
 
 function shortShotId(shotId: string) {
-  return shotId.length > 12 ? `${shotId.slice(0, 8)}...` : shotId
+  return shotId.length > 12 ? `${shotId.slice(0, 8)}…` : shotId
 }
 
-function latestPreviewExport(exports: Record<string, number> | undefined) {
-  const entries = Object.entries(exports ?? {}).filter(([, value]) => Number.isFinite(value))
-  if (!entries.length) return ''
-  const [shotId, timestamp] = entries.reduce((latest, current) => (current[1] > latest[1] ? current : latest))
-  return `${shortShotId(shotId)} ${new Date(timestamp * 1000).toLocaleTimeString()}`
+function BrandMark() {
+  return (
+    <span className="brand-mark" aria-hidden="true">
+      <svg viewBox="0 0 16 16"><rect x="2" y="3.5" width="5" height="9" rx="1" /><rect x="9" y="3.5" width="5" height="9" rx="1" /></svg>
+    </span>
+  )
 }
 
-function photoshopStatusTitle(label: string, selectedShotId: string, openShotIds: string[], lastExport: string) {
-  const parts = [label]
-  if (selectedShotId) parts.push(`Current: ${selectedShotId}`)
-  if (openShotIds.length) parts.push(`Open tabs: ${openShotIds.join(', ')}`)
-  if (lastExport) parts.push(`Last preview export: ${lastExport}`)
-  return parts.join('\n')
-}
-
-export function Topbar({ workspaceMode }: { workspaceMode: WorkspaceMode }) {
-  const { project, dirtyShotIds, initialLoading } = useProject()
+function usePhotoshopPreheat() {
+  const { project, initialLoading } = useProject()
   const bridgeStatus = useBridgeStatus()
   const [preheatState, setPreheatState] = useState<'idle' | 'countdown' | 'preheating'>('idle')
   const [preheatSeconds, setPreheatSeconds] = useState(PREHEAT_COUNTDOWN_SECONDS)
 
-  const cancelPreheatCountdown = useCallback(() => {
+  const cancel = useCallback(() => {
     if (preheatSessionState !== 'countdown') return
     preheatSessionState = 'cancelled'
     setPreheatState('idle')
   }, [])
 
-  const projectPreheatEnabled = Boolean(project?.settings?.preheat_photoshop_on_open)
-  const projectSessionKey = project?.project_json_path ?? project?.project_path ?? ''
-  const psAlreadyLinked = Boolean(bridgeStatus?.plugin_linked)
+  const enabled = Boolean(project?.settings?.preheat_photoshop_on_open)
+  const sessionKey = project?.project_json_path ?? project?.project_path ?? ''
+  const linked = Boolean(bridgeStatus?.plugin_linked)
 
   useEffect(() => {
-    if (initialLoading) return
-    if (!projectPreheatEnabled) return
-    if (!projectSessionKey) return
+    if (initialLoading || !enabled || !sessionKey) return
     if (preheatSessionState !== 'ready') return
-    if (psAlreadyLinked) {
+    if (linked) {
       // PS is already running and connected — no need to preheat.
       preheatSessionState = 'attempted'
       return
@@ -75,7 +69,6 @@ export function Topbar({ workspaceMode }: { workspaceMode: WorkspaceMode }) {
         setPreheatSeconds(remaining)
         return
       }
-
       window.clearInterval(timer)
       if (preheatSessionState !== 'countdown') return
       preheatSessionState = 'attempted'
@@ -84,9 +77,7 @@ export function Topbar({ workspaceMode }: { workspaceMode: WorkspaceMode }) {
         .catch(() => {
           // Best-effort warmup; missing/unsupported Photoshop must not affect the app.
         })
-        .finally(() => {
-          setPreheatState('idle')
-        })
+        .finally(() => setPreheatState('idle'))
     }, 1000)
 
     return () => {
@@ -97,63 +88,172 @@ export function Topbar({ workspaceMode }: { workspaceMode: WorkspaceMode }) {
         window.setTimeout(() => setPreheatState('idle'), 0)
       }
     }
-  }, [initialLoading, projectPreheatEnabled, projectSessionKey, psAlreadyLinked])
+  }, [initialLoading, enabled, sessionKey, linked])
 
+  return { preheatState, preheatSeconds, cancel }
+}
+
+function PhotoshopStatus() {
+  const { project } = useProject()
+  const status = useBridgeStatus()
+  const { preheatState, preheatSeconds, cancel } = usePhotoshopPreheat()
+  const linked = Boolean(status?.plugin_linked)
+  const selected = status?.plugin_selected_shot_id ?? ''
+  const openShots = status?.plugin_open_shot_ids ?? []
+
+  let label = 'Ps'
+  let title = linked ? 'Photoshop connected' : 'Photoshop not connected'
+  if (preheatState === 'countdown') {
+    label = `Ps in ${preheatSeconds}s`
+    title = 'Click to cancel the Photoshop preheat for this session.'
+  } else if (preheatState === 'preheating') {
+    label = 'Ps starting…'
+    title = 'Launching Photoshop in the background.'
+  } else if (linked) {
+    const details = [selected ? `Current: ${selected}` : '', openShots.length ? `Open: ${openShots.map(shortShotId).join(', ')}` : '']
+    title = [title, ...details.filter(Boolean)].join('\n')
+  }
+  if (!project) return null
+  const state = preheatState !== 'idle' ? 'is-pending' : linked ? 'is-on' : 'is-off'
+  return (
+    <button
+      type="button"
+      className={`ghost topbar-bridge ${state}`}
+      title={title}
+      aria-label={preheatState === 'countdown' ? 'Cancel Photoshop preheat' : title}
+      onClick={preheatState === 'countdown' ? cancel : undefined}
+    >
+      <span className="topbar-bridge-dot" aria-hidden="true" />
+      {label}
+      {linked && openShots.length ? <span className="topbar-bridge-count">{openShots.length}</span> : null}
+    </button>
+  )
+}
+
+function ProjectMenu({ onOpenSettings, onGoHome }: { onOpenSettings: () => void; onGoHome: () => void }) {
+  const { project, newProject, openProjectFromDialog, saveProject, saveProjectAs, convertProject, dirtyShotIds, projectActionBusy, initialLoading } = useProject()
+  const { ref, close } = useDetailsMenu()
+  const busy = projectActionBusy || initialLoading
   const hasUnsaved = !!project && (project.dirty || dirtyShotIds.length > 0)
-  const projectLabel = project ? `${project.name}${hasUnsaved ? ' *' : ''}` : 'Storyboarder'
-  const shotCount = project?.shots.length ?? 0
-  const subtitle = project
-    ? `${shotCount} shot${shotCount === 1 ? '' : 's'}${hasUnsaved ? ' | unsaved changes' : ''}`
-    : initialLoading
-      ? 'Loading...'
-      : 'Open or create a project'
+  const run = (action: () => Promise<unknown> | void) => {
+    close()
+    void Promise.resolve(action()).catch(() => { /* surfaced via the app error banner */ })
+  }
+  if (!project) return null
+  return (
+    <details className="menu topbar-project-menu" ref={ref}>
+      <summary className="topbar-project-name" title={project.project_json_path || project.project_path}>
+        <span>{project.name}</span>
+        <CaretDown size={12} weight="bold" />
+      </summary>
+      <div className="menu-panel is-left" role="menu">
+        <button type="button" role="menuitem" disabled={busy} onClick={() => run(onGoHome)}>Close to Home</button>
+        <div className="menu-divider" />
+        <button type="button" role="menuitem" disabled={busy} onClick={() => run(() => newProject({ path: null, canvas_width: 1920, canvas_height: 1080 }))}>
+          New project…<span className="menu-hint">Ctrl N</span>
+        </button>
+        <button type="button" role="menuitem" disabled={busy} onClick={() => run(openProjectFromDialog)}>
+          Open project…<span className="menu-hint">Ctrl O</span>
+        </button>
+        <div className="menu-divider" />
+        <button type="button" role="menuitem" disabled={busy || !hasUnsaved} onClick={() => run(saveProject)}>
+          Save<span className="menu-hint">Ctrl S</span>
+        </button>
+        <button type="button" role="menuitem" disabled={busy} onClick={() => run(saveProjectAs)}>Save as…</button>
+        {canConvertProjectToLayout2(project) ? (
+          <button type="button" role="menuitem" disabled={busy} onClick={() => run(convertProject)}>Convert to Layout 2…</button>
+        ) : null}
+        <div className="menu-divider" />
+        <button type="button" role="menuitem" disabled={busy} onClick={() => run(onOpenSettings)}>Project settings…</button>
+      </div>
+    </details>
+  )
+}
 
-  const psLabel = bridgeStatusLabel(bridgeStatus, !!project)
-  const psSelectedShot = bridgeStatus?.plugin_selected_shot_id ?? ''
-  const psOpenShots = bridgeStatus?.plugin_open_shot_ids ?? []
-  const psLastExport = latestPreviewExport(bridgeStatus?.plugin_last_exported_preview)
-  const psDetails = [
-    psSelectedShot ? shortShotId(psSelectedShot) : '',
-    psOpenShots.length ? `${psOpenShots.length} open` : '',
-    psLastExport ? 'exported' : '',
-  ].filter(Boolean)
-  const psVisibleLabel = psDetails.length ? `${psLabel} | ${psDetails.join(' | ')}` : psLabel
-  const preheatCountdownActive = preheatState === 'countdown'
-  const preheatBusy = preheatState === 'preheating'
-  const psDisplayLabel = preheatCountdownActive
-    ? `Preheat PS in ${preheatSeconds}s`
-    : preheatBusy
-      ? 'Preheating Photoshop...'
-      : psVisibleLabel
-  const psStatusTitle = preheatCountdownActive
-    ? 'Click to cancel Photoshop preheat for this app session.'
-    : preheatBusy
-      ? 'Launching Photoshop in the background.'
-      : photoshopStatusTitle(psLabel, psSelectedShot, psOpenShots, psLastExport)
+function SaveState() {
+  const { project, dirtyShotIds, savingShots, projectActionBusy } = useProject()
+  if (!project) return null
+  const saving = projectActionBusy || Object.values(savingShots).some(Boolean)
+  const dirty = project.dirty || dirtyShotIds.length > 0
+  const state = saving ? 'is-saving' : dirty ? 'is-dirty' : 'is-saved'
+  const label = saving ? 'Saving…' : dirty ? 'Unsaved changes' : 'Saved'
+  return (
+    <span className={`topbar-save ${state}`} role="status">
+      <span className="topbar-save-dot" aria-hidden="true" />
+      {label}
+    </span>
+  )
+}
+
+export function Topbar({
+  workspaceMode,
+  onSetWorkspaceMode,
+  refsOpen,
+  onToggleRefs,
+  onOpenSettings,
+  onOpenExport,
+  onGoHome,
+}: {
+  workspaceMode: WorkspaceMode
+  onSetWorkspaceMode: (mode: WorkspaceMode) => void
+  refsOpen: boolean
+  onToggleRefs: () => void
+  onOpenSettings: () => void
+  onOpenExport: () => void
+  onGoHome: () => void
+}) {
+  const { project, projectActionBusy, initialLoading } = useProject()
+  const busy = projectActionBusy || initialLoading
 
   return (
     <header className="topbar">
       <div className="topbar-left">
-        <div className="topbar-project-copy">
-          <div className="topbar-title">{projectLabel}</div>
-          <div className="topbar-subtitle">{subtitle}</div>
-        </div>
+        <BrandMark />
+        {project ? (
+          <>
+            <ProjectMenu onOpenSettings={onOpenSettings} onGoHome={onGoHome} />
+            <SaveState />
+          </>
+        ) : (
+          <span className="topbar-app-name">Storyboarder</span>
+        )}
       </div>
 
-      <div className="topbar-center">
-        <div className="topbar-context">{workspaceLabels[workspaceMode]}</div>
-      </div>
+      {project ? (
+        <nav className="topbar-center" aria-label="Workspace">
+          <div className="seg-group">
+            {WORKSPACES.map((item) => (
+              <button
+                key={item.mode}
+                type="button"
+                title={item.title}
+                aria-current={workspaceMode === item.mode ? 'page' : undefined}
+                onClick={() => onSetWorkspaceMode(item.mode)}
+              >
+                {item.label}
+              </button>
+            ))}
+          </div>
+        </nav>
+      ) : <div className="topbar-center" />}
 
       <div className="topbar-right">
-        <button
-          type="button"
-          className={`topbar-ps-status ${bridgeStatus?.plugin_linked && !preheatCountdownActive && !preheatBusy ? 'is-linked' : ''} ${preheatCountdownActive ? 'is-preheat-countdown' : ''} ${preheatBusy ? 'is-preheating' : ''}`}
-          title={psStatusTitle}
-          onClick={preheatCountdownActive ? cancelPreheatCountdown : undefined}
-          aria-label={preheatCountdownActive ? 'Cancel Photoshop preheat' : psDisplayLabel}
-        >
-          {psDisplayLabel}
-        </button>
+        <PhotoshopStatus />
+        {project ? (
+          <>
+            <span className="topbar-divider" aria-hidden="true" />
+            <button type="button" aria-pressed={refsOpen} aria-controls="ref-drawer-panel" onClick={onToggleRefs}
+              className={refsOpen ? 'is-active' : undefined}>
+              <Images size={16} />References
+            </button>
+            <button type="button" className="primary" disabled={busy} onClick={onOpenExport}>
+              <DownloadSimple size={16} weight="bold" />Export
+            </button>
+            <button type="button" className="ghost icon-btn" aria-label="Project settings" title="Project settings" disabled={busy} onClick={onOpenSettings}>
+              <GearSix size={17} />
+            </button>
+          </>
+        ) : null}
       </div>
     </header>
   )

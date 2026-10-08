@@ -1421,7 +1421,8 @@ class StoryboardBackendService(Scene2DServiceMixin, Scene3DServiceMixin, ExportS
         if not cleaned:
             raise HTTPException(status_code=400, detail="Comment cannot be empty.")
         next_id = max([int(comment.get("id", 0)) for comment in shot.comments] or [0]) + 1
-        shot.comments.append({"id": next_id, "text": cleaned, "resolved": False})
+        created_at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        shot.comments.append({"id": next_id, "text": cleaned, "resolved": False, "created_at": created_at})
         app_state._autosave(self.app)
         return app_state._project_payload(project, self.app.state.dirty)
 

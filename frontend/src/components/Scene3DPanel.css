@@ -78,7 +78,6 @@
 }
 
 .scene3d-actions button,
-.scene3d-workspace-actions button,
 .scene3d-editor-root button {
   padding: 6px 8px;
   border-radius: 8px;
@@ -103,11 +102,12 @@
 }
 
 .scene3d-note {
-  color: var(--color-text);
-  padding: 7px 8px;
-  border-radius: 8px;
-  border: 1px solid color-mix(in srgb, var(--color-accent) 24%, transparent);
-  background: var(--color-accent-soft);
+  max-width: 260px;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  color: var(--text-2);
+  font-size: 12px;
 }
 
 .scene3d-workspace-page {
@@ -118,74 +118,18 @@
   display: flex;
   flex-direction: column;
   overflow: hidden;
-  background: #15171b;
-}
-
-.scene3d-workspace-header {
-  flex: 0 0 auto;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  padding: 10px 12px;
-  color: #f3f4f6;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.12);
-  background: #20232a;
-}
-
-.scene3d-workspace-title {
-  font-size: 13px;
-  font-weight: 700;
-}
-
-.scene3d-workspace-subtitle {
-  margin-top: 2px;
-  font-size: 11px;
-  color: #aeb4bf;
-}
-
-.scene3d-workspace-actions {
-  display: flex;
-  flex-wrap: wrap;
-  justify-content: flex-end;
-  gap: 6px;
-}
-
-.scene3d-workspace-actions button {
-  border-color: rgba(255, 255, 255, 0.16);
-  background: rgba(255, 255, 255, 0.08);
-  color: #f3f4f6;
+  background: var(--bg-0);
 }
 
 .scene3d-workspace-select {
-  min-width: 150px;
-  max-width: 220px;
-  padding: 6px 8px;
-  border-radius: 8px;
-  border: 1px solid rgba(255, 255, 255, 0.16);
-  background: #15171b;
-  color: #f3f4f6;
-  font-size: 11px;
+  width: auto;
+  min-width: 140px;
+  max-width: 200px;
 }
 
 .scene3d-keywords-input {
-  min-width: 190px;
-  max-width: 260px;
-  padding: 6px 8px;
-  border: 1px solid rgba(255, 255, 255, 0.16);
-  border-radius: 8px;
-  color: #f3f4f6;
-  background: #15171b;
-  font-size: 11px;
-}
-
-.scene3d-keywords-input:focus {
-  border-color: color-mix(in srgb, var(--color-accent) 70%, white);
-  outline: none;
-}
-
-.scene3d-workspace-actions button:hover:not(:disabled) {
-  background: rgba(255, 255, 255, 0.14);
+  min-width: 170px;
+  max-width: 240px;
 }
 
 .scene3d-editor-root {
@@ -196,13 +140,94 @@
 }
 
 .scene3d-preview-empty {
+  flex: 1;
   min-height: 320px;
   display: grid;
   place-items: center;
   padding: 32px;
-  color: #9fa6b1;
-  background: #17191d;
-  text-align: center;
+  background-color: var(--bg-well);
+  background-image:
+    linear-gradient(var(--bg-1) 1px, transparent 1px),
+    linear-gradient(90deg, var(--bg-1) 1px, transparent 1px);
+  background-size: 40px 40px;
+}
+
+.scene3d-empty-card {
+  width: min(440px, 100%);
+  padding: 28px;
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--line-2);
+  background: var(--bg-2);
+  box-shadow: var(--shadow-pop);
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.scene3d-empty-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.scene3d-empty-head strong {
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.scene3d-empty-head p {
+  margin: 2px 0 0;
+  font-size: 12.5px;
+  color: var(--text-2);
+}
+
+.scene3d-empty-icon {
+  width: 40px;
+  height: 40px;
+  flex-shrink: 0;
+  display: grid;
+  place-items: center;
+  border-radius: 10px;
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.scene3d-empty-steps {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  color: var(--text-2);
+}
+
+.scene3d-empty-steps li {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.scene3d-empty-steps span {
+  width: 22px;
+  height: 22px;
+  flex-shrink: 0;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  border: 1px solid var(--line-3);
+  font: 500 11px var(--font-mono);
+  color: var(--text-2);
+}
+
+.scene3d-empty-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.scene3d-empty-actions .primary {
+  flex: 1;
+  min-height: var(--control-h-lg);
 }
 
 .scene3d-editor-root .scene3d-layout {

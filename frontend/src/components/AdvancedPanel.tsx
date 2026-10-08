@@ -10,9 +10,11 @@ import { useProject } from '../state/useProject'
 import { AnnotationList } from './AnnotationList'
 import './AdvancedPanel.css'
 
-export function AdvancedPanel() {
+/** Board utilities. `embedded` renders the sections directly (inspector tab) instead of behind a toggle. */
+export function AdvancedPanel({ embedded = false }: { embedded?: boolean } = {}) {
   const { project, selectedShotId, setProject, flushDirtyShots, projectActionBusy, reportError } = useProject()
-  const [open, setOpen] = useState(false)
+  const [toggledOpen, setOpen] = useState(false)
+  const open = embedded || toggledOpen
   const [bridgeJson, setBridgeJson] = useState('')
   const [busy, setBusy] = useState(false)
   const [sourceNote, setSourceNote] = useState('')
@@ -143,11 +145,13 @@ export function AdvancedPanel() {
   if (!project) return null
 
   return (
-    <section className={`advanced ${open ? 'is-open' : ''}`}>
-      <button type="button" className="advanced-toggle" onClick={() => setOpen((v) => !v)}>
-        <span>Advanced</span>
-        <span className="advanced-toggle-icon" aria-hidden="true">{open ? '▾' : '▸'}</span>
-      </button>
+    <section className={`advanced ${open ? 'is-open' : ''}${embedded ? ' is-embedded' : ''}`}>
+      {embedded ? null : (
+        <button type="button" className="advanced-toggle" onClick={() => setOpen((v) => !v)}>
+          <span>Advanced</span>
+          <span className="advanced-toggle-icon" aria-hidden="true">{open ? '▾' : '▸'}</span>
+        </button>
+      )}
 
       {open ? (
         <div className="advanced-body">

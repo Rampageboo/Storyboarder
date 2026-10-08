@@ -1,0 +1,124 @@
+/*
+ * Storyboarder design tokens — the single source of colour, type and metrics.
+ * New code uses the semantic names in the first block. The "legacy aliases"
+ * block keeps older component stylesheets on the same palette until they are
+ * rewritten; do not add new uses of those names.
+ */
+@import '@fontsource/ibm-plex-sans/400.css';
+@import '@fontsource/ibm-plex-sans/500.css';
+@import '@fontsource/ibm-plex-sans/600.css';
+@import '@fontsource/ibm-plex-mono/400.css';
+@import '@fontsource/ibm-plex-mono/500.css';
+
+:root {
+  color-scheme: dark;
+
+  /* Surfaces, darkest to lightest */
+  --bg-well: #0b0c0e;
+  --bg-0: #0e0f11;
+  --bg-1: #131518;
+  --bg-2: #16181c;
+  --bg-3: #1c1f23;
+  --bg-4: #252930;
+  --bg-selected: #1f2227;
+  --bg-seg-on: #2b3038;
+  --line: #22252b;
+  --line-2: #2a2e35;
+  --line-3: #3a3f48;
+  --paper: #f4f1ea;
+  --ink: #2b2a28;
+
+  /* Text */
+  --text-1: #ecedef;
+  --text-2: #a9aeb7;
+  --text-3: #8d939c;
+  --text-4: #7c828c;
+
+  /* Accent — one only: primary action, selection, playhead */
+  --accent: #f0743e;
+  --accent-hover: #ff8552;
+  --accent-ink: #1a0e07;
+  --accent-soft: rgba(240, 116, 62, 0.14);
+  --accent-ring: rgba(240, 116, 62, 0.18);
+
+  /* Status — always paired with a word */
+  --st-draft: #8d939c;
+  --st-progress: #5b9bf0;
+  --st-review: #e8b44a;
+  --st-approved: #4cc38a;
+  --st-final: #b58cf5;
+  --ok: #4cc38a;
+  --warn: #e8b44a;
+  --warn-text: #e8c77a;
+  --danger: #e5655a;
+  --danger-text: #f08a7e;
+  --info: #3e7bd8;
+  --ps: #31a8ff;
+
+  /* Type */
+  --font-ui: 'IBM Plex Sans', 'Segoe UI', 'Microsoft YaHei', 'PingFang SC', sans-serif;
+  --font-mono: 'IBM Plex Mono', ui-monospace, Consolas, monospace;
+
+  /* Metrics */
+  --radius-xs: 4px;
+  --radius-sm: 6px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+  --control-h: 30px;
+  --control-h-sm: 26px;
+  --control-h-lg: 34px;
+  --topbar-h: 48px;
+  --toolbar-h: 48px;
+  --nav-w: 248px;
+  --inspector-w: 360px;
+  --dock-h: 196px;
+  --shadow-pop: 0 18px 48px rgba(0, 0, 0, 0.5);
+  --modal-backdrop: rgba(0, 0, 0, 0.62);
+
+  /* ── Legacy aliases (do not use in new code) ── */
+  --bg-app: var(--bg-0);
+  --bg-panel: var(--bg-1);
+  --bg-canvas: var(--bg-well);
+  --bg-toolbar: var(--bg-1);
+  --bg-input: var(--bg-3);
+  --bg-hover: var(--bg-4);
+  --bg-elevated: var(--bg-2);
+  --border: var(--line-2);
+  --border-light: var(--line-3);
+  --text: var(--text-1);
+  --text-muted: var(--text-3);
+  --accent-2: var(--accent-hover);
+  --accent-ps: var(--ps);
+  --accent-bl: #a5d66a;
+  --success: var(--ok);
+  --thumb-active: var(--accent);
+  --shadow: rgba(0, 0, 0, 0.6);
+  --topbar-bg: var(--bg-0);
+  --canvas-well: var(--bg-well);
+  --ps-bg: var(--accent-soft);
+  --ps-bg-hover: rgba(240, 116, 62, 0.22);
+  --ps-border: var(--accent);
+  --bl-bg: #1f2a18;
+  --bl-bg-hover: #283420;
+  --bl-border: #8bc34a;
+  --startup-bg: var(--bg-0);
+  --startup-panel: var(--bg-2);
+  --surface: var(--bg-1);
+
+  --color-bg: var(--bg-0);
+  --color-surface: var(--bg-1);
+  --color-border: var(--line-2);
+  --color-text: var(--text-1);
+  --color-muted: var(--text-3);
+  --color-text-muted: var(--text-3);
+  --color-accent: var(--accent);
+  --color-accent-soft: var(--accent-soft);
+  --color-danger: var(--danger);
+  --color-danger-bg: rgba(229, 101, 90, 0.12);
+  --color-success: var(--ok);
+  --color-input: var(--bg-3);
+  --color-toolbar: var(--bg-1);
+  --color-canvas-well: var(--bg-well);
+  --color-hover: var(--bg-4);
+  --color-thumb-active: var(--accent);
+}

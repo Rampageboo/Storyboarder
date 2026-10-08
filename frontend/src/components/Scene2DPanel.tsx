@@ -18,6 +18,7 @@ import {
   updateScene2D,
   updateScene2DPerspective,
 } from '../api'
+import { Plus, UploadSimple } from '@phosphor-icons/react'
 import { useProject } from '../state/useProject'
 import { useBridgeStatus } from '../state/liveBridgeUtils'
 import type { Scene2D, Scene2DPerspective, Scene3DRecord } from '../types'
@@ -98,7 +99,6 @@ export function Scene2DPanel({ active = false }: { active?: boolean }) {
   const [previewFailedFor, setPreviewFailedFor] = useState('')
   const [previewZoom, setPreviewZoom] = useState(100)
   const [fitPreview, setFitPreview] = useState(true)
-  const [inspectorCollapsed, setInspectorCollapsed] = useState(false)
   const [descriptionOpen, setDescriptionOpen] = useState(false)
   const [contextMenu, setContextMenu] = useState<(ContextMenuState & { perspectiveId: string }) | null>(null)
   const [dragPerspectiveId, setDragPerspectiveId] = useState<string | null>(null)
@@ -693,11 +693,151 @@ export function Scene2DPanel({ active = false }: { active?: boolean }) {
           host=".scene2d-workspace" target=".scene2d-scene-list" width={{ property: '--scene2d-list-width', min: 160, max: 520, fraction: 0.3 }} />
         {/* ── RIGHT: perspective strip + canvas ───────────────────────── */}
         <div className="scene2d-main-col">
+          <div className="stage-toolbar">
+            <div className="stage-title">
+              {selectedScene ? <span className="stage-crumb">{sceneLabel(selectedScene)} /</span> : null}
+              <strong>{selectedPerspective ? perspectiveLabel(selectedPerspective) : selectedScene ? 'No perspective' : 'Scene library'}</strong>
+              {selectedPerspective && perspectiveTotal > 1 ? <span className="stage-meta">{perspectiveIndex} of {perspectiveTotal}</span> : null}
+            </div>
+            {selectedScene ? (
+              <>
+                <button type="button" onClick={() => void addPerspective()} disabled={disabled}>
+                  <Plus size={15} />Perspective
+                </button>
+                <button type="button" onClick={() => importRef.current?.click()} disabled={disabled}>
+                  <UploadSimple size={15} />Import image/PSD
+                </button>
+                {selectedPerspective ? (
+                  <button type="button" className="primary" onClick={() => void openPerspective()} disabled={disabled}>
+                    Open in Photoshop
+                  </button>
+                ) : null}
+              </>
+            ) : null}
+          </div>
 
+          {/* ── Canvas area ──────────────────────────────────────────── */}
+          <div className="scene2d-canvas-area" ref={canvasAreaRef}>
+
+            {/* Toast (top-center, auto-dismissed) */}
+            {note && (
+              <div className="scene2d-toast" role="status" aria-live="polite">
+                {note}
+              </div>
+            )}
+
+            {/* Preview / empty states */}
+            {!selectedScene ? (
+              <div className="scene2d-canvas-empty">
+                <strong>No scenes yet</strong>
+                <span>Create a scene for the facts and artwork shared by its shots.</span>
+                <button
+                  type="button"
+                  className="scene2d-canvas-empty-btn"
+                  onClick={() => void createScene()}
+                  disabled={disabled}
+                >
+                  Create Scene
+                </button>
+              </div>
+            ) : selectedScene.perspectives.length === 0 ? (
+              <div className="scene2d-canvas-empty">
+                <strong>No Perspectives in this Scene</strong>
+                <div className="scene2d-canvas-empty-actions">
+                  <button type="button" onClick={() => void addPerspective()} disabled={disabled}>
+                    Create PSD Perspective
+                  </button>
+                  <button type="button" onClick={() => importRef.current?.click()} disabled={disabled}>
+                    Import image/PSD
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <div className="scene2d-preview-viewport">
+                {selectedPerspective && !previewMissing ? (
+                  <div
+                    className={`scene2d-preview-canvas ${fitPreview ? 'is-fit' : 'is-zoomed'}`}
+                    style={{ '--scene2d-preview-width': `${previewZoom}%` } as CSSProperties}
+                  >
+                    <img
+                      src={scene2DPerspectivePreviewUrl(selectedScene, selectedPerspective)}
+                      alt={`${perspectiveLabel(selectedPerspective)} preview`}
+                      onError={() => setPreviewFailedFor(previewKey)}
+                    />
+                  </div>
+                ) : (
+                  <div className="scene2d-preview-placeholder">
+                    <strong>No preview available</strong>
+                    <span>Open the PSD in Photoshop, export the preview, then refresh.</span>
+                    <div className="scene2d-preview-placeholder-actions">
+                      <button type="button" onClick={() => void openPerspective()} disabled={disabled}>
+                        Open in Photoshop
+                      </button>
+                      <button type="button" onClick={() => void refreshPreview()} disabled={disabled}>
+                        Refresh Preview
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Floating zoom island (bottom-center) */}
+            {selectedScene && selectedScene.perspectives.length > 0 && (
+              <div className="scene2d-zoom-island" aria-label="Preview zoom controls">
+                <button
+                  type="button"
+                  className={fitPreview ? 'is-active' : ''}
+                  onClick={() => setFitPreview(true)}
+                  disabled={!selectedPerspective}
+                  aria-label="Fit preview to screen"
+                  title="Fit"
+                >
+                  Fit
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setManualPreviewZoom(previewZoom - 10)}
+                  disabled={!selectedPerspective || previewZoom <= MIN_PREVIEW_ZOOM}
+                  aria-label="Zoom out"
+                  title="Zoom out"
+                >
+                  −
+                </button>
+                <input
+                  type="range"
+                  min={MIN_PREVIEW_ZOOM}
+                  max={MAX_PREVIEW_ZOOM}
+                  step={ZOOM_STEP}
+                  value={previewZoom}
+                  onChange={(e) => setManualPreviewZoom(Number(e.target.value))}
+                  disabled={!selectedPerspective}
+                  aria-label="Zoom level"
+                  className="scene2d-zoom-slider"
+                />
+                <button
+                  type="button"
+                  onClick={() => setManualPreviewZoom(previewZoom + 10)}
+                  disabled={!selectedPerspective || previewZoom >= MAX_PREVIEW_ZOOM}
+                  aria-label="Zoom in"
+                  title="Zoom in"
+                >
+                  +
+                </button>
+                <output
+                  className="scene2d-zoom-output"
+                  onClick={() => setManualPreviewZoom(100)}
+                  title="Click to reset to 100%"
+                >
+                  {fitPreview ? 'Fit' : `${previewZoom}%`}
+                </output>
+              </div>
+            )}
+          </div>{/* /.scene2d-canvas-area */}
           {/* Horizontal perspective strip */}
           {selectedScene && (
             <div className="scene2d-perspectives-frame">
-            <PanelResizeHandle panelKey="scene2d-perspectives" label="Resize Perspectives" edge="bottom" bounds=".scene2d-main-col"
+            <PanelResizeHandle panelKey="scene2d-perspectives" label="Resize Perspectives" edge="top" bounds=".scene2d-main-col"
               height={{ property: '--scene2d-perspectives-height', min: 155, max: 400, fraction: 0.45 }} />
             <div className="scene2d-perspective-strip">
               {selectedScene.perspectives.map((perspective) => (
@@ -755,84 +895,17 @@ export function Scene2DPanel({ active = false }: { active?: boolean }) {
                 <span>Add Perspective</span>
               </button>
 
-              <button
-                type="button"
-                className="scene2d-perspective-import-card"
-                onClick={() => importRef.current?.click()}
-                disabled={disabled}
-              >
-                Import image/PSD
-              </button>
             </div>
             </div>
           )}
 
-          {/* ── Canvas area ──────────────────────────────────────────── */}
-          <div className="scene2d-canvas-area" ref={canvasAreaRef}>
+        </div>{/* /.scene2d-main-col */}
 
-            {/* Canvas title overlay (top-left, non-blocking) */}
-            {selectedScene && selectedPerspective && (
-              <div className="scene2d-canvas-title" aria-hidden="true">
-                <div className="scene2d-canvas-title-scene">{sceneLabel(selectedScene)}</div>
-                <div className="scene2d-canvas-title-perspective">
-                  {perspectiveLabel(selectedPerspective)}
-                  {perspectiveTotal > 1 && (
-                    <span className="scene2d-canvas-title-index">
-                      {' '}· {perspectiveIndex} of {perspectiveTotal}
-                    </span>
-                  )}
-                </div>
-              </div>
-            )}
-
-            {/* Toast (top-center, auto-dismissed) */}
-            {note && (
-              <div className="scene2d-toast" role="status" aria-live="polite">
-                {note}
-              </div>
-            )}
-
-            {/* ── Floating Inspector island (top-right) ─────────────── */}
-            <div
-              className={`scene2d-inspector${inspectorCollapsed ? ' is-collapsed' : ''}`}
-              aria-label="Inspector"
-            >
-              {inspectorCollapsed ? (
-                <button
-                  type="button"
-                  className="scene2d-inspector-pill"
-                  onClick={() => setInspectorCollapsed(false)}
-                  aria-label="Expand inspector"
-                  title="Expand inspector"
-                >
-                  <span className="scene2d-inspector-pill-label">
-                    {selectedScene ? sceneLabel(selectedScene) : 'Inspector'}
-                    {selectedPerspective ? ` / ${perspectiveLabel(selectedPerspective)}` : ''}
-                  </span>
-                  <span className="scene2d-inspector-pill-icon" aria-hidden="true">⊞</span>
-                </button>
-              ) : (
-                <>
-                  <PanelResizeHandle panelKey="scene2d-inspector" label="Resize Scene inspector width" edge="left" bounds=".scene2d-canvas-area"
-                    width={{ property: '--scene2d-inspector-width', min: 250, max: 720, reserve: 48 }} />
-                  <PanelResizeHandle panelKey="scene2d-inspector" label="Resize Scene inspector height" edge="bottom" bounds=".scene2d-canvas-area"
-                    height={{ property: '--scene2d-inspector-height', min: 160, max: 1000, reserve: 80 }} />
-                  <PanelResizeHandle panelKey="scene2d-inspector" label="Resize Scene inspector" edge="bottom-left" bounds=".scene2d-canvas-area"
-                    width={{ property: '--scene2d-inspector-width', min: 250, max: 720, reserve: 48 }}
-                    height={{ property: '--scene2d-inspector-height', min: 160, max: 1000, reserve: 80 }} />
-                  <div className="scene2d-inspector-header">
-                    <span className="scene2d-inspector-heading">Inspector</span>
-                    <button
-                      type="button"
-                      className="scene2d-inspector-close"
-                      onClick={() => setInspectorCollapsed(true)}
-                      aria-label="Collapse inspector"
-                      title="Collapse inspector"
-                    >
-                      ×
-                    </button>
-                  </div>
-
+        <aside className="scene2d-inspector-col" aria-label="Scene inspector">
+          <PanelResizeHandle panelKey="scene2d-inspector" label="Resize Scene inspector" edge="left"
+            host=".scene2d-workspace" target=".scene2d-inspector-col"
+            width={{ property: '--scene2d-inspector-width', min: 280, max: 640, fraction: 0.4 }} />
+          <div className="tab-row"><button type="button" role="tab" aria-selected="true">Scene bible</button></div>
                   <div className="scene2d-inspector-body">
                     {selectedScene ? (
                       <>
@@ -1082,119 +1155,7 @@ export function Scene2DPanel({ active = false }: { active?: boolean }) {
                       </div>
                     )}
                   </div>
-                </>
-              )}
-            </div>
-
-            {/* Preview / empty states */}
-            {!selectedScene ? (
-              <div className="scene2d-canvas-empty">
-                <strong>No scenes yet</strong>
-                <span>Create a scene for the facts and artwork shared by its shots.</span>
-                <button
-                  type="button"
-                  className="scene2d-canvas-empty-btn"
-                  onClick={() => void createScene()}
-                  disabled={disabled}
-                >
-                  Create Scene
-                </button>
-              </div>
-            ) : selectedScene.perspectives.length === 0 ? (
-              <div className="scene2d-canvas-empty">
-                <strong>No Perspectives in this Scene</strong>
-                <div className="scene2d-canvas-empty-actions">
-                  <button type="button" onClick={() => void addPerspective()} disabled={disabled}>
-                    Create PSD Perspective
-                  </button>
-                  <button type="button" onClick={() => importRef.current?.click()} disabled={disabled}>
-                    Import image/PSD
-                  </button>
-                </div>
-              </div>
-            ) : (
-              <div className="scene2d-preview-viewport">
-                {selectedPerspective && !previewMissing ? (
-                  <div
-                    className={`scene2d-preview-canvas ${fitPreview ? 'is-fit' : 'is-zoomed'}`}
-                    style={{ '--scene2d-preview-width': `${previewZoom}%` } as CSSProperties}
-                  >
-                    <img
-                      src={scene2DPerspectivePreviewUrl(selectedScene, selectedPerspective)}
-                      alt={`${perspectiveLabel(selectedPerspective)} preview`}
-                      onError={() => setPreviewFailedFor(previewKey)}
-                    />
-                  </div>
-                ) : (
-                  <div className="scene2d-preview-placeholder">
-                    <strong>No preview available</strong>
-                    <span>Open the PSD in Photoshop, export the preview, then refresh.</span>
-                    <div className="scene2d-preview-placeholder-actions">
-                      <button type="button" onClick={() => void openPerspective()} disabled={disabled}>
-                        Open in Photoshop
-                      </button>
-                      <button type="button" onClick={() => void refreshPreview()} disabled={disabled}>
-                        Refresh Preview
-                      </button>
-                    </div>
-                  </div>
-                )}
-              </div>
-            )}
-
-            {/* Floating zoom island (bottom-center) */}
-            {selectedScene && selectedScene.perspectives.length > 0 && (
-              <div className="scene2d-zoom-island" aria-label="Preview zoom controls">
-                <button
-                  type="button"
-                  className={fitPreview ? 'is-active' : ''}
-                  onClick={() => setFitPreview(true)}
-                  disabled={!selectedPerspective}
-                  aria-label="Fit preview to screen"
-                  title="Fit"
-                >
-                  Fit
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setManualPreviewZoom(previewZoom - 10)}
-                  disabled={!selectedPerspective || previewZoom <= MIN_PREVIEW_ZOOM}
-                  aria-label="Zoom out"
-                  title="Zoom out"
-                >
-                  −
-                </button>
-                <input
-                  type="range"
-                  min={MIN_PREVIEW_ZOOM}
-                  max={MAX_PREVIEW_ZOOM}
-                  step={ZOOM_STEP}
-                  value={previewZoom}
-                  onChange={(e) => setManualPreviewZoom(Number(e.target.value))}
-                  disabled={!selectedPerspective}
-                  aria-label="Zoom level"
-                  className="scene2d-zoom-slider"
-                />
-                <button
-                  type="button"
-                  onClick={() => setManualPreviewZoom(previewZoom + 10)}
-                  disabled={!selectedPerspective || previewZoom >= MAX_PREVIEW_ZOOM}
-                  aria-label="Zoom in"
-                  title="Zoom in"
-                >
-                  +
-                </button>
-                <output
-                  className="scene2d-zoom-output"
-                  onClick={() => setManualPreviewZoom(100)}
-                  title="Click to reset to 100%"
-                >
-                  {fitPreview ? 'Fit' : `${previewZoom}%`}
-                </output>
-              </div>
-            )}
-          </div>{/* /.scene2d-canvas-area */}
-        </div>{/* /.scene2d-main-col */}
+        </aside>
       </div>{/* /.scene2d-workspace */}
 
       <ContextMenu

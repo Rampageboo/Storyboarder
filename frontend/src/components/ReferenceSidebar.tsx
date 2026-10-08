@@ -175,7 +175,7 @@ export function ReferenceSidebar({ open, onOpenChange }: ReferenceSidebarProps) 
         aria-label="Project references"
         aria-hidden={!open}
       >
-        <PanelResizeHandle panelKey="references" label="Resize References" edge="right" hidden={!open} bounds=".app-root"
+        <PanelResizeHandle panelKey="references" label="Resize References" edge="left" hidden={!open} bounds=".app-root"
           width={{ property: '--reference-drawer-width', min: 220, max: 760, reserve: 100 }} />
         <div className="ref-sidebar-scroll">
           <div className="ref-sidebar-head">

@@ -491,6 +491,35 @@ class StoryboardSmokeTests(unittest.TestCase):
             self.assertEqual(opened.status_code, 200)
             self.assertEqual(opened.json()["settings"]["canvas_width"], 1600)
 
+    def test_shot_prompt_preview_is_read_only(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            app = api_module.create_app(Path(tmp))
+            client = TestClient(app, raise_server_exceptions=False)
+            with contextlib.redirect_stderr(io.StringIO()):
+                created = client.post("/api/project/new", json={"path": tmp})
+                shot_created = client.post("/api/shots", json={})
+            self.assertEqual(created.status_code, 200)
+            shot = shot_created.json()["shot"]
+            design = {**shot["shot_design"], "shot_size": "Extreme close-up", "story_beat": "A match flares"}
+            with contextlib.redirect_stderr(io.StringIO()):
+                updated = client.patch(f"/api/shots/{shot['shot_id']}", json={"shot_design": design})
+            self.assertEqual(updated.status_code, 200, updated.text)
+            dirty = app.state.dirty
+            with contextlib.redirect_stderr(io.StringIO()):
+                response = client.get(f"/api/shots/{shot['shot_id']}/prompt-preview")
+                missing = client.get("/api/shots/not-a-shot/prompt-preview")
+            self.assertEqual(response.status_code, 200, response.text)
+            snapshot = response.json()
+            self.assertEqual(snapshot["output_contract"]["kind"], "storyboard-image")
+            self.assertIn("Extreme close-up", snapshot["prompt"]["compiled_prompt"])
+            self.assertIn("A match flares", snapshot["prompt"]["compiled_prompt"])
+            self.assertEqual(app.state.dirty, dirty)
+            with contextlib.redirect_stderr(io.StringIO()):
+                queued = client.get("/api/generation/requests")
+            self.assertEqual(queued.status_code, 200)
+            self.assertEqual(queued.json().get("requests", []), [])
+            self.assertEqual(missing.status_code, 404)
+
     def test_comment_add_and_resolve(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             app = api_module.create_app(Path(tmp))
@@ -510,6 +539,7 @@ class StoryboardSmokeTests(unittest.TestCase):
             self.assertEqual(rest_comment.status_code, 200)
             rest_comments = rest_comment.json()["shots"][0]["comments"]
             self.assertEqual(len(rest_comments), 1)
+            self.assertRegex(rest_comments[0]["created_at"], r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$")
             comment_id = rest_comments[0]["id"]
 
             with contextlib.redirect_stderr(io.StringIO()):

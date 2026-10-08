@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type PointerEvent, type CSSProperties } from 'react'
+import { ArrowClockwise, ArrowCounterClockwise, CaretDown, DownloadSimple } from '@phosphor-icons/react'
 import { addShot, duplicateShot } from '../api'
+import { useDetailsMenu } from '../hooks/useDetailsMenu'
 import { exportComic, openComicExport, previewComicPrompt, type ComicExportScope } from '../api/comic'
 import { useProject } from '../state/useProject'
 import { useComicDocument } from '../state/useComicDocument'
@@ -42,6 +44,7 @@ export function ComicWorkspace({ active }: { active: boolean }) {
   const { project, selectedShotId, setSelectedShotId, setProject, flushDirtyShots, reportError,
     projectActionBusy, drawingActive, visualEpoch, getDraft, editShotField, runProjectMutation } = useProject()
   const [gestureActive, setGestureActive] = useState(false)
+  const { ref: exportMenuRef, close: closeExportMenu } = useDetailsMenu()
   const comic = useComicDocument(gestureActive)
   const document = comic.document
   const [chapterId, setChapterId] = useState('')
@@ -507,24 +510,33 @@ export function ComicWorkspace({ active }: { active: boolean }) {
   </div>
 
   return <section className="comic-workspace" data-comic-active={active ? 'true' : 'false'} aria-label="Comic workspace">
-    <header className="comic-toolbar">
-      <strong>Comic</strong>
-      <div className="comic-tabs" role="group" aria-label="Comic view">
-        {(['layout', 'artwork', 'read'] as const).map(mode => <button key={mode} type="button" className={view === mode ? 'is-active' : ''}
+    <header className="comic-toolbar stage-toolbar">
+      <div className="stage-title"><strong>{page?.title || chapter?.title || 'Comic'}</strong>
+        {page ? <span className="stage-meta">{page.width} × {page.height} · {page.panels.length} panel{page.panels.length === 1 ? '' : 's'}</span> : null}</div>
+      <span className="comic-save-state" role="status">{comic.busy ? 'Saving…' : comic.dirty ? 'Unsaved layout' : 'Layout saved'}</span>
+      <div className="seg-group" role="group" aria-label="Comic view">
+        {(['layout', 'artwork', 'read'] as const).map(mode => <button key={mode} type="button" aria-pressed={view === mode}
           disabled={drawingActive || adding} onClick={() => { void flushDirtyShots().then(() => {
             cancelGesture(); setView(mode); if (mode === 'artwork') setInspector('panel')
           }).catch(reportError) }}>
           {mode === 'layout' ? 'Layout' : mode === 'artwork' ? 'Artwork' : 'Read'}</button>)}
       </div>
-      <span className="comic-save-state" role="status">{comic.busy ? 'Saving…' : comic.dirty ? 'Unsaved layout' : 'Layout saved'}</span>
-      <button type="button" onClick={comic.undo} disabled={disabled || comic.busy || !comic.canUndo}>Undo</button>
-      <button type="button" onClick={comic.redo} disabled={disabled || comic.busy || !comic.canRedo}>Redo</button>
-      <button type="button" onClick={() => { void flushDirtyShots().catch(reportError) }} disabled={disabled}>Save layout</button>
-      <button type="button" onClick={() => { void exportPage() }} disabled={disabled || !page}>Export PNG</button>
-      <button type="button" onClick={() => { void exportPage(true) }} disabled={disabled || !page}>Chapter ZIP</button>
-      <select aria-label="More comic export formats" value="" disabled={disabled || !page} onChange={event => {
-        if (event.target.value) void exportPage(true, event.target.value as 'pdf' | 'cbz')
-      }}><option value="">More exports…</option><option value="pdf">Chapter PDF</option><option value="cbz">Chapter CBZ</option></select>
+      <span className="stage-divider" aria-hidden="true" />
+      <button type="button" className="ghost icon-btn" title="Undo" aria-label="Undo" onClick={comic.undo} disabled={disabled || comic.busy || !comic.canUndo}><ArrowCounterClockwise size={16} /></button>
+      <button type="button" className="ghost icon-btn" title="Redo" aria-label="Redo" onClick={comic.redo} disabled={disabled || comic.busy || !comic.canRedo}><ArrowClockwise size={16} /></button>
+      <button type="button" className="ghost" onClick={() => { void flushDirtyShots().catch(reportError) }} disabled={disabled}>Save layout</button>
+      <details className="menu" ref={exportMenuRef}>
+        <summary className={'comic-export-trigger' + (disabled || !page ? ' is-disabled' : '')} aria-label="Export this comic">
+          <DownloadSimple size={16} />Export<CaretDown size={12} weight="bold" />
+        </summary>
+        <div className="menu-panel" role="menu">
+          <button type="button" role="menuitem" onClick={() => { closeExportMenu(); void exportPage() }} disabled={disabled || !page}>This page as PNG</button>
+          <div className="menu-divider" />
+          <button type="button" role="menuitem" onClick={() => { closeExportMenu(); void exportPage(true) }} disabled={disabled || !page}>Chapter as ZIP of PNGs</button>
+          <button type="button" role="menuitem" onClick={() => { closeExportMenu(); void exportPage(true, 'pdf') }} disabled={disabled || !page}>Chapter as PDF</button>
+          <button type="button" role="menuitem" onClick={() => { closeExportMenu(); void exportPage(true, 'cbz') }} disabled={disabled || !page}>Chapter as CBZ</button>
+        </div>
+      </details>
     </header>
     <aside className="comic-structure">
       <div className="comic-heading"><strong>Chapters & pages</strong><button type="button" disabled={disabled} onClick={() => {

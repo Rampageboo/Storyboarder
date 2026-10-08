@@ -161,17 +161,24 @@ The `base: '/react/'` setting means all Vite-generated asset paths are prefixed 
 
 | Component | Purpose |
 |---|---|
-| `App.tsx` | Root layout: left sidebar, center canvas, right inspector |
-| `Topbar.tsx` | Menu bar (File, View, Tools, Help) and status |
-| `BoardStrip.tsx` | Timeline film strip; shot thumbnails, duration scrubber |
-| `CanvasBoard.tsx` | Main drawing canvas |
-| `ShotInspector.tsx` | Metadata editor (title, scene, status, camera, dialogue) |
+| `App.tsx` | App shell: top bar, error banner, and one workspace at a time (Home when no project is open) |
+| `Topbar.tsx` | Project menu (Home/New/Open/Save/Save as/Convert/Settings), save state, Story/Comic/Scenes/3D switch, Photoshop status and preheat, References, Export |
+| `HomePage.tsx` | New storyboard / new comic / open, and the recent-projects grid |
+| `StoryWorkspace.tsx` | Story workspace: route + outline navigator, stage (Board/Play/Map/All views), inspector column and route timeline dock |
+| `CanvasBoard.tsx` | Board stage: toolbar (Draw, Photoshop menu, Layers, Generate, More), preview composite, drawing editor host |
+| `ShotInspector.tsx` | Tabbed board inspector: Shot, Camera (structured `shot_design`), Continuity, Prompt (read-only preview), Notes (review comments); Advanced view hosts `AdvancedPanel` |
+| `BoardStrip.tsx` | Legacy film strip used by the All boards → Strip view |
 | `ReferencePanel.tsx` | Per-shot reference images |
-| `ReferenceSidebar.tsx` | Project-level reference library, import controls |
+| `ReferenceSidebar.tsx` | Project-level reference library, opened as a right-side sheet from the top bar |
 | `ReferenceAssignmentPopover.tsx` | Shot-range apply modal for image/video references |
 | `ReferenceAssignmentPopover3dApply.tsx` | Shot-range apply modal for 3D captures |
-| `Scene3DPanel.tsx` | 3D workspace (import GLB, edit scene, capture frames) |
+| `Scene2DPanel.tsx` | Scenes workspace: scene list, perspective preview and strip, scene-bible inspector column |
+| `Scene3DPanel.tsx` | 3D workspace (Blender preview, cameras, capture to board) |
 | `KeywordTextarea.tsx` | Shot-detail textarea overlay that highlights words linked to Scene 3D assets. |
+
+### Styling
+
+`frontend/src/tokens.css` is the single source of colour, type (IBM Plex Sans/Mono, bundled via `@fontsource`) and layout metrics; `index.css` holds base controls and shared primitives (`.stage-toolbar`, `.seg-group`, `.tab-row`, `.status-chip`, `.menu`, `.notice`). Every workspace uses the same regions: 48 px top bar, 248 px navigator, stage with a 48 px toolbar, 360 px inspector. Older component stylesheets still read legacy variable names (`--bg-panel`, `--color-accent`, …), which `tokens.css` aliases to the current palette; new CSS should use the semantic tokens. The approved design canvas is the reference for new screens.
 
 ### State and API client
 

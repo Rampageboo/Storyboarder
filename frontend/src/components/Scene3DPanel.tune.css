@@ -1,16 +1,3 @@
-.scene3d-workspace-header {
-  padding: 12px 14px;
-}
-
-.scene3d-workspace-title {
-  font-size: 16px;
-}
-
-.scene3d-workspace-subtitle {
-  font-size: 13px;
-}
-
-.scene3d-workspace-actions button,
 .scene3d-editor-root button {
   min-height: 34px;
   padding: 7px 11px;

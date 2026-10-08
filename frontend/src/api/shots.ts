@@ -255,6 +255,21 @@ export function resolveComment(
   )
 }
 
+export interface ShotPromptPreview {
+  prompt: {
+    compiled_prompt: string
+    negative_prompt: string
+    aspect_ratio: string
+    variant_count: number
+    layers: { scene: string; characters: string; shot: string }
+  }
+}
+
+/** Read-only generation prompt the board would send right now; queues nothing. */
+export function previewShotPrompt(shotId: string): Promise<ShotPromptPreview> {
+  return requestJson<ShotPromptPreview>(`/api/shots/${encodeURIComponent(shotId)}/prompt-preview`)
+}
+
 export function getAnnotations(shotId: string): Promise<Record<string, unknown>> {
   return requestJson<Record<string, unknown>>(`/api/shots/${encodeURIComponent(shotId)}/annotations`)
 }

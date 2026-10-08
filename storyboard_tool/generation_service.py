@@ -310,7 +310,7 @@ def compile_prompt(
     _append_prompt_line(scene_lines, "Scene context", scene_context.get("description"))
     relevant_assets = keyword_assets or []
     draft_instruction = (
-        "DRAFT STORYBOARD MODE â€” render a simple monochrome line drawing only. Prioritize framing, camera, "
+        "DRAFT STORYBOARD MODE — render a simple monochrome line drawing only. Prioritize framing, camera, "
         "action, silhouette, and spatial relationships. Do not create a polished style frame, concept art, color "
         "rendering, materials, textures, or cinematic lighting. Ignore lighting direction and mood."
     )

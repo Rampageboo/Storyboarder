@@ -1,4 +1,5 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from 'react'
+import { CaretDown, DotsThree, PencilSimple, Sparkle, Stack } from '@phosphor-icons/react'
 import {
   createShotCanvas,
   openShotPreview,
@@ -20,12 +21,20 @@ import { shotDisplayLabel } from '../utils/shotDisplay'
 import { shotHasPreview, shotShouldOverlayPreview } from '../utils/shotPreview'
 import { FloatingLayersPanel, type CanvasLayerId } from './FloatingLayersPanel'
 import { FullDrawingEditor } from './FullDrawingEditor'
+import { useDetailsMenu } from '../hooks/useDetailsMenu'
 import './CanvasBoard.css'
 
 type SyncResult = { synced?: boolean; message?: string }
 const ALL_LAYERS_VISIBLE: Record<CanvasLayerId, boolean> = { background: true, codex: true, artwork: true }
 
-export function CanvasBoard({ panelsInitiallyOpen = true, panelSize }: { panelsInitiallyOpen?: boolean; panelSize?: { width: number; height: number } }) {
+export function CanvasBoard({ panelsInitiallyOpen = true, panelSize, headerLead }: {
+  panelsInitiallyOpen?: boolean
+  panelSize?: { width: number; height: number }
+  /** Workspace-owned left side of the stage toolbar (title, status, view switch). */
+  headerLead?: ReactNode
+}) {
+  const { ref: psMenuRef, close: closePsMenu } = useDetailsMenu()
+  const { ref: moreMenuRef, close: closeMoreMenu } = useDetailsMenu()
   const { project, selectedShotId, setProject, flushDirtyShots, projectActionBusy, reportError, missingFiles, setDrawingActive } = useProject()
   const [bust, setBust] = useState(0)
   const [loadFailed, setLoadFailed] = useState(false)
@@ -75,7 +84,6 @@ export function CanvasBoard({ panelsInitiallyOpen = true, panelSize }: { panelsI
   const canvasAspect = `${canvasWidth} / ${canvasHeight}`
   const linkedCount = [hasBoardBg, hasCodexLayer, hasPreview].filter(Boolean).length
   const linkedTotal = 3
-  const linkedLabel = `Layers ${linkedCount}/${linkedTotal}`
   const linkedTitle = [
     hasPreview ? 'Artist artwork: linked' : 'Artist artwork: none',
     hasCodexLayer ? 'Codex image: linked' : 'Codex image: none',
@@ -360,96 +368,44 @@ export function CanvasBoard({ panelsInitiallyOpen = true, panelSize }: { panelsI
 
   return (
     <div className="canvas">
-      <div className="canvas-header">
-        <div className="canvas-heading">
-          <div className="canvas-title">Preview</div>
-          <div className="canvas-subtitle">{shotDisplayLabel(shot)}</div>
-        </div>
-        <div className="canvas-toolbar" aria-label="Preview actions">
-          <button
-            type="button"
-            onClick={() => setFullEditorMode(true)}
-            disabled={disabled || editorActive}
-            title="Draw directly in the storyboard canvas"
-          >
-            Draw
-          </button>
+      <div className="canvas-header stage-toolbar">
+        {headerLead ?? (
+          <>
+            <div className="stage-title"><strong>{shotDisplayLabel(shot)}</strong></div>
+            <div className="stage-spacer" />
+          </>
+        )}
+        <span className="stage-divider" aria-hidden="true" />
+        <div className="canvas-toolbar" aria-label="Board actions">
           <button
             type="button"
             className="primary"
-            onClick={() => handleOpenInPhotoshop()}
+            onClick={() => setFullEditorMode(true)}
             disabled={disabled || editorActive}
-            title="Open the shot's source in Photoshop (creates a blank canvas if none exists)"
+            title="Draw directly on this board"
           >
-            Open in Photoshop
+            <PencilSimple size={16} weight="bold" />Draw
           </button>
-          <button
-            type="button"
-            onClick={() => handleSync()}
-            disabled={disabled || editorActive || !hasSource}
-            title="Sync the preview from the linked source file"
-          >
-            Sync
-          </button>
-          <button
-            type="button"
-            onClick={() => handleOpenPreview()}
-            disabled={disabled || editorActive || !hasPreview}
-            title="Open the preview image externally"
-          >
-            Preview
-          </button>
-          <button type="button" onClick={() => imageInputRef.current?.click()} disabled={disabled || editorActive}>
-            {busy ? 'Working...' : 'Upload'}
-          </button>
-          <button
-            type="button"
-            className="icon"
-            onClick={() => {
-              setLoadFailed(false)
-              setBust((x) => x + 1)
-            }}
-            disabled={disabled || editorActive || (!hasArtworkImage && !hasBoardBg)}
-            title="Reload preview from server"
-            aria-label="Refresh preview"
-          >
-            Refresh
-          </button>
-          <button
-            type="button"
-            className={`canvas-link-pill ${linkedCount === linkedTotal ? 'ok' : 'partial'}`}
-            title={`${layersPanelOpen ? 'Close' : 'Open'} Layers\n${linkedTitle}`}
-            aria-label={linkedTitle}
-            aria-pressed={layersPanelOpen}
-            onClick={() => setLayersPanelOpen((open) => !open)}
-            disabled={disabled || editorActive}
-          >
-            {linkedLabel}
-          </button>
-          <button
-            type="button"
-            className="canvas-link-pill"
-            title={`${queuePanelOpen ? 'Close' : 'Open'} Queue`}
-            aria-label="Generation Queue"
-            aria-pressed={queuePanelOpen}
-            onClick={() => setQueuePanelOpen((open) => !open)}
-            disabled={disabled || editorActive}
-          >
-            Queue
-          </button>
-          <details className="canvas-more" hidden={editorActive}>
-            <summary aria-label="More preview actions">More</summary>
-            <div className="canvas-more-menu">
-              <button type="button" onClick={() => sourceInputRef.current?.click()} disabled={disabled}>
-                Upload source PSD
+          <details className="menu canvas-menu" ref={psMenuRef} hidden={editorActive}>
+            <summary className={`canvas-menu-trigger${disabled ? ' is-disabled' : ''}`} aria-label="Photoshop actions">
+              <span className="ps-badge" aria-hidden="true">Ps</span><span className="btn-label is-keep">Photoshop</span><CaretDown size={12} weight="bold" />
+            </summary>
+            <div className="menu-panel" role="menu">
+              <button type="button" role="menuitem" onClick={() => { closePsMenu(); handleOpenInPhotoshop() }} disabled={disabled}
+                title="Creates a blank PSD first when the board has no source">
+                Open in Photoshop<span className="menu-hint">O</span>
               </button>
-              <button type="button" onClick={() => handleCreateCanvas()} disabled={disabled}>
+              <button type="button" role="menuitem" onClick={() => { closePsMenu(); handleSync() }} disabled={disabled || !hasSource}>
+                Sync preview from source<span className="menu-hint">R</span>
+              </button>
+              <div className="menu-divider" />
+              <button type="button" role="menuitem" onClick={() => { closePsMenu(); handleCreateCanvas() }} disabled={disabled}>
                 Create blank canvas
               </button>
-              <button type="button" className="danger" onClick={() => handleDelete()} disabled={disabled || !shot.image_path}>
-                Delete image
+              <button type="button" role="menuitem" onClick={() => { closePsMenu(); sourceInputRef.current?.click() }} disabled={disabled}>
+                Upload source PSD…
               </button>
-              <label className="canvas-autoopen" title="Open the new source in Photoshop right after creating a canvas">
+              <label title="Open the new source in Photoshop right after creating a canvas">
                 <input
                   type="checkbox"
                   checked={autoOpenPs}
@@ -463,23 +419,67 @@ export function CanvasBoard({ panelsInitiallyOpen = true, panelSize }: { panelsI
                     }
                   }}
                 />
-                Open PS after create
+                Open in Photoshop after creating
               </label>
+            </div>
+          </details>
+          <button
+            type="button"
+            className={`canvas-toggle${linkedCount === linkedTotal ? ' is-complete' : ''}`}
+            title={`${layersPanelOpen ? 'Hide' : 'Show'} layers
+${linkedTitle}`}
+            aria-label={`Layers: ${linkedTitle}`}
+            aria-pressed={layersPanelOpen}
+            onClick={() => setLayersPanelOpen((open) => !open)}
+            disabled={disabled || editorActive}
+          >
+            <Stack size={16} /><span className="btn-label">Layers</span><span className="canvas-toggle-count">{linkedCount}/{linkedTotal}</span>
+          </button>
+          <button
+            type="button"
+            className="canvas-toggle"
+            title={`${queuePanelOpen ? 'Hide' : 'Show'} the generation queue`}
+            aria-label="Generation queue"
+            aria-pressed={queuePanelOpen}
+            onClick={() => setQueuePanelOpen((open) => !open)}
+            disabled={disabled || editorActive}
+          >
+            <Sparkle size={16} /><span className="btn-label">Generate</span>
+          </button>
+          <details className="menu canvas-menu" ref={moreMenuRef} hidden={editorActive}>
+            <summary className="canvas-menu-trigger is-icon" aria-label="More board actions" title="More">
+              <DotsThree size={18} weight="bold" />
+            </summary>
+            <div className="menu-panel" role="menu">
+              <button type="button" role="menuitem" onClick={() => { closeMoreMenu(); imageInputRef.current?.click() }} disabled={disabled}>
+                {busy ? 'Working…' : 'Upload image…'}
+              </button>
+              <button type="button" role="menuitem" onClick={() => { closeMoreMenu(); handleOpenPreview() }} disabled={disabled || !hasPreview}>
+                Open preview externally
+              </button>
+              <button
+                type="button"
+                role="menuitem"
+                onClick={() => {
+                  closeMoreMenu()
+                  setLoadFailed(false)
+                  setBust((x) => x + 1)
+                }}
+                disabled={disabled || (!hasArtworkImage && !hasBoardBg)}
+              >
+                Reload preview
+              </button>
               {sourcePath || previewPath ? (
-                <details className="canvas-file-details">
-                  <summary>File details</summary>
-                  {sourcePath ? (
-                    <div className="canvas-status-path" title={sourcePath}>
-                      Source: {sourcePath}
-                    </div>
-                  ) : null}
-                  {previewPath ? (
-                    <div className="canvas-status-path" title={previewPath}>
-                      Preview: {previewPath}
-                    </div>
-                  ) : null}
-                </details>
+                <>
+                  <div className="menu-divider" />
+                  {sourcePath ? <div className="menu-caption canvas-status-path" title={sourcePath}>Source · {sourcePath}</div> : null}
+                  {previewPath ? <div className="menu-caption canvas-status-path" title={previewPath}>Preview · {previewPath}</div> : null}
+                </>
               ) : null}
+              <div className="menu-divider" />
+              <button type="button" role="menuitem" className="danger" onClick={() => { closeMoreMenu(); handleDelete() }} disabled={disabled || !shot.image_path}>
+                Delete image
+              </button>
             </div>
           </details>
         </div>

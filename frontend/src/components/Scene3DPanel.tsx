@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { Cube, Plus } from '@phosphor-icons/react'
 import {
   createScene3D,
   getBpyViewportStatus,
@@ -618,6 +619,8 @@ export function Scene3DPanel({ active }: { active: boolean }) {
     }
     if (active) {
       wasActiveRef.current = true
+      // Without a Blender preview the editor root is not rendered; the empty state explains why.
+      if (!hasBlenderPreview) return
       const request = window.requestAnimationFrame(() => {
         void loadEditorScene()
           .then(() => {
@@ -631,7 +634,7 @@ export function Scene3DPanel({ active }: { active: boolean }) {
     persistReferenceView()
     editorRef.current?.pauseAnimation?.()
     wasActiveRef.current = false
-  }, [active, currentSceneKey, selectedShotId, loadEditorScene, persistReferenceView, reportError])
+  }, [active, hasBlenderPreview, currentSceneKey, selectedShotId, loadEditorScene, persistReferenceView, reportError])
 
   useEffect(
     () => () => {
@@ -667,55 +670,51 @@ export function Scene3DPanel({ active }: { active: boolean }) {
       />
 
       <section className="scene3d-workspace-page" aria-label="Scene 3D workspace">
-          <div className="scene3d-workspace-header">
-            <div>
-              <div className="scene3d-workspace-title">Scene 3D Workspace</div>
-              <div className="scene3d-workspace-subtitle">
-                {sceneName || activeScene3d?.id || 'Built-in scene'} - selected board drives preview/capture
-              </div>
+          <div className="scene3d-workspace-header stage-toolbar">
+            <div className="stage-title">
+              <strong>{sceneName || activeScene3d?.title || 'Scene 3D'}</strong>
+              <span className="stage-meta">selected board drives preview &amp; capture</span>
             </div>
-            <div className="scene3d-workspace-actions">
-              {note ? <span className="scene3d-note">{note}</span> : null}
-              <select
-                className="scene3d-workspace-select"
-                value={activeScene3dId}
-                onChange={(event) => void activate3dScene(event.target.value)}
-                disabled={sceneMutationDisabled || scene3ds.length === 0}
-                aria-label="Active Scene 3D"
-              >
-                {scene3ds.length ? (
-                  scene3ds.map((item) => (
-                    <option key={item.id} value={item.id}>
-                      {item.title || item.id}
-                    </option>
-                  ))
-                ) : (
-                  <option value="">No Scene 3D records</option>
-                )}
-              </select>
-              {activeScene3d ? (
-                <Scene3DKeywordEditor
-                  key={`${activeScene3d.id}:${activeScene3d.updated_at}`}
-                  scene={activeScene3d}
-                  disabled={sceneMutationDisabled}
-                  onSave={(keywords) => saveSceneKeywords(activeScene3d.id, keywords)}
-                />
-              ) : null}
-              <button type="button" onClick={() => void create3dScene()} disabled={sceneMutationDisabled}>
-                Add 3D Scene
+            {note ? <span className="scene3d-note" role="status">{note}</span> : null}
+            <select
+              className="scene3d-workspace-select"
+              value={activeScene3dId}
+              onChange={(event) => void activate3dScene(event.target.value)}
+              disabled={sceneMutationDisabled || scene3ds.length === 0}
+              aria-label="Active Scene 3D"
+            >
+              {scene3ds.length ? (
+                scene3ds.map((item) => (
+                  <option key={item.id} value={item.id}>
+                    {item.title || item.id}
+                  </option>
+                ))
+              ) : (
+                <option value="">No Scene 3D records</option>
+              )}
+            </select>
+            {activeScene3d ? (
+              <Scene3DKeywordEditor
+                key={`${activeScene3d.id}:${activeScene3d.updated_at}`}
+                scene={activeScene3d}
+                disabled={sceneMutationDisabled}
+                onSave={(keywords) => saveSceneKeywords(activeScene3d.id, keywords)}
+              />
+            ) : null}
+            <button type="button" className="ghost" onClick={() => void create3dScene()} disabled={sceneMutationDisabled}>
+              <Plus size={15} />Scene
+            </button>
+            <button type="button" onClick={() => blendInputRef.current?.click()} disabled={sceneMutationDisabled}>
+              Attach .blend
+            </button>
+            {!BUILT_IN_BPY_VIEWPORT ? (
+              <button type="button" onClick={() => void captureToBoard()} disabled={!editorReady || !selectedShotId || disabled}>
+                Capture to board
               </button>
-              <button type="button" onClick={() => blendInputRef.current?.click()} disabled={sceneMutationDisabled}>
-                Attach .blend
-              </button>
-              <button type="button" onClick={() => void openBlender()} disabled={disabled || externalBlenderOwned}>
-                {externalBlenderOwned ? 'Blender Connected' : 'Open Blender'}
-              </button>
-              {!BUILT_IN_BPY_VIEWPORT ? (
-                <button type="button" onClick={() => void captureToBoard()} disabled={!editorReady || !selectedShotId || disabled}>
-                  Capture to board
-                </button>
-              ) : null}
-            </div>
+            ) : null}
+            <button type="button" className="primary" onClick={() => void openBlender()} disabled={disabled || externalBlenderOwned}>
+              {externalBlenderOwned ? 'Blender connected' : 'Open Blender'}
+            </button>
           </div>
           {BUILT_IN_BPY_VIEWPORT ? (
             <BpyViewport
@@ -733,7 +732,26 @@ export function Scene3DPanel({ active }: { active: boolean }) {
               <div className="scene3d-editor-root" ref={editorRootRef} />
             ) : (
               <div className="scene3d-preview-empty">
-                Open Blender to create this Scene 3D. Storyboarder will show a smooth, read-only preview after Blender saves.
+                <div className="scene3d-empty-card">
+                  <div className="scene3d-empty-head">
+                    <span className="scene3d-empty-icon" aria-hidden="true"><Cube size={20} /></span>
+                    <div>
+                      <strong>No Blender preview yet</strong>
+                      <p>The viewport shows a read-only preview of the scene Blender saves.</p>
+                    </div>
+                  </div>
+                  <ol className="scene3d-empty-steps">
+                    <li><span>1</span>Open Blender from here, or attach an existing .blend</li>
+                    <li><span>2</span>Build or adjust the set, then save in Blender</li>
+                    <li><span>3</span>The preview appears here; capture cameras to boards</li>
+                  </ol>
+                  <div className="scene3d-empty-actions">
+                    <button type="button" className="primary" onClick={() => void openBlender()} disabled={disabled || externalBlenderOwned}>
+                      {externalBlenderOwned ? 'Blender connected' : 'Open Blender'}
+                    </button>
+                    <button type="button" onClick={() => blendInputRef.current?.click()} disabled={sceneMutationDisabled}>Attach .blend</button>
+                  </div>
+                </div>
               </div>
             )
           )}
