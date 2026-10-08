@@ -320,13 +320,18 @@ class TestSweepOrphanedWorkingRoots:
 def test_running_app_exposes_its_background_loops_for_shutdown(tmp_path: Path) -> None:
     """Shutdown can only stop the watchers if the app publishes them.
 
-    Both loops write into the open project's work tree, so removing that tree
+    The loops write into the open project's work tree, so removing that tree
     without stopping them first is what leaves undeletable TEMP directories.
     """
     with TestClient(api_module.create_app(tmp_path)) as client:
         app = client.app
         assert app.state.background_stop is not None
-        assert len(app.state.background_threads) == 2
+        names = {thread.name for thread in app.state.background_threads}
+        assert names == {
+            "storyboard-bridge-refresh",
+            "storyboard-generation-results",
+            "storyboard-blender-session",
+        }
         assert all(thread.is_alive() for thread in app.state.background_threads)
 
 

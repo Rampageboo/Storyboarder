@@ -93,8 +93,7 @@
 .comic-workspace .comic-prompt-preview { min-height: 220px; font-family: monospace; font-size: 11px; }
 .comic-toolbar { flex-wrap: wrap; height: auto; }
 .comic-workspace { grid-template-rows: auto minmax(0, 1fr); }
-.comic-inspector-tabs { display: flex; gap: 5px; position: sticky; top: -12px; z-index: 5; padding: 0 0 12px; background: var(--color-surface); }
-.comic-inspector-tabs button { flex: 1; }
+.comic-inspector-tabs.tab-row { position: sticky; top: -14px; z-index: 5; margin: -14px -14px 14px; gap: 16px; background: var(--bg-1); }
 .comic-selected-panel { display: flex; flex-direction: column; gap: 5px; margin: 16px 0; }
 .comic-selected-panel strong { color: var(--color-accent); font-size: 14px; }
 .comic-selected-panel span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--color-muted); }
@@ -102,7 +101,10 @@
 .comic-preview-paper { fill: transparent; stroke: var(--color-muted); stroke-width: 1px; vector-effect: non-scaling-stroke; }
 .comic-preview-cell { fill: color-mix(in srgb, var(--color-muted) 12%, transparent); stroke: currentColor; stroke-width: 1px; vector-effect: non-scaling-stroke; }
 .comic-preview-spine { stroke: var(--color-muted); stroke-dasharray: 3 3; stroke-width: 1px; vector-effect: non-scaling-stroke; }
-.comic-tools { display: flex; flex-wrap: wrap; align-items: center; gap: 5px; padding: 8px 12px; border-bottom: 1px solid var(--color-border); background: var(--color-surface); }
+.comic-tools { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 8px 12px; border-bottom: 1px solid var(--line); background: var(--bg-1); }
+.comic-tools .comic-tool-group > button { width: 30px; padding: 0; }
+.comic-tools button.ghost[aria-pressed='true'] { background: var(--bg-seg-on); color: var(--text-1); }
+.comic-tools button.ghost { min-height: 28px; height: 28px; }
 .comic-tools label { margin: 0 0 0 auto; flex-direction: row; align-items: center; }
 .comic-tools select { width: auto; padding: 4px; }
 .comic-canvas-footer { display: flex; justify-content: space-between; gap: 12px; border: 1px solid var(--color-border); padding: 8px 10px; margin-top: 12px; color: var(--color-muted); font-size: 10px; }

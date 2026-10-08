@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
 import secrets
 import sys
@@ -57,25 +58,13 @@ def _write_heartbeat(payload: dict[str, Any]) -> None:
 
 
 def _context_allows_write() -> bool:
-    if not CONTEXT or str(CONTEXT.get("session_id") or "") != SESSION_ID:
-        return False
-    if CONTEXT.get("path_mode") != "explicit-assets":
-        return True
-    lease_expires_at = CONTEXT.get("lease_expires_at")
-    lease_is_fresh = (
-        isinstance(lease_expires_at, (int, float))
-        and not isinstance(lease_expires_at, bool)
-        and time.time() <= float(lease_expires_at)
-    )
-    return (
-        CONTEXT.get("version") == 2
-        and bool(str(CONTEXT.get("project_session_id") or ""))
-        and isinstance(CONTEXT.get("context_revision"), int)
-        and CONTEXT.get("context_revision") >= 0
-        and CONTEXT.get("offline_write_allowed") is False
-        and CONTEXT.get("write_enabled") is True
-        and lease_is_fresh
-    )
+    """Write the preview only for the session Storyboarder still recognises.
+
+    Storyboarder decides separately whether a save may enter the project (it
+    checks the canonical file has not changed underneath). Blender never refuses
+    to save because Storyboarder is busy or briefly unreachable.
+    """
+    return bool(CONTEXT) and str(CONTEXT.get("session_id") or "") == SESSION_ID and CONTEXT.get("write_enabled") is True
 
 
 def _current_blend_matches_context() -> bool:
@@ -113,6 +102,7 @@ def _export_preview() -> None:
             raise RuntimeError("Blender did not create the preview GLB.")
         os.replace(temporary, preview_path)
         PREVIEW_REVISION = preview_path.stat().st_mtime_ns
+        _export_manifest()
         print(f"Storyboarder: preview updated at {preview_path}")
     except Exception as exc:  # Blender operator failures vary by version.
         PREVIEW_ERROR = str(exc)
@@ -123,6 +113,54 @@ def _export_preview() -> None:
             pass
     finally:
         PREVIEW_EXPORTING = False
+
+
+def _camera_facts(obj: Any, active: Any) -> dict[str, Any]:
+    matrix = obj.matrix_world
+    location = matrix.to_translation()
+    rotation = matrix.to_euler("XYZ")
+    data = obj.data
+    return {
+        "name": obj.name,
+        "is_active": obj == active,
+        "lens_mm": round(float(getattr(data, "lens", 0.0) or 0.0), 3),
+        "sensor_width_mm": round(float(getattr(data, "sensor_width", 0.0) or 0.0), 3),
+        "projection": str(getattr(data, "type", "PERSP")),
+        "location": [round(float(value), 4) for value in location],
+        "rotation_deg": [round(math.degrees(float(value)), 3) for value in rotation],
+        "animated": bool(obj.animation_data and obj.animation_data.action),
+    }
+
+
+def _export_manifest() -> None:
+    """Scene facts Storyboarder lists next to the preview (cameras, frame range)."""
+    manifest_value = str(CONTEXT.get("manifest_path") or "").strip()
+    if not manifest_value:
+        return
+    scene = bpy.context.scene
+    active = scene.camera
+    cameras = [_camera_facts(obj, active) for obj in scene.objects if obj.type == "CAMERA"]
+    fps_base = float(getattr(scene.render, "fps_base", 1.0) or 1.0)
+    payload = {
+        "version": 1,
+        "session_id": SESSION_ID,
+        "scene3d_id": str(CONTEXT.get("scene3d_id") or ""),
+        "fps": round(float(scene.render.fps) / fps_base, 3),
+        "frame_start": int(scene.frame_start),
+        "frame_end": int(scene.frame_end),
+        "active_camera": active.name if active is not None else "",
+        "cameras": sorted(cameras, key=lambda item: item["name"].lower()),
+        "object_count": len(scene.objects),
+        "exported_at": time.time(),
+    }
+    path = Path(manifest_value).expanduser()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name(f".{path.name}.{os.getpid()}.{secrets.token_hex(4)}.tmp")
+    try:
+        temporary.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+        os.replace(temporary, path)
+    except OSError as exc:
+        print(f"Storyboarder: manifest export failed: {exc}")
 
 
 def _preview_export_timer() -> None:
@@ -145,11 +183,8 @@ def _on_save_pre(_unused: Any) -> None:
     global CONTEXT, PREVIEW_ERROR, SAVE_AUTHORIZED
     CONTEXT = _read_context()
     SAVE_AUTHORIZED = _context_allows_write() and _current_blend_matches_context()
-    if CONTEXT.get("path_mode") == "explicit-assets" and not SAVE_AUTHORIZED:
-        PREVIEW_ERROR = (
-            "Storyboarder lease is stale; this session save will not be ingested "
-            "into the canonical project asset."
-        )
+    if not SAVE_AUTHORIZED:
+        PREVIEW_ERROR = "This Blender session is no longer linked to Storyboarder; the preview was not updated."
         print(f"Storyboarder: {PREVIEW_ERROR}")
 
 
@@ -173,8 +208,6 @@ def _heartbeat() -> float:
             {
                 "version": 1,
                 "session_id": SESSION_ID,
-                "project_session_id": str(CONTEXT.get("project_session_id") or ""),
-                "context_revision": CONTEXT.get("context_revision"),
                 "blend_path": str(Path(filepath).resolve()) if filepath else "",
                 "scene3d_id": str(CONTEXT.get("scene3d_id") or ""),
                 "active_camera": active_camera.name if active_camera is not None else "",

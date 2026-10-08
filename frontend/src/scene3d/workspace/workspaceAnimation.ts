@@ -92,19 +92,19 @@ export function buildAnimationHint(input: AnimationHintInput): string {
   const duration = input.animationDuration || 0
   if (!duration) {
     return (
-      '未检测到 GLB 动画。Blender 导出请勾选 Animation，Animation mode 建议选 Scene，并勾选 Bake All Objects Animations。'
+      'No animation in this preview. Add keyframes in Blender and save to animate cameras.'
     )
   }
   if (!input.activeCameraName) {
-    return `动画 ${input.formatTime(duration)} · 请在左侧选择相机`
+    return `Animation ${input.formatTime(duration)} · choose a camera in the Cameras list`
   }
   if (!input.cameraMoves) {
     return (
-      `动画 ${input.formatTime(duration)} · 当前相机「${input.activeCameraName}」未随时间变化。` +
-      '请换其他相机，或在 Blender 给该相机（或其父级）打关键帧后重新导出。'
+      `Animation ${input.formatTime(duration)} · camera "${input.activeCameraName}" does not move. ` +
+      'Pick another camera, or keyframe this camera (or its parent) in Blender and save.'
     )
   }
-  return '拖动时间条或点 ▶ 播放 · 跟随相机视角 · 「印到当前分镜」保存当前画面'
+  return 'Scrub or play · camera view follows the active camera · Capture saves this frame to the selected board'
 }
 
 export function advancePlaybackTime(

@@ -203,7 +203,6 @@ def test_layout2_failure_restores_disk_memory_revision_and_active_app(tmp_path, 
         app.state.project = Project(root_path=tmp_path / "wrong")
         app.state.dirty = True
         app.state.project_disk_mtime = 99
-        app.state.external_blender_context_revision = 100
         raise RuntimeError("after persistence")
 
     with pytest.raises(RuntimeError, match="after persistence"):
@@ -214,7 +213,6 @@ def test_layout2_failure_restores_disk_memory_revision_and_active_app(tmp_path, 
     assert project.storage_revision == before_revision
     assert app.state.dirty is False
     assert app.state.project_disk_mtime == 12
-    assert app.state.external_blender_context_revision == 34
     assert _tree_bytes(project.project_root) == before_disk
     assert not new_asset.exists()
 
@@ -233,7 +231,6 @@ def test_layout2_app_state_restoration_also_runs_on_base_exception(execution_tra
         app.state.project = None
         app.state.dirty = True
         app.state.project_disk_mtime = 99
-        app.state.external_blender_context_revision = 100
         raise Abort()
 
     with pytest.raises(Abort):
@@ -242,5 +239,4 @@ def test_layout2_app_state_restoration_also_runs_on_base_exception(execution_tra
     assert project.storage_revision == 5
     assert app.state.dirty is False
     assert app.state.project_disk_mtime == 12
-    assert app.state.external_blender_context_revision == 34
     assert execution_trace == ["enter:project", "enter:disk", "enter:memory", "exit:memory", "exit:disk", "exit:project"]

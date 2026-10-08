@@ -593,7 +593,7 @@ function z(e) {
 }
 function B(e) {
 	let t = ((e.parser?.json || {}).nodes || []).filter((e) => e.camera !== void 0).length, n = e.cameras?.length || 0;
-	return n > 0 || t > 0 ? `GLB 元数据含 ${Math.max(n, t)} 个相机，但未能正确挂到场景。 请检查 Blender：相机不要隐藏（眼睛图标），Limit to 不要勾选 Visible/Active Collection，或把相机放进导出集合。` : "GLB 内完全没有相机数据（不是勾选 Cameras 就行）。 请确认场景里有 Camera 对象、导出时 Limit to 留空、相机可见，并重新导出。";
+	return n > 0 || t > 0 ? `The preview lists ${Math.max(n, t)} camera(s) that are not attached to the scene. In Blender, make sure the cameras are visible and part of the scene, then save.` : "This scene has no cameras yet. Add a Camera object in Blender and save; it will appear in the Cameras list.";
 }
 function V(e, t) {
 	let n = 0, r = e.object3d;
@@ -665,17 +665,17 @@ function Oe(e) {
 	return U(e) ? e.importedLightCount > 0 ? .35 : 1 : 0;
 }
 function ke(e) {
-	return e.mode === "on" ? "手动：环境 + 柔光" : e.mode === "off" ? "手动：仅 GLB 灯光" : e.importedLightCount > 0 ? `自动：GLB ${e.importedLightCount} 盏灯 + 弱环境反射` : "自动：GLB 无灯，全程序补光";
+	return e.mode === "on" ? "Manual: environment + fill" : e.mode === "off" ? "Manual: Blender lights only" : e.importedLightCount > 0 ? `Auto: ${e.importedLightCount} Blender light(s) + soft reflection` : "Auto: no Blender lights, full fill";
 }
 function K(e) {
 	switch (e) {
-		case "on": return "始终开启";
-		case "off": return "关闭";
-		default: return "自动";
+		case "on": return "Always on";
+		case "off": return "Off";
+		default: return "Auto";
 	}
 }
 function Ae(e) {
-	let t = e.importedLightCount > 0 ? `GLB 已导出 ${e.importedLightCount} 盏灯` : "GLB 未导出灯光（导出时请勾选 Punctual Lights）", n = U(e) && !e.objectColorPreview ? "环境反射：开" : "环境反射：关", r = W(e) ? "柔光补光：开" : G(e) ? "柔光补光：弱" : "柔光补光：关", i = e.objectColorPreview ? "对象色：开（不受灯光影响）" : "对象色：关";
+	let t = e.importedLightCount > 0 ? `${e.importedLightCount} Blender light(s)` : "No Blender lights", n = U(e) && !e.objectColorPreview ? "Reflection on" : "Reflection off", r = W(e) ? "Fill on" : G(e) ? "Fill soft" : "Fill off", i = e.objectColorPreview ? "Object colours on" : "Object colours off";
 	return `${t} · ${K(e.mode)} · ${n} · ${r} · ${i}`;
 }
 function je(e, t, n) {
@@ -735,7 +735,7 @@ function Ie(e, t, n) {
 }
 function Le(e) {
 	let t = e.animationDuration || 0;
-	return t ? e.activeCameraName ? e.cameraMoves ? "拖动时间条或点 ▶ 播放 · 跟随相机视角 · 「印到当前分镜」保存当前画面" : `动画 ${e.formatTime(t)} · 当前相机「${e.activeCameraName}」未随时间变化。请换其他相机，或在 Blender 给该相机（或其父级）打关键帧后重新导出。` : `动画 ${e.formatTime(t)} · 请在左侧选择相机` : "未检测到 GLB 动画。Blender 导出请勾选 Animation，Animation mode 建议选 Scene，并勾选 Bake All Objects Animations。";
+	return t ? e.activeCameraName ? e.cameraMoves ? "Scrub or play · camera view follows the active camera · Capture saves this frame to the selected board" : `Animation ${e.formatTime(t)} · camera "${e.activeCameraName}" does not move. Pick another camera, or keyframe this camera (or its parent) in Blender and save.` : `Animation ${e.formatTime(t)} · choose a camera in the Cameras list` : "No animation in this preview. Add keyframes in Blender and save to animate cameras.";
 }
 function Re(e, t, n) {
 	let r = n || 0, i = e + t;
@@ -781,7 +781,7 @@ function He(e, t, n) {
 }
 function Ue(e) {
 	let { gltf: t, importedCameras: n, animationDuration: r, importedLightCount: i, programLightingMode: a } = e, o = [];
-	return n.length === 0 ? (o.push(B(t)), o) : (n.some((e) => e.orphan) ? o.push(`已找到 ${n.length} 个相机（部分未挂到场景树，已自动修复）。`) : (t.animations || []).length ? r <= 0 ? o.push("已找到动画轨道，但时长为 0。请检查 Blender 时间轴范围与关键帧。") : a === "auto" && (i > 0 ? o.push(`检测到 GLB 含 ${i} 盏灯，已校准强度并启用弱环境反射（模拟 Blender World）。`) : o.push("GLB 无导出灯光，已自动开启全程序补光。")) : o.push("场景已加载，但未找到动画。请在 Blender 导出时勾选 Animation。"), o);
+	return n.length === 0 ? (o.push(B(t)), o) : (n.some((e) => e.orphan) ? o.push(`Found ${n.length} camera(s); some were detached and have been reattached.`) : (t.animations || []).length ? r <= 0 ? o.push("Animation tracks found but they are 0 seconds long. Check the Blender timeline range and keyframes.") : a === "auto" && (i > 0 ? o.push(`Using ${i} Blender light(s) with soft environment reflection.`) : o.push("The scene has no lights; preview fill lighting is on.")) : o.push("Scene loaded. It has no animation."), o);
 }
 function We(e, t) {
 	if (t != null && !Number.isNaN(Number(t))) return Number(t);
@@ -822,9 +822,9 @@ function Xe(e, t, n) {
 	n.px.value = t.position.x.toFixed(2), n.py.value = t.position.y.toFixed(2), n.pz.value = t.position.z.toFixed(2), n.rx.value = i.radToDeg(t.rotation.x).toFixed(1), n.ry.value = i.radToDeg(t.rotation.y).toFixed(1), n.rz.value = i.radToDeg(t.rotation.z).toFixed(1), n.sx.value = t.scale.x.toFixed(2), n.sy.value = t.scale.y.toFixed(2), n.sz.value = t.scale.z.toFixed(2);
 }
 var Ze = {
-	off: "关闭",
-	on: "标准",
-	strong: "强化"
+	off: "Off",
+	on: "Edges",
+	strong: "Strong"
 };
 //#endregion
 //#region src/scene3d/workspace/workspaceOutliner.ts
@@ -836,7 +836,7 @@ function Qe(e, t, n, r, i) {
 		active: e.id === r
 	})) : [{
 		kind: "empty",
-		label: "无相机"
+		label: "No cameras"
 	}];
 	let a = [], o = t instanceof Map ? t.entries() : t;
 	for (let [e, t] of o) a.push({
@@ -851,7 +851,7 @@ function $e(e, t) {
 	e.innerHTML = "";
 	for (let n of t) {
 		let t = document.createElement("li");
-		n.kind === "empty" ? (t.className = "scene3d-empty", t.textContent = n.label) : n.kind === "camera" ? (t.dataset.cameraId = n.id, t.className = n.active ? "active" : "", t.textContent = `📷 ${n.label}`) : (t.dataset.objectId = n.id, t.className = n.active ? "active" : "", t.textContent = n.label), e.appendChild(t);
+		n.kind === "empty" ? (t.className = "scene3d-empty", t.textContent = n.label) : n.kind === "camera" ? (t.dataset.cameraId = n.id, t.className = n.active ? "active" : "", t.textContent = `${n.label}`) : (t.dataset.objectId = n.id, t.className = n.active ? "active" : "", t.textContent = n.label), e.appendChild(t);
 	}
 }
 function et(e) {
@@ -860,7 +860,7 @@ function et(e) {
 		label: e.name
 	})) : [{
 		value: "",
-		label: "（无相机）"
+		label: "No cameras"
 	}];
 }
 function tt(e, t, n = "") {
@@ -1156,7 +1156,7 @@ var mt = class {
 		this.rootEl = t, this.callbacks = n, this.sceneData = u(), this.sceneMeta = {}, this.mode = "builtin", this.objects = /* @__PURE__ */ new Map(), this.selectedId = null, this.transformMode = "translate", this.shotCameraHelper = null, this.animationId = null, this.clock = new e.Clock(), this.blenderRoot = null, this.mixer = null, this.mixerActions = [], this.importedCameras = [], this.activeCameraId = "", this.followCamera = !0, this.isPlaying = !1, this.programLightingMode = "auto", this.importedLightCount = 0, this.objectColorPreview = !0, this.previewMaterials = /* @__PURE__ */ new Set(), this.wireframeMode = "off", this.wireframeResources = A(), this.animationTime = 0, this.animationDuration = 0, this.animatedNodeNames = /* @__PURE__ */ new Set(), this._followPos = new e.Vector3(), this._followQuat = new e.Quaternion(), this._followScale = new e.Vector3(), this._probePosA = new e.Vector3(), this._probePosB = new e.Vector3(), this._sceneSettingsSaveTimer = null, this._suppressViewChange = !1, this._disposed = !1, this.renderer = null, this.scene = null, this.camera = null, this.defaultAmbient = null, this.defaultSun = null, this.programAmbient = null, this.programHemisphere = null, this.grid = null, this.axes = null, this.builtinBackground = null, this.pmremGenerator = null, this.blenderEnvMap = null, this.orbit = null, this.transform = null, this.raycaster = null, this.pointer = null, this.transformInputs = {}, this._buildDom(), this._initThree(), this._bindUi();
 	}
 	_buildDom() {
-		this.rootEl.innerHTML = "\n      <div class=\"scene3d-layout\">\n        <aside class=\"scene3d-sidebar\">\n          <div class=\"scene3d-panel-title\">当前分镜预览</div>\n          <div class=\"scene3d-board-preview\" data-board-preview>\n            <img data-board-preview-img alt=\"\" hidden />\n            <span class=\"scene3d-board-preview-empty\" data-board-preview-empty>无预览 · Capture 后显示</span>\n          </div>\n          <div class=\"scene3d-board-label\" data-board-label>—</div>\n          <div class=\"scene3d-panel-title\">Blender 场景</div>\n          <div class=\"scene3d-blender-panel\">\n            <div class=\"scene3d-file-name\" data-blend-name>scene3d/scene.blend</div>\n            <button type=\"button\" data-action=\"open-blender\" class=\"scene3d-import-btn\">在 Blender 中打开</button>\n            <div class=\"scene3d-light-status\">在 Blender 保存后自动更新预览</div>\n            <label class=\"scene3d-check\">\n              <input type=\"checkbox\" data-follow-camera checked />\n              跟随相机视角\n            </label>\n            <label class=\"scene3d-check\">\n              <input type=\"checkbox\" data-object-colors checked />\n              对象随机色（低饱和，便于区分）\n            </label>\n            <label class=\"scene3d-field\">\n              <span>线框</span>\n              <select data-wireframe-mode>\n                <option value=\"off\">关闭</option>\n                <option value=\"on\">标准（叠加边线）</option>\n                <option value=\"strong\">强化（全边线 + 高亮）</option>\n              </select>\n            </label>\n            <label class=\"scene3d-field\">\n              <span>程序补光</span>\n              <select data-program-lighting>\n                <option value=\"auto\">自动（有灯：环境反射；无灯：全补光）</option>\n                <option value=\"on\">始终开启（环境 + 柔光）</option>\n                <option value=\"off\">关闭（仅 GLB 灯光）</option>\n              </select>\n            </label>\n            <div class=\"scene3d-light-status\" data-light-status>—</div>\n            <label class=\"scene3d-field\">\n              <span>相机</span>\n              <select data-camera-select disabled>\n                <option value=\"\">（无相机）</option>\n              </select>\n            </label>\n          </div>\n          <div class=\"scene3d-panel-title\">Outliner</div>\n          <ul class=\"scene3d-outliner\" data-outliner></ul>\n          <div class=\"scene3d-panel-title scene3d-builtin-only\">Transform</div>\n          <div class=\"scene3d-transform-fields scene3d-builtin-only\">\n            <label>位置 X <input type=\"number\" step=\"0.1\" data-tf=\"px\" /></label>\n            <label>位置 Y <input type=\"number\" step=\"0.1\" data-tf=\"py\" /></label>\n            <label>位置 Z <input type=\"number\" step=\"0.1\" data-tf=\"pz\" /></label>\n            <label>旋转 X <input type=\"number\" step=\"1\" data-tf=\"rx\" /></label>\n            <label>旋转 Y <input type=\"number\" step=\"1\" data-tf=\"ry\" /></label>\n            <label>旋转 Z <input type=\"number\" step=\"1\" data-tf=\"rz\" /></label>\n            <label>缩放 X <input type=\"number\" step=\"0.1\" min=\"0.01\" data-tf=\"sx\" /></label>\n            <label>缩放 Y <input type=\"number\" step=\"0.1\" min=\"0.01\" data-tf=\"sy\" /></label>\n            <label>缩放 Z <input type=\"number\" step=\"0.1\" min=\"0.01\" data-tf=\"sz\" /></label>\n          </div>\n        </aside>\n        <div class=\"panel-resize-handle scene3d-sidebar-resize\" data-edge=\"right\" data-sidebar-resize\n          role=\"separator\" tabindex=\"0\" aria-label=\"Resize Scene 3D sidebar\" aria-orientation=\"vertical\"\n          title=\"Drag or use arrow keys to resize. Double-click or press Home to reset.\"></div>\n        <div class=\"scene3d-main\">\n          <div class=\"scene3d-toolbar\">\n            <div class=\"scene3d-tool-group scene3d-builtin-only\">\n              <button type=\"button\" data-mode=\"translate\" class=\"active\" title=\"移动 (G)\">移动</button>\n              <button type=\"button\" data-mode=\"rotate\" title=\"旋转 (R)\">旋转</button>\n              <button type=\"button\" data-mode=\"scale\" title=\"缩放 (S)\">缩放</button>\n            </div>\n            <div class=\"scene3d-tool-group scene3d-builtin-only\">\n              <button type=\"button\" data-add=\"cube\">立方体</button>\n              <button type=\"button\" data-add=\"sphere\">球体</button>\n              <button type=\"button\" data-add=\"plane\">平面</button>\n              <button type=\"button\" data-add=\"cylinder\">圆柱</button>\n              <button type=\"button\" data-add=\"cone\">圆锥</button>\n            </div>\n            <div class=\"scene3d-tool-group scene3d-blender-only\" hidden>\n              <button type=\"button\" data-action=\"play-pause\">▶ 播放</button>\n              <button type=\"button\" data-action=\"go-to-start\" title=\"回到开头\">⏮ 开头</button>\n              <button type=\"button\" data-action=\"step-back\" title=\"后退 0.1s\">◀</button>\n              <button type=\"button\" data-action=\"step-forward\" title=\"前进 0.1s\">▶</button>\n              <button type=\"button\" data-action=\"capture-board\">印到当前分镜</button>\n              <button type=\"button\" data-action=\"free-view\">自由视角</button>\n            </div>\n            <div class=\"scene3d-tool-group scene3d-builtin-only\">\n              <button type=\"button\" data-action=\"delete\" title=\"删除 (Del)\">删除</button>\n              <button type=\"button\" data-action=\"focus\" title=\"聚焦 (F)\">聚焦</button>\n              <button type=\"button\" data-action=\"reset-view\">重置视图</button>\n            </div>\n            <div class=\"scene3d-tool-group scene3d-tool-group-right scene3d-builtin-only\">\n              <button type=\"button\" data-action=\"load-shot-camera\">加载镜头相机</button>\n              <button type=\"button\" data-action=\"apply-shot-camera\">保存镜头相机</button>\n            </div>\n          </div>\n          <div class=\"scene3d-viewport\" data-viewport>\n            <div class=\"scene3d-format-frame\" data-format-frame></div>\n          </div>\n          <div class=\"scene3d-timeline scene3d-blender-only\" hidden>\n            <input type=\"range\" min=\"0\" max=\"0\" step=\"0.01\" value=\"0\" data-time-slider />\n            <span data-time-display>0.0s / 0.0s</span>\n          </div>\n          <div class=\"scene3d-hint\" data-hint>\n            拖动旋转 · 滚轮缩放 · 右键平移 · 自由视角/相机视角 · Blender 保存后自动更新\n          </div>\n        </div>\n      </div>\n    ";
+		this.rootEl.innerHTML = "\n      <div class=\"scene3d-layout\">\n        <aside class=\"scene3d-sidebar\" hidden>\n          <div class=\"scene3d-panel-title\">Selected board</div>\n          <div class=\"scene3d-board-preview\" data-board-preview>\n            <img data-board-preview-img alt=\"\" hidden />\n            <span class=\"scene3d-board-preview-empty\" data-board-preview-empty>No preview · capture to fill</span>\n          </div>\n          <div class=\"scene3d-board-label\" data-board-label>—</div>\n          <div class=\"scene3d-panel-title\">Blender scene</div>\n          <div class=\"scene3d-blender-panel\">\n            <div class=\"scene3d-file-name\" data-blend-name>scene3d/scene.blend</div>\n            <button type=\"button\" data-action=\"open-blender\" class=\"scene3d-import-btn\">Open in Blender</button>\n            <div class=\"scene3d-light-status\">Updates after each save in Blender</div>\n            <label class=\"scene3d-check\">\n              <input type=\"checkbox\" data-follow-camera checked />\n              Follow camera\n            </label>\n            <label class=\"scene3d-check\">\n              <input type=\"checkbox\" data-object-colors checked />\n              Object colours\n            </label>\n            <label class=\"scene3d-field\">\n              <span>Wireframe</span>\n              <select data-wireframe-mode>\n                <option value=\"off\">Off</option>\n                <option value=\"on\">Edges</option>\n                <option value=\"strong\">Strong</option>\n              </select>\n            </label>\n            <label class=\"scene3d-field\">\n              <span>Fill light</span>\n              <select data-program-lighting>\n                <option value=\"auto\">Auto</option>\n                <option value=\"on\">Always on</option>\n                <option value=\"off\">Off</option>\n              </select>\n            </label>\n            <div class=\"scene3d-light-status\" data-light-status>—</div>\n            <label class=\"scene3d-field\">\n              <span>Camera</span>\n              <select data-camera-select disabled>\n                <option value=\"\">No cameras</option>\n              </select>\n            </label>\n          </div>\n          <div class=\"scene3d-panel-title\">Outliner</div>\n          <ul class=\"scene3d-outliner\" data-outliner></ul>\n          <div class=\"scene3d-panel-title scene3d-builtin-only\">Transform</div>\n          <div class=\"scene3d-transform-fields scene3d-builtin-only\">\n            <label>Position X <input type=\"number\" step=\"0.1\" data-tf=\"px\" /></label>\n            <label>Position Y <input type=\"number\" step=\"0.1\" data-tf=\"py\" /></label>\n            <label>Position Z <input type=\"number\" step=\"0.1\" data-tf=\"pz\" /></label>\n            <label>Rotation X <input type=\"number\" step=\"1\" data-tf=\"rx\" /></label>\n            <label>Rotation Y <input type=\"number\" step=\"1\" data-tf=\"ry\" /></label>\n            <label>Rotation Z <input type=\"number\" step=\"1\" data-tf=\"rz\" /></label>\n            <label>Scale X <input type=\"number\" step=\"0.1\" min=\"0.01\" data-tf=\"sx\" /></label>\n            <label>Scale Y <input type=\"number\" step=\"0.1\" min=\"0.01\" data-tf=\"sy\" /></label>\n            <label>Scale Z <input type=\"number\" step=\"0.1\" min=\"0.01\" data-tf=\"sz\" /></label>\n          </div>\n        </aside>\n        <div class=\"panel-resize-handle scene3d-sidebar-resize\" hidden data-edge=\"right\" data-sidebar-resize\n          role=\"separator\" tabindex=\"0\" aria-label=\"Resize Scene 3D sidebar\" aria-orientation=\"vertical\"\n          title=\"Drag or use arrow keys to resize. Double-click or press Home to reset.\"></div>\n        <div class=\"scene3d-main\">\n          <div class=\"scene3d-toolbar\">\n            <div class=\"scene3d-tool-group scene3d-builtin-only\">\n              <button type=\"button\" data-mode=\"translate\" class=\"active\" title=\"Move (G)\">Move</button>\n              <button type=\"button\" data-mode=\"rotate\" title=\"Rotate (R)\">Rotate</button>\n              <button type=\"button\" data-mode=\"scale\" title=\"Scale (S)\">Scale</button>\n            </div>\n            <div class=\"scene3d-tool-group scene3d-builtin-only\">\n              <button type=\"button\" data-add=\"cube\">Cube</button>\n              <button type=\"button\" data-add=\"sphere\">Sphere</button>\n              <button type=\"button\" data-add=\"plane\">Plane</button>\n              <button type=\"button\" data-add=\"cylinder\">Cylinder</button>\n              <button type=\"button\" data-add=\"cone\">Cone</button>\n            </div>\n            <div class=\"scene3d-tool-group scene3d-blender-only\" hidden>\n              <button type=\"button\" data-action=\"play-pause\">Play</button>\n              <button type=\"button\" data-action=\"go-to-start\" title=\"Back to start\">Start</button>\n              <button type=\"button\" data-action=\"step-back\" title=\"Back 0.1 s\">−0.1s</button>\n              <button type=\"button\" data-action=\"step-forward\" title=\"Forward 0.1 s\">+0.1s</button>\n              <button type=\"button\" data-action=\"free-view\" title=\"Orbit freely instead of looking through the camera\">Free view</button>\n            </div>\n            <div class=\"scene3d-tool-group scene3d-builtin-only\">\n              <button type=\"button\" data-action=\"delete\" title=\"Delete (Del)\">Delete</button>\n              <button type=\"button\" data-action=\"focus\" title=\"Focus (F)\">Focus</button>\n              <button type=\"button\" data-action=\"reset-view\">Reset view</button>\n            </div>\n            <div class=\"scene3d-tool-group scene3d-tool-group-right scene3d-builtin-only\">\n              <button type=\"button\" data-action=\"load-shot-camera\">Load board camera</button>\n              <button type=\"button\" data-action=\"apply-shot-camera\">Save board camera</button>\n            </div>\n          </div>\n          <div class=\"scene3d-viewport\" data-viewport>\n            <div class=\"scene3d-format-frame\" data-format-frame></div>\n          </div>\n          <div class=\"scene3d-timeline scene3d-blender-only\" hidden>\n            <input type=\"range\" min=\"0\" max=\"0\" step=\"0.01\" value=\"0\" data-time-slider />\n            <span data-time-display>0.0s / 0.0s</span>\n          </div>\n          <div class=\"scene3d-hint\" data-hint>\n            Drag to orbit · wheel to zoom · right-drag to pan · updates after each Blender save\n          </div>\n        </div>\n      </div>\n    ";
 		let e = this.rootEl.querySelector(".scene3d-layout");
 		this._disposePanelResize = pt(this.rootEl.querySelector("[data-sidebar-resize]"), {
 			key: "scene3d-sidebar",
@@ -1334,7 +1334,7 @@ var mt = class {
 		this.wireframeMode = this._normalizeWireframeMode(e), this.wireframeModeEl && (this.wireframeModeEl.value = this.wireframeMode), t && (this.sceneMeta = {
 			...this.sceneMeta || {},
 			wireframe_mode: this.wireframeMode
-		}), this._applyWireframeMode(), t && this._scheduleSceneSettingsSave(), n && this.callbacks.onMessage?.(`线框：${Ze[this.wireframeMode] || this.wireframeMode}`);
+		}), this._applyWireframeMode(), t && this._scheduleSceneSettingsSave(), n && this.callbacks.onMessage?.(`Wireframe: ${Ze[this.wireframeMode] || this.wireframeMode}`);
 	}
 	_getWireframeRoots() {
 		return qe(this.blenderRoot, this.objects.values());
@@ -1362,16 +1362,16 @@ var mt = class {
 	}
 	async reloadBlenderScene() {
 		if (!this.sceneMeta?.file_path) {
-			this.callbacks.onMessage?.("Blender 尚未生成预览，请在 Blender 中保存场景。");
+			this.callbacks.onMessage?.("Blender has not produced a preview yet. Save the scene in Blender.");
 			return;
 		}
 		let e = this.animationTime, t = this.importedCameras.find((e) => e.id === this.activeCameraId)?.name || this.sceneMeta.camera_name || "";
 		this.isPlaying = !1, this._updatePlayButton(), this._suppressViewChange = !0;
 		try {
 			let n = `/api/project/scene3d/file?t=${Date.now()}`;
-			await this._loadBlenderUrl(n, String(this.sceneMeta.file_name || this.sceneMeta.file_path)), t && this.setActiveCamera(this._pickBestCameraId(String(t)), !1), e > 0 && this.setAnimationTime(Ge(e, this.animationDuration)), this.callbacks.onMessage?.("已更新 Blender 预览（保留时间与显示设置）");
+			await this._loadBlenderUrl(n, String(this.sceneMeta.file_name || this.sceneMeta.file_path)), t && this.setActiveCamera(this._pickBestCameraId(String(t)), !1), e > 0 && this.setAnimationTime(Ge(e, this.animationDuration)), this.callbacks.onMessage?.("Preview updated from Blender.");
 		} catch (e) {
-			this.callbacks.onMessage?.(`更新 Blender 预览失败：${e instanceof Error ? e.message : String(e)}`);
+			this.callbacks.onMessage?.(`Could not update the Blender preview: ${e instanceof Error ? e.message : String(e)}`);
 		} finally {
 			this._suppressViewChange = !1;
 		}
@@ -1465,7 +1465,7 @@ var mt = class {
 		this.programLightingMode = r, this.programLightingEl && (this.programLightingEl.value = r), t && (this.sceneMeta = {
 			...this.sceneMeta || {},
 			program_lighting: r
-		}), this._applyProgramLighting(), this.blenderRoot && this._prepareImportedMaterials(this.blenderRoot), this.objectColorPreview && this._applyObjectColorPreview(!0), t && this._scheduleSceneSettingsSave(), n && this.callbacks.onMessage?.(`灯光设置：${this._programLightingReason()}`);
+		}), this._applyProgramLighting(), this.blenderRoot && this._prepareImportedMaterials(this.blenderRoot), this.objectColorPreview && this._applyObjectColorPreview(!0), t && this._scheduleSceneSettingsSave(), n && this.callbacks.onMessage?.(`Lighting: ${this._programLightingReason()}`);
 	}
 	_updateLightStatusUi() {
 		if (this.lightStatusEl) {
@@ -1512,7 +1512,7 @@ var mt = class {
 		this.objectColorPreview = !!e, this.objectColorsEl && (this.objectColorsEl.checked = this.objectColorPreview), t && (this.sceneMeta = {
 			...this.sceneMeta || {},
 			object_color_preview: this.objectColorPreview
-		}), this._applyProgramLighting(), this._applyObjectColorPreview(this.objectColorPreview), !this.objectColorPreview && this.blenderRoot && this._prepareImportedMaterials(this.blenderRoot), this._applyWireframeMode(), t && this._scheduleSceneSettingsSave(), n && this.callbacks.onMessage?.(this.objectColorPreview ? "已启用对象随机色（不受灯光影响，便于区分）" : "已恢复 GLB 原始材质");
+		}), this._applyProgramLighting(), this._applyObjectColorPreview(this.objectColorPreview), !this.objectColorPreview && this.blenderRoot && this._prepareImportedMaterials(this.blenderRoot), this._applyWireframeMode(), t && this._scheduleSceneSettingsSave(), n && this.callbacks.onMessage?.(this.objectColorPreview ? "Object colours on" : "Original materials restored");
 	}
 	_applyObjectColorPreview(t) {
 		this.blenderRoot && (_e(e, this.blenderRoot, this.blenderRoot, this.previewMaterials, t), !t && this.blenderRoot && this._prepareImportedMaterials(this.blenderRoot));
@@ -1549,7 +1549,14 @@ var mt = class {
 	}
 	setActiveCamera(e, t = !0) {
 		let n = this.importedCameras.find((t) => t.id === e);
-		n && (this.activeCameraId = e, this.cameraSelectEl.value = e, n.viewNode = this._resolveViewNode(n), this._renderOutliner(), t && this.callbacks.onMessage?.(`已切换相机：${n.name}`), this.followCamera && this._applyFollowCamera(), this._updateAnimationHint(), t && this._notifyViewChange());
+		n && (this.activeCameraId = e, this.cameraSelectEl.value = e, n.viewNode = this._resolveViewNode(n), this._renderOutliner(), t && this.callbacks.onMessage?.(`Camera: ${n.name}`), this.followCamera && this._applyFollowCamera(), this._updateAnimationHint(), t && this._notifyViewChange());
+	}
+	setActiveCameraByName(e) {
+		let t = this.importedCameras.find((t) => t.name === e);
+		return t ? (this.followCamera || this.setFollowCamera(!0), this.setActiveCamera(t.id, !1), this._notifyViewChange(), !0) : !1;
+	}
+	getActiveCameraName() {
+		return this.importedCameras.find((e) => e.id === this.activeCameraId)?.name || "";
 	}
 	setFollowCamera(e, { persist: t = !0 } = {}) {
 		this.followCamera = !!e, this.followCameraEl.checked = this.followCamera, this.orbit.enabled = !this.followCamera, this.followCamera && this._applyFollowCamera(), t && (this.sceneMeta = {
@@ -1642,7 +1649,7 @@ var mt = class {
 	}
 	loadShotCamera(t) {
 		if (!t?.position) {
-			this.callbacks.onMessage?.("当前镜头没有保存的 3D 相机数据");
+			this.callbacks.onMessage?.("This board has no saved 3D camera.");
 			return;
 		}
 		this.setFollowCamera(!1), y(e, this.camera, this.orbit, t);
@@ -1685,7 +1692,7 @@ var mt = class {
 	}
 	toggleAnimationPlayback() {
 		if (this.mode !== "blender" || !this.mixer) {
-			this.callbacks.onMessage?.("请先导入带相机动画的 GLB");
+			this.callbacks.onMessage?.("This scene has no camera animation.");
 			return;
 		}
 		!this.isPlaying && this.animationDuration > 0 && this.animationTime >= this.animationDuration - .001 && this.setAnimationTime(0), this.isPlaying = !this.isPlaying, this._updatePlayButton();
@@ -1719,7 +1726,7 @@ var mt = class {
 		};
 	}
 	_updatePlayButton() {
-		this.playPauseBtn && (this.playPauseBtn.textContent = this.isPlaying ? "⏸ 暂停" : "▶ 播放");
+		this.playPauseBtn && (this.playPauseBtn.textContent = this.isPlaying ? "Pause" : "Play");
 	}
 	_updateTimelineUi() {
 		let e = Ie(this.animationTime, this.animationDuration, E);

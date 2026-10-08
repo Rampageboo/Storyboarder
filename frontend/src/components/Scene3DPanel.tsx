@@ -1,9 +1,14 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { Cube, Plus } from '@phosphor-icons/react'
+import { Aperture, Cube, LinkSimple, Plus, VideoCamera } from '@phosphor-icons/react'
 import {
   createScene3D,
-  getBpyViewportStatus,
   getProject,
+  getScene3DManifest,
+  getScene3DSession,
+  resolveScene3DSession,
+  type Scene3DCamera,
+  type Scene3DManifest,
+  type Scene3DSession,
   importScene3DToScene,
   listScene3D,
   openBlenderScene,
@@ -21,12 +26,23 @@ import {
   loadScene3DEditorClass,
   type Scene3DEditorInstance,
 } from '../scene3d/workspace/loadScene3DEditor'
-import { BpyViewport } from './BpyViewport'
+import { statusStyle } from '../utils/status'
 import './Scene3DPanel.css'
-import './Scene3DPanel.tune.css'
 
 type Scene3DSettings = Record<string, unknown>
-const BUILT_IN_BPY_VIEWPORT = false
+type InspectorTab = 'camera' | 'display' | 'scene'
+
+const SESSION_LABELS: Record<string, { label: string; tone: string }> = {
+  offline: { label: 'Blender offline', tone: 'Draft' },
+  launching: { label: 'Opening Blender…', tone: 'In Progress' },
+  connected: { label: 'Blender connected', tone: 'Approved' },
+  closed: { label: 'Syncing last save…', tone: 'In Progress' },
+  conflict: { label: 'Save conflict', tone: 'Review' },
+}
+
+function formatVector(value: number[] | undefined, digits = 2): string {
+  return Array.isArray(value) ? value.map((item) => Number(item).toFixed(digits)).join(', ') : '—'
+}
 
 type CameraState = {
   position?: unknown
@@ -149,7 +165,11 @@ export function Scene3DPanel({ active }: { active: boolean }) {
   const [busy, setBusy] = useState(false)
   const [note, setNote] = useState('')
   const [editorReady, setEditorReady] = useState(false)
-  const [externalBlenderOwned, setExternalBlenderOwned] = useState(false)
+  const [session, setSession] = useState<Scene3DSession | null>(null)
+  const [manifest, setManifest] = useState<Scene3DManifest | null>(null)
+  const [cameraName, setCameraName] = useState('')
+  const [inspectorTab, setInspectorTab] = useState<InspectorTab>('camera')
+  const externalBlenderOwned = Boolean(session?.external_blender_owned)
   const [scene3ds, setScene3ds] = useState<Scene3DRecord[]>([])
   const [activeScene3dId, setActiveScene3dId] = useState('')
   const inputRef = useRef<HTMLInputElement | null>(null)
@@ -163,6 +183,7 @@ export function Scene3DPanel({ active }: { active: boolean }) {
   const selectedShotIdRef = useRef<string | null>(null)
   const activeScene3dIdRef = useRef('')
   const previewRevisionRef = useRef(0)
+  const manifestRevisionRef = useRef(-1)
   const wasActiveRef = useRef(false)
 
   useEffect(() => {
@@ -359,12 +380,9 @@ export function Scene3DPanel({ active }: { active: boolean }) {
     }
   }, [flushDirtyShots, reportError, setProject])
 
-  const handleExternalOwnershipChange = useCallback((owned: boolean) => {
-    setExternalBlenderOwned(owned)
-  }, [])
-
   useEffect(() => {
     previewRevisionRef.current = 0
+    manifestRevisionRef.current = -1
   }, [activeScene3dId, projectJsonPath])
 
   useEffect(() => {
@@ -374,22 +392,25 @@ export function Scene3DPanel({ active }: { active: boolean }) {
 
     const poll = async () => {
       try {
-        const status = await getBpyViewportStatus()
+        const status = await getScene3DSession()
         if (cancelled) return
-        const owned = status.owner === 'external' || !!status.external_blender_owned
-        setExternalBlenderOwned(owned)
+        setSession(status)
         const revision = Number(status.preview_revision || 0)
-        if (status.preview_error) {
-          setNote(`Blender preview export failed: ${status.preview_error}`)
-        } else if (status.preview_exporting) {
-          setNote('Blender is updating the Storyboarder preview...')
-        }
+        if (status.preview_error) setNote(`Blender preview export failed: ${status.preview_error}`)
+        else if (status.preview_exporting) setNote('Blender is updating the preview…')
         if (revision && revision !== previewRevisionRef.current) {
           previewRevisionRef.current = revision
           if (editorRef.current?.reloadBlenderScene) {
             await editorRef.current.reloadBlenderScene()
             if (!cancelled) setNote('Preview updated from Blender.')
           }
+        }
+        const sceneId = activeScene3dIdRef.current
+        const manifestRevision = Number(status.manifest_revision || 0)
+        if (sceneId && manifestRevision !== manifestRevisionRef.current) {
+          manifestRevisionRef.current = manifestRevision
+          const next = await getScene3DManifest(sceneId)
+          if (!cancelled) setManifest(next)
         }
       } catch {
         // Keep the last usable preview during a transient status failure.
@@ -528,31 +549,6 @@ export function Scene3DPanel({ active }: { active: boolean }) {
     }
   }, [currentShot, flushDirtyShots, reportError, setProject])
 
-  const captureBpyToBoard = useCallback(
-    async (image: Blob) => {
-      const shot = currentShot()
-      if (!shot) {
-        setNote('Select a board before capture.')
-        return
-      }
-      setBusy(true)
-      try {
-        await flushDirtyShots()
-        const file = new File([image], `${shot.shot_id}_bpy_frame.jpg`, {
-          type: image.type || 'image/jpeg',
-        })
-        const payload = await uploadShotImage(shot.shot_id, file)
-        setProject(payload)
-        setNote(`Captured built-in Blender view to ${shotDisplayLabel(shot)}.`)
-      } catch (error) {
-        reportError(error)
-      } finally {
-        setBusy(false)
-      }
-    },
-    [currentShot, flushDirtyShots, reportError, setProject],
-  )
-
   const ensureEditorLoaded = useCallback(async () => {
     if (editorRef.current) return editorRef.current
     if (!editorRootRef.current) throw new Error('3D editor root is not mounted.')
@@ -613,10 +609,6 @@ export function Scene3DPanel({ active }: { active: boolean }) {
   }, [ensureEditorLoaded, getShotScene3dTime])
 
   useEffect(() => {
-    if (BUILT_IN_BPY_VIEWPORT) {
-      wasActiveRef.current = active
-      return
-    }
     if (active) {
       wasActiveRef.current = true
       // Without a Blender preview the editor root is not rendered; the empty state explains why.
@@ -646,7 +638,74 @@ export function Scene3DPanel({ active }: { active: boolean }) {
     [],
   )
 
+  const selectCamera = useCallback((name: string) => {
+    setCameraName(name)
+    setInspectorTab('camera')
+    const editor = editorRef.current
+    if (editor?.setActiveCameraByName && !editor.setActiveCameraByName(name)) {
+      setNote(`Camera "${name}" is not in the current preview yet. Save in Blender to refresh it.`)
+    }
+  }, [])
+
+  const linkCameraToBoard = useCallback(async (name: string) => {
+    const shot = currentShot()
+    if (!shot) {
+      setNote('Select a board to link this camera to.')
+      return
+    }
+    setBusy(true)
+    try {
+      await flushDirtyShots()
+      const latest = currentShot() ?? shot
+      const linked = String(latest.camera_data?.scene3d_camera || '') === name
+      const cameraData = { ...(latest.camera_data || {}), scene3d_camera: linked ? '' : name }
+      setProject(await updateShot(latest.shot_id, { ...shotToUpdate(latest), camera_data: cameraData }))
+      setNote(linked ? `Unlinked ${name} from ${shotDisplayLabel(latest)}.` : `Linked ${name} to ${shotDisplayLabel(latest)}.`)
+    } catch (error) {
+      reportError(error)
+    } finally {
+      setBusy(false)
+    }
+  }, [currentShot, flushDirtyShots, reportError, setProject])
+
+  const resolveConflict = useCallback(async (action: 'use_blender' | 'discard') => {
+    if (action === 'discard' && !window.confirm('Discard the Blender save that conflicts with the project file?')) return
+    setBusy(true)
+    try {
+      setSession(await resolveScene3DSession(action))
+      setProject(await getProject())
+      setNote(action === 'use_blender' ? 'Blender save copied into the project.' : 'Blender session discarded.')
+    } catch (error) {
+      reportError(error)
+    } finally {
+      setBusy(false)
+    }
+  }, [reportError, setProject])
+
   if (!project) return null
+
+  const sessionState = session?.state ?? 'offline'
+  const sessionBadge = SESSION_LABELS[sessionState] ?? SESSION_LABELS.offline
+  const sceneManifest = manifest && manifest.scene3d_id === activeScene3d?.id ? manifest : null
+  const cameras: Scene3DCamera[] = sceneManifest?.cameras ?? []
+  const selectedCamera = cameras.find((camera) => camera.name === cameraName)
+    ?? cameras.find((camera) => camera.name === session?.external_blender_camera)
+    ?? cameras.find((camera) => camera.is_active)
+    ?? cameras[0]
+  const selectedShot = project.shots.find((shot) => shot.shot_id === selectedShotId) ?? null
+  const boardsByCamera = new Map<string, { id: string; label: string; index: number }[]>()
+  project.shots.forEach((shot, index) => {
+    const name = String(shot.camera_data?.scene3d_camera || '')
+    if (!name) return
+    const list = boardsByCamera.get(name) ?? []
+    list.push({ id: shot.shot_id, label: shotDisplayLabel(shot), index: index + 1 })
+    boardsByCamera.set(name, list)
+  })
+  const selectedShotCamera = String(selectedShot?.camera_data?.scene3d_camera || '')
+  const display = sceneSettings(project)
+  const captures = project.shots
+    .map((shot, index) => ({ shot, index }))
+    .filter(({ shot }) => shot.camera_data?.scene3d_camera || shot.camera_data?.scene3d_view)
 
   return (
     <>
@@ -670,91 +729,233 @@ export function Scene3DPanel({ active }: { active: boolean }) {
       />
 
       <section className="scene3d-workspace-page" aria-label="Scene 3D workspace">
+        <aside className="scene3d-nav" aria-label="3D scenes and cameras">
+          <div className="scene3d-nav-heading">
+            <span className="section-label">3D scenes</span>
+            <button type="button" className="ghost icon-btn" aria-label="Add 3D scene" title="Add 3D scene"
+              onClick={() => void create3dScene()} disabled={sceneMutationDisabled}><Plus size={15} /></button>
+          </div>
+          <div className="scene3d-nav-list">
+            {scene3ds.map((item) => (
+              <button key={item.id} type="button"
+                className={'scene3d-nav-row' + (item.id === activeScene3d?.id ? ' is-active' : '')}
+                aria-current={item.id === activeScene3d?.id ? 'true' : undefined}
+                disabled={sceneMutationDisabled && item.id !== activeScene3d?.id}
+                title={externalBlenderOwned && item.id !== activeScene3d?.id ? 'Close Blender before switching scenes' : item.title}
+                onClick={() => void activate3dScene(item.id)}>
+                <Cube size={15} className="scene3d-nav-icon" />
+                <span className="scene3d-nav-label">{item.title || item.id}</span>
+                <span className="scene3d-nav-meta">{item.source_type === 'blender' ? '.blend' : item.source_type || ''}</span>
+              </button>
+            ))}
+            {!scene3ds.length ? <p className="scene3d-nav-empty">No 3D scenes yet.</p> : null}
+          </div>
+
+          <div className="scene3d-nav-heading">
+            <span className="section-label">Cameras → boards</span>
+          </div>
+          <div className="scene3d-nav-list is-grow">
+            {cameras.map((camera) => {
+              const boards = boardsByCamera.get(camera.name) ?? []
+              return (
+                <button key={camera.name} type="button"
+                  className={'scene3d-nav-row is-camera' + (camera.name === selectedCamera?.name ? ' is-active' : '')}
+                  onClick={() => selectCamera(camera.name)} title={camera.name}>
+                  <VideoCamera size={15} className="scene3d-nav-icon" />
+                  <span className="scene3d-nav-label">
+                    <span className="scene3d-camera-name">{camera.name}</span>
+                    <small>{boards.length ? boards.map((board) => String(board.index).padStart(2, '0')).join(', ') : 'Not linked'}</small>
+                  </span>
+                  {camera.is_active ? <span className="scene3d-nav-meta">active</span> : null}
+                </button>
+              )
+            })}
+            {!cameras.length ? (
+              <p className="scene3d-nav-empty">
+                {hasBlenderPreview ? 'Cameras appear here after the next save in Blender.' : 'Open Blender to list this scene’s cameras.'}
+              </p>
+            ) : null}
+          </div>
+        </aside>
+
+        <main className="scene3d-stage">
           <div className="scene3d-workspace-header stage-toolbar">
             <div className="stage-title">
               <strong>{sceneName || activeScene3d?.title || 'Scene 3D'}</strong>
-              <span className="stage-meta">selected board drives preview &amp; capture</span>
+              <span className="status-chip" style={statusStyle(sessionBadge.tone)}><span className="status-dot" />{sessionBadge.label}</span>
             </div>
-            {note ? <span className="scene3d-note" role="status">{note}</span> : null}
-            <select
-              className="scene3d-workspace-select"
-              value={activeScene3dId}
-              onChange={(event) => void activate3dScene(event.target.value)}
-              disabled={sceneMutationDisabled || scene3ds.length === 0}
-              aria-label="Active Scene 3D"
-            >
-              {scene3ds.length ? (
-                scene3ds.map((item) => (
-                  <option key={item.id} value={item.id}>
-                    {item.title || item.id}
-                  </option>
-                ))
-              ) : (
-                <option value="">No Scene 3D records</option>
-              )}
-            </select>
-            {activeScene3d ? (
-              <Scene3DKeywordEditor
-                key={`${activeScene3d.id}:${activeScene3d.updated_at}`}
-                scene={activeScene3d}
-                disabled={sceneMutationDisabled}
-                onSave={(keywords) => saveSceneKeywords(activeScene3d.id, keywords)}
-              />
-            ) : null}
-            <button type="button" className="ghost" onClick={() => void create3dScene()} disabled={sceneMutationDisabled}>
-              <Plus size={15} />Scene
-            </button>
+            {note ? <span className="scene3d-note" role="status" title={note}>{note}</span> : null}
             <button type="button" onClick={() => blendInputRef.current?.click()} disabled={sceneMutationDisabled}>
               Attach .blend
             </button>
-            {!BUILT_IN_BPY_VIEWPORT ? (
-              <button type="button" onClick={() => void captureToBoard()} disabled={!editorReady || !selectedShotId || disabled}>
-                Capture to board
-              </button>
-            ) : null}
+            <button type="button" onClick={() => void captureToBoard()} disabled={!editorReady || !selectedShotId || disabled}
+              title="Save the current 3D frame to the selected board">
+              <Aperture size={16} />Capture to board
+            </button>
             <button type="button" className="primary" onClick={() => void openBlender()} disabled={disabled || externalBlenderOwned}>
-              {externalBlenderOwned ? 'Blender connected' : 'Open Blender'}
+              {externalBlenderOwned ? 'Blender is open' : 'Open Blender'}
             </button>
           </div>
-          {BUILT_IN_BPY_VIEWPORT ? (
-            <BpyViewport
-              key={`${project.project_json_path}:${activeScene3dId}`}
-              active={active}
-              disabled={disabled}
-              canCapture={!!selectedShotId}
-              onCapture={captureBpyToBoard}
-              onMessage={setNote}
-              onError={reportError}
-              onExternalOwnershipChange={handleExternalOwnershipChange}
-            />
+          {sessionState === 'conflict' ? (
+            <div className="notice is-warn scene3d-conflict" role="alert">
+              <span>{session?.sync_error || 'The project’s .blend changed while Blender had it open.'}</span>
+              <button type="button" onClick={() => void resolveConflict('use_blender')} disabled={busy}>Use Blender’s version</button>
+              <button type="button" className="ghost" onClick={() => void resolveConflict('discard')} disabled={busy}>Discard</button>
+            </div>
+          ) : session?.sync_error ? (
+            <div className="notice is-danger scene3d-conflict" role="alert">{session.sync_error}</div>
+          ) : null}
+          {hasBlenderPreview ? (
+            <div className="scene3d-editor-root" ref={editorRootRef} />
           ) : (
-            hasBlenderPreview ? (
-              <div className="scene3d-editor-root" ref={editorRootRef} />
-            ) : (
-              <div className="scene3d-preview-empty">
-                <div className="scene3d-empty-card">
-                  <div className="scene3d-empty-head">
-                    <span className="scene3d-empty-icon" aria-hidden="true"><Cube size={20} /></span>
-                    <div>
-                      <strong>No Blender preview yet</strong>
-                      <p>The viewport shows a read-only preview of the scene Blender saves.</p>
-                    </div>
-                  </div>
-                  <ol className="scene3d-empty-steps">
-                    <li><span>1</span>Open Blender from here, or attach an existing .blend</li>
-                    <li><span>2</span>Build or adjust the set, then save in Blender</li>
-                    <li><span>3</span>The preview appears here; capture cameras to boards</li>
-                  </ol>
-                  <div className="scene3d-empty-actions">
-                    <button type="button" className="primary" onClick={() => void openBlender()} disabled={disabled || externalBlenderOwned}>
-                      {externalBlenderOwned ? 'Blender connected' : 'Open Blender'}
-                    </button>
-                    <button type="button" onClick={() => blendInputRef.current?.click()} disabled={sceneMutationDisabled}>Attach .blend</button>
+            <div className="scene3d-preview-empty">
+              <div className="scene3d-empty-card">
+                <div className="scene3d-empty-head">
+                  <span className="scene3d-empty-icon" aria-hidden="true"><Cube size={20} /></span>
+                  <div>
+                    <strong>No Blender preview yet</strong>
+                    <p>The viewport shows a read-only preview of the scene Blender saves.</p>
                   </div>
                 </div>
+                <ol className="scene3d-empty-steps">
+                  <li><span>1</span>Open Blender from here, or attach an existing .blend</li>
+                  <li><span>2</span>Build or adjust the set, then save in Blender</li>
+                  <li><span>3</span>The preview and its cameras appear here; capture them to boards</li>
+                </ol>
+                <div className="scene3d-empty-actions">
+                  <button type="button" className="primary" onClick={() => void openBlender()} disabled={disabled || externalBlenderOwned}>
+                    {externalBlenderOwned ? 'Blender is open' : 'Open Blender'}
+                  </button>
+                  <button type="button" onClick={() => blendInputRef.current?.click()} disabled={sceneMutationDisabled}>Attach .blend</button>
+                </div>
               </div>
-            )
+            </div>
           )}
+        </main>
+
+        <aside className="scene3d-inspector" aria-label="3D inspector">
+          <div className="tab-row" role="tablist" aria-label="3D details">
+            {(['camera', 'display', 'scene'] as const).map((tab) => (
+              <button key={tab} type="button" role="tab" aria-selected={inspectorTab === tab} onClick={() => setInspectorTab(tab)}>
+                {tab === 'camera' ? 'Camera' : tab === 'display' ? 'Display' : 'Scene'}
+              </button>
+            ))}
+          </div>
+          <div className="scene3d-inspector-body">
+            {inspectorTab === 'camera' ? (
+              selectedCamera ? (
+                <>
+                  <div className="scene3d-camera-card">
+                    <VideoCamera size={18} />
+                    <div>
+                      <strong>{selectedCamera.name}</strong>
+                      <span>{selectedCamera.projection === 'ORTHO' ? 'Orthographic' : 'Perspective'}{selectedCamera.animated ? ' · animated' : ''}{selectedCamera.is_active ? ' · scene camera' : ''}</span>
+                    </div>
+                  </div>
+                  <dl className="scene3d-facts">
+                    <dt>Focal length</dt><dd>{selectedCamera.lens_mm} mm</dd>
+                    <dt>Sensor</dt><dd>{selectedCamera.sensor_width_mm} mm</dd>
+                    <dt>Location</dt><dd>{formatVector(selectedCamera.location)}</dd>
+                    <dt>Rotation</dt><dd>{formatVector(selectedCamera.rotation_deg, 1)}°</dd>
+                  </dl>
+                  <div className="scene3d-link-box">
+                    <span className="field-label">Selected board</span>
+                    {selectedShot ? (
+                      <>
+                        <p>{shotDisplayLabel(selectedShot)}{selectedShotCamera ? ` · uses ${selectedShotCamera}` : ' · no camera linked'}</p>
+                        <button type="button" onClick={() => void linkCameraToBoard(selectedCamera.name)} disabled={disabled}>
+                          <LinkSimple size={15} />{selectedShotCamera === selectedCamera.name ? 'Unlink from this board' : 'Link to this board'}
+                        </button>
+                      </>
+                    ) : <p>Select a board in the Story workspace to link this camera.</p>}
+                  </div>
+                  {(boardsByCamera.get(selectedCamera.name) ?? []).length ? (
+                    <div>
+                      <span className="field-label">Boards using this camera</span>
+                      <ul className="scene3d-board-list">
+                        {(boardsByCamera.get(selectedCamera.name) ?? []).map((board) => (
+                          <li key={board.id}><b>{String(board.index).padStart(2, '0')}</b>{board.label}</li>
+                        ))}
+                      </ul>
+                    </div>
+                  ) : null}
+                </>
+              ) : (
+                <p className="scene3d-inspector-empty">No camera selected. Cameras come from the Blender scene after a save.</p>
+              )
+            ) : null}
+
+            {inspectorTab === 'display' ? (
+              editorReady ? (
+                <div className="scene3d-display">
+                  <label className="check-field">
+                    <input type="checkbox" checked={display.follow_camera !== false}
+                      onChange={(event) => editorRef.current?.setFollowCamera?.(event.target.checked)} />
+                    Look through the selected camera
+                  </label>
+                  <label className="check-field">
+                    <input type="checkbox" checked={display.object_color_preview !== false}
+                      onChange={(event) => editorRef.current?.setObjectColorPreview?.(event.target.checked, { persist: true, notify: true })} />
+                    Colour objects to tell them apart
+                  </label>
+                  <label className="field">
+                    <span className="field-label">Wireframe</span>
+                    <select value={String(display.wireframe_mode || 'off')}
+                      onChange={(event) => editorRef.current?.setWireframeMode?.(event.target.value, { persist: true, notify: true })}>
+                      <option value="off">Off</option>
+                      <option value="on">Edges</option>
+                      <option value="strong">Strong</option>
+                    </select>
+                  </label>
+                  <label className="field">
+                    <span className="field-label">Fill light</span>
+                    <select value={String(display.program_lighting || 'auto')}
+                      onChange={(event) => editorRef.current?.setProgramLightingMode?.(event.target.value, { persist: true, notify: true })}>
+                      <option value="auto">Auto (use Blender lights when present)</option>
+                      <option value="on">Always on</option>
+                      <option value="off">Off (Blender lights only)</option>
+                    </select>
+                  </label>
+                  <p className="scene3d-inspector-empty">Display settings change only this preview, never the .blend.</p>
+                </div>
+              ) : <p className="scene3d-inspector-empty">Display options appear once a Blender preview is loaded.</p>
+            ) : null}
+
+            {inspectorTab === 'scene' ? (
+              <div className="scene3d-display">
+                {activeScene3d ? (
+                  <label className="field">
+                    <span className="field-label">Keywords</span>
+                    <Scene3DKeywordEditor
+                      key={`${activeScene3d.id}:${activeScene3d.updated_at}`}
+                      scene={activeScene3d}
+                      disabled={sceneMutationDisabled}
+                      onSave={(keywords) => saveSceneKeywords(activeScene3d.id, keywords)}
+                    />
+                    <small className="scene3d-hint-text">Words in a board’s story or camera notes that link it to this set.</small>
+                  </label>
+                ) : null}
+                <dl className="scene3d-facts">
+                  <dt>Blender file</dt><dd className="mono">{activeScene3d?.blend_file_path || '—'}</dd>
+                  <dt>Frames</dt><dd>{sceneManifest?.frame_start != null ? `${sceneManifest.frame_start}–${sceneManifest.frame_end}` : '—'}{sceneManifest?.fps ? ` @ ${sceneManifest.fps} fps` : ''}</dd>
+                  <dt>Objects</dt><dd>{sceneManifest?.object_count ?? '—'}</dd>
+                  <dt>Last sync</dt><dd>{session?.last_synced_at ? new Date(session.last_synced_at * 1000).toLocaleTimeString() : '—'}</dd>
+                </dl>
+                {captures.length ? (
+                  <div>
+                    <span className="field-label">Boards captured from 3D</span>
+                    <ul className="scene3d-board-list">
+                      {captures.map(({ shot, index }) => (
+                        <li key={shot.shot_id}><b>{String(index + 1).padStart(2, '0')}</b>{shotDisplayLabel(shot)}
+                          <i>{String(shot.camera_data?.scene3d_camera || '')}</i></li>
+                      ))}
+                    </ul>
+                  </div>
+                ) : null}
+              </div>
+            ) : null}
+          </div>
+        </aside>
       </section>
     </>
   )

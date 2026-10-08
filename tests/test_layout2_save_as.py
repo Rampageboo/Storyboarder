@@ -372,25 +372,6 @@ def test_layout2_save_as_activation_fault_preserves_target_and_source_state(
     assert (tmp_path / "Activation" / "Activation.sbd").is_file()
 
 
-def test_layout2_save_as_builtin_writer_blocks_before_staging(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    project = _layout2_project(tmp_path, monkeypatch)
-    app = _app_for(project, tmp_path)
-    app.state.bpy_viewport_manager = SimpleNamespace(running=True)
-
-    with pytest.raises(HTTPException) as raised:
-        StoryboardBackendService(app).method_save_project_as(
-            str(tmp_path / "Blocked.sbd")
-        )
-
-    assert raised.value.status_code == 409
-    assert app.state.project is project
-    assert not (tmp_path / "Blocked").exists()
-    assert not list(tmp_path.glob(".Blocked.save-as-*"))
-
-
 def test_layout2_save_as_detects_concurrent_source_change(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

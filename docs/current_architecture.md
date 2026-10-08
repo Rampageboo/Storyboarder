@@ -166,6 +166,7 @@ The `base: '/react/'` setting means all Vite-generated asset paths are prefixed 
 | `HomePage.tsx` | New storyboard / new comic / open, and the recent-projects grid |
 | `StoryWorkspace.tsx` | Story workspace: route + outline navigator, stage (Board/Play/Map/All views), inspector column and route timeline dock |
 | `CanvasBoard.tsx` | Board stage: toolbar (Draw, Photoshop menu, Layers, Generate, More), preview composite, drawing editor host |
+| `AnnotationLayer.tsx` | Annotation palette and SVG overlay on the board (arrow, line, box, ellipse, highlight, text; normalised 0..1 points, validated on save) |
 | `ShotInspector.tsx` | Tabbed board inspector: Shot, Camera (structured `shot_design`), Continuity, Prompt (read-only preview), Notes (review comments); Advanced view hosts `AdvancedPanel` |
 | `BoardStrip.tsx` | Legacy film strip used by the All boards → Strip view |
 | `ReferencePanel.tsx` | Per-shot reference images |
@@ -173,7 +174,7 @@ The `base: '/react/'` setting means all Vite-generated asset paths are prefixed 
 | `ReferenceAssignmentPopover.tsx` | Shot-range apply modal for image/video references |
 | `ReferenceAssignmentPopover3dApply.tsx` | Shot-range apply modal for 3D captures |
 | `Scene2DPanel.tsx` | Scenes workspace: scene list, perspective preview and strip, scene-bible inspector column |
-| `Scene3DPanel.tsx` | 3D workspace (Blender preview, cameras, capture to board) |
+| `Scene3DPanel.tsx` | 3D workspace: scenes and cameras→boards navigator, read-only Blender preview, Camera / Display / Scene inspector, session status and conflict resolution |
 | `KeywordTextarea.tsx` | Shot-detail textarea overlay that highlights words linked to Scene 3D assets. |
 
 ### Styling
@@ -610,33 +611,63 @@ the preview revision and hot-reloads it while preserving preview time, selected
 camera, and display settings. A failed export leaves the last valid preview in
 place.
 
-While the external process or a fresh matching heartbeat owns the `.blend`,
-Storyboarder blocks
-project switching, Save As, Scene 3D switching/deletion/replacement, and working
-root cleanup. A fresh heartbeat is adopted after a Storyboarder restart.
+### Blender session (`blender_bridge.py`)
+
+A session pairs one Blender process with one Scene 3D. `session_path` is the file
+Blender edits (Layout 2: a hidden `.<name>.storyboarder-session-<hex>.blend` copy
+next to the asset; Layout 1: the asset itself) and `canonical_path` is the
+project's `.blend`.
+
+- **Blender never refuses to save.** The add-on writes the preview GLB and
+  `storyboarder_manifest.json` (cameras with lens/sensor/transform, frame range,
+  fps, object count) whenever its session id is still the one in the bridge
+  context and `write_enabled` is true. There is no lease or project-revision gate
+  on the Blender side.
+- **A background tick owns syncing** (`storyboard-blender-session` thread, 1 s,
+  paused during project transitions). It adopts sessions, refreshes the context,
+  and brings each finished save (heartbeat not dirty, announced `saved_mtime_ns`)
+  into the project. It takes the project lock only for the short copy and skips a
+  tick if a long operation holds it.
+- **Conflicts are file-level.** A save is copied over `canonical_path` only if
+  that file still has the mtime this session last wrote or saw (`baseline`).
+  Otherwise the state becomes `conflict`, nothing is overwritten, and
+  `POST /api/project/scene3d/session/resolve` (`use_blender` | `discard`) settles it.
+  Unrelated project edits never affect Blender.
+- **Restarts are safe.** The session record (project identity = the `.sbd` path or
+  project folder, scene id, both paths, baseline) lives in the bridge context file.
+  A restarted Storyboarder adopts it and copies saves made while it was closed;
+  document projects re-baseline on their freshly extracted working root.
+- **Lifetime.** Until the first heartbeat (up to 90 s) the session counts as
+  launching. After Blender stops reporting and its last save is synced, the
+  session closes, the context is revoked and the hidden copy is removed.
+- **Read-only status.** `GET /api/project/scene3d/session` returns a snapshot
+  (`offline | launching | connected | closed | conflict`, preview and manifest
+  revisions, sync error); it never writes. `GET /api/project/scenes3d/{id}/manifest`
+  returns the camera manifest.
+
+While a session owns the scene, Storyboarder blocks project switching, Save As,
+Scene 3D switching/deletion/replacement and working-root cleanup; project save and
+shutdown run a final sync first.
 
 ### Preview pipeline
 
 ```text
-External Blender edits authoritative .blend
-  -> save_post handler in storyboarder_bridge.py
-  -> atomic preview GLB export
-  -> heartbeat exposes preview revision
-  -> Scene3DPanel polls revision
-  -> Scene3DEditor hot-reloads preview
-  -> local Three.js orbit/pan/zoom/camera view
+External Blender saves its session file
+  -> save_post: preview GLB + camera manifest (atomic)
+  -> heartbeat: saved_mtime_ns, dirty, active camera
+  -> blender_session tick: baseline check, copy into the project
+  -> Scene3DPanel polls the session: reloads preview / manifest on new revisions
+  -> React navigator lists cameras and the boards linked to each
 ```
 
-The managed `BpyViewportManager` and background Blender worker remain in the
-tree as an experimental renderer, but they are not the main Scene3D workflow.
-Legacy manually imported GLB endpoints remain for compatibility; the main panel
-does not expose manual GLB import or reload controls.
+The experimental built-in `bpy` viewport and background Blender worker were
+removed; external Blender is the only authoring path. Legacy manually imported
+GLB endpoints remain for compatibility.
 
 ### Pipeline overview
 
 ```
-User opens Blender → /api/project/scene3d/open-blender → stop built-in worker
-                                                          → publish bridge context
+User opens Blender → /api/project/scene3d/open-blender → publish bridge context
                                                           → launch blender.exe with
                                                             session-only add-on
 External Blender   → heartbeat (file/camera/dirty)      → ownership lock in UI/API

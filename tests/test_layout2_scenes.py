@@ -4,6 +4,8 @@ import copy
 import hashlib
 import io
 import json
+import os
+import time
 import uuid
 import subprocess
 from pathlib import Path
@@ -26,11 +28,6 @@ from storyboard_tool import (
 )
 from storyboard_tool.api import create_app
 from storyboard_tool.backend_service import StoryboardBackendService
-from storyboard_tool.bpy_viewport import (
-    BpyViewportError,
-    BpyViewportManager,
-    project_blend_path,
-)
 from storyboard_tool.models import Project
 from storyboard_tool.plugin_service import (
     EXPLICIT_ASSET_PATHS_CAPABILITY,
@@ -75,56 +72,6 @@ def _v2_protocol(
         "asset_role": asset_role,
         "write_intent": token,
     }
-
-
-class _Layout2BpyManager:
-    def __init__(self, project: Project, session_id: str, canonical: Path) -> None:
-        self.running = True
-        self.canonical = canonical
-        self.project_root = str(project.project_root.resolve())
-        self.session_id = session_id
-        self.context_revision = project.storage_revision
-        self.stop_count = 0
-
-    def status(self) -> dict[str, object]:
-        return {
-            "running": self.running,
-            "blend_path": str(self.canonical),
-            "engine": "bpy",
-        }
-
-    def require_context(
-        self,
-        project: Project,
-        *,
-        project_session_id: str,
-        context_revision: int,
-    ) -> None:
-        if (
-            self.project_root != str(project.project_root.resolve())
-            or self.session_id != project_session_id
-            or self.context_revision != context_revision
-        ):
-            raise BpyViewportError("Built-in Blender context is stale.")
-
-    def bind_context(
-        self,
-        project: Project,
-        *,
-        project_session_id: str,
-        context_revision: int,
-    ) -> None:
-        self.project_root = str(project.project_root.resolve())
-        self.session_id = project_session_id
-        self.context_revision = context_revision
-
-    def save(self) -> dict[str, object]:
-        self.canonical.write_bytes(b"worker-save")
-        return {"ok": True, "blend_path": str(self.canonical)}
-
-    def stop(self) -> None:
-        self.running = False
-        self.stop_count += 1
 
 
 def test_layout2_scene2d_assets_are_flat_and_metadata_stays_in_work(
@@ -341,177 +288,194 @@ def test_layout2_blender_references_use_portable_double_slash_paths(
     )
 
 
-def test_layout2_external_blender_rejects_stale_writer_context(
+def _brokered_session(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
-) -> None:
+    *,
+    title: str = "Brokered",
+):
+    monkeypatch.setattr(project_layout, "LAYOUT_2_ENABLED", True)
     project = _project(tmp_path)
-    scene = scene3d.create_scene(project, title="Stage")["scene"]
-    blend = project.project_root / "Blender" / f"{scene['id']}.blend"
-    blend.parent.mkdir(parents=True)
-    blend.write_bytes(b"blend")
-    scene = scene3d.configure_blend_preview(project, scene["id"], blend)
+    project.settings["backup_on_save"] = False
+    scene = scene3d.create_scene(project, title=title)["scene"]
+    canonical = project.project_root / "Blender" / f"{scene['id']}.blend"
+    canonical.parent.mkdir(parents=True)
+    canonical.write_bytes(b"canonical-v1")
+    scene = scene3d.configure_blend_preview(project, scene["id"], canonical)
+    project_manager.save_project(project, flush_document=False)
+    project_document.commit_layout2_document(project.project_root)
     bridge_path = tmp_path / "bridge.json"
     heartbeat_path = tmp_path / "heartbeat.json"
     monkeypatch.setattr(blender_bridge, "bridge_file_path", lambda: bridge_path)
     monkeypatch.setattr(blender_bridge, "heartbeat_file_path", lambda: heartbeat_path)
-    app = create_app(tmp_path)
-    app.state.project = project
-
-    session = blender_bridge.begin_session(app, project, scene, blend)
-    launch = Path(session["launch_path"])
-    assert launch != blend
-    assert launch.parent == blend.parent
-    assert launch.read_bytes() == blend.read_bytes()
-    context = json.loads(bridge_path.read_text(encoding="utf-8"))
-    assert context["version"] == 2
-    assert context["path_mode"] == "explicit-assets"
-    assert context["offline_write_allowed"] is False
-    assert context["write_enabled"] is True
-    assert context["project_session_id"] == app.state.project_session_id
-    assert context["context_revision"] == project.storage_revision
-    assert context["blend_path"] == str(launch)
-    assert context["canonical_blend_path"] == str(blend.resolve())
-
-    blender_bridge._write_json(
-        heartbeat_path,
-        {"session_id": session["session_id"], "blend_path": str(blend.resolve())},
-    )
-    heartbeat, _age = blender_bridge._validated_heartbeat(app, project)
-    assert heartbeat == {}
-
-    blender_bridge._write_json(
-        heartbeat_path,
-        {
-            "session_id": session["session_id"],
-            "project_session_id": app.state.project_session_id,
-            "context_revision": project.storage_revision,
-            "blend_path": str(launch),
-        },
-    )
-    heartbeat, _age = blender_bridge._validated_heartbeat(app, project)
-    assert heartbeat["session_id"] == session["session_id"]
-
-    project.storage_revision += 1
-    heartbeat_path.write_text(
-        json.dumps(heartbeat),
-        encoding="utf-8",
-    )
-    rejected, _age = blender_bridge._validated_heartbeat(app, project)
-    assert rejected == {}
-
-
-def test_layout2_external_blender_brokers_only_save_authorized_session_bytes(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr(project_layout, "LAYOUT_2_ENABLED", True)
-    project = _project(tmp_path)
-    project.settings["backup_on_save"] = False
-    scene = scene3d.create_scene(project, title="Brokered")["scene"]
-    canonical = project.project_root / "Blender" / f"{scene['id']}.blend"
-    canonical.parent.mkdir(parents=True)
-    canonical.write_bytes(b"canonical-v1")
-    scene = scene3d.configure_blend_preview(
-        project, scene["id"], canonical
-    )
-    project_manager.save_project(project, flush_document=False)
-    project_document.commit_layout2_document(project.project_root)
-
-    bridge_path = tmp_path / "broker-bridge.json"
-    heartbeat_path = tmp_path / "broker-heartbeat.json"
-    monkeypatch.setattr(blender_bridge, "bridge_file_path", lambda: bridge_path)
-    monkeypatch.setattr(blender_bridge, "heartbeat_file_path", lambda: heartbeat_path)
-    app_root = tmp_path / "broker-app"
+    app_root = tmp_path / "app"
     app_root.mkdir()
     app = create_app(app_root)
     app.state.project = project
     session = blender_bridge.begin_session(app, project, scene, canonical)
-    working = Path(session["launch_path"])
-    before_revision = project.storage_revision
+    return project, scene, canonical, app, session, bridge_path, heartbeat_path
 
-    working.write_bytes(b"authorized-v2")
+
+def _blender_saved(heartbeat_path: Path, session: dict, working: Path, content: bytes) -> None:
+    """Simulate Blender finishing a save of its session file."""
+    previous = working.stat().st_mtime_ns
+    working.write_bytes(content)
+    if working.stat().st_mtime_ns == previous:
+        os.utime(working, ns=(previous + 1_000_000, previous + 1_000_000))
     blender_bridge._write_json(
         heartbeat_path,
         {
             "session_id": session["session_id"],
-            "project_session_id": app.state.project_session_id,
-            "context_revision": before_revision,
             "blend_path": str(working),
             "dirty": False,
             "saved_mtime_ns": working.stat().st_mtime_ns,
-            "save_authorized": True,
         },
     )
 
-    status = blender_bridge.status(app)
 
-    assert status["external_blender_canonical_path"] == str(canonical)
-    assert canonical.read_bytes() == b"authorized-v2"
-    assert project.storage_revision == before_revision + 1
-    renewed = json.loads(bridge_path.read_text(encoding="utf-8"))
-    assert renewed["context_revision"] == project.storage_revision
-    assert renewed["write_enabled"] is True
-
-    canonical_before_stale = canonical.read_bytes()
-    working.write_bytes(b"offline-stale-v3")
-    renewed["lease_expires_at"] = 0.0
-    blender_bridge._write_json(bridge_path, renewed)
-    blender_bridge._write_json(
-        heartbeat_path,
-        {
-            "session_id": session["session_id"],
-            "project_session_id": app.state.project_session_id,
-            "context_revision": project.storage_revision,
-            "blend_path": str(working),
-            "dirty": False,
-            "saved_mtime_ns": working.stat().st_mtime_ns,
-            "save_authorized": False,
-        },
-    )
-
-    stale_status = blender_bridge.status(app, refresh_context=False)
-
-    assert stale_status["external_blender_connected"] is False
-    assert canonical.read_bytes() == canonical_before_stale
-    assert project.storage_revision == before_revision + 1
-
-
-def test_layout2_external_ingest_revalidates_heartbeat_inside_project_lock(
+def test_layout2_external_blender_edits_a_hidden_session_copy(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    project = _project(tmp_path)
-    scene = scene3d.create_scene(project, title="Race")["scene"]
-    canonical = project.project_root / "Blender" / f"{scene['id']}.blend"
-    canonical.parent.mkdir(parents=True)
-    canonical.write_bytes(b"canonical-before")
-    scene3d.configure_blend_preview(project, scene["id"], canonical)
-    app_root = tmp_path / "race-app"
-    app_root.mkdir()
-    app = create_app(app_root)
-    app.state.project = project
+    project, _scene, canonical, app, session, bridge_path, _hb = _brokered_session(tmp_path, monkeypatch)
+
+    working = Path(session["launch_path"])
+    assert working != canonical
+    assert working.parent == canonical.parent
+    assert blender_bridge.SESSION_MARK in working.name
+    assert working.read_bytes() == canonical.read_bytes()
+    context = json.loads(bridge_path.read_text(encoding="utf-8"))
+    assert context["version"] == blender_bridge.CONTEXT_VERSION
+    assert context["write_enabled"] is True
+    assert context["project_identity"] == blender_bridge.project_identity(project)
+    assert context["blend_path"] == str(working)
+    assert context["canonical_blend_path"] == str(canonical.resolve())
+    assert context["manifest_path"].endswith(blender_bridge.MANIFEST_FILENAME)
+
+
+def test_layout2_session_copy_survives_until_blender_reports_in(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _project_, _scene, _canonical, app, session, _bridge, _hb = _brokered_session(tmp_path, monkeypatch)
+    working = Path(session["launch_path"])
+
+    for _ in range(3):
+        assert blender_bridge.tick(app)["state"] == "launching"
+
+    assert working.is_file()
+
+
+def test_layout2_unrelated_project_edits_keep_blender_saves_flowing(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Regression: any project mutation used to revoke Blender's write permission."""
+    project, scene, canonical, app, session, bridge_path, heartbeat_path = _brokered_session(tmp_path, monkeypatch)
+    service = StoryboardBackendService(app)
+    working = Path(session["launch_path"])
+
+    service.method_update_scene3d(scene["id"], {"title": "Renamed while Blender is open"})
+    context = json.loads(bridge_path.read_text(encoding="utf-8"))
+    assert context["write_enabled"] is True
+
     before_revision = project.storage_revision
-    initially_valid = {
-        "session_id": "stale-after-status",
-        "save_authorized": True,
-    }
-    monkeypatch.setattr(
-        blender_bridge,
-        "_validated_heartbeat",
-        lambda *_args, **_kwargs: ({}, None),
-    )
+    _blender_saved(heartbeat_path, session, working, b"blender-v2")
+    blender_bridge.tick(app)
 
-    ingested = blender_bridge._ingest_layout2_session_save(
-        app, project, initially_valid
-    )
-
-    assert ingested is False
-    assert canonical.read_bytes() == b"canonical-before"
-    assert project.storage_revision == before_revision
+    assert canonical.read_bytes() == b"blender-v2"
+    assert project.storage_revision == before_revision + 1
+    status = blender_bridge.status(app)
+    assert status["state"] == "connected"
+    assert status["sync_error"] == ""
 
 
-def test_layout2_real_blender_native_save_cannot_bypass_broker(
+def test_layout2_unsaved_or_unannounced_blender_writes_are_not_ingested(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _project_, _scene, canonical, app, session, _bridge, heartbeat_path = _brokered_session(tmp_path, monkeypatch)
+    working = Path(session["launch_path"])
+
+    _blender_saved(heartbeat_path, session, working, b"half-written")
+    heartbeat = json.loads(heartbeat_path.read_text(encoding="utf-8"))
+    heartbeat["dirty"] = True
+    blender_bridge._write_json(heartbeat_path, heartbeat)
+    blender_bridge.tick(app)
+    assert canonical.read_bytes() == b"canonical-v1"
+
+    heartbeat["dirty"] = False
+    heartbeat["saved_mtime_ns"] = 1
+    blender_bridge._write_json(heartbeat_path, heartbeat)
+    blender_bridge.tick(app)
+    assert canonical.read_bytes() == b"canonical-v1"
+
+
+def test_layout2_conflicting_canonical_change_is_reported_not_overwritten(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _project_, _scene, canonical, app, session, _bridge, heartbeat_path = _brokered_session(tmp_path, monkeypatch)
+    working = Path(session["launch_path"])
+
+    canonical.write_bytes(b"someone-else")
+    os.utime(canonical, ns=(1, 1))
+    _blender_saved(heartbeat_path, session, working, b"blender-v2")
+    blender_bridge.tick(app)
+
+    assert canonical.read_bytes() == b"someone-else"
+    status = blender_bridge.status(app)
+    assert status["state"] == "conflict"
+    assert status["external_blender_owned"] is True
+    assert "kept in the session file" in status["sync_error"]
+
+    resolved = blender_bridge.resolve_conflict(app, "use_blender")
+    assert canonical.read_bytes() == b"blender-v2"
+    assert resolved["state"] == "connected"
+
+
+def test_layout2_blender_closed_releases_after_final_sync_and_removes_copy(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _project_, _scene, canonical, app, session, bridge_path, heartbeat_path = _brokered_session(tmp_path, monkeypatch)
+    working = Path(session["launch_path"])
+    _blender_saved(heartbeat_path, session, working, b"last-save")
+    blender_bridge.tick(app)  # Blender reported in and its save synced
+    _blender_saved(heartbeat_path, session, working, b"last-save-then-quit")
+    stale = time.time() - blender_bridge.HEARTBEAT_MAX_AGE_SECONDS - 5
+    os.utime(heartbeat_path, (stale, stale))
+
+    released = blender_bridge.tick(app)
+
+    assert canonical.read_bytes() == b"last-save-then-quit"
+    assert released["state"] == "offline"
+    assert released["external_blender_owned"] is False
+    assert not working.exists()
+    assert json.loads(bridge_path.read_text(encoding="utf-8"))["session_id"] == ""
+
+
+def test_layout2_restarted_storyboarder_adopts_and_recovers_session_saves(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    project, _scene, canonical, _app, session, _bridge, heartbeat_path = _brokered_session(tmp_path, monkeypatch)
+    working = Path(session["launch_path"])
+    # Storyboarder quits; Blender keeps working and saves.
+    _blender_saved(heartbeat_path, session, working, b"saved-while-storyboarder-was-closed")
+
+    restarted_root = tmp_path / "restarted"
+    restarted_root.mkdir()
+    restarted = create_app(restarted_root)
+    restarted.state.project = project
+    status = blender_bridge.tick(restarted)
+
+    assert restarted.state.external_blender_session_id == session["session_id"]
+    assert canonical.read_bytes() == b"saved-while-storyboarder-was-closed"
+    assert status["state"] == "connected"
+
+
+def test_layout2_real_blender_save_reaches_project_with_preview_and_manifest(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -523,11 +487,6 @@ def test_layout2_real_blender_native_save_cannot_bypass_broker(
     if not template.is_file():
         pytest.skip("Storyboarder Blender template is unavailable.")
 
-    # This fixture does not run the app's periodic lease publisher. Allow the
-    # native process its 90-second startup budget; a cold start can exceed the
-    # production seven-second lease before reaching its first save. The stale
-    # phase below still explicitly expires the lease and proves write denial.
-    monkeypatch.setattr(blender_bridge, "HEARTBEAT_MAX_AGE_SECONDS", 120.0)
     monkeypatch.setattr(project_layout, "LAYOUT_2_ENABLED", True)
     project = _project(tmp_path)
     project.settings["backup_on_save"] = False
@@ -549,253 +508,63 @@ def test_layout2_real_blender_native_save_cannot_bypass_broker(
     app.state.project = project
     session = blender_bridge.begin_session(app, project, scene, canonical)
     working = Path(session["launch_path"])
-    bootstrap = (
-        Path(__file__).parents[1]
-        / "storyboard_tool"
-        / "blender_addon"
-        / "register_storyboarder_addon.py"
-    )
+    bootstrap = Path(__file__).parents[1] / "storyboard_tool" / "blender_addon" / "register_storyboarder_addon.py"
 
     def native_save(marker: str) -> subprocess.CompletedProcess[str]:
         expression = (
             "import bpy, storyboarder_bridge; "
+            "cam = bpy.data.objects.new('CAM_SB', bpy.data.cameras.new('CAM_SB')); "
+            "bpy.context.scene.collection.objects.link(cam); "
             f"bpy.context.scene['storyboarder_test_marker']={marker!r}; "
             "bpy.ops.wm.save_as_mainfile(filepath=bpy.data.filepath); "
+            "storyboarder_bridge._preview_export_timer(); "
             "storyboarder_bridge._heartbeat()"
         )
         return subprocess.run(
             [
-                str(blender),
-                "--background",
-                str(working),
-                "--python",
-                str(bootstrap),
-                "--python-expr",
-                expression,
-                "--",
-                "--storyboarder-bridge",
-                str(bridge_path),
-                "--storyboarder-heartbeat",
-                str(heartbeat_path),
-                "--storyboarder-session",
-                str(session["session_id"]),
+                str(blender), "--background", str(working),
+                "--python", str(bootstrap), "--python-expr", expression,
+                "--", "--storyboarder-bridge", str(bridge_path),
+                "--storyboarder-heartbeat", str(heartbeat_path),
+                "--storyboarder-session", str(session["session_id"]),
             ],
             cwd=Path(__file__).parents[1],
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            timeout=90,
-            check=False,
+            capture_output=True, text=True, encoding="utf-8", errors="replace",
+            timeout=180, check=False,
         )
 
     canonical_before = canonical.read_bytes()
-    authorized = native_save("authorized")
-    assert authorized.returncode == 0, authorized.stdout + authorized.stderr
-    authorized_heartbeat = json.loads(
-        heartbeat_path.read_text(encoding="utf-8")
-    )
-    assert authorized_heartbeat["save_authorized"] is True, authorized_heartbeat
-    assert authorized_heartbeat["blend_path"] == str(working.resolve())
+    # Storyboarder being busy (an expired informational lease) must not matter.
+    context = json.loads(bridge_path.read_text(encoding="utf-8"))
+    context["lease_expires_at"] = 0.0
+    blender_bridge._write_json(bridge_path, context)
 
-    blender_bridge.status(app)
+    saved = native_save("first")
+    assert saved.returncode == 0, saved.stdout + saved.stderr
+    heartbeat = json.loads(heartbeat_path.read_text(encoding="utf-8"))
+    assert heartbeat["save_authorized"] is True, heartbeat
+    assert heartbeat["preview_error"] == ""
 
-    canonical_after_authorized = canonical.read_bytes()
-    assert canonical_after_authorized != canonical_before
-    authorized_revision = project.storage_revision
+    blender_bridge.tick(app)
 
-    stale_context = json.loads(bridge_path.read_text(encoding="utf-8"))
-    stale_context["lease_expires_at"] = 0.0
-    blender_bridge._write_json(bridge_path, stale_context)
-    stale = native_save("stale-offline")
-    assert stale.returncode == 0, stale.stdout + stale.stderr
-    stale_heartbeat = json.loads(heartbeat_path.read_text(encoding="utf-8"))
-    assert stale_heartbeat["save_authorized"] is False
-    assert working.read_bytes() != canonical_after_authorized
-
-    blender_bridge.status(app, refresh_context=False)
-
-    assert canonical.read_bytes() == canonical_after_authorized
-    assert project.storage_revision == authorized_revision
+    assert canonical.read_bytes() != canonical_before
+    assert canonical.read_bytes() == working.read_bytes()
+    assert scene3d.preview_file_path(project, scene["id"]).is_file()
+    manifest = blender_bridge.read_manifest(project, scene["id"])
+    assert "CAM_SB" in [camera["name"] for camera in manifest["cameras"]]
+    assert manifest["frame_end"] >= manifest["frame_start"]
 
 
-def test_layout2_builtin_blender_rejects_stale_writer_context(tmp_path: Path) -> None:
-    project = _project(tmp_path)
-    app = create_app(tmp_path)
-    manager = BpyViewportManager()
-    manager.bind_context(
-        project,
-        project_session_id=app.state.project_session_id,
-        context_revision=project.storage_revision,
-    )
-    manager.require_context(
-        project,
-        project_session_id=app.state.project_session_id,
-        context_revision=project.storage_revision,
-    )
-
-    with pytest.raises(BpyViewportError, match="stale"):
-        manager.require_context(
-            project,
-            project_session_id=app.state.project_session_id,
-            context_revision=project.storage_revision + 1,
-        )
-
-
-def test_layout2_builtin_blender_start_does_not_rebind_running_stale_worker(
-    tmp_path: Path,
-) -> None:
-    project = _project(tmp_path)
-    scene = scene3d.create_scene(project, title="Running")["scene"]
-    canonical = project.project_root / "Blender" / f"{scene['id']}.blend"
-    canonical.parent.mkdir(parents=True)
-    canonical.write_bytes(b"blend")
-    scene3d.configure_blend_preview(project, scene["id"], canonical)
-    app = create_app(tmp_path)
-    manager = BpyViewportManager()
-    manager.bind_context(
-        project,
-        project_session_id=app.state.project_session_id,
-        context_revision=project.storage_revision,
-    )
-
-    class _RunningProcess:
-        def poll(self):
-            return None
-
-    process = _RunningProcess()
-    manager._blend_path = canonical.resolve()
-    manager._process = process
-
-    with pytest.raises(BpyViewportError, match="stale"):
-        manager.start(
-            project,
-            project_session_id=app.state.project_session_id,
-            context_revision=project.storage_revision + 1,
-        )
-
-    assert manager._process is process
-    assert manager._context_revision == project.storage_revision
-
-
-def test_layout2_builtin_blender_save_advances_once_and_rebinds(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr(project_layout, "LAYOUT_2_ENABLED", True)
-    project = _project(tmp_path)
-    project.settings["backup_on_save"] = False
-    scene = scene3d.create_scene(project, title="Save")["scene"]
-    canonical = project.project_root / "Blender" / f"{scene['id']}.blend"
-    canonical.parent.mkdir(parents=True)
-    canonical.write_bytes(b"before")
-    scene3d.configure_blend_preview(project, scene["id"], canonical)
-    project_manager.save_project(project, flush_document=False)
-    project_document.commit_layout2_document(project.project_root)
-    app_root = tmp_path / "builtin-save-app"
-    app_root.mkdir()
-    app = create_app(app_root)
-    app.state.project = project
-    app.state.project_disk_mtime = project_manager.project_disk_mtime(project)
-    manager = _Layout2BpyManager(
-        project, app.state.project_session_id, canonical
-    )
-    app.state.bpy_viewport_manager = manager
-    before_revision = project.storage_revision
-    endpoint = next(
-        route.endpoint
-        for route in app.routes
-        if getattr(route, "path", "") == "/api/project/bpy-viewport/save"
-    )
-
-    result = endpoint()
-
-    assert result["ok"] is True
-    assert canonical.read_bytes() == b"worker-save"
-    assert project.storage_revision == before_revision + 1
-    assert manager.context_revision == project.storage_revision
-    assert manager.running is True
-
-
-def test_layout2_builtin_blender_save_fault_restores_binary_and_stops_worker(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr(project_layout, "LAYOUT_2_ENABLED", True)
-    project = _project(tmp_path)
-    project.settings["backup_on_save"] = False
-    scene = scene3d.create_scene(project, title="Save rollback")["scene"]
-    canonical = project.project_root / "Blender" / f"{scene['id']}.blend"
-    canonical.parent.mkdir(parents=True)
-    canonical.write_bytes(b"before")
-    scene3d.configure_blend_preview(project, scene["id"], canonical)
-    project_manager.save_project(project, flush_document=False)
-    project_document.commit_layout2_document(project.project_root)
-    app_root = tmp_path / "builtin-save-fault-app"
-    app_root.mkdir()
-    app = create_app(app_root)
-    app.state.project = project
-    app.state.project_disk_mtime = project_manager.project_disk_mtime(project)
-    manager = _Layout2BpyManager(
-        project, app.state.project_session_id, canonical
-    )
-    app.state.bpy_viewport_manager = manager
-    before_tree = _tree_bytes(project.project_root)
-    before_revision = project.storage_revision
-    endpoint = next(
-        route.endpoint
-        for route in app.routes
-        if getattr(route, "path", "") == "/api/project/bpy-viewport/save"
-    )
-    real_persist = app_state.persist_project_mutation
-
-    def fail_after_persist(current_app) -> None:
-        real_persist(current_app)
-        raise OSError("injected built-in save fault")
-
-    monkeypatch.setattr(app_state, "persist_project_mutation", fail_after_persist)
-
-    with pytest.raises(OSError, match="built-in save fault"):
-        endpoint()
-
-    assert project.storage_revision == before_revision
-    assert _tree_bytes(project.project_root) == before_tree
-    assert canonical.read_bytes() == b"before"
-    assert manager.running is False
-    assert manager.stop_count == 1
-
-
-def test_layout2_builtin_blender_uses_valid_persisted_path(
-    tmp_path: Path,
-) -> None:
-    project = _project(tmp_path)
-    scene = scene3d.create_scene(project, title="Stage")["scene"]
-    stale = project.project_root / "Blender" / "stale.blend"
-    stale.parent.mkdir(parents=True, exist_ok=True)
-    stale.write_bytes(b"stale")
-    scene["blend_file_path"] = "Blender/stale.blend"
-    scene3d._save(project, scene["id"], [scene])
-
-    configured = scene3d.configure_blend_preview(project, scene["id"], stale)
-    assert configured["blend_file_path"] == "Blender/stale.blend"
-    assert project_blend_path(project) == stale.resolve()
-
-
-def test_blender_addon_guards_explicit_asset_writes() -> None:
+def test_blender_addon_never_refuses_saves_on_lease_or_revision() -> None:
     source = (
-        Path(__file__).parents[1]
-        / "storyboard_tool"
-        / "blender_addon"
-        / "storyboarder_bridge.py"
+        Path(__file__).parents[1] / "storyboard_tool" / "blender_addon" / "storyboarder_bridge.py"
     ).read_text(encoding="utf-8")
 
     assert "def _context_allows_write" in source
-    assert 'CONTEXT.get("offline_write_allowed") is False' in source
     assert 'CONTEXT.get("write_enabled") is True' in source
-    assert '"project_session_id"' in source
-    assert '"context_revision"' in source
-    assert 'CONTEXT.get("lease_expires_at")' in source
-    assert "def _on_save_pre" in source
+    assert "lease_expires_at" not in source
+    assert "context_revision" not in source
+    assert "def _export_manifest" in source
     assert "bpy.app.handlers.save_pre.append(_on_save_pre)" in source
 
 
@@ -807,7 +576,7 @@ def _tree_bytes(root: Path) -> dict[str, bytes]:
     }
 
 
-def test_layout2_scene_mutation_advances_once_and_invalidates_blender_lease(
+def test_layout2_scene_mutation_advances_once_and_keeps_blender_session_writable(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -851,8 +620,7 @@ def test_layout2_scene_mutation_advances_once_and_invalidates_blender_lease(
     assert state["committed_revision"] == before
     assert project_document.validate_layout2_document(project.document_path).revision == before
     context = json.loads(bridge_path.read_text(encoding="utf-8"))
-    assert context["write_enabled"] is False
-    assert context["lease_expires_at"] > context["updated_at"]
+    assert context["write_enabled"] is True
 
     project_manager.sync_document(project)
 

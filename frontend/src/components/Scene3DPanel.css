@@ -1,147 +1,172 @@
-.scene3d {
-  flex-shrink: 0;
-  border-top: 1px solid color-mix(in srgb, var(--color-border) 72%, transparent);
-  background: color-mix(in srgb, var(--bg-toolbar) 84%, transparent);
-}
-
-.scene3d-toggle {
-  width: 100%;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 12px var(--panel-padding, 12px);
-  border: none;
-  background: transparent;
-  font-weight: 600;
-  font-size: 12px;
-  color: var(--color-text);
-  cursor: pointer;
-}
-
-.scene3d-toggle:hover {
-  background: color-mix(in srgb, var(--color-accent) 8%, transparent);
-}
-
-.scene3d-toggle-icon {
-  width: 18px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 11px;
-  line-height: 1;
-}
-
-.scene3d-body {
-  padding: 0 var(--panel-padding, 12px) 14px;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
-.scene3d-status {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  min-width: 0;
-}
-
-.scene3d-chip {
-  flex-shrink: 0;
-  font-size: 10px;
-  padding: 2px 8px;
-  border-radius: 999px;
-  border: 1px solid var(--color-border);
-}
-
-.scene3d-chip.ok {
-  background: rgba(40, 167, 69, 0.12);
-  border-color: rgba(40, 167, 69, 0.4);
-}
-
-.scene3d-chip.off {
-  color: var(--color-muted);
-  background: rgba(0, 0, 0, 0.04);
-}
-
-.scene3d-path {
-  font-size: 11px;
-  color: var(--color-muted);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.scene3d-actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-}
-
-.scene3d-actions button,
-.scene3d-editor-root button {
-  padding: 6px 8px;
-  border-radius: 8px;
-  border: 1px solid var(--color-border);
-  background: color-mix(in srgb, var(--bg-elevated) 82%, transparent);
-  font-size: 11px;
-  cursor: pointer;
-}
-
-.scene3d-actions button.primary {
-  border-color: var(--color-accent);
-  background: var(--color-accent);
-  color: #120d05;
-  font-weight: 700;
-}
-
-.scene3d-help,
-.scene3d-note {
-  font-size: 11px;
-  line-height: 1.35;
-  color: var(--color-muted);
-}
-
-.scene3d-note {
-  max-width: 260px;
-  overflow: hidden;
-  white-space: nowrap;
-  text-overflow: ellipsis;
-  color: var(--text-2);
-  font-size: 12px;
-}
-
+/* ── Workspace layout: navigator | stage | inspector ── */
 .scene3d-workspace-page {
   width: 100%;
   height: 100%;
   min-width: 0;
   min-height: 0;
-  display: flex;
-  flex-direction: column;
+  display: grid;
+  grid-template-columns: var(--nav-w) minmax(0, 1fr) var(--inspector-w);
   overflow: hidden;
   background: var(--bg-0);
 }
 
-.scene3d-workspace-select {
-  width: auto;
-  min-width: 140px;
-  max-width: 200px;
+.scene3d-nav,
+.scene3d-inspector {
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-1);
 }
 
-.scene3d-keywords-input {
-  min-width: 170px;
-  max-width: 240px;
+.scene3d-nav {
+  border-right: 1px solid var(--line);
 }
 
-.scene3d-editor-root {
-  flex: 1 1 auto;
+.scene3d-inspector {
+  border-left: 1px solid var(--line);
+}
+
+.scene3d-nav-heading {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-height: 26px;
+  padding: 14px 8px 6px 14px;
+}
+
+.scene3d-nav-heading .icon-btn {
+  width: 26px;
+  min-height: 26px;
+  height: 26px;
+}
+
+.scene3d-nav-list {
+  flex-shrink: 0;
+  max-height: 32%;
+  overflow-y: auto;
+  padding: 0 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.scene3d-nav-list.is-grow {
+  flex: 1;
+  max-height: none;
+}
+
+.scene3d-nav-row {
+  width: 100%;
+  min-height: 32px;
+  height: auto;
+  justify-content: flex-start;
+  gap: 8px;
+  padding: 6px 8px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-2);
+  font-size: 12.5px;
+  font-weight: 400;
+  text-align: left;
+  white-space: normal;
+}
+
+.scene3d-nav-row:hover:not(:disabled) {
+  background: var(--bg-3);
+  color: var(--text-1);
+}
+
+.scene3d-nav-row.is-active {
+  background: var(--bg-selected);
+  color: var(--text-1);
+}
+
+.scene3d-nav-icon {
+  flex-shrink: 0;
+  color: var(--text-3);
+}
+
+.scene3d-nav-row.is-active .scene3d-nav-icon {
+  color: var(--accent);
+}
+
+.scene3d-nav-label {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.scene3d-nav-label small {
+  font: 400 11px var(--font-mono);
+  color: var(--text-4);
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.scene3d-camera-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.scene3d-nav-meta {
+  flex-shrink: 0;
+  font: 400 11px var(--font-mono);
+  color: var(--text-4);
+}
+
+.scene3d-nav-empty {
+  margin: 0;
+  padding: 6px 8px 12px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-3);
+}
+
+/* ── Stage ── */
+.scene3d-stage {
   min-width: 0;
   min-height: 0;
+  display: flex;
+  flex-direction: column;
   overflow: hidden;
+}
+
+.scene3d-note {
+  max-width: 280px;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  color: var(--text-3);
+  font-size: 12px;
+}
+
+.scene3d-conflict {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 10px 12px 0;
+}
+
+.scene3d-conflict > span {
+  flex: 1;
+}
+
+.scene3d-conflict button {
+  flex-shrink: 0;
+  min-height: 28px;
+  height: 28px;
 }
 
 .scene3d-preview-empty {
   flex: 1;
-  min-height: 320px;
+  min-height: 0;
   display: grid;
   place-items: center;
   padding: 32px;
@@ -217,7 +242,6 @@
   border-radius: 50%;
   border: 1px solid var(--line-3);
   font: 500 11px var(--font-mono);
-  color: var(--text-2);
 }
 
 .scene3d-empty-actions {
@@ -230,125 +254,175 @@
   min-height: var(--control-h-lg);
 }
 
-.scene3d-editor-root .scene3d-layout {
-  height: 100%;
+/* ── Inspector ── */
+.scene3d-inspector-body {
+  flex: 1;
   min-height: 0;
-  display: grid;
-  grid-template-columns: min(var(--scene3d-sidebar-width, 280px), 40%) minmax(0, 1fr);
-  background: #17191e;
-  color: #e6e8ec;
+  overflow-y: auto;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
 }
 
-.scene3d-editor-root .scene3d-sidebar {
-  grid-column: 1;
-  grid-row: 1;
-  min-height: 0;
-  overflow: auto;
-  padding: 10px;
-  border-right: 1px solid rgba(255, 255, 255, 0.12);
-  background: #20232a;
+.scene3d-inspector-empty,
+.scene3d-hint-text {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-3);
 }
 
-.scene3d-editor-root .scene3d-panel-title {
-  margin: 10px 0 6px;
-  font-size: 11px;
-  font-weight: 700;
-  color: #aeb4bf;
-  text-transform: uppercase;
-  letter-spacing: 0.03em;
-}
-
-.scene3d-editor-root .scene3d-board-preview {
-  position: relative;
-  min-height: 94px;
+.scene3d-camera-card {
   display: flex;
   align-items: center;
-  justify-content: center;
-  overflow: hidden;
-  border-radius: 9px;
-  background: #101216;
-  border: 1px solid rgba(255, 255, 255, 0.1);
+  gap: 12px;
+  padding: 12px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--line);
+  background: var(--bg-2);
 }
 
-.scene3d-editor-root .scene3d-board-preview img {
-  width: 100%;
-  height: 100%;
-  object-fit: contain;
+.scene3d-camera-card > svg {
+  color: var(--accent);
 }
 
-.scene3d-editor-root .scene3d-board-preview-empty,
-.scene3d-editor-root .scene3d-board-label,
-.scene3d-editor-root .scene3d-file-name,
-.scene3d-editor-root .scene3d-light-status,
-.scene3d-editor-root .scene3d-hint {
-  font-size: 11px;
-  color: #aeb4bf;
-  line-height: 1.35;
+.scene3d-camera-card strong {
+  display: block;
+  font-weight: 600;
 }
 
-.scene3d-editor-root .scene3d-board-label,
-.scene3d-editor-root .scene3d-file-name {
-  margin-top: 6px;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+.scene3d-camera-card span {
+  font-size: 12px;
+  color: var(--text-3);
 }
 
-.scene3d-editor-root .scene3d-blender-panel,
-.scene3d-editor-root .scene3d-transform-fields {
+.scene3d-facts {
+  margin: 0;
   display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 8px 16px;
+  font-size: 12.5px;
+}
+
+.scene3d-facts dt {
+  color: var(--text-3);
+}
+
+.scene3d-facts dd {
+  margin: 0;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.scene3d-link-box {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px;
+  border-radius: var(--radius-md);
+  border: 1px dashed var(--line-2);
+}
+
+.scene3d-link-box p {
+  margin: 0;
+  font-size: 12.5px;
+  color: var(--text-2);
+}
+
+.scene3d-link-box button {
+  align-self: flex-start;
+}
+
+.scene3d-inspector .field-label {
+  display: block;
+  margin-bottom: 6px;
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--text-3);
+}
+
+.scene3d-board-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12.5px;
+}
+
+.scene3d-board-list li {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+}
+
+.scene3d-board-list b {
+  font: 500 11px var(--font-mono);
+  color: var(--text-4);
+}
+
+.scene3d-board-list i {
+  margin-left: auto;
+  font: normal 400 11px var(--font-mono);
+  color: var(--text-4);
+}
+
+.scene3d-display {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.scene3d-display .field {
+  display: flex;
+  flex-direction: column;
   gap: 6px;
 }
 
-.scene3d-editor-root .scene3d-check,
-.scene3d-editor-root .scene3d-field,
-.scene3d-editor-root .scene3d-transform-fields label {
-  display: grid;
-  gap: 3px;
-  font-size: 11px;
-  color: #cfd3da;
-}
-
-.scene3d-editor-root .scene3d-check {
-  grid-template-columns: auto 1fr;
+.scene3d-display .check-field {
+  display: flex;
   align-items: center;
+  gap: 8px;
+  font-size: 12.5px;
+  color: var(--text-2);
 }
 
-.scene3d-editor-root input,
-.scene3d-editor-root select {
+.scene3d-keywords-input {
+  width: 100%;
+}
+
+/* ── Read-only Three.js preview (runtime bundle markup) ── */
+.scene3d-editor-root {
+  flex: 1 1 auto;
   min-width: 0;
-  border-radius: 7px;
-  border: 1px solid rgba(255, 255, 255, 0.14);
-  background: #111318;
-  color: #e6e8ec;
-  padding: 5px 7px;
-  font-size: 11px;
+  min-height: 0;
+  overflow: hidden;
 }
 
-.scene3d-editor-root .scene3d-outliner {
-  max-height: 180px;
-  overflow: auto;
-  display: grid;
-  gap: 4px;
-  padding: 0;
-  margin: 0;
-  list-style: none;
+.scene3d-editor-root [hidden] {
+  display: none !important;
 }
 
-.scene3d-editor-root .scene3d-outliner li,
-.scene3d-editor-root .scene3d-outliner [data-camera-id],
-.scene3d-editor-root .scene3d-outliner [data-object-id] {
-  padding: 5px 7px;
-  border-radius: 7px;
-  background: rgba(255, 255, 255, 0.05);
-  border: 1px solid rgba(255, 255, 255, 0.07);
-  font-size: 11px;
-  cursor: pointer;
+.scene3d-editor-root .scene3d-layout {
+  height: 100%;
+  min-height: 0;
+  display: flex;
+  background: var(--bg-well);
+  color: var(--text-1);
+}
+
+/* The bundle's own sidebar is replaced by the React navigator and inspector. */
+.scene3d-editor-root .scene3d-sidebar,
+.scene3d-editor-root .scene3d-sidebar-resize,
+.scene3d-editor-root .scene3d-builtin-only {
+  display: none !important;
 }
 
 .scene3d-editor-root .scene3d-main {
-  grid-column: 2;
-  grid-row: 1;
+  flex: 1;
   min-height: 0;
   min-width: 0;
   display: flex;
@@ -356,17 +430,19 @@
   overflow: hidden;
 }
 
-.scene3d-editor-root .scene3d-sidebar-resize { position: relative; grid-column: 1; grid-row: 1; justify-self: end; align-self: stretch; }
-
 .scene3d-editor-root .scene3d-toolbar {
   flex: 0 0 auto;
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
   align-items: center;
-  padding: 8px;
-  background: #20232a;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.12);
+  padding: 8px 12px;
+  background: var(--bg-1);
+  border-bottom: 1px solid var(--line);
+}
+
+.scene3d-editor-root .scene3d-blender-only:not([hidden]) {
+  display: flex;
 }
 
 .scene3d-editor-root .scene3d-tool-group {
@@ -379,10 +455,16 @@
   margin-left: auto;
 }
 
+.scene3d-editor-root button {
+  min-height: var(--control-h-sm);
+  height: var(--control-h-sm);
+  padding: 0 10px;
+  font-size: 12px;
+}
+
 .scene3d-editor-root .scene3d-toolbar button.active {
-  border-color: var(--color-accent);
-  background: color-mix(in srgb, var(--color-accent) 18%, transparent);
-  color: var(--color-text);
+  background: var(--bg-seg-on);
+  border-color: var(--line-3);
 }
 
 .scene3d-editor-root .scene3d-viewport {
@@ -391,7 +473,7 @@
   min-width: 0;
   min-height: 0;
   overflow: hidden;
-  background: #111318;
+  background: var(--bg-well);
 }
 
 .scene3d-editor-root .scene3d-format-frame {
@@ -407,12 +489,13 @@
 
 .scene3d-editor-root .scene3d-timeline {
   flex: 0 0 auto;
-  display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 8px 10px;
-  background: #20232a;
-  border-top: 1px solid rgba(255, 255, 255, 0.12);
+  gap: 10px;
+  padding: 8px 12px;
+  background: var(--bg-1);
+  border-top: 1px solid var(--line);
+  font: 500 12px var(--font-mono);
+  color: var(--text-2);
 }
 
 .scene3d-editor-root .scene3d-timeline input[type='range'] {
@@ -421,7 +504,15 @@
 
 .scene3d-editor-root .scene3d-hint {
   flex: 0 0 auto;
-  padding: 7px 10px;
-  background: #17191e;
-  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  padding: 6px 12px;
+  font-size: 11.5px;
+  color: var(--text-4);
+  background: var(--bg-0);
+  border-top: 1px solid var(--line);
+}
+
+@media (max-width: 1100px) {
+  .scene3d-workspace-page {
+    grid-template-columns: 200px minmax(0, 1fr) 300px;
+  }
 }

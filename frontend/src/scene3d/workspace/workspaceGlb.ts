@@ -100,13 +100,13 @@ export function diagnoseMissingCameras(gltf: {
   const gltfCameraCount = gltf.cameras?.length || 0
   if (gltfCameraCount > 0 || nodeCameraCount > 0) {
     return (
-      `GLB 元数据含 ${Math.max(gltfCameraCount, nodeCameraCount)} 个相机，但未能正确挂到场景。` +
-      ' 请检查 Blender：相机不要隐藏（眼睛图标），Limit to 不要勾选 Visible/Active Collection，或把相机放进导出集合。'
+      `The preview lists ${Math.max(gltfCameraCount, nodeCameraCount)} camera(s) that are not attached to the scene. ` +
+      'In Blender, make sure the cameras are visible and part of the scene, then save.'
     )
   }
   return (
-    'GLB 内完全没有相机数据（不是勾选 Cameras 就行）。' +
-    ' 请确认场景里有 Camera 对象、导出时 Limit to 留空、相机可见，并重新导出。'
+    'This scene has no cameras yet. ' +
+    'Add a Camera object in Blender and save; it will appear in the Cameras list.'
   )
 }
 

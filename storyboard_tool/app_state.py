@@ -21,7 +21,6 @@ from fastapi import FastAPI, HTTPException
 
 from . import (
     blender_bridge,
-    bpy_viewport,
     live_bridge,
     preview_analysis_cache,
     project_convert,
@@ -213,13 +212,9 @@ def transition_active_project(
                 _transition_checkpoint(app, report, "plugin_inbox_resolved")
 
                 report["current_stage"] = "external_blender_release"
+                blender_bridge.sync_now(app)
                 blender_bridge.require_released(app, action)
                 _transition_checkpoint(app, report, "external_blender_released")
-
-                report["current_stage"] = "builtin_blender_release"
-                built_in_save = bpy_viewport.save_and_stop_worker(app)
-                report["built_in_blender_saved"] = built_in_save is not None
-                _transition_checkpoint(app, report, "builtin_blender_released")
 
                 dirty_after_writer_checks = bool(
                     getattr(app.state, "dirty", False)
@@ -227,9 +222,7 @@ def transition_active_project(
                 report["source_dirty_after_writer_checks"] = (
                     dirty_after_writer_checks
                 )
-                must_persist_source = source is not None and (
-                    dirty_after_writer_checks or built_in_save is not None
-                )
+                must_persist_source = source is not None and dirty_after_writer_checks
                 report["current_stage"] = "backend_serialize"
                 if must_persist_source:
                     project_manager.save_project(source, flush_document=False)
@@ -379,13 +372,6 @@ def save_active_project_as_layout2(app: FastAPI, requested_document: Path) -> Pr
                 blender_bridge.require_released(app, "using Save As")
                 _transition_checkpoint(app, report, "external_blender_released")
 
-                report["current_stage"] = "builtin_blender_release"
-                manager = getattr(app.state, "bpy_viewport_manager", None)
-                if manager is not None and bool(getattr(manager, "running", False)):
-                    raise ValueError(
-                        "Save and close the built-in Blender scene before using Save As."
-                    )
-                _transition_checkpoint(app, report, "builtin_blender_released")
 
                 report["current_stage"] = "snapshot"
                 result = project_save_as.materialize_layout2_save_as(
@@ -494,13 +480,6 @@ def convert_active_project_to_layout2(app: FastAPI, requested_document: Path) ->
                 blender_bridge.require_released(app, "converting to Layout 2")
                 _transition_checkpoint(app, report, "external_blender_released")
 
-                report["current_stage"] = "builtin_blender_release"
-                manager = getattr(app.state, "bpy_viewport_manager", None)
-                if manager is not None and bool(getattr(manager, "running", False)):
-                    raise ValueError(
-                        "Save and close the built-in Blender scene before converting to Layout 2."
-                    )
-                _transition_checkpoint(app, report, "builtin_blender_released")
 
                 report["current_stage"] = "conversion"
                 result = project_convert.materialize_layout1_to_layout2(

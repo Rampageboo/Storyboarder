@@ -23,7 +23,6 @@ FAULT_STAGES = (
     "mutations_frozen",
     "plugin_inbox_resolved",
     "external_blender_released",
-    "builtin_blender_released",
     "backend_serialized",
     "source_durable",
     "candidate_opened",
@@ -207,30 +206,6 @@ def test_writer_quiesce_timeout_aborts_without_changing_active_project(
     assert app.state.dirty is True
     assert app.state.project_session_id == original_session
     assert app.state.project_writers_quiesced is False
-
-
-def test_builtin_blender_save_failure_aborts_before_swap(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    app, source, _source_document = _dirty_document(tmp_path, monkeypatch)
-    target_document = _closed_document(tmp_path)
-    original_session = app.state.project_session_id
-
-    class FailingViewport:
-        def save_and_stop(self):
-            raise RuntimeError("built-in Blender save failed")
-
-    app.state.bpy_viewport_manager = FailingViewport()
-
-    with pytest.raises(HTTPException) as raised:
-        StoryboardBackendService(app).method_open_project(str(target_document))
-
-    assert raised.value.status_code == 409
-    assert app.state.project is source
-    assert app.state.dirty is True
-    assert app.state.project_session_id == original_session
-    assert source.root_path.is_dir()
 
 
 def test_close_uses_transition_and_durably_saves_dirty_document(

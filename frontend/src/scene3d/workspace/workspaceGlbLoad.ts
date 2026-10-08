@@ -61,18 +61,18 @@ export function buildGlbLoadNotifications(input: GlbLoadNotificationInput): stri
   }
 
   if (importedCameras.some((item) => item.orphan)) {
-    messages.push(`已找到 ${importedCameras.length} 个相机（部分未挂到场景树，已自动修复）。`)
+    messages.push(`Found ${importedCameras.length} camera(s); some were detached and have been reattached.`)
   } else if (!(gltf.animations || []).length) {
-    messages.push('场景已加载，但未找到动画。请在 Blender 导出时勾选 Animation。')
+    messages.push('Scene loaded. It has no animation.')
   } else if (animationDuration <= 0) {
-    messages.push('已找到动画轨道，但时长为 0。请检查 Blender 时间轴范围与关键帧。')
+    messages.push('Animation tracks found but they are 0 seconds long. Check the Blender timeline range and keyframes.')
   } else if (programLightingMode === 'auto') {
     if (importedLightCount > 0) {
       messages.push(
-        `检测到 GLB 含 ${importedLightCount} 盏灯，已校准强度并启用弱环境反射（模拟 Blender World）。`,
+        `Using ${importedLightCount} Blender light(s) with soft environment reflection.`,
       )
     } else {
-      messages.push('GLB 无导出灯光，已自动开启全程序补光。')
+      messages.push('The scene has no lights; preview fill lighting is on.')
     }
   }
 

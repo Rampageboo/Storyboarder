@@ -382,23 +382,18 @@ def test_convert_activation_failure_leaves_source_active_and_target_complete(
         project_manager.cleanup_document_working_root(project)
 
 
-@pytest.mark.parametrize("writer", ["external", "builtin"])
 def test_convert_writer_block_occurs_before_staging(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
-    writer: str,
 ) -> None:
     project = _legacy_project(tmp_path)
     source_hash = _sha(project.document_path)
     app = _app_for(project, tmp_path)
-    if writer == "external":
-        monkeypatch.setattr(
-            app_state.blender_bridge,
-            "require_released",
-            lambda *args: (_ for _ in ()).throw(ValueError("external writer active")),
-        )
-    else:
-        app.state.bpy_viewport_manager = SimpleNamespace(running=True)
+    monkeypatch.setattr(
+        app_state.blender_bridge,
+        "require_released",
+        lambda *args: (_ for _ in ()).throw(ValueError("external writer active")),
+    )
     try:
         with pytest.raises(HTTPException) as raised:
             StoryboardBackendService(app).method_convert_project(

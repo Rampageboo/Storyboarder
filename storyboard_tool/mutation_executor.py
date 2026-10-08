@@ -88,7 +88,6 @@ def mutation_scope(app, policy: MutationPolicy):
             for name in (
                 "dirty",
                 "project_disk_mtime",
-                "external_blender_context_revision",
             )
         }
         try:

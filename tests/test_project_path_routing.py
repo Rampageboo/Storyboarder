@@ -14,7 +14,6 @@ ROUTED_MODULES = (
     "backend_service.py",
     "backups.py",
     "blender_bridge.py",
-    "bpy_viewport.py",
     "canvas_settings.py",
     "export_service.py",
     "export_utils.py",

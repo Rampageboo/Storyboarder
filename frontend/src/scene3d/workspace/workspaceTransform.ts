@@ -58,7 +58,7 @@ export function syncTransformInputsFromMesh(
 }
 
 export const WIREFRAME_MODE_LABELS: Record<string, string> = {
-  off: '关闭',
-  on: '标准',
-  strong: '强化',
+  off: 'Off',
+  on: 'Edges',
+  strong: 'Strong',
 }

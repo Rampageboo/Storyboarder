@@ -19,8 +19,6 @@ from fastapi.staticfiles import StaticFiles
 from . import (
     app_state,
     blender_bridge,
-    bpy_viewport,
-    bpy_viewport_api,
     generation_service,
     logging_config,
     project_manager,
@@ -70,6 +68,7 @@ from .schemas import (
     Scene2DPerspectiveUpdateRequest,
     Scene2DUpdateRequest,
     Scene3DCreateRequest,
+    Scene3DSessionResolveRequest,
     Scene3DUpdateRequest,
     SetReferencePathsRequest,
     SettingsUpdateRequest,
@@ -82,6 +81,7 @@ from .schemas import (
 
 # Photoshop plugin treats bridge files older than ~8s as stale (see BRIDGE_STALE_MS in panel.js).
 _BRIDGE_REFRESH_SECONDS = 1.5
+_BLENDER_SESSION_SECONDS = 1.0
 _GENERATION_SIGNAL_SECONDS = 0.5
 
 # Uploads are buffered in memory by _read_upload; cap the size so a single large or
@@ -263,6 +263,18 @@ def create_app(base_dir: Path, bridge_port: int = 8000) -> FastAPI:
                     # will be retried without asking Codex to generate it again.
                     logger.debug("Generation result signal processing failed", exc_info=True)
 
+        def blender_session_loop() -> None:
+            # Owns the external-Blender session: adopts, renews its context, and
+            # brings finished Blender saves into the project. Independent of request
+            # handlers so a minimised window or a long export never stalls it.
+            while not stop_event.wait(_BLENDER_SESSION_SECONDS):
+                try:
+                    with app_state.project_background_writer(app, "blender_session") as allowed:
+                        if allowed:
+                            blender_bridge.tick(app)
+                except Exception:
+                    logger.debug("Blender session tick failed", exc_info=True)
+
         refresh_thread = threading.Thread(
             target=bridge_refresh_loop,
             name="storyboard-bridge-refresh",
@@ -273,19 +285,28 @@ def create_app(base_dir: Path, bridge_port: int = 8000) -> FastAPI:
             name="storyboard-generation-results",
             daemon=True,
         )
+        blender_thread = threading.Thread(
+            target=blender_session_loop,
+            name="storyboard-blender-session",
+            daemon=True,
+        )
         refresh_thread.start()
         generation_thread.start()
+        blender_thread.start()
         # Exposed so shutdown can halt these loops *before* the work tree is
         # removed. The bridge loop writes into the project root, so deleting the
         # tree while it runs leaves a directory Windows can never reclaim.
         app.state.background_stop = stop_event
-        app.state.background_threads = (refresh_thread, generation_thread)
+        app.state.background_threads = (refresh_thread, generation_thread, blender_thread)
         try:
             yield
         finally:
             app_state.stop_background_loops(app)
-            bpy_viewport.stop_worker(app)
             _shutdown_reference_cleanup(app)
+            try:
+                blender_bridge.sync_now(app)
+            except Exception:
+                logger.exception("Final Blender session sync failed")
             if not blender_bridge.owns_scene(app):
                 project_manager.cleanup_document_working_root(app.state.project)
 
@@ -297,7 +318,6 @@ def create_app(base_dir: Path, bridge_port: int = 8000) -> FastAPI:
     app.state.main_window = None
     app.state.api_token = _read_launch_token()
     runtime_state.init_bridge_state(app, bridge_port)
-    bpy_viewport_api.register_bpy_viewport_routes(app)
 
     def _svc() -> StoryboardBackendService:
         return StoryboardBackendService(app)
@@ -764,6 +784,18 @@ def create_app(base_dir: Path, bridge_port: int = 8000) -> FastAPI:
     @app.post("/api/project/scene3d/open-blender")
     def open_blender_scene() -> dict[str, Any]:
         return _svc().method_open_blender_scene()
+
+    @app.get("/api/project/scene3d/session")
+    def scene3d_session() -> dict[str, Any]:
+        return _svc().method_scene3d_session()
+
+    @app.post("/api/project/scene3d/session/resolve")
+    def resolve_scene3d_session(request: Scene3DSessionResolveRequest) -> dict[str, Any]:
+        return _svc().method_resolve_scene3d_session(request.action)
+
+    @app.get("/api/project/scenes3d/{scene3d_id}/manifest")
+    def scene3d_manifest(scene3d_id: str) -> dict[str, Any]:
+        return _svc().method_scene3d_manifest(scene3d_id)
 
     @app.post("/api/project/scene3d/import")
     async def import_scene3d(file: UploadFile = File(...)) -> dict[str, Any]:

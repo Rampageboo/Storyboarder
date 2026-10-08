@@ -22,6 +22,8 @@ import { shotHasPreview, shotShouldOverlayPreview } from '../utils/shotPreview'
 import { FloatingLayersPanel, type CanvasLayerId } from './FloatingLayersPanel'
 import { FullDrawingEditor } from './FullDrawingEditor'
 import { useDetailsMenu } from '../hooks/useDetailsMenu'
+import { useBoardAnnotations } from '../hooks/useBoardAnnotations'
+import { AnnotationOverlay, AnnotationPalette, type AnnotationTool } from './AnnotationLayer'
 import './CanvasBoard.css'
 
 type SyncResult = { synced?: boolean; message?: string }
@@ -34,6 +36,8 @@ export function CanvasBoard({ panelsInitiallyOpen = true, panelSize, headerLead 
   headerLead?: ReactNode
 }) {
   const { ref: psMenuRef, close: closePsMenu } = useDetailsMenu()
+  const [annotationTool, setAnnotationTool] = useState<AnnotationTool>('select')
+  const [annotationsVisible, setAnnotationsVisible] = useState(true)
   const { ref: moreMenuRef, close: closeMoreMenu } = useDetailsMenu()
   const { project, selectedShotId, setProject, flushDirtyShots, projectActionBusy, reportError, missingFiles, setDrawingActive } = useProject()
   const [bust, setBust] = useState(0)
@@ -65,6 +69,7 @@ export function CanvasBoard({ panelsInitiallyOpen = true, panelSize, headerLead 
     if (!project || !selectedShotId) return null
     return project.shots.find((s) => s.shot_id === selectedShotId) || null
   }, [project, selectedShotId])
+  const annotations = useBoardAnnotations(shot?.shot_id ?? null, reportError)
 
   const sourcePath = shot?.source_file_path || ''
   const previewPath = shot?.preview_image_path || shot?.image_path || ''
@@ -615,6 +620,12 @@ ${linkedTitle}`}
                   onLoad={() => setLoadFailed(false)}
                 />
               ) : null}
+              <AnnotationOverlay
+                items={annotations.items}
+                tool={annotationTool}
+                visible={annotationsVisible}
+                onChange={(next) => void annotations.persist(next)}
+              />
             </div>
           </div>
         ) : (hasPreview || hasCodexLayer || hasBoardBg) && !hasVisibleLayer ? (
@@ -660,6 +671,20 @@ ${linkedTitle}`}
             </div>
           </div>
         )}
+
+        {hasVisual && !editorActive ? (
+          <AnnotationPalette
+            tool={annotationTool}
+            visible={annotationsVisible}
+            count={annotations.items.length}
+            disabled={disabled || !annotations.ready}
+            onTool={(next) => { setAnnotationTool(next); if (next !== 'select') setAnnotationsVisible(true) }}
+            onToggleVisible={() => setAnnotationsVisible((value) => !value)}
+            onClear={() => {
+              if (window.confirm('Remove every annotation from this board?')) void annotations.persist([])
+            }}
+          />
+        ) : null}
 
         {/* Zoom HUD — appears when not in fit mode */}
         {hasVisual && !editorActive && !fitPreview && (

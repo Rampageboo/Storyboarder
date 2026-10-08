@@ -289,47 +289,47 @@ export class Scene3DEditor {
   _buildDom(): void {
     this.rootEl.innerHTML = `
       <div class="scene3d-layout">
-        <aside class="scene3d-sidebar">
-          <div class="scene3d-panel-title">当前分镜预览</div>
+        <aside class="scene3d-sidebar" hidden>
+          <div class="scene3d-panel-title">Selected board</div>
           <div class="scene3d-board-preview" data-board-preview>
             <img data-board-preview-img alt="" hidden />
-            <span class="scene3d-board-preview-empty" data-board-preview-empty>无预览 · Capture 后显示</span>
+            <span class="scene3d-board-preview-empty" data-board-preview-empty>No preview · capture to fill</span>
           </div>
           <div class="scene3d-board-label" data-board-label>—</div>
-          <div class="scene3d-panel-title">Blender 场景</div>
+          <div class="scene3d-panel-title">Blender scene</div>
           <div class="scene3d-blender-panel">
             <div class="scene3d-file-name" data-blend-name>scene3d/scene.blend</div>
-            <button type="button" data-action="open-blender" class="scene3d-import-btn">在 Blender 中打开</button>
-            <div class="scene3d-light-status">在 Blender 保存后自动更新预览</div>
+            <button type="button" data-action="open-blender" class="scene3d-import-btn">Open in Blender</button>
+            <div class="scene3d-light-status">Updates after each save in Blender</div>
             <label class="scene3d-check">
               <input type="checkbox" data-follow-camera checked />
-              跟随相机视角
+              Follow camera
             </label>
             <label class="scene3d-check">
               <input type="checkbox" data-object-colors checked />
-              对象随机色（低饱和，便于区分）
+              Object colours
             </label>
             <label class="scene3d-field">
-              <span>线框</span>
+              <span>Wireframe</span>
               <select data-wireframe-mode>
-                <option value="off">关闭</option>
-                <option value="on">标准（叠加边线）</option>
-                <option value="strong">强化（全边线 + 高亮）</option>
+                <option value="off">Off</option>
+                <option value="on">Edges</option>
+                <option value="strong">Strong</option>
               </select>
             </label>
             <label class="scene3d-field">
-              <span>程序补光</span>
+              <span>Fill light</span>
               <select data-program-lighting>
-                <option value="auto">自动（有灯：环境反射；无灯：全补光）</option>
-                <option value="on">始终开启（环境 + 柔光）</option>
-                <option value="off">关闭（仅 GLB 灯光）</option>
+                <option value="auto">Auto</option>
+                <option value="on">Always on</option>
+                <option value="off">Off</option>
               </select>
             </label>
             <div class="scene3d-light-status" data-light-status>—</div>
             <label class="scene3d-field">
-              <span>相机</span>
+              <span>Camera</span>
               <select data-camera-select disabled>
-                <option value="">（无相机）</option>
+                <option value="">No cameras</option>
               </select>
             </label>
           </div>
@@ -337,50 +337,49 @@ export class Scene3DEditor {
           <ul class="scene3d-outliner" data-outliner></ul>
           <div class="scene3d-panel-title scene3d-builtin-only">Transform</div>
           <div class="scene3d-transform-fields scene3d-builtin-only">
-            <label>位置 X <input type="number" step="0.1" data-tf="px" /></label>
-            <label>位置 Y <input type="number" step="0.1" data-tf="py" /></label>
-            <label>位置 Z <input type="number" step="0.1" data-tf="pz" /></label>
-            <label>旋转 X <input type="number" step="1" data-tf="rx" /></label>
-            <label>旋转 Y <input type="number" step="1" data-tf="ry" /></label>
-            <label>旋转 Z <input type="number" step="1" data-tf="rz" /></label>
-            <label>缩放 X <input type="number" step="0.1" min="0.01" data-tf="sx" /></label>
-            <label>缩放 Y <input type="number" step="0.1" min="0.01" data-tf="sy" /></label>
-            <label>缩放 Z <input type="number" step="0.1" min="0.01" data-tf="sz" /></label>
+            <label>Position X <input type="number" step="0.1" data-tf="px" /></label>
+            <label>Position Y <input type="number" step="0.1" data-tf="py" /></label>
+            <label>Position Z <input type="number" step="0.1" data-tf="pz" /></label>
+            <label>Rotation X <input type="number" step="1" data-tf="rx" /></label>
+            <label>Rotation Y <input type="number" step="1" data-tf="ry" /></label>
+            <label>Rotation Z <input type="number" step="1" data-tf="rz" /></label>
+            <label>Scale X <input type="number" step="0.1" min="0.01" data-tf="sx" /></label>
+            <label>Scale Y <input type="number" step="0.1" min="0.01" data-tf="sy" /></label>
+            <label>Scale Z <input type="number" step="0.1" min="0.01" data-tf="sz" /></label>
           </div>
         </aside>
-        <div class="panel-resize-handle scene3d-sidebar-resize" data-edge="right" data-sidebar-resize
+        <div class="panel-resize-handle scene3d-sidebar-resize" hidden data-edge="right" data-sidebar-resize
           role="separator" tabindex="0" aria-label="Resize Scene 3D sidebar" aria-orientation="vertical"
           title="Drag or use arrow keys to resize. Double-click or press Home to reset."></div>
         <div class="scene3d-main">
           <div class="scene3d-toolbar">
             <div class="scene3d-tool-group scene3d-builtin-only">
-              <button type="button" data-mode="translate" class="active" title="移动 (G)">移动</button>
-              <button type="button" data-mode="rotate" title="旋转 (R)">旋转</button>
-              <button type="button" data-mode="scale" title="缩放 (S)">缩放</button>
+              <button type="button" data-mode="translate" class="active" title="Move (G)">Move</button>
+              <button type="button" data-mode="rotate" title="Rotate (R)">Rotate</button>
+              <button type="button" data-mode="scale" title="Scale (S)">Scale</button>
             </div>
             <div class="scene3d-tool-group scene3d-builtin-only">
-              <button type="button" data-add="cube">立方体</button>
-              <button type="button" data-add="sphere">球体</button>
-              <button type="button" data-add="plane">平面</button>
-              <button type="button" data-add="cylinder">圆柱</button>
-              <button type="button" data-add="cone">圆锥</button>
+              <button type="button" data-add="cube">Cube</button>
+              <button type="button" data-add="sphere">Sphere</button>
+              <button type="button" data-add="plane">Plane</button>
+              <button type="button" data-add="cylinder">Cylinder</button>
+              <button type="button" data-add="cone">Cone</button>
             </div>
             <div class="scene3d-tool-group scene3d-blender-only" hidden>
-              <button type="button" data-action="play-pause">▶ 播放</button>
-              <button type="button" data-action="go-to-start" title="回到开头">⏮ 开头</button>
-              <button type="button" data-action="step-back" title="后退 0.1s">◀</button>
-              <button type="button" data-action="step-forward" title="前进 0.1s">▶</button>
-              <button type="button" data-action="capture-board">印到当前分镜</button>
-              <button type="button" data-action="free-view">自由视角</button>
+              <button type="button" data-action="play-pause">Play</button>
+              <button type="button" data-action="go-to-start" title="Back to start">Start</button>
+              <button type="button" data-action="step-back" title="Back 0.1 s">−0.1s</button>
+              <button type="button" data-action="step-forward" title="Forward 0.1 s">+0.1s</button>
+              <button type="button" data-action="free-view" title="Orbit freely instead of looking through the camera">Free view</button>
             </div>
             <div class="scene3d-tool-group scene3d-builtin-only">
-              <button type="button" data-action="delete" title="删除 (Del)">删除</button>
-              <button type="button" data-action="focus" title="聚焦 (F)">聚焦</button>
-              <button type="button" data-action="reset-view">重置视图</button>
+              <button type="button" data-action="delete" title="Delete (Del)">Delete</button>
+              <button type="button" data-action="focus" title="Focus (F)">Focus</button>
+              <button type="button" data-action="reset-view">Reset view</button>
             </div>
             <div class="scene3d-tool-group scene3d-tool-group-right scene3d-builtin-only">
-              <button type="button" data-action="load-shot-camera">加载镜头相机</button>
-              <button type="button" data-action="apply-shot-camera">保存镜头相机</button>
+              <button type="button" data-action="load-shot-camera">Load board camera</button>
+              <button type="button" data-action="apply-shot-camera">Save board camera</button>
             </div>
           </div>
           <div class="scene3d-viewport" data-viewport>
@@ -391,7 +390,7 @@ export class Scene3DEditor {
             <span data-time-display>0.0s / 0.0s</span>
           </div>
           <div class="scene3d-hint" data-hint>
-            拖动旋转 · 滚轮缩放 · 右键平移 · 自由视角/相机视角 · Blender 保存后自动更新
+            Drag to orbit · wheel to zoom · right-drag to pan · updates after each Blender save
           </div>
         </div>
       </div>
@@ -665,7 +664,7 @@ export class Scene3DEditor {
     if (persist) this._scheduleSceneSettingsSave()
     if (notify) {
       this.callbacks.onMessage?.(
-        `线框：${(WIREFRAME_MODE_LABELS as Record<string, string>)[this.wireframeMode] || this.wireframeMode}`,
+        `Wireframe: ${(WIREFRAME_MODE_LABELS as Record<string, string>)[this.wireframeMode] || this.wireframeMode}`,
       )
     }
   }
@@ -724,7 +723,7 @@ export class Scene3DEditor {
 
   async reloadBlenderScene(): Promise<void> {
     if (!this.sceneMeta?.file_path) {
-      this.callbacks.onMessage?.('Blender 尚未生成预览，请在 Blender 中保存场景。')
+      this.callbacks.onMessage?.('Blender has not produced a preview yet. Save the scene in Blender.')
       return
     }
     const savedTime = this.animationTime
@@ -744,10 +743,10 @@ export class Scene3DEditor {
       if (savedTime > 0) {
         this.setAnimationTime(resolveReloadAnimationTime(savedTime, this.animationDuration))
       }
-      this.callbacks.onMessage?.('已更新 Blender 预览（保留时间与显示设置）')
+      this.callbacks.onMessage?.('Preview updated from Blender.')
     } catch (error: unknown) {
       this.callbacks.onMessage?.(
-        `更新 Blender 预览失败：${error instanceof Error ? error.message : String(error)}`,
+        `Could not update the Blender preview: ${error instanceof Error ? error.message : String(error)}`,
       )
     } finally {
       this._suppressViewChange = false
@@ -874,7 +873,7 @@ export class Scene3DEditor {
     if (this.objectColorPreview) this._applyObjectColorPreview(true)
     if (persist) this._scheduleSceneSettingsSave()
     if (notify) {
-      this.callbacks.onMessage?.(`灯光设置：${this._programLightingReason()}`)
+      this.callbacks.onMessage?.(`Lighting: ${this._programLightingReason()}`)
     }
   }
 
@@ -946,8 +945,8 @@ export class Scene3DEditor {
     if (notify) {
       this.callbacks.onMessage?.(
         this.objectColorPreview
-          ? '已启用对象随机色（不受灯光影响，便于区分）'
-          : '已恢复 GLB 原始材质',
+          ? 'Object colours on'
+          : 'Original materials restored',
       )
     }
   }
@@ -1045,13 +1044,28 @@ export class Scene3DEditor {
     match.viewNode = this._resolveViewNode(match)
     this._renderOutliner()
     if (showMessage) {
-      this.callbacks.onMessage?.(`已切换相机：${match.name}`)
+      this.callbacks.onMessage?.(`Camera: ${match.name}`)
     }
     if (this.followCamera) {
       this._applyFollowCamera()
     }
     this._updateAnimationHint()
     if (showMessage) this._notifyViewChange()
+  }
+
+  /** Select a Blender camera by object name (the name the scene manifest lists). */
+  setActiveCameraByName(name: string): boolean {
+    const match = this.importedCameras.find((item: ThreeObject) => item.name === name)
+    if (!match) return false
+    // Persist: a later settings refresh re-applies the stored follow flag.
+    if (!this.followCamera) this.setFollowCamera(true)
+    this.setActiveCamera(match.id, false)
+    this._notifyViewChange()
+    return true
+  }
+
+  getActiveCameraName(): string {
+    return this.importedCameras.find((item: ThreeObject) => item.id === this.activeCameraId)?.name || ''
   }
 
   setFollowCamera(enabled: boolean, { persist = true } = {}): void {
@@ -1210,7 +1224,7 @@ export class Scene3DEditor {
 
   loadShotCamera(cameraData: Record<string, unknown> | null | undefined): void {
     if (!cameraData?.position) {
-      this.callbacks.onMessage?.('当前镜头没有保存的 3D 相机数据')
+      this.callbacks.onMessage?.('This board has no saved 3D camera.')
       return
     }
     this.setFollowCamera(false)
@@ -1294,7 +1308,7 @@ export class Scene3DEditor {
 
   toggleAnimationPlayback(): void {
     if (this.mode !== 'blender' || !this.mixer) {
-      this.callbacks.onMessage?.('请先导入带相机动画的 GLB')
+      this.callbacks.onMessage?.('This scene has no camera animation.')
       return
     }
     if (
@@ -1353,7 +1367,7 @@ export class Scene3DEditor {
 
   _updatePlayButton(): void {
     if (!this.playPauseBtn) return
-    this.playPauseBtn.textContent = this.isPlaying ? '⏸ 暂停' : '▶ 播放'
+    this.playPauseBtn.textContent = this.isPlaying ? 'Pause' : 'Play'
   }
 
   _updateTimelineUi(): void {

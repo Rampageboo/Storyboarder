@@ -21,7 +21,7 @@ export function buildOutlinerEntries(
 ): WorkspaceOutlinerEntry[] {
   if (mode === 'blender') {
     if (!importedCameras.length) {
-      return [{ kind: 'empty', label: '无相机' }]
+      return [{ kind: 'empty', label: 'No cameras' }]
     }
     return importedCameras.map((item) => ({
       kind: 'camera' as const,
@@ -54,7 +54,7 @@ export function renderOutlinerDom(outlinerEl: HTMLElement, entries: WorkspaceOut
     } else if (entry.kind === 'camera') {
       li.dataset.cameraId = entry.id
       li.className = entry.active ? 'active' : ''
-      li.textContent = `📷 ${entry.label}`
+      li.textContent = `${entry.label}`
     } else {
       li.dataset.objectId = entry.id
       li.className = entry.active ? 'active' : ''
@@ -70,7 +70,7 @@ export function buildCameraSelectOptions(
   importedCameras: WorkspaceImportedCamera[],
 ): WorkspaceCameraSelectOption[] {
   if (!importedCameras.length) {
-    return [{ value: '', label: '（无相机）' }]
+    return [{ value: '', label: 'No cameras' }]
   }
   return importedCameras.map((item) => ({ value: item.id, label: item.name }))
 }

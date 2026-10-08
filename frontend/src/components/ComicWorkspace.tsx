@@ -1,5 +1,8 @@
 import { useEffect, useMemo, useRef, useState, type PointerEvent, type CSSProperties } from 'react'
-import { ArrowClockwise, ArrowCounterClockwise, CaretDown, DownloadSimple } from '@phosphor-icons/react'
+import {
+  ArrowClockwise, ArrowCounterClockwise, BoundingBox, CaretDown, ChatCircleText, Crop, Cursor, DownloadSimple, FrameCorners, GridFour,
+  Knife, Polygon,
+} from '@phosphor-icons/react'
 import { addShot, duplicateShot } from '../api'
 import { useDetailsMenu } from '../hooks/useDetailsMenu'
 import { exportComic, openComicExport, previewComicPrompt, type ComicExportScope } from '../api/comic'
@@ -583,18 +586,24 @@ export function ComicWorkspace({ active }: { active: boolean }) {
       {message ? <div className="comic-message" role="status">{message}
         {lastExport ? <button type="button" onClick={() => { void openComicExport(lastExport).catch(reportError) }}>Open export</button> : null}</div> : null}
       {page && view === 'layout' ? <div className="comic-tools" role="group" aria-label="Panel design tools">
-        <button type="button" aria-pressed={tool === 'move'} className={tool === 'move' ? 'is-active' : ''}
-          disabled={disabled} title="Select, move and resize (V)" onClick={() => setTool('move')}>Select / move</button>
-        <button type="button" aria-pressed={tool === 'draw'} className={tool === 'draw' ? 'is-active' : ''}
-          disabled={disabled} title="Drag a new rectangular panel (R)" onClick={() => setTool('draw')}>Draw panel</button>
-        {(['shape', 'knife', 'crop'] as const).map(next => <button type="button" key={next} aria-pressed={tool === next}
-          className={tool === next ? 'is-active' : ''} disabled={disabled || !panel || panel.locked} onClick={() => { setLetteringId(''); setInspector('panel'); setTool(next) }}>
-          {next === 'shape' ? 'Edit vertices' : next === 'knife' ? 'Knife (K)' : 'Crop / pan (C)'}</button>)}
-        <button type="button" disabled={disabled} onClick={() => addLettering('speech')}>+ Dialogue</button>
-        <button type="button" aria-pressed={snap} className={snap ? 'is-active' : ''} disabled={disabled}
-          onClick={() => setSnap(value => !value)}>Snap · {comicGridSize}px</button>
-        <button type="button" aria-pressed={guides} onClick={() => setGuides(value => !value)}>Guides</button>
-        <button type="button" disabled={disabled || !page.panels.length} onClick={() => { setSelection(page.panels.map(item => item.id)); setLetteringId(''); setInspector('panel') }}>Select all</button>
+        <div className="seg-group comic-tool-group">
+          <button type="button" className="icon-btn" aria-pressed={tool === 'move'} aria-label="Select, move and resize"
+            disabled={disabled} title="Select, move and resize (V)" onClick={() => setTool('move')}><Cursor size={16} /></button>
+          <button type="button" className="icon-btn" aria-pressed={tool === 'draw'} aria-label="Draw panel"
+            disabled={disabled} title="Draw a rectangular panel (R)" onClick={() => setTool('draw')}><BoundingBox size={16} /></button>
+          {(['shape', 'knife', 'crop'] as const).map(next => {
+            const label = next === 'shape' ? 'Edit vertices' : next === 'knife' ? 'Knife (K)' : 'Crop / pan artwork (C)'
+            const Icon = next === 'shape' ? Polygon : next === 'knife' ? Knife : Crop
+            return <button type="button" key={next} className="icon-btn" aria-pressed={tool === next} aria-label={label} title={label}
+              disabled={disabled || !panel || panel.locked} onClick={() => { setLetteringId(''); setInspector('panel'); setTool(next) }}><Icon size={16} /></button>
+          })}
+        </div>
+        <button type="button" className="ghost" disabled={disabled} onClick={() => addLettering('speech')}><ChatCircleText size={16} />Dialogue</button>
+        <span className="stage-divider" aria-hidden="true" />
+        <button type="button" className="ghost" aria-pressed={snap} disabled={disabled} title="Snap to grid"
+          onClick={() => setSnap(value => !value)}><GridFour size={16} />Snap {comicGridSize}</button>
+        <button type="button" className="ghost" aria-pressed={guides} title="Safe-area and binding guides" onClick={() => setGuides(value => !value)}><FrameCorners size={16} />Guides</button>
+        <button type="button" className="ghost" disabled={disabled || !page.panels.length} onClick={() => { setSelection(page.panels.map(item => item.id)); setLetteringId(''); setInspector('panel') }}>Select all</button>
         <label>Zoom<select aria-label="Canvas zoom" value={zoom} onChange={event => setZoom(Number(event.target.value))}>
           <option value={.75}>75% of fit</option><option value={1}>Fit</option><option value={1.5}>150% of fit</option><option value={2}>200% of fit</option>
         </select></label>
@@ -624,7 +633,7 @@ export function ComicWorkspace({ active }: { active: boolean }) {
       host=".comic-workspace" target=".comic-properties" height={{ property: '--comic-properties-height', min: 160, max: 520, fraction: 0.55 }} />
     <aside className="comic-properties">
       {page ? <>
-        <div className="comic-inspector-tabs" role="tablist" aria-label="Comic inspector">
+        <div className="comic-inspector-tabs tab-row" role="tablist" aria-label="Comic inspector">
           {(['page', 'panel', 'lettering', 'ai'] as const).map(tab => <button key={tab} type="button" role="tab"
             aria-selected={inspector === tab} aria-controls={`comic-inspector-${tab}`} id={`comic-tab-${tab}`}
             className={inspector === tab ? 'is-active' : ''} disabled={drawingActive || (tab === 'ai' && !panel)}

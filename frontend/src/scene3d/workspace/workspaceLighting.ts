@@ -46,35 +46,35 @@ export function getEnvMapIntensity(ctx: ProgramLightingContext): number {
 }
 
 export function programLightingReason(ctx: ProgramLightingContext): string {
-  if (ctx.mode === 'on') return '手动：环境 + 柔光'
-  if (ctx.mode === 'off') return '手动：仅 GLB 灯光'
-  if (ctx.importedLightCount > 0) return `自动：GLB ${ctx.importedLightCount} 盏灯 + 弱环境反射`
-  return '自动：GLB 无灯，全程序补光'
+  if (ctx.mode === 'on') return 'Manual: environment + fill'
+  if (ctx.mode === 'off') return 'Manual: Blender lights only'
+  if (ctx.importedLightCount > 0) return `Auto: ${ctx.importedLightCount} Blender light(s) + soft reflection`
+  return 'Auto: no Blender lights, full fill'
 }
 
 export function programLightingModeLabel(mode: ProgramLightingMode): string {
   switch (mode) {
     case 'on':
-      return '始终开启'
+      return 'Always on'
     case 'off':
-      return '关闭'
+      return 'Off'
     default:
-      return '自动'
+      return 'Auto'
   }
 }
 
 export function buildLightStatusText(ctx: ProgramLightingContext): string {
   const exported =
     ctx.importedLightCount > 0
-      ? `GLB 已导出 ${ctx.importedLightCount} 盏灯`
-      : 'GLB 未导出灯光（导出时请勾选 Punctual Lights）'
-  const ibl = shouldUseProgramIbl(ctx) && !ctx.objectColorPreview ? '环境反射：开' : '环境反射：关'
+      ? `${ctx.importedLightCount} Blender light(s)`
+      : 'No Blender lights'
+  const ibl = shouldUseProgramIbl(ctx) && !ctx.objectColorPreview ? 'Reflection on' : 'Reflection off'
   const fill = shouldUseProgramFill(ctx)
-    ? '柔光补光：开'
+    ? 'Fill on'
     : shouldUseProgramWeakFill(ctx)
-      ? '柔光补光：弱'
-      : '柔光补光：关'
-  const colors = ctx.objectColorPreview ? '对象色：开（不受灯光影响）' : '对象色：关'
+      ? 'Fill soft'
+      : 'Fill off'
+  const colors = ctx.objectColorPreview ? 'Object colours on' : 'Object colours off'
   return `${exported} · ${programLightingModeLabel(ctx.mode)} · ${ibl} · ${fill} · ${colors}`
 }
 

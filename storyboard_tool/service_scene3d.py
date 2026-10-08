@@ -7,7 +7,7 @@ from typing import Any
 
 from fastapi import HTTPException
 
-from . import app_state, blender_bridge, bpy_viewport, generation_service, project_manager, scene3d
+from . import app_state, blender_bridge, generation_service, project_manager, scene3d
 from .errors import AppErrorCode, app_error
 from .mutation_executor import MutationPolicy, project_mutation
 from .upload_payload import normalize_upload_bytes as _normalize_upload_bytes
@@ -16,6 +16,24 @@ logger = logging.getLogger(__name__)
 
 
 class Scene3DServiceMixin:
+    def method_scene3d_session(self) -> dict[str, Any]:
+        """Read-only snapshot of the external Blender session."""
+        return blender_bridge.status(self.app)
+
+    def method_resolve_scene3d_session(self, action: str) -> dict[str, Any]:
+        try:
+            return blender_bridge.resolve_conflict(self.app, action)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    def method_scene3d_manifest(self, scene3d_id: str) -> dict[str, Any]:
+        project = app_state._require_project(self.app)
+        try:
+            scene3d._validate_scene_id(scene3d_id)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return blender_bridge.read_manifest(project, scene3d_id)
+
     @project_mutation(MutationPolicy.LAYOUT2)
     def method_open_blender_scene(self) -> dict[str, Any]:
         project = app_state._require_project(self.app)
@@ -32,11 +50,7 @@ class Scene3DServiceMixin:
                 "blender_bridge": existing,
                 **app_state._project_payload(project, self.app.state.dirty),
             }
-        manager = bpy_viewport.manager_for_app(self.app)
         try:
-            bpy_viewport.require_current_context(self.app)
-            manager.save_if_running()
-            bpy_viewport.stop_worker(self.app)
             active_scene = scene3d.ensure_active_scene(project)
             attached = str(active_scene.get("blend_file_path") or "").strip()
             blend_path = (

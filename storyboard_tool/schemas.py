@@ -303,6 +303,10 @@ class Scene3DCreateRequest(BaseModel):
     keywords: list[str] | None = None
 
 
+class Scene3DSessionResolveRequest(BaseModel):
+    action: Literal["use_blender", "discard"]
+
+
 class Scene3DUpdateRequest(BaseModel):
     title: str | None = None
     description: str | None = None

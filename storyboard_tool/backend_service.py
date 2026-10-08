@@ -15,7 +15,6 @@ from fastapi import FastAPI, HTTPException
 from . import (
     app_state,
     blender_bridge,
-    bpy_viewport,
     comic,
     generation_service,
     project_manager,
@@ -165,6 +164,56 @@ def _focus_desktop_window(
     }
 
 
+_ANNOTATION_SHAPES = {"arrow", "line", "box", "circle", "highlight", "text"}
+_ANNOTATION_LIMIT = 500
+_HEX_COLOR = re.compile(r"^#[0-9a-fA-F]{6}$")
+
+
+def _annotation_point(value: Any) -> dict[str, float] | None:
+    if not isinstance(value, dict):
+        return None
+    try:
+        x, y = float(value.get("x")), float(value.get("y"))
+    except (TypeError, ValueError):
+        return None
+    if x != x or y != y:  # NaN
+        return None
+    return {"x": min(1.0, max(0.0, x)), "y": min(1.0, max(0.0, y))}
+
+
+def _normalize_annotations(items: Any) -> list[dict[str, Any]]:
+    """Keep the board annotation file well formed.
+
+    Known shapes get clamped 0..1 points, bounded text and a valid colour; a known
+    shape without usable points is dropped. Items of other types are kept as-is
+    so data written by other tools survives a round trip.
+    """
+    if not isinstance(items, list):
+        return []
+    result: list[dict[str, Any]] = []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        kind = str(item.get("type") or "")
+        if kind not in _ANNOTATION_SHAPES:
+            result.append(item)
+        else:
+            start = _annotation_point(item.get("start"))
+            end = _annotation_point(item.get("end")) or start
+            if start is None or end is None:
+                continue
+            clean: dict[str, Any] = {**item, "type": kind, "start": start, "end": end}
+            if kind == "text":
+                clean["text"] = str(item.get("text") or "").strip()[:500] or "Text"
+            color = item.get("color")
+            if color is not None and not (isinstance(color, str) and _HEX_COLOR.match(color)):
+                clean.pop("color", None)
+            result.append(clean)
+        if len(result) >= _ANNOTATION_LIMIT:
+            break
+    return result
+
+
 class StoryboardBackendService(Scene2DServiceMixin, Scene3DServiceMixin, ExportServiceMixin):
     """Business logic shared by every REST route and the desktop bridge."""
 
@@ -294,7 +343,6 @@ class StoryboardBackendService(Scene2DServiceMixin, Scene3DServiceMixin, ExportS
             status = 409 if exc.stage in {
                 "writer_quiesce",
                 "external_blender_release",
-                "builtin_blender_release",
             } else 500
             raise app_error(
                 AppErrorCode.PROJECT_SAVE_FAILED,
@@ -485,7 +533,6 @@ class StoryboardBackendService(Scene2DServiceMixin, Scene3DServiceMixin, ExportS
             status = 409 if exc.stage in {
                 "writer_quiesce",
                 "external_blender_release",
-                "builtin_blender_release",
             } else 400 if exc.stage in {"candidate_open", "candidate_validate"} else 500
             raise app_error(
                 AppErrorCode.PROJECT_OPEN_FAILED,
@@ -509,7 +556,6 @@ class StoryboardBackendService(Scene2DServiceMixin, Scene3DServiceMixin, ExportS
             status = 409 if exc.stage in {
                 "writer_quiesce",
                 "external_blender_release",
-                "builtin_blender_release",
             } else 400 if exc.stage in {"candidate_open", "candidate_validate"} else 500
             raise app_error(
                 AppErrorCode.PROJECT_OPEN_FAILED,
@@ -522,10 +568,7 @@ class StoryboardBackendService(Scene2DServiceMixin, Scene3DServiceMixin, ExportS
     def method_save_project(self) -> dict[str, Any]:
         project = app_state._require_project(self.app)
         try:
-            blender_bridge.status(self.app)
-            manager = bpy_viewport.manager_for_app(self.app)
-            bpy_viewport.require_current_context(self.app)
-            manager.save_if_running()
+            blender_bridge.sync_now(self.app)
             project_manager.save_project(project)
         except Exception as exc:
             logger.exception("Failed to save project")
@@ -553,7 +596,6 @@ class StoryboardBackendService(Scene2DServiceMixin, Scene3DServiceMixin, ExportS
                 status = 409 if exc.stage in {
                     "writer_quiesce",
                     "external_blender_release",
-                    "builtin_blender_release",
                 } else 500
                 raise app_error(
                     AppErrorCode.PROJECT_SAVE_FAILED,
@@ -566,7 +608,6 @@ class StoryboardBackendService(Scene2DServiceMixin, Scene3DServiceMixin, ExportS
             blender_bridge.require_released(self.app, "using Save As")
         except ValueError as exc:
             raise app_error(AppErrorCode.PROJECT_SAVE_FAILED, str(exc), status=409) from exc
-        bpy_viewport.stop_worker(self.app)
         try:
             saved_project = project_manager.save_project_as(project, Path(destination))
         except Exception as exc:
@@ -619,7 +660,6 @@ class StoryboardBackendService(Scene2DServiceMixin, Scene3DServiceMixin, ExportS
             status = 409 if exc.stage in {
                 "writer_quiesce",
                 "external_blender_release",
-                "builtin_blender_release",
             } else 500
             raise app_error(
                 AppErrorCode.PROJECT_SAVE_FAILED,
@@ -1409,7 +1449,7 @@ class StoryboardBackendService(Scene2DServiceMixin, Scene3DServiceMixin, ExportS
         project = app_state._require_project(self.app)
         shot = app_state._find_shot(project, shot_id)
         path = app_state._annotation_path(project, shot)
-        payload = annotations if isinstance(annotations, list) else []
+        payload = _normalize_annotations(annotations)
         project_manager._atomic_write_text(path, json.dumps(payload, indent=2))
         return {"annotations": payload}
 

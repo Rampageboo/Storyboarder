@@ -138,7 +138,8 @@
   flex: 1 1 0;
   min-height: 0;
   position: relative;
-  padding: 28px 40px;
+  /* Left gutter keeps the annotation palette clear of the board. */
+  padding: 28px 40px 28px 72px;
   background: var(--bg-well);
   overflow: auto;
 }

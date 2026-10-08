@@ -483,6 +483,31 @@ class TestAnnotationPersistence(unittest.TestCase):
         self.assertEqual(response.json()["annotations"], payload)
         self.assertEqual(json.loads(self._annotation_path().read_text(encoding="utf-8")), payload)
 
+    def test_save_annotations_normalizes_known_shapes(self):
+        payload = [
+            {"type": "arrow", "start": {"x": -0.5, "y": 0.2}, "end": {"x": 1.7, "y": 0.4}, "color": "#ff4d2e"},
+            {"type": "box", "start": {"x": "bad"}, "end": {"x": 0.1, "y": 0.1}},
+            {"type": "text", "start": {"x": 0.5, "y": 0.5}, "text": "  " + "x" * 600, "color": "red"},
+            {"type": "legacy", "points": [[1, 2]]},
+        ]
+
+        response = _quiet(lambda: self.client.put(
+            f"/api/shots/{self.shot_id}/annotations",
+            json={"annotations": payload},
+        ))
+
+        self.assertEqual(response.status_code, 200)
+        saved = response.json()["annotations"]
+        self.assertEqual(len(saved), 3)
+        self.assertEqual(saved[0]["start"], {"x": 0.0, "y": 0.2})
+        self.assertEqual(saved[0]["end"], {"x": 1.0, "y": 0.4})
+        self.assertEqual(saved[0]["color"], "#ff4d2e")
+        self.assertEqual(saved[1]["type"], "text")
+        self.assertEqual(saved[1]["end"], {"x": 0.5, "y": 0.5})
+        self.assertEqual(len(saved[1]["text"]), 500)
+        self.assertNotIn("color", saved[1])
+        self.assertEqual(saved[2], {"type": "legacy", "points": [[1, 2]]})
+
     def test_missing_annotation_file_is_recreated_as_empty_list(self):
         path = self._annotation_path()
         path.unlink()

@@ -17,6 +17,11 @@ export type Scene3DEditorInstance = {
   pauseAnimation?: () => void
   setFollowCamera?: (enabled: boolean, options?: Record<string, unknown>) => void
   setActiveCamera?: (cameraId: string, showMessage?: boolean) => void
+  setActiveCameraByName?: (name: string) => boolean
+  getActiveCameraName?: () => string
+  setWireframeMode?: (mode: string, options?: { persist?: boolean; notify?: boolean }) => void
+  setProgramLightingMode?: (mode: string, options?: { persist?: boolean; notify?: boolean }) => void
+  setObjectColorPreview?: (enabled: boolean, options?: { persist?: boolean; notify?: boolean }) => void
   _resize?: () => void
   dispose?: () => void
 }
