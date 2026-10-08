@@ -574,6 +574,9 @@ def convert_active_project_to_layout2(app: FastAPI, requested_document: Path) ->
 
 
 def _project_payload(project: Project, dirty: bool) -> dict[str, Any]:
+    from .comic import get_document
+    from .story_graph import get_graph
+
     cache = preview_analysis_cache.load_cache(project.metadata_root)
     return {
         "project_path": str(project.visible_path),
@@ -586,6 +589,8 @@ def _project_payload(project: Project, dirty: bool) -> dict[str, Any]:
         "can_convert_to_layout2": project_manager.can_convert_to_layout2(project),
         "dirty": dirty,
         "settings": project.settings,
+        "story_graph": get_graph(project),
+        "comic_document": get_document(project),
         "statuses": list(SHOT_STATUSES),
         "shots": [_shot_payload(project, shot, cache) for shot in project.shots],
     }
@@ -798,6 +803,11 @@ def _dialog_initial_dir(app: FastAPI, kind: str) -> str:
 
 def _remember_recent(project: Project) -> None:
     """Update session-facing recents without rewriting the opened document."""
+    if project.layout == LAYOUT_2:
+        # _persist_app_session records this path in the application session.
+        # Canonical Layout 2 settings cannot change after publication without
+        # a metadata revision, and remembering a path is not a document edit.
+        return
     recent = [str(project.visible_path)]
     for item in project.settings.get("recent_projects", []):
         if item not in recent:
@@ -1006,14 +1016,15 @@ def _persist_app_session(app: FastAPI, *, selected_shot_id: str | None = None) -
     project = app.state.project
     if project is None:
         return
-    # Recents are app-level, but each document also carries its own list. Merge
-    # both so Home keeps showing documents opened before this one, instead of
-    # being reset to whatever the newest document happened to remember.
+    # Layout 2 recents belong to the session. Re-merging historical document
+    # entries would resurrect cards the user already forgot. Legacy documents
+    # retain their existing embedded-list compatibility behavior.
     previous = session_store.read_session(app.state.base_dir).get("recent_projects", [])
+    document_recents = project.settings.get("recent_projects", []) if project.layout != LAYOUT_2 else []
     merged = recents.dedupe(
         [
             str(project.visible_path),
-            *[str(item) for item in project.settings.get("recent_projects", [])],
+            *[str(item) for item in document_recents],
             *[str(item) for item in previous if isinstance(item, (str, Path))],
         ]
     )

@@ -70,7 +70,20 @@ class TestFilenameSuffix:
 
     def test_long_gappy_selection_stays_a_readable_length(self) -> None:
         suffix = board_range.filename_suffix([0, 2, 4, 6, 8], 10)
-        assert suffix == "_boards-001-009-selection"
+        assert suffix.startswith("_boards-001-009-selection-")
+        assert len(suffix) <= 48
+
+    def test_long_selections_with_same_endpoints_do_not_share_a_name(self) -> None:
+        assert board_range.filename_suffix([0, 2, 4, 8], 10) != board_range.filename_suffix([0, 3, 6, 8], 10)
+
+    def test_equivalent_specs_keep_the_same_name(self) -> None:
+        first = board_range.parse("1, 3, 5, 9", 10)
+        second = board_range.parse("9, 5, 3, 1, 3", 10)
+        assert board_range.filename_suffix(first, 10) == board_range.filename_suffix(second, 10)
+
+    def test_unselected_boards_do_not_change_the_selection_name(self) -> None:
+        indexes = [0, 2, 4, 8]
+        assert board_range.filename_suffix(indexes, 10) == board_range.filename_suffix(indexes, 20)
 
     def test_distinct_ranges_get_distinct_names(self) -> None:
         # Two exports in one session must not silently overwrite each other.

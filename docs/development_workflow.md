@@ -30,8 +30,9 @@ Steps in order:
 1. Python syntax check (`py_compile`) on all core backend modules
 2. Migration validator (`scripts/validate_migration.py`) — checks static file tree, route expectations, and desktop-shell invariants
 3. Full test suite (`pytest tests/`)
-4. Frontend lint (`eslint`)
-5. Frontend build (`vite build`)
+4. Frontend lifecycle, command and history regression tests (`npm test`)
+5. Frontend lint (`eslint`)
+6. Frontend build (`vite build`)
 
 ### Backend mode
 ```bash
@@ -47,7 +48,7 @@ python scripts/verify_dev.py --frontend
 ```
 Use when you have only changed TypeScript, CSS, or frontend config files.
 
-Steps: eslint → vite build.
+Steps: lifecycle/command/history tests → eslint → vite build.
 
 ### Fast mode
 ```bash
@@ -55,7 +56,7 @@ python scripts/verify_dev.py --fast
 ```
 Use during active development for a quick sanity check between commits. Runs the smoke test suite instead of the full test suite, and skips the frontend build.
 
-Steps: py_compile → validate_migration → pytest smoke → eslint.
+Steps: py_compile → validate_migration → pytest smoke → lifecycle/command/history tests → eslint.
 
 When to use fast vs full:
 - **fast** — iterating on a feature mid-branch; checking your last change didn't break imports or core routes
@@ -138,12 +139,22 @@ python -m pytest tests/
 # Smoke tests only
 python -m pytest tests/test_smoke.py
 
+# Frontend state/lifecycle tests (Windows)
+cd frontend && npm.cmd test
+
 # Frontend lint (Windows)
 cd frontend && npm.cmd run lint
 
 # Frontend build (Windows)
 cd frontend && npm.cmd run build
 ```
+
+State/lifecycle tests run with Node's test runner and the installed TypeScript
+compiler through `frontend/tests/typescript-loader.mjs`; no separate browser or
+test framework is required for these deterministic async tests. They cover
+pending drafts, failure retention, overlapping actions and document lifetimes.
+Use the manual GUI smoke procedure with isolated project data for rendered integration behavior;
+these tests do not substitute for Photoshop, Blender or desktop-host acceptance.
 
 ---
 

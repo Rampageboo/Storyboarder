@@ -8,6 +8,7 @@ Domain module: no FastAPI imports, no app state.
 """
 from __future__ import annotations
 
+import hashlib
 import re
 
 # Accept the dashes a user actually types, including what Word/Docs autocorrects
@@ -72,7 +73,7 @@ def is_contiguous(indexes: list[int]) -> bool:
 
 
 def filename_suffix(indexes: list[int], total: int) -> str:
-    """Name an export after the boards in it, so ranges never overwrite each other.
+    """Name an export after its selection, fingerprinting long noncontiguous sets.
 
     Empty when the selection is the whole storyboard — that output keeps its
     plain name.
@@ -85,7 +86,10 @@ def filename_suffix(indexes: list[int], total: int) -> str:
         return f"_boards-{indexes[0] + 1:03d}-{indexes[-1] + 1:03d}"
     if len(indexes) <= _MAX_SUFFIX_BOARDS:
         return "_boards-" + "+".join(f"{index + 1:03d}" for index in indexes)
-    return f"_boards-{indexes[0] + 1:03d}-{indexes[-1] + 1:03d}-selection"
+    # Endpoints alone identify a contiguous range, not a gappy selection.
+    selection = ",".join(str(index) for index in indexes).encode("ascii")
+    fingerprint = hashlib.blake2s(selection, digest_size=8).hexdigest()
+    return f"_boards-{indexes[0] + 1:03d}-{indexes[-1] + 1:03d}-selection-{fingerprint}"
 
 
 def describe(indexes: list[int], total: int) -> str:

@@ -7,9 +7,8 @@ Handles the storage-level concerns of a project's non-shot files:
 - Project file modification-time tracking for change detection.
 
 Shot metadata storage lives in storyboard_tool.shot_store (shots.json, shots.csv).
-Settings normalization that needs reference_segments is imported lazily inside
-load_settings to avoid a circular import: reference_segments imports project_manager
-at module level, so project_storage must not trigger that chain at import time.
+Reference normalization lives in reference_metadata, a pure metadata module.
+Loading settings does not import project or reference workflow services.
 """
 from __future__ import annotations
 
@@ -22,6 +21,7 @@ from typing import Any
 from .models import Project
 from .project_layout import PROJECT_JSON_VERSION, resolve_root_child
 from .shot_store import shots_csv_mtime, shots_json_mtime
+from .reference_metadata import ensure_reference_library, normalize_reference_links
 
 DEFAULT_SETTINGS: dict = {
     "autosave": True,
@@ -82,15 +82,7 @@ def atomic_write_json(path: Path, data: Any) -> None:
 
 
 def load_settings(project: Project) -> dict:
-    """Read and normalize settings.json; returns DEFAULT_SETTINGS copy on failure.
-
-    reference_segments is imported lazily here to avoid a circular import
-    (reference_segments imports project_manager at module level).
-    """
-    # Lazy import: reference_segments imports project_manager at module level, so
-    # importing it here at call time (not at project_storage import time) avoids
-    # triggering that circular chain before project_manager is fully initialized.
-    from .reference_segments import ensure_reference_library, normalize_reference_links  # noqa: PLC0415
+    """Read and normalize settings.json; returns DEFAULT_SETTINGS copy on failure."""
 
     if not project.settings_path.exists():
         return DEFAULT_SETTINGS.copy()

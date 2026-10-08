@@ -17,10 +17,22 @@ import type {
   Shot,
 } from '../types'
 import { shotDisplayLabel } from '../utils/shotDisplay'
+import { PanelResizeHandle } from './PanelResizeHandle'
 import './FloatingLayersPanel.css'
 
 export type CanvasLayerId = 'background' | 'codex' | 'artwork'
 type DispatchScope = 'current' | 'queued' | 'all'
+
+function FloatingResizeHandles({ kind }: { kind: 'layers' | 'queue' }) {
+  const label = kind === 'layers' ? 'Layers' : 'Queue'
+  const width = { property: `--${kind}-panel-width`, min: 220, max: 720 }
+  const height = { property: `--${kind}-panel-height`, min: kind === 'layers' ? 180 : 260, max: 1100 }
+  return <>
+    <PanelResizeHandle panelKey={kind} label={`Resize ${label} width`} edge="left" bounds=".floating-panel-stack" width={width} />
+    <PanelResizeHandle panelKey={kind} label={`Resize ${label} height`} edge="bottom" bounds=".floating-panel-stack" height={height} />
+    <PanelResizeHandle panelKey={kind} label={`Resize ${label}`} edge="bottom-left" bounds=".floating-panel-stack" width={width} height={height} />
+  </>
+}
 
 // Display mirror of the backend generation_service._default_mode_for_status: the
 // precision mode is driven by the shot's status, not chosen separately.
@@ -169,19 +181,23 @@ export function FloatingLayersPanel({
     if (payload) replaceProject(payload, selectedShotIdRef.current)
   }, [replaceProject])
 
-  const loadRequests = useCallback(async (quiet = false) => {
+  const loadRequests = useCallback(() => {
     const revision = ++requestListRevisionRef.current
-    if (!quiet) setLoading(true)
-    try {
-      const response = await listGenerationRequests()
-      if (revision !== requestListRevisionRef.current) return
-      setRequests(response.requests)
-      setLoadedProjectPath(projectPath)
-    } catch (error) {
-      if (revision === requestListRevisionRef.current) reportError(error)
-    } finally {
-      if (revision === requestListRevisionRef.current) setLoading(false)
-    }
+    // Initial/project-change loading is derived from loadedProjectPath below.
+    // Background refresh keeps the current queue visible; explicit Refresh owns
+    // its busy state in refreshResults.
+    return listGenerationRequests()
+      .then(response => {
+        if (revision !== requestListRevisionRef.current) return
+        setRequests(response.requests)
+        setLoadedProjectPath(projectPath)
+      })
+      .catch(error => {
+        if (revision === requestListRevisionRef.current) reportError(error)
+      })
+      .finally(() => {
+        if (revision === requestListRevisionRef.current) setLoading(false)
+      })
   }, [projectPath, reportError])
 
   useEffect(() => {
@@ -249,7 +265,7 @@ export function FloatingLayersPanel({
     try {
       if (destination === 'queue' && selectedShotIds.length > 1) {
         await sendSelectedShotsToQueue()
-        await loadRequests(true)
+        await loadRequests()
         setNotice(`${selectedShotIds.length} selected shots added to Queue.`)
         return
       }
@@ -260,7 +276,7 @@ export function FloatingLayersPanel({
         clearQueueOnResult: shouldClearQueueOnResult,
       })
       replaceWithCurrentSelection(response.project)
-      await loadRequests(true)
+      await loadRequests()
       if (destination === 'codex' && response.codex_prompt) {
         const copied = await copyTextWithTimeout(response.codex_prompt)
         const backendName = requestProvider === 'stable_diffusion' ? 'Stable Diffusion' : 'Codex'
@@ -376,7 +392,7 @@ export function FloatingLayersPanel({
         artifact_path: artifactPath,
       })
       replaceWithCurrentSelection(response.project)
-      await loadRequests(true)
+      await loadRequests()
       setNotice('Result placed on the shot Codex layer.')
     } catch (error) {
       reportError(error)
@@ -389,6 +405,7 @@ export function FloatingLayersPanel({
     <div className={`floating-panel-stack ${showLayers && showQueue ? 'is-split' : 'is-single'}`}>
       {showLayers ? (
       <aside className="floating-island floating-layers-island" aria-label="Layers">
+      <FloatingResizeHandles kind="layers" />
       <header className="floating-panel-header">
         <div>
           <strong>Layers</strong>
@@ -437,6 +454,7 @@ export function FloatingLayersPanel({
 
       {showQueue ? (
       <aside className="floating-island floating-queue-island" aria-label="Generation queue">
+      <FloatingResizeHandles kind="queue" />
       <section className="floating-panel-section floating-queue-section" aria-labelledby="floating-queue-heading">
         <div className="floating-section-heading floating-queue-heading">
           <span id="floating-queue-heading">Queue</span>

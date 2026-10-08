@@ -11,14 +11,16 @@ export function ShotThumb({
   hasImage,
   hasBg = false,
   hasCodex = false,
+  fullResolution = false,
 }: {
   shotId: string
   version: string | number
   hasImage: boolean
   hasBg?: boolean
   hasCodex?: boolean
+  fullResolution?: boolean
 }) {
-  const resetKey = `${shotId}:${String(version)}:${hasImage ? '1' : '0'}:${hasBg ? '1' : '0'}:${hasCodex ? '1' : '0'}`
+  const resetKey = `${shotId}:${String(version)}:${hasImage ? '1' : '0'}:${hasBg ? '1' : '0'}:${hasCodex ? '1' : '0'}:${fullResolution}`
   const [prevResetKey, setPrevResetKey] = useState(resetKey)
   const [stage, setStage] = useState<ThumbStage>(hasImage ? (hasBg ? 'image' : 'thumb') : hasBg ? 'background' : 'failed')
   const [artworkLoaded, setArtworkLoaded] = useState(false)
@@ -38,9 +40,9 @@ export function ShotThumb({
   const codexSrc = hasCodex ? `${shotCodexLayerUrl(shotId)}?v=${versionQuery}` : ''
   const artworkSrc = useMemo(() => {
     if (!hasImage || stage === 'failed' || stage === 'background') return ''
-    const url = hasBg || stage === 'image' ? shotImageUrl(shotId) : shotThumbnailUrl(shotId)
+    const url = hasBg || fullResolution || stage === 'image' ? shotImageUrl(shotId) : shotThumbnailUrl(shotId)
     return `${url}?v=${versionQuery}`
-  }, [hasBg, hasImage, shotId, stage, versionQuery])
+  }, [hasBg, fullResolution, hasImage, shotId, stage, versionQuery])
   const showImage = !!backgroundSrc || !!codexSrc || !!artworkSrc
   const artworkVisible = artworkLoaded || !backgroundSrc
 

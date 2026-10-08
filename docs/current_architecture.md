@@ -1,6 +1,6 @@
 # Storyboarder — Current Architecture
 
-> Last updated: 2026-06-19 (asset lifecycle boundaries)
+> Boundary update: 2026-10-03 (project editing ownership, scene service adapters, operation-local policies and reference metadata isolation).
 > Reflects the codebase after the desktop-only refactor, architecture cleanup,
 > Photoshop plugin API, shot-service extraction, and project-transaction safety
 > commits. For earlier history see [code-review-and-refactor.md](code-review-and-refactor.md).
@@ -177,7 +177,16 @@ The `base: '/react/'` setting means all Vite-generated asset paths are prefixed 
 
 | Module | Role |
 |---|---|
-| `state/ProjectContext.tsx` | Project server state, selected shot, dirty shot drafts, project busy/error flags, and central project actions that replace the project payload |
+| `state/ProjectContext.tsx` | Public project facade, selection reconciliation, response acceptance and integration of domain hooks |
+| `state/projectLifecycle.ts` | Framework-independent action exclusion, domain write serialization, registered draft draining and document response lifetimes |
+| `state/useProjectLifecycle.ts` | React adapter for canonical project state, guarded updates, drawing state and action busy/error state |
+| `state/projectResponses.ts` | Payload identity/revision checks, Comic response side effects and failed-draft reload recovery |
+| `state/useProjectActions.ts` | New/Open/Close/Save/Save As/Convert workflows, including settling drafts after native file dialogs |
+| `state/useShotDrafts.ts` | Per-shot draft buffers and canonical Shot update handling |
+| `state/projectHistory.ts`, `state/useProjectHistory.ts` | Shared bounded board/reference history; React subscription and lifecycle-gated undo/redo |
+| `state/boardCommands.ts`, `state/useBoardCommands.ts` | Board mutation sequences and inverse construction, with project/selection reads after draft draining |
+| `state/referenceCommands.ts`, `state/useReferenceSegments.ts` | Reference snapshot/token inverses and reference range/inspect UI state |
+| `state/useComicDocument.ts` | Comic document drafts, domain undo/redo and save/reload handling using the shared coordinator |
 | `state/useProject.ts` | Public hook for reading project state and calling ProjectContext actions |
 | `state/LiveBridgeContext.tsx` | Bridge heartbeat/status polling; delegates project refreshes caused by plugin revisions back to ProjectContext |
 | `state/liveBridgeUtils.ts` | Bridge-specific context hook and display helpers |
@@ -186,7 +195,12 @@ The `base: '/react/'` setting means all Vite-generated asset paths are prefixed 
 
 Frontend state ownership is intentionally narrow:
 
-- `ProjectContext` owns server-backed project payloads, selected-shot behavior, dirty/saving shot drafts, project fetch/save busy state, and project-level actions such as add/delete/sync/open selected shot.
+- `ProjectContext` remains the public interface. The lifecycle adapter owns canonical project replacement and document lifetimes; Shot and Comic hooks own their drafts, with immediate draft updates independent of React rendering.
+- Save and transition operations share an exclusive action gate. Registered drafts drain before an action continues, including edits arriving during a save. A failed save retains the draft and prevents navigation. Native dialogs settle drafts again after the user chooses a path; drawing retains its explicit Save drawing / close requirement.
+- Domain writes share one queue. Server replies are applied to their owned fields and documented side effects, rather than replacing unrelated domain state. A new document lifetime, including reopening the same path, invalidates old callbacks. Payload identity/revision checks and read tickets prevent background replies from overwriting a newer accepted project state, including legacy documents whose storage revision remains zero.
+- Comic saves propagate server-side generation freshness changes while keeping unrelated Shot fields. **Discard draft and reload** waits for any in-flight save but does not retry an invalid/conflicting draft; a failed GET retains the draft so recovery remains possible.
+- Board and reference commands own their inverses and share one 50-entry history. Public commands enter the lifecycle gate once, then capture current source state after drafts drain. Failed undo/redo leaves the stack unchanged; clearing or replacing history invalidates an in-flight replay. A successful server mutation whose history became invalid triggers a fresh guarded read for the same document, without reviving that history or committing its old reference token. Board restore retains canonical graph membership/layout and uses the current graph revision; reference replay owns rotating snapshot tokens.
+- Scene 2D fields reset on selected identity or changed editable scalar metadata, not newly allocated response objects. The workspace remounts for each project lifetime, while unchanged background data and perspective selection preserve pending scene metadata. Scrubber callbacks update their refs after React commits, so abandoned renders cannot change active drag handlers.
 - `LiveBridgeContext` owns bridge status, heartbeat publication, plugin revision polling, and Photoshop connection metadata. It delegates project refreshes back to `ProjectContext`.
 - Component-local state stays local when it is only needed by one component: text input drafts, annotation editor rows, image load failures, popover form fields, lightboxes, upload notes, relink paths, and per-panel open/closed state.
 - Derived state should be computed from `project`, `selectedShotId`, or component props with `useMemo` or pure helpers rather than stored globally.
@@ -223,7 +237,7 @@ async def import_shot_image(shot_id: str, file: UploadFile = File(...)):
 
 `storyboard_tool/backend_service.py` — `StoryboardBackendService` class.
 
-This is the single business-logic entry point. Every `method_*` handler corresponds to one or more REST endpoints.
+This is the stable backend facade. Its 146 effective public `method_*` handlers include domain adapters inherited from the scene and export service mixins.
 
 **Responsibilities**
 
@@ -239,6 +253,9 @@ This is the single business-logic entry point. Every `method_*` handler correspo
 | Shot domain operations | `shot_service.py` |
 | Project/file CRUD | `project_manager.py` |
 | Reference workflows | `reference_segments.py` |
+| Scene 2D endpoint orchestration | `service_scene2d.py` → `scene2d.py`, generation freshness and the shared plugin service |
+| Scene 3D/Blender endpoint orchestration | `service_scene3d.py` → `scene3d.py`, Blender bridge and viewport manager |
+| Shared upload byte conversion | `upload_payload.py` (historical helper imports remain available from `backend_service.py`) |
 | Auto-sync (PSD/PNG) | `linked_sync.py` |
 | Export generation | `export_service.py` + `export_utils.py` |
 | Photoshop bridge | `live_bridge.py` |
@@ -247,7 +264,29 @@ This is the single business-logic entry point. Every `method_*` handler correspo
 | File dialogs | `system_utils.py` |
 | App/project state helpers | `app_state.py` |
 
-`StoryboardBackendService` inherits from `ExportServiceMixin` (`service_exports.py`), which adapts backend `method_export_*` and `method_download_*` handlers to the canonical export logic in `export_service.py`.
+`StoryboardBackendService` composes `Scene2DServiceMixin`, `Scene3DServiceMixin` and `ExportServiceMixin`. The scene adapters own 24 Scene 2D and 9 Scene 3D handlers, respectively; their signatures, policies and response/error shapes remain compatible. Export adapters still delegate to canonical export logic in `export_service.py`. `method_get_scene3d_file(scene3d_id=None)` has one owner in the scene adapter; the previously shadowed export copy was removed.
+
+Domain adapters depend on app-state helpers and their domain modules, never back on `backend_service`. Scene 2D plugin callbacks use the facade's shared `_plugin_service()` factory. External Blender launch keeps its existing bootstrap path, session checks and release requirements.
+
+State-changing operations declare their execution boundary at the method with
+`@project_mutation(MutationPolicy...)`. `mutation_executor.py` owns lock and
+rollback coordination; it does not inspect operation names. There are no
+production method-name registries or import-time loops wrapping service methods.
+
+| Policy | Execution boundary |
+|---|---|
+| `SERIALIZED` | Whole operation under `PROJECT_LOCK`; operation-specific rollback stays in the operation. |
+| `GRAPH_IF_PRESENT` | Layout 1 metadata rollback when a stored graph exists; recoverable transaction for Layout 2. |
+| `METADATA` | Layout 1 metadata rollback even before a stored graph exists; recoverable transaction for Layout 2. |
+| `LAYOUT2` | Recoverable Layout 2 transaction; Layout 1 keeps its existing operation-specific behavior. |
+| `SAVE_AS` | Transition lock first; Layout 2 coordinator quiesces writers before taking the project lock. |
+| `CONVERT` | Transition lock first; the conversion coordinator owns writer quiescence and project locking. |
+
+`tests/fixtures/backend_mutation_policies.json` is a test-only review inventory of
+service operations, including those outside this generic boundary. Changes to
+the operation surface must update that inventory intentionally. Behavioral tests
+verify lock order, conditional Layout 1 coverage, and Layout 2 disk/memory/app-state
+restoration; the inventory is not used to execute operations.
 
 ---
 
@@ -349,6 +388,14 @@ Provides a context manager, `mutate_project(project)`, that:
 2. Restores the snapshot if the block raises any exception.
 3. Does nothing extra on success.
 
+`metadata_transaction(app)` additionally snapshots Layout 1 canonical metadata
+files and app dirty/mtime flags. It now lives in this transaction module;
+`story_graph.metadata_transaction` remains a compatibility import. This is
+metadata-only protection: asset workflows still own their image/PSD rollback.
+For Layout 2, `mutation_executor` composes the existing recoverable work-tree
+transaction with the in-memory snapshot and restores revision/app-state flags
+on failure.
+
 ```python
 with project_transaction.mutate_project(project):
     shot_service.delete_shot(project, shot_id)
@@ -375,6 +422,13 @@ This is an in-memory guard only. It does not protect against failures that occur
 ## 12. reference_segments Role
 
 `storyboard_tool/reference_segments.py`
+
+Reference-library JSON normalization belongs to `reference_metadata.py`, which
+uses only the standard library and does not access project files. Both
+`project_storage.load_settings()` and reference workflows use it directly.
+Existing `project_manager` and `reference_segments` normalization imports remain
+compatible re-exports. Loading settings no longer imports reference workflows,
+project_manager or image processing modules to work around a circular import.
 
 Owns all reference domain business logic. `project_manager.py` re-exports every public function from this module so callers can import from either name.
 

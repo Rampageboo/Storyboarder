@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import functools
-import io
 import json
 import logging
 import os
@@ -10,7 +8,7 @@ import tempfile
 import threading
 import time
 from pathlib import Path
-from typing import Any, BinaryIO
+from typing import Any
 
 from fastapi import FastAPI, HTTPException
 
@@ -18,26 +16,33 @@ from . import (
     app_state,
     blender_bridge,
     bpy_viewport,
+    comic,
     generation_service,
-    project_document,
     project_manager,
     project_transaction,
     recents,
     reference_segments,
     runtime_state,
-    scene2d,
-    scene3d,
     session_store,
     shot_service,
+    story_graph,
 )
 from .errors import AppErrorCode, app_error
 from .external_tools import preheat_photoshop
 from .export_utils import missing_files
 from .image_utils import normalize_hex_color
 from .linked_sync import sync_project
+from .mutation_executor import MutationPolicy, project_mutation
 from .project_layout import LAYOUT_2, LayoutDisabledError, ensure_layout_enabled
 from .plugin_service import PluginBridgeService
 from .service_exports import ExportServiceMixin
+from .service_scene2d import Scene2DServiceMixin
+from .service_scene3d import Scene3DServiceMixin
+# Retain historical helper imports for bridge callers.
+from .upload_payload import (
+    normalize_upload_bytes as _normalize_upload_bytes,
+    upload_stream as _upload_stream,
+)
 from .system_utils import (
     browse_blender_executable,
     browse_folder,
@@ -160,19 +165,7 @@ def _focus_desktop_window(
     }
 
 
-def _normalize_upload_bytes(data: list[int] | bytes | bytearray) -> bytes:
-    if isinstance(data, (bytes, bytearray)):
-        return bytes(data)
-    if isinstance(data, list):
-        return bytes(int(value) & 0xFF for value in data)
-    raise HTTPException(status_code=400, detail="Upload payload must be bytes.")
-
-
-def _upload_stream(data: list[int] | bytes | bytearray) -> BinaryIO:
-    return io.BytesIO(_normalize_upload_bytes(data))
-
-
-class StoryboardBackendService(ExportServiceMixin):
+class StoryboardBackendService(Scene2DServiceMixin, Scene3DServiceMixin, ExportServiceMixin):
     """Business logic shared by every REST route and the desktop bridge."""
 
     def __init__(self, app: FastAPI) -> None:
@@ -272,13 +265,14 @@ class StoryboardBackendService(ExportServiceMixin):
             last_project_json_path="" if recents.same_path(last, path) else None,
         )
         project = self.app.state.project
-        if project is not None:
+        if project is not None and project.layout != LAYOUT_2:
             project.settings["recent_projects"] = recents.forget(
                 [str(item) for item in project.settings.get("recent_projects", [])],
                 path,
             )
         return {"recents": self._recent_entries()}
 
+    # transition_active_project owns quiescing and transition -> project locks.
     def method_close_project(self) -> dict[str, Any]:
         """Return to Home: flush the document, then drop it from app state.
 
@@ -460,12 +454,15 @@ class StoryboardBackendService(ExportServiceMixin):
         photoshop_path = str(project.settings.get("photoshop_path", "") or "") if project else ""
         return preheat_photoshop(photoshop_path)
 
+    # transition_active_project owns quiescing and transition -> project locks.
     def method_new_project(
         self,
         path: str | None = None,
         canvas_width: int | None = None,
         canvas_height: int | None = None,
+        project_type: str = "video",
     ) -> dict[str, Any]:
+        project_manager.validate_project_type(project_type)
         root = Path(path).expanduser() if path else self.app.state.base_dir / "Untitled.sbd"
         try:
             creator = (
@@ -480,6 +477,7 @@ class StoryboardBackendService(ExportServiceMixin):
                     root,
                     canvas_width=canvas_width if canvas_width is not None else 1920,
                     canvas_height=canvas_height if canvas_height is not None else 1080,
+                    project_type=project_type,
                 ),
             )
         except app_state.ProjectTransitionError as exc:
@@ -496,6 +494,7 @@ class StoryboardBackendService(ExportServiceMixin):
             ) from exc
         return app_state._project_payload(opened_project, self.app.state.dirty)
 
+    # transition_active_project owns quiescing and transition -> project locks.
     def method_open_project(self, project_json_path: str) -> dict[str, Any]:
         try:
             opened_project = app_state.transition_active_project(
@@ -519,6 +518,7 @@ class StoryboardBackendService(ExportServiceMixin):
             ) from exc
         return app_state._project_payload(opened_project, self.app.state.dirty)
 
+    @project_mutation(MutationPolicy.SERIALIZED)
     def method_save_project(self) -> dict[str, Any]:
         project = app_state._require_project(self.app)
         try:
@@ -533,6 +533,7 @@ class StoryboardBackendService(ExportServiceMixin):
         self.app.state.dirty = False
         return app_state._project_payload(project, self.app.state.dirty)
 
+    @project_mutation(MutationPolicy.SAVE_AS)
     def method_save_project_as(self, path: str) -> dict[str, Any]:
         project = app_state._require_project(self.app)
         try:
@@ -579,6 +580,7 @@ class StoryboardBackendService(ExportServiceMixin):
         self.app.state.dirty = False
         return app_state._project_payload(self.app.state.project, self.app.state.dirty)
 
+    @project_mutation(MutationPolicy.CONVERT)
     def method_convert_project(self, path: str) -> dict[str, Any]:
         project = app_state._require_project(self.app)
         if project.layout == LAYOUT_2:
@@ -663,6 +665,7 @@ class StoryboardBackendService(ExportServiceMixin):
     ) -> dict[str, Any]:
         return self._plugin_service().context_payload(project, protocol)
 
+    @project_mutation(MutationPolicy.SERIALIZED)
     def method_plugin_write_intent(
         self,
         work_key: str,
@@ -675,6 +678,7 @@ class StoryboardBackendService(ExportServiceMixin):
             protocol,
         )
 
+    @project_mutation(MutationPolicy.SERIALIZED)
     def method_plugin_export_preview(
         self,
         shot_id: str,
@@ -683,6 +687,7 @@ class StoryboardBackendService(ExportServiceMixin):
     ) -> dict[str, Any]:
         return self._plugin_service().export_preview(shot_id, payload, protocol)
 
+    @project_mutation(MutationPolicy.SERIALIZED)
     def method_plugin_psd_saved(
         self,
         shot_id: str,
@@ -691,6 +696,7 @@ class StoryboardBackendService(ExportServiceMixin):
     ) -> dict[str, Any]:
         return self._plugin_service().psd_saved(shot_id, payload, protocol)
 
+    @project_mutation(MutationPolicy.SERIALIZED)
     def method_plugin_focus_shot(
         self,
         shot_id: str,
@@ -698,6 +704,7 @@ class StoryboardBackendService(ExportServiceMixin):
     ) -> dict[str, Any]:
         return self._plugin_service().focus_shot(shot_id, protocol)
 
+    @project_mutation(MutationPolicy.GRAPH_IF_PRESENT)
     def method_plugin_next_shot(
         self,
         current_shot_id: str | None = None,
@@ -722,6 +729,84 @@ class StoryboardBackendService(ExportServiceMixin):
     def _plugin_shot_health(self, project, shot) -> dict[str, Any]:
         return self._plugin_service().shot_health(project, shot)
 
+    @project_mutation(MutationPolicy.METADATA)
+    def method_update_comic(self, document: dict[str, Any], project_path: str) -> dict[str, Any]:
+        project = app_state._require_project(self.app)
+        if project_path != str(project.reopen_path):
+            raise app_error(AppErrorCode.INVALID_REQUEST, "The active project changed.", status=409)
+        try:
+            comic.update_document(project, document)
+        except comic.RevisionConflict as exc:
+            raise app_error(AppErrorCode.INVALID_REQUEST, str(exc), status=409) from exc
+        except ValueError as exc:
+            raise app_error(AppErrorCode.INVALID_REQUEST, str(exc)) from exc
+        app_state._autosave(self.app)
+        return app_state._project_payload(project, self.app.state.dirty)
+
+    def method_render_comic(self, page_id: str) -> bytes:
+        with project_manager.PROJECT_LOCK:
+            project = app_state._require_project(self.app)
+            try:
+                return comic.render_page(project, page_id)
+            except ValueError as exc:
+                raise app_error(AppErrorCode.INVALID_REQUEST, str(exc)) from exc
+
+    def method_export_comic(self, project_path: str, page_id: str = "", chapter_id: str = "", open_file: bool = False, format: str = "") -> dict[str, str]:
+        with project_manager.PROJECT_LOCK:
+            project = app_state._require_project(self.app)
+            if project_path != str(project.reopen_path):
+                raise app_error(AppErrorCode.INVALID_REQUEST, "The active project changed.", status=409)
+            try:
+                if open_file:
+                    target = comic.export_path(project, page_id, chapter_id, format)
+                    if not target.is_file():
+                        raise ValueError("Export this comic first.")
+                    os.startfile(target)
+                else:
+                    target = comic.export_comic(project, page_id, chapter_id, format)
+                return {"path": str(target)}
+            except (OSError, ValueError) as exc:
+                raise app_error(AppErrorCode.EXPORT_FAILED, str(exc)) from exc
+
+    def method_comic_prompt_preview(self, shot_id: str) -> dict[str, Any]:
+        with project_manager.PROJECT_LOCK:
+            project = app_state._require_project(self.app)
+            shot = app_state._find_shot(project, shot_id)
+            return generation_service.build_request_snapshot(project, shot, "queue", read_only=True)
+
+    @project_mutation(MutationPolicy.METADATA)
+    def method_update_story_graph(self, graph: dict[str, Any]) -> dict[str, Any]:
+        project = app_state._require_project(self.app)
+        try:
+            story_graph.update_graph(project, graph)
+        except story_graph.RevisionConflict as exc:
+            raise app_error(AppErrorCode.INVALID_REQUEST, str(exc), status=409) from exc
+        except ValueError as exc:
+            raise app_error(AppErrorCode.INVALID_REQUEST, str(exc)) from exc
+        app_state._autosave(self.app)
+        return app_state._project_payload(project, self.app.state.dirty)
+
+    @project_mutation(MutationPolicy.METADATA)
+    def method_create_story_branch(self, route_id: str, from_shot_id: str, title: str) -> dict[str, Any]:
+        from contextlib import nullcontext
+        from .file_transactions import rollback_paths
+        from .models import Shot
+
+        project = app_state._require_project(self.app)
+        shot = Shot(shot_id=project_manager.new_shot_id())
+        # Layout 2 notes/annotations are covered by its work-metadata journal.
+        # Layout 1 additionally creates a shot directory, so enlist it before I/O.
+        paths = [project_manager.get_shot_dir(project, shot)] if project.layout != LAYOUT_2 else []
+        try:
+            with rollback_paths(paths) if paths else nullcontext():
+                story_graph.add_branch(project, shot, route_id, from_shot_id, title)
+                project_manager._ensure_shot_files(project, shot)
+                app_state._autosave(self.app)
+        except ValueError as exc:
+            raise app_error(AppErrorCode.INVALID_REQUEST, str(exc)) from exc
+        return {"shot": shot.to_dict(), **app_state._project_payload(project, self.app.state.dirty)}
+
+    @project_mutation(MutationPolicy.GRAPH_IF_PRESENT)
     def method_add_shot(self, after_shot_id: str | None = None) -> dict[str, Any]:
         project = app_state._require_project(self.app)
         try:
@@ -731,6 +816,7 @@ class StoryboardBackendService(ExportServiceMixin):
         app_state._autosave(self.app)
         return {"shot": shot.to_dict(), **app_state._project_payload(project, self.app.state.dirty)}
 
+    @project_mutation(MutationPolicy.GRAPH_IF_PRESENT)
     def method_duplicate_shot(self, shot_id: str) -> dict[str, Any]:
         project = app_state._require_project(self.app)
         try:
@@ -740,6 +826,7 @@ class StoryboardBackendService(ExportServiceMixin):
         app_state._autosave(self.app)
         return {"shot": duplicate.to_dict(), **app_state._project_payload(project, self.app.state.dirty)}
 
+    @project_mutation(MutationPolicy.SERIALIZED)
     def method_update_shot(self, shot_id: str, payload: dict[str, Any]) -> dict[str, Any]:
         project = app_state._require_project(self.app)
         shot = app_state._find_shot(project, shot_id)
@@ -760,6 +847,7 @@ class StoryboardBackendService(ExportServiceMixin):
             raise ValueError("At least one shot is required.")
         return unique
 
+    @project_mutation(MutationPolicy.SERIALIZED)
     def method_update_shots_batch(self, updates: list[dict[str, Any]]) -> dict[str, Any]:
         project = app_state._require_project(self.app)
         if not isinstance(updates, list) or not updates:
@@ -784,6 +872,7 @@ class StoryboardBackendService(ExportServiceMixin):
             raise app_error(AppErrorCode.INVALID_REQUEST, str(exc)) from exc
         return app_state._project_payload(project, self.app.state.dirty)
 
+    @project_mutation(MutationPolicy.GRAPH_IF_PRESENT)
     def method_delete_shots_batch(self, shot_ids: list[str]) -> dict[str, Any]:
         project = app_state._require_project(self.app)
         try:
@@ -798,7 +887,8 @@ class StoryboardBackendService(ExportServiceMixin):
             raise app_error(AppErrorCode.INVALID_REQUEST, str(exc)) from exc
         return app_state._project_payload(project, self.app.state.dirty)
 
-    def method_restore_shots_batch(self, items: list[dict[str, Any]]) -> dict[str, Any]:
+    @project_mutation(MutationPolicy.METADATA)
+    def method_restore_shots_batch(self, items: list[dict[str, Any]], graph_snapshot: dict[str, Any] | None = None) -> dict[str, Any]:
         project = app_state._require_project(self.app)
         if not isinstance(items, list) or not items:
             raise app_error(AppErrorCode.INVALID_REQUEST, "At least one shot is required.")
@@ -819,14 +909,20 @@ class StoryboardBackendService(ExportServiceMixin):
             existing_ids = {shot.shot_id for shot in project.shots}
             if any(shot_id in existing_ids for shot_id in restore_ids):
                 raise ValueError("A restored shot already exists.")
+            restored_graph = story_graph.prepare_restore(project, graph_snapshot, restore_ids)
             with project_transaction.mutate_project(project):
                 for shot, index in normalized:
                     project_manager.restore_shot(project, shot, index)
+                if restored_graph is not None:
+                    project.settings["story_graph"] = restored_graph
                 app_state._autosave(self.app)
+        except story_graph.RevisionConflict as exc:
+            raise app_error(AppErrorCode.INVALID_REQUEST, str(exc), status=409) from exc
         except (KeyError, TypeError, ValueError) as exc:
             raise app_error(AppErrorCode.INVALID_REQUEST, str(exc)) from exc
         return app_state._project_payload(project, self.app.state.dirty)
 
+    @project_mutation(MutationPolicy.SERIALIZED)
     def method_create_queue_batch_requests(self, shot_ids: list[str]) -> dict[str, Any]:
         project = app_state._require_project(self.app)
         requests: list[dict[str, Any]] = []
@@ -859,6 +955,7 @@ class StoryboardBackendService(ExportServiceMixin):
             "created_request_ids": [str(request["request_id"]) for request in requests],
         }
 
+    @project_mutation(MutationPolicy.SERIALIZED)
     def method_create_generation_request(
         self,
         shot_id: str,
@@ -908,6 +1005,7 @@ class StoryboardBackendService(ExportServiceMixin):
             )
         return response
 
+    @project_mutation(MutationPolicy.SERIALIZED)
     def method_create_codex_batch_requests(
         self,
         provider: str = "codex",
@@ -995,6 +1093,7 @@ class StoryboardBackendService(ExportServiceMixin):
             raise app_error(AppErrorCode.INVALID_REQUEST, str(exc)) from exc
         return {"requests": requests}
 
+    @project_mutation(MutationPolicy.SERIALIZED)
     def method_delete_generation_request(self, request_id: str) -> dict[str, Any]:
         project = app_state._require_project(self.app)
         try:
@@ -1025,6 +1124,7 @@ class StoryboardBackendService(ExportServiceMixin):
             "project": app_state._project_payload(project, self.app.state.dirty),
         }
 
+    @project_mutation(MutationPolicy.SERIALIZED)
     def method_pull_generation_results(self) -> dict[str, Any]:
         project = app_state._require_project(self.app)
         try:
@@ -1040,6 +1140,7 @@ class StoryboardBackendService(ExportServiceMixin):
             "project": app_state._project_payload(project, self.app.state.dirty),
         }
 
+    @project_mutation(MutationPolicy.SERIALIZED)
     def method_reconcile_generation_results(self) -> dict[str, Any]:
         project = app_state._require_project(self.app)
         try:
@@ -1055,6 +1156,7 @@ class StoryboardBackendService(ExportServiceMixin):
             "project": app_state._project_payload(project, self.app.state.dirty),
         }
 
+    @project_mutation(MutationPolicy.SERIALIZED)
     def method_accept_generation_candidate(
         self,
         shot_id: str,
@@ -1081,6 +1183,7 @@ class StoryboardBackendService(ExportServiceMixin):
             "project": app_state._project_payload(project, self.app.state.dirty),
         }
 
+    @project_mutation(MutationPolicy.GRAPH_IF_PRESENT)
     def method_delete_shot(self, shot_id: str) -> dict[str, Any]:
         project = app_state._require_project(self.app)
         try:
@@ -1091,18 +1194,25 @@ class StoryboardBackendService(ExportServiceMixin):
         app_state._autosave(self.app)
         return app_state._project_payload(project, self.app.state.dirty)
 
-    def method_restore_shot(self, shot: dict[str, Any], index: int = 0) -> dict[str, Any]:
+    @project_mutation(MutationPolicy.METADATA)
+    def method_restore_shot(self, shot: dict[str, Any], index: int = 0, graph_snapshot: dict[str, Any] | None = None) -> dict[str, Any]:
         project = app_state._require_project(self.app)
         if not isinstance(shot, dict):
             raise app_error(AppErrorCode.INVALID_REQUEST, "Shot payload required.")
         try:
+            restored_graph = story_graph.prepare_restore(project, graph_snapshot, [str(shot.get("shot_id", ""))])
             with project_transaction.mutate_project(project):
                 project_manager.restore_shot(project, shot, int(index))
+                if restored_graph is not None:
+                    project.settings["story_graph"] = restored_graph
+                app_state._autosave(self.app)
+        except story_graph.RevisionConflict as exc:
+            raise app_error(AppErrorCode.INVALID_REQUEST, str(exc), status=409) from exc
         except (KeyError, ValueError) as exc:
             raise app_error(AppErrorCode.INVALID_REQUEST, str(exc)) from exc
-        app_state._autosave(self.app)
         return app_state._project_payload(project, self.app.state.dirty)
 
+    @project_mutation(MutationPolicy.GRAPH_IF_PRESENT)
     def method_reorder_shots(self, shot_ids: list[str]) -> dict[str, Any]:
         project = app_state._require_project(self.app)
         if not isinstance(shot_ids, list):
@@ -1115,6 +1225,7 @@ class StoryboardBackendService(ExportServiceMixin):
         app_state._autosave(self.app)
         return app_state._project_payload(project, self.app.state.dirty)
 
+    @project_mutation(MutationPolicy.SERIALIZED)
     def method_import_image_path(self, shot_id: str, source_path: str) -> dict[str, Any]:
         project = app_state._require_project(self.app)
         shot = app_state._find_shot(project, shot_id)
@@ -1125,6 +1236,7 @@ class StoryboardBackendService(ExportServiceMixin):
         app_state._autosave(self.app)
         return app_state._project_payload(project, self.app.state.dirty)
 
+    @project_mutation(MutationPolicy.SERIALIZED)
     def method_apply_ref_segment(self, anchor_shot_id: str, end_shot_id: str, segment_id: str = "") -> dict[str, Any]:
         project = app_state._require_project(self.app)
         anchor = app_state._find_shot_index(project, anchor_shot_id)
@@ -1142,6 +1254,7 @@ class StoryboardBackendService(ExportServiceMixin):
         app_state._autosave(self.app)
         return {**result, **app_state._project_payload(project, self.app.state.dirty)}
 
+    @project_mutation(MutationPolicy.SERIALIZED)
     def method_apply_ref_segment_image(
         self,
         anchor_shot_id: str,
@@ -1164,6 +1277,7 @@ class StoryboardBackendService(ExportServiceMixin):
         app_state._autosave(self.app)
         return {**result, **app_state._project_payload(project, self.app.state.dirty)}
 
+    @project_mutation(MutationPolicy.SERIALIZED)
     def method_apply_ref_segment_3d(
         self,
         anchor_shot_id: str,
@@ -1188,6 +1302,7 @@ class StoryboardBackendService(ExportServiceMixin):
         app_state._autosave(self.app)
         return {**result, **app_state._project_payload(project, self.app.state.dirty)}
 
+    @project_mutation(MutationPolicy.SERIALIZED)
     def method_apply_ref_segment_model_captures(
         self,
         anchor_shot_id: str,
@@ -1212,6 +1327,7 @@ class StoryboardBackendService(ExportServiceMixin):
         app_state._autosave(self.app)
         return {**result, **app_state._project_payload(project, self.app.state.dirty)}
 
+    @project_mutation(MutationPolicy.SERIALIZED)
     def method_snapshot_ref_boards(self, anchor_shot_id: str, end_shot_id: str) -> dict[str, Any]:
         # Manual snapshot of a board range before a destructive bake. Returns an undo token usable
         # with method_restore_ref_apply / restore_boards_from_undo. Browser 3D apply snapshots
@@ -1226,6 +1342,7 @@ class StoryboardBackendService(ExportServiceMixin):
             raise app_error(AppErrorCode.REF_APPLY_FAILED, str(exc)) from exc
         return {"undo_token": token}
 
+    @project_mutation(MutationPolicy.SERIALIZED)
     def method_restore_ref_apply(self, token: str) -> dict[str, Any]:
         project = app_state._require_project(self.app)
         try:
@@ -1236,6 +1353,7 @@ class StoryboardBackendService(ExportServiceMixin):
         app_state._autosave(self.app)
         return {**result, **app_state._project_payload(project, self.app.state.dirty)}
 
+    @project_mutation(MutationPolicy.SERIALIZED)
     def method_delete_ref_segment(self, segment_id: str) -> dict[str, Any]:
         project = app_state._refresh_project_from_disk(self.app)
         try:
@@ -1246,18 +1364,21 @@ class StoryboardBackendService(ExportServiceMixin):
         app_state._autosave(self.app)
         return {**result, **app_state._project_payload(project, self.app.state.dirty)}
 
+    @project_mutation(MutationPolicy.GRAPH_IF_PRESENT)
     def method_move_shot_up(self, shot_id: str) -> dict[str, Any]:
         project = app_state._require_project(self.app)
         project_manager.move_shot_up(project, app_state._find_shot_index(project, shot_id))
         app_state._autosave(self.app)
         return app_state._project_payload(project, self.app.state.dirty)
 
+    @project_mutation(MutationPolicy.GRAPH_IF_PRESENT)
     def method_move_shot_down(self, shot_id: str) -> dict[str, Any]:
         project = app_state._require_project(self.app)
         project_manager.move_shot_down(project, app_state._find_shot_index(project, shot_id))
         app_state._autosave(self.app)
         return app_state._project_payload(project, self.app.state.dirty)
 
+    @project_mutation(MutationPolicy.SERIALIZED)
     def method_sync_shot(self, shot_id: str, force: bool = False) -> dict[str, Any]:
         project = app_state._refresh_project_from_disk(self.app)
         shot = app_state._find_shot(project, shot_id)
@@ -1283,6 +1404,7 @@ class StoryboardBackendService(ExportServiceMixin):
             raise HTTPException(status_code=400, detail="Annotation file must contain a list.")
         return {"annotations": annotations}
 
+    @project_mutation(MutationPolicy.SERIALIZED)
     def method_save_annotations(self, shot_id: str, annotations: list[Any]) -> dict[str, Any]:
         project = app_state._require_project(self.app)
         shot = app_state._find_shot(project, shot_id)
@@ -1291,6 +1413,7 @@ class StoryboardBackendService(ExportServiceMixin):
         project_manager._atomic_write_text(path, json.dumps(payload, indent=2))
         return {"annotations": payload}
 
+    @project_mutation(MutationPolicy.SERIALIZED)
     def method_add_comment(self, shot_id: str, text: str) -> dict[str, Any]:
         project = app_state._require_project(self.app)
         shot = app_state._find_shot(project, shot_id)
@@ -1302,6 +1425,7 @@ class StoryboardBackendService(ExportServiceMixin):
         app_state._autosave(self.app)
         return app_state._project_payload(project, self.app.state.dirty)
 
+    @project_mutation(MutationPolicy.SERIALIZED)
     def method_resolve_comment(self, shot_id: str, comment_id: int, resolved: bool = True) -> dict[str, Any]:
         project = app_state._require_project(self.app)
         shot = app_state._find_shot(project, shot_id)
@@ -1312,6 +1436,7 @@ class StoryboardBackendService(ExportServiceMixin):
                 return app_state._project_payload(project, self.app.state.dirty)
         raise HTTPException(status_code=404, detail="Comment not found.")
 
+    @project_mutation(MutationPolicy.SERIALIZED)
     def method_update_settings(self, payload: dict[str, Any]) -> dict[str, Any]:
         project = app_state._require_project(self.app)
         data = payload if isinstance(payload, dict) else {}
@@ -1445,6 +1570,7 @@ class StoryboardBackendService(ExportServiceMixin):
             "template_path": str(project_manager.blend_template_path()),
         }
 
+    @project_mutation(MutationPolicy.SERIALIZED)
     def method_remove_shot_image(self, shot_id: str) -> dict[str, Any]:
         project = app_state._require_project(self.app)
         shot = app_state._find_shot(project, shot_id)
@@ -1452,6 +1578,7 @@ class StoryboardBackendService(ExportServiceMixin):
         app_state._autosave(self.app)
         return app_state._project_payload(project, self.app.state.dirty)
 
+    @project_mutation(MutationPolicy.SERIALIZED)
     def method_remove_fixed_layer(self, shot_id: str, layer_id: str) -> dict[str, Any]:
         project = app_state._require_project(self.app)
         shot = app_state._find_shot(project, shot_id)
@@ -1471,6 +1598,7 @@ class StoryboardBackendService(ExportServiceMixin):
             app_state._autosave(self.app)
         return app_state._project_payload(project, self.app.state.dirty)
 
+    @project_mutation(MutationPolicy.SERIALIZED)
     def method_relink_preview(self, shot_id: str, relative_path: str) -> dict[str, Any]:
         project = app_state._require_project(self.app)
         shot = app_state._find_shot(project, shot_id)
@@ -1533,6 +1661,7 @@ class StoryboardBackendService(ExportServiceMixin):
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return {"path": str(opened)}
 
+    @project_mutation(MutationPolicy.SERIALIZED)
     def method_recover_shot_source(self, shot_id: str, preserve_layers: bool = True) -> dict[str, Any]:
         """Rebuild a broken (Photoshop-unopenable) source PSD from its layers."""
         project = app_state._require_project(self.app)
@@ -1550,6 +1679,7 @@ class StoryboardBackendService(ExportServiceMixin):
         app_state._autosave(self.app)
         return {"result": result, **app_state._project_payload(project, self.app.state.dirty)}
 
+    @project_mutation(MutationPolicy.SERIALIZED)
     def method_delete_project_reference(self, ref_id: str) -> dict[str, Any]:
         project = app_state._require_project(self.app)
         try:
@@ -1560,605 +1690,12 @@ class StoryboardBackendService(ExportServiceMixin):
         app_state._autosave(self.app)
         return app_state._project_payload(project, self.app.state.dirty)
 
-    def method_open_blender_scene(self) -> dict[str, Any]:
-        project = app_state._require_project(self.app)
-        existing = blender_bridge.status(self.app)
-        if existing["external_blender_owned"]:
-            opened = Path(str(existing["external_blender_blend_path"]))
-            try:
-                relative_path = project_manager.project_relative_posix(project, opened)
-            except ValueError:
-                relative_path = ""
-            return {
-                "path": str(opened),
-                "relative_path": relative_path,
-                "blender_bridge": existing,
-                **app_state._project_payload(project, self.app.state.dirty),
-            }
-        manager = bpy_viewport.manager_for_app(self.app)
-        try:
-            bpy_viewport.require_current_context(self.app)
-            manager.save_if_running()
-            bpy_viewport.stop_worker(self.app)
-            active_scene = scene3d.ensure_active_scene(project)
-            attached = str(active_scene.get("blend_file_path") or "").strip()
-            blend_path = (
-                project_manager.resolve_project_path(project, attached)
-                if attached
-                else project_manager.ensure_project_blend_file(
-                    project,
-                    scene_id=str(active_scene["id"]),
-                ).resolve()
-            )
-            active_scene = scene3d.configure_blend_preview(
-                project,
-                str(active_scene["id"]),
-                blend_path,
-            )
-            app_state.persist_project_mutation(self.app)
-            session = blender_bridge.begin_session(
-                self.app,
-                project,
-                active_scene,
-                blend_path,
-            )
-            bootstrap = (
-                Path(__file__).resolve().parent
-                / "blender_addon"
-                / "register_storyboarder_addon.py"
-            )
-            launch_path = Path(session["launch_path"])
-            launch_relative = project_manager.project_relative_posix(
-                project, launch_path
-            )
-            opened = project_manager.open_blender_scene(
-                project,
-                launch_relative,
-                python_script=bootstrap,
-                script_args=[
-                    "--storyboarder-bridge",
-                    session["bridge_path"],
-                    "--storyboarder-heartbeat",
-                    session["heartbeat_path"],
-                    "--storyboarder-session",
-                    session["session_id"],
-                ],
-                on_launch=lambda process: blender_bridge.attach_process(self.app, process),
-            )
-        except (FileNotFoundError, ValueError) as exc:
-            blender_bridge.cancel_session(self.app)
-            logger.exception("Failed to open Blender scene")
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-        except Exception:
-            blender_bridge.cancel_session(self.app)
-            raise
-        app_state._touch_live_bridge(self.app)
-        return {
-            "path": str(opened),
-            "relative_path": (
-                project_manager.project_relative_posix(project, opened) if opened.exists() else ""
-            ),
-            "blender_bridge": blender_bridge.status(self.app),
-            **app_state._project_payload(project, self.app.state.dirty),
-        }
-
-    def method_list_scene3d(self) -> dict[str, Any]:
-        project = app_state._require_project(self.app)
-        return scene3d.list_scenes(project)
-
-    def method_create_scene3d(self, data: dict[str, Any]) -> dict[str, Any]:
-        project = app_state._require_project(self.app)
-        try:
-            payload = scene3d.create_scene(
-                project,
-                title=str(data.get("title") or ""),
-                description=str(data.get("description") or ""),
-                keywords=data.get("keywords") if isinstance(data.get("keywords"), list) else None,
-            )
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-        app_state.persist_project_mutation(self.app)
-        return payload
-
-    def method_update_scene3d(self, scene3d_id: str, data: dict[str, Any]) -> dict[str, Any]:
-        project = app_state._require_project(self.app)
-        try:
-            before_scene = next(
-                (item for item in scene3d.list_scenes(project).get("scenes", []) if item.get("id") == scene3d_id),
-                None,
-            )
-            payload = scene3d.update_scene(project, scene3d_id, data)
-        except FileNotFoundError as exc:
-            raise HTTPException(status_code=404, detail=str(exc)) from exc
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-        semantic_keys = {"title", "description", "keywords"}
-        scene_changed = before_scene is None or any(
-            key in data and before_scene.get(key) != payload["scene"].get(key)
-            for key in semantic_keys
-        )
-        generation_service.mark_generated_shots_for_asset_keywords_stale(
-            project,
-            [
-                *generation_service.semantic_asset_keywords(before_scene),
-                *generation_service.semantic_asset_keywords(payload["scene"]),
-            ],
-        ) if scene_changed else []
-        app_state.persist_project_mutation(self.app)
-        return payload
-
-    def method_delete_scene3d(self, scene3d_id: str) -> dict[str, Any]:
-        project = app_state._require_project(self.app)
-        try:
-            blender_bridge.require_released(self.app, "deleting a Scene 3D")
-        except ValueError as exc:
-            raise HTTPException(status_code=409, detail=str(exc)) from exc
-        try:
-            payload = scene3d.delete_scene(project, scene3d_id)
-        except FileNotFoundError as exc:
-            raise HTTPException(status_code=404, detail=str(exc)) from exc
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-        app_state.persist_project_mutation(self.app)
-        return payload
-
-    def method_set_active_scene3d(self, scene3d_id: str) -> dict[str, Any]:
-        project = app_state._require_project(self.app)
-        try:
-            blender_bridge.require_released(self.app, "switching the active Scene 3D")
-        except ValueError as exc:
-            raise HTTPException(status_code=409, detail=str(exc)) from exc
-        try:
-            payload = scene3d.set_active(project, scene3d_id)
-        except FileNotFoundError as exc:
-            raise HTTPException(status_code=404, detail=str(exc)) from exc
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-        app_state.persist_project_mutation(self.app)
-        return payload
-
-    def method_import_scene3d_to_scene(self, scene3d_id: str, filename: str, data: list[int] | bytes | bytearray) -> dict[str, Any]:
-        project = app_state._require_project(self.app)
-        try:
-            blender_bridge.require_released(self.app, "replacing a Scene 3D asset")
-        except ValueError as exc:
-            raise HTTPException(status_code=409, detail=str(exc)) from exc
-        try:
-            before_scene = next(
-                (item for item in scene3d.list_scenes(project).get("scenes", []) if item.get("id") == scene3d_id),
-                None,
-            )
-            payload = scene3d.import_scene_file(project, scene3d_id, str(filename or "scene.glb"), _normalize_upload_bytes(data))
-        except (FileNotFoundError, ValueError) as exc:
-            logger.exception("Failed to import Scene3D file: %s", filename)
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-        generation_service.mark_generated_shots_for_asset_keywords_stale(
-            project,
-            [
-                *generation_service.semantic_asset_keywords(before_scene),
-                *generation_service.semantic_asset_keywords(payload["scene"]),
-            ],
-        )
-        app_state.persist_project_mutation(self.app)
-        return payload
-
-    def method_get_scene3d_file(self, scene3d_id: str | None = None) -> dict[str, str]:
-        project = app_state._require_project(self.app)
-        try:
-            path = scene3d.file_path(project, scene3d_id)
-        except FileNotFoundError as exc:
-            raise HTTPException(status_code=404, detail=str(exc)) from exc
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-        if path is None:
-            raise app_error(AppErrorCode.MEDIA_NOT_FOUND, "No Scene 3D file linked.", status=404)
-        return {"path": str(path), "media_type": "model/gltf-binary", "filename": path.name}
-
-    def method_list_scene2d(self) -> dict[str, Any]:
-        project = app_state._require_project(self.app)
-        return {"scenes": scene2d.list_scenes(project)}
-
-    def method_create_scene2d(self, data: dict[str, Any]) -> dict[str, Any]:
-        project = app_state._require_project(self.app)
-        try:
-            scene, scenes = scene2d.create_scene(
-                project,
-                title=str(data.get("title") or ""),
-                description=str(data.get("description") or ""),
-                location=str(data.get("location") or ""),
-                time_of_day=str(data.get("time_of_day") or ""),
-                environment_prompt=str(data.get("environment_prompt") or ""),
-                consistency_anchors=data.get("consistency_anchors") if isinstance(data.get("consistency_anchors"), list) else [],
-            )
-        except (FileNotFoundError, ValueError) as exc:
-            logger.exception("Failed to create Scene 2D")
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-        app_state.persist_project_mutation(self.app)
-        app_state._touch_live_bridge(self.app)
-        return {"scene": scene, "scenes": scenes}
-
-    def method_update_scene2d(self, scene_id: str, data: dict[str, Any]) -> dict[str, Any]:
-        project = app_state._require_project(self.app)
-        try:
-            before_scene = next(
-                (item for item in scene2d.list_scenes(project) if item.get("id") == scene_id),
-                None,
-            )
-            scene, scenes = scene2d.update_scene(project, scene_id, data)
-        except FileNotFoundError as exc:
-            raise HTTPException(status_code=404, detail=str(exc)) from exc
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-        context_keys = {"title", "description", "location", "time_of_day", "environment_prompt", "consistency_anchors"}
-        scene_context_changed = before_scene is None or any(
-            key in data and before_scene.get(key) != scene.get(key)
-            for key in context_keys
-        )
-        for shot in project.shots:
-            if shot.scene_id != scene["id"]:
-                continue
-            if "title" in data and shot.scene != scene["title"]:
-                shot.scene = scene["title"]
-            if scene_context_changed and generation_service.has_generation_activity(shot):
-                shot.generation_state["freshness_status"] = "stale"
-        app_state.persist_project_mutation(self.app)
-        app_state._touch_live_bridge(self.app)
-        return {"scene": scene, "scenes": scenes}
-
-    def method_delete_scene2d(self, scene_id: str) -> dict[str, Any]:
-        project = app_state._require_project(self.app)
-        try:
-            existing_scene = next(
-                (item for item in scene2d.list_scenes(project) if item.get("id") == scene_id),
-                None,
-            )
-            scenes = scene2d.delete_scene(project, scene_id)
-        except FileNotFoundError as exc:
-            raise HTTPException(status_code=404, detail=str(exc)) from exc
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-        for shot in project.shots:
-            if shot.scene_id != scene_id:
-                continue
-            shot.scene_id = ""
-            if not shot.scene and existing_scene:
-                shot.scene = str(existing_scene.get("title") or "")
-            if generation_service.has_generation_activity(shot):
-                shot.generation_state["freshness_status"] = "stale"
-        app_state.persist_project_mutation(self.app)
-        app_state._touch_live_bridge(self.app)
-        return {"scenes": scenes}
-
-    def method_open_scene2d(self, scene_id: str) -> dict[str, Any]:
-        project = app_state._require_project(self.app)
-        try:
-            scene, opened, relative_path = scene2d.open_scene(project, scene_id)
-        except FileNotFoundError as exc:
-            raise HTTPException(status_code=404, detail=str(exc)) from exc
-        except ValueError as exc:
-            logger.exception("Failed to open Scene 2D %s", scene_id)
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-        app_state._touch_live_bridge(self.app)
-        return {"path": opened, "relative_path": relative_path, "scene": scene}
-
-    def method_refresh_scene2d_preview(self, scene_id: str) -> dict[str, Any]:
-        project = app_state._require_project(self.app)
-        try:
-            scene, preview_exists, message = scene2d.refresh_preview(project, scene_id)
-        except FileNotFoundError as exc:
-            raise HTTPException(status_code=404, detail=str(exc)) from exc
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-        app_state.persist_project_mutation(self.app)
-        return {"scene": scene, "preview_exists": preview_exists, "message": message}
-
-    def method_add_scene2d_to_references(self, scene_id: str) -> dict[str, Any]:
-        project = app_state._require_project(self.app)
-        try:
-            reference, scene = scene2d.add_to_references(project, scene_id)
-        except FileNotFoundError as exc:
-            raise HTTPException(status_code=404, detail=str(exc)) from exc
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-        app_state.persist_project_mutation(self.app)
-        app_state._touch_live_bridge(self.app)
-        return {"reference": reference, "scene": scene, "project": app_state._project_payload(project, self.app.state.dirty)}
-
-    def method_get_scene2d_preview(self, scene_id: str) -> dict[str, str]:
-        project = app_state._require_project(self.app)
-        try:
-            return scene2d.preview_meta(project, scene_id)
-        except FileNotFoundError as exc:
-            raise HTTPException(status_code=404, detail=str(exc)) from exc
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-
-    def method_list_scene2d_perspectives(self, scene_id: str) -> dict[str, Any]:
-        project = app_state._require_project(self.app)
-        try:
-            scene, perspectives = scene2d.list_perspectives(project, scene_id)
-        except FileNotFoundError as exc:
-            raise HTTPException(status_code=404, detail=str(exc)) from exc
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-        return {"scene": scene, "perspectives": perspectives}
-
-    def method_create_scene2d_perspective(self, scene_id: str, data: dict[str, Any]) -> dict[str, Any]:
-        project = app_state._require_project(self.app)
-        try:
-            scene, perspective, scenes = scene2d.create_perspective(
-                project,
-                scene_id,
-                title=str(data.get("title") or ""),
-                perspective_type=str(data.get("type") or "psd"),
-                linked_scene3d_id=str(data.get("linked_scene3d_id") or ""),
-                linked_scene3d_view=data.get("linked_scene3d_view") if isinstance(data.get("linked_scene3d_view"), dict) else None,
-            )
-        except FileNotFoundError as exc:
-            raise HTTPException(status_code=404, detail=str(exc)) from exc
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-        app_state.persist_project_mutation(self.app)
-        return {"scene": scene, "perspective": perspective, "scenes": scenes}
-
-    def method_duplicate_scene2d_perspective(self, scene_id: str, perspective_id: str) -> dict[str, Any]:
-        project = app_state._require_project(self.app)
-        try:
-            scene, perspective, scenes = scene2d.duplicate_perspective(project, scene_id, perspective_id)
-        except FileNotFoundError as exc:
-            raise HTTPException(status_code=404, detail=str(exc)) from exc
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-        app_state.persist_project_mutation(self.app)
-        return {"scene": scene, "perspective": perspective, "scenes": scenes}
-
-    def method_reorder_scene2d_perspectives(self, scene_id: str, perspective_ids: list[str]) -> dict[str, Any]:
-        project = app_state._require_project(self.app)
-        try:
-            scene, scenes = scene2d.reorder_perspectives(project, scene_id, perspective_ids)
-        except FileNotFoundError as exc:
-            raise HTTPException(status_code=404, detail=str(exc)) from exc
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-        app_state.persist_project_mutation(self.app)
-        return {"scene": scene, "scenes": scenes}
-
-    def method_import_scene2d_perspective(
-        self,
-        scene_id: str,
-        filename: str,
-        data: list[int] | bytes | bytearray,
-        title: str = "",
-        linked_scene3d_id: str = "",
-    ) -> dict[str, Any]:
-        project = app_state._require_project(self.app)
-        try:
-            scene, perspective, scenes = scene2d.import_perspective(
-                project,
-                scene_id,
-                str(filename or "perspective"),
-                _normalize_upload_bytes(data),
-                title=str(title or ""),
-                linked_scene3d_id=str(linked_scene3d_id or ""),
-            )
-        except FileNotFoundError as exc:
-            raise HTTPException(status_code=404, detail=str(exc)) from exc
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-        app_state.persist_project_mutation(self.app)
-        return {"scene": scene, "perspective": perspective, "scenes": scenes}
-
-    def method_update_scene2d_perspective(self, scene_id: str, perspective_id: str, data: dict[str, Any]) -> dict[str, Any]:
-        project = app_state._require_project(self.app)
-        try:
-            scene, perspective, scenes = scene2d.update_perspective(project, scene_id, perspective_id, data)
-        except FileNotFoundError as exc:
-            raise HTTPException(status_code=404, detail=str(exc)) from exc
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-        app_state.persist_project_mutation(self.app)
-        return {"scene": scene, "perspective": perspective, "scenes": scenes}
-
-    def method_delete_scene2d_perspective(self, scene_id: str, perspective_id: str) -> dict[str, Any]:
-        project = app_state._require_project(self.app)
-        try:
-            scene, scenes = scene2d.delete_perspective(project, scene_id, perspective_id)
-        except FileNotFoundError as exc:
-            raise HTTPException(status_code=404, detail=str(exc)) from exc
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-        app_state.persist_project_mutation(self.app)
-        return {"scene": scene, "scenes": scenes}
-
-    def method_open_scene2d_perspective(self, scene_id: str, perspective_id: str) -> dict[str, Any]:
-        from . import runtime_state
-        project = app_state._require_project(self.app)
-
-        try:
-            sc, _scenes = scene2d._find_scene(project, scene_id)
-        except FileNotFoundError as exc:
-            raise HTTPException(status_code=404, detail=str(exc)) from exc
-
-        try:
-            perspective = scene2d._find_perspective(sc, perspective_id)
-        except FileNotFoundError as exc:
-            raise HTTPException(status_code=404, detail=str(exc)) from exc
-
-        if perspective.get("type") != "psd":
-            raise HTTPException(status_code=400, detail="Only PSD Perspectives can be opened for editing.")
-
-        source_rel = str(perspective.get("source_file_path") or "")
-        if Path(source_rel).suffix.lower() != ".psd":
-            raise HTTPException(status_code=400, detail="Perspective source must be a PSD.")
-        try:
-            source_path = project_manager.resolve_project_path(project, source_rel)
-        except ValueError as exc:
-            raise HTTPException(
-                status_code=400, detail="Perspective source path is invalid."
-            ) from exc
-
-        if not source_path.is_file():
-            raise HTTPException(status_code=400, detail=f"Source PSD not found: {source_rel}")
-        opened = str(source_path)
-        relative_path = source_rel
-
-        # Set active work context before publishing bridge
-        runtime_state.set_active_scene2d_context(
-            self.app,
-            scene_id,
-            perspective_id,
-            sc,
-            perspective,
-            source_native_path=str(source_path.resolve()).replace("\\", "/") if source_path else "",
-        )
-
-        # If plugin already has this PSD open, request focus; otherwise OS-open.
-        # Use the authoritative shared helper so freshness between file and HTTP
-        # heartbeats is respected: a newer explicit empty list is not overridden
-        # by stale runtime state, and an unknown or cross-project key is ignored.
-        work_key = f"scene2d:{scene_id}:{perspective_id}"
-        _active_key, open_keys = app_state.plugin_work_key_state(self.app)
-        if work_key in open_keys:
-            runtime_state.request_work_context_focus(self.app, runtime_state.active_work_context(self.app))
-        else:
-            try:
-                sc, opened, relative_path = scene2d.open_perspective(project, scene_id, perspective_id)
-            except (FileNotFoundError, ValueError) as exc:
-                raise HTTPException(status_code=400, detail=str(exc)) from exc
-            perspective = scene2d._find_perspective(sc, perspective_id)
-            source_path = project_manager.resolve_project_path(project, relative_path)
-            runtime_state.set_active_scene2d_context(
-                self.app,
-                scene_id,
-                perspective_id,
-                sc,
-                perspective,
-                source_native_path=str(source_path.resolve()).replace("\\", "/"),
-            )
-
-        app_state._touch_live_bridge(self.app)
-        return {
-            "path": opened,
-            "relative_path": relative_path,
-            "scene": scene2d._with_legacy_aliases(sc),
-            "work_context": runtime_state.active_work_context(self.app),
-        }
-
-    def method_plugin_scene2d_export_preview(
-        self,
-        scene_id: str,
-        perspective_id: str,
-        protocol: dict[str, Any] | None = None,
-    ) -> dict[str, Any]:
-        return self._plugin_service().scene2d_export_preview(
-            scene_id,
-            perspective_id,
-            protocol,
-        )
-
-    def method_plugin_scene2d_psd_saved(
-        self,
-        scene_id: str,
-        perspective_id: str,
-        protocol: dict[str, Any] | None = None,
-    ) -> dict[str, Any]:
-        return self._plugin_service().scene2d_psd_saved(
-            scene_id,
-            perspective_id,
-            protocol,
-        )
-
-    def method_plugin_scene2d_next_perspective(
-        self,
-        scene_id: str,
-        perspective_id: str,
-        protocol: dict[str, Any] | None = None,
-    ) -> dict[str, Any]:
-        return self._plugin_service().scene2d_next_perspective(
-            scene_id,
-            perspective_id,
-            protocol,
-        )
-
-    def method_refresh_scene2d_perspective_preview(self, scene_id: str, perspective_id: str) -> dict[str, Any]:
-        project = app_state._require_project(self.app)
-        try:
-            scene, perspective, _scenes = scene2d.refresh_perspective_preview(project, scene_id, perspective_id)
-            preview_exists = bool(
-                project_manager.resolve_project_path(
-                    project,
-                    perspective["preview_image_path"],
-                ).is_file()
-            )
-        except FileNotFoundError as exc:
-            raise HTTPException(status_code=404, detail=str(exc)) from exc
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-        app_state.persist_project_mutation(self.app)
-        return {
-            "scene": scene,
-            "perspective": perspective,
-            "preview_exists": preview_exists,
-            "message": "Scene 2D preview refreshed." if preview_exists else "No Scene 2D preview exists yet.",
-        }
-
-    def method_set_primary_scene2d_perspective(self, scene_id: str, perspective_id: str) -> dict[str, Any]:
-        project = app_state._require_project(self.app)
-        try:
-            scene, scenes = scene2d.set_primary_perspective(project, scene_id, perspective_id)
-        except FileNotFoundError as exc:
-            raise HTTPException(status_code=404, detail=str(exc)) from exc
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-        app_state.persist_project_mutation(self.app)
-        return {"scene": scene, "scenes": scenes}
-
-    def method_move_scene2d_perspective(self, scene_id: str, perspective_id: str, target_scene_id: str) -> dict[str, Any]:
-        project = app_state._require_project(self.app)
-        try:
-            source_scene, target_scene, perspective, scenes = scene2d.move_perspective(
-                project,
-                scene_id,
-                perspective_id,
-                target_scene_id,
-            )
-        except FileNotFoundError as exc:
-            raise HTTPException(status_code=404, detail=str(exc)) from exc
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-        app_state.persist_project_mutation(self.app)
-        return {
-            "source_scene": source_scene,
-            "target_scene": target_scene,
-            "scene": target_scene,
-            "perspective": perspective,
-            "scenes": scenes,
-        }
-
-    def method_add_scene2d_perspective_to_references(self, scene_id: str, perspective_id: str) -> dict[str, Any]:
-        project = app_state._require_project(self.app)
-        try:
-            reference, scene = scene2d.add_perspective_to_references(project, scene_id, perspective_id)
-        except FileNotFoundError as exc:
-            raise HTTPException(status_code=404, detail=str(exc)) from exc
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-        app_state.persist_project_mutation(self.app)
-        return {"reference": reference, "scene": scene, "project": app_state._project_payload(project, self.app.state.dirty)}
-
-    def method_get_scene2d_perspective_preview(self, scene_id: str, perspective_id: str) -> dict[str, str]:
-        project = app_state._require_project(self.app)
-        try:
-            return scene2d.perspective_preview_meta(project, scene_id, perspective_id)
-        except FileNotFoundError as exc:
-            raise HTTPException(status_code=404, detail=str(exc)) from exc
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     def method_get_canvas_color(self) -> dict[str, str]:
         project = app_state._require_project(self.app)
         return {"color": project_manager.get_canvas_color(project)}
 
+    @project_mutation(MutationPolicy.SERIALIZED)
     def method_set_canvas_color(self, color: str) -> dict[str, Any]:
         project = app_state._require_project(self.app)
         try:
@@ -2168,6 +1705,7 @@ class StoryboardBackendService(ExportServiceMixin):
         app_state._touch_live_bridge(self.app)
         return {"color": normalized, **app_state._project_payload(project, self.app.state.dirty)}
 
+    @project_mutation(MutationPolicy.SERIALIZED)
     def method_remove_shot_reference_image(self, shot_id: str, path: str) -> dict[str, Any]:
         project = app_state._require_project(self.app)
         shot = app_state._find_shot(project, shot_id)
@@ -2178,6 +1716,7 @@ class StoryboardBackendService(ExportServiceMixin):
         app_state._autosave(self.app)
         return app_state._project_payload(project, self.app.state.dirty)
 
+    @project_mutation(MutationPolicy.SERIALIZED)
     def method_set_shot_reference_image_paths(self, shot_id: str, paths: list[str]) -> dict[str, Any]:
         project = app_state._require_project(self.app)
         shot = app_state._find_shot(project, shot_id)
@@ -2189,6 +1728,7 @@ class StoryboardBackendService(ExportServiceMixin):
         app_state._autosave(self.app)
         return app_state._project_payload(project, self.app.state.dirty)
 
+    @project_mutation(MutationPolicy.SERIALIZED)
     def method_create_shot_canvas(
         self,
         shot_id: str,
@@ -2198,7 +1738,8 @@ class StoryboardBackendService(ExportServiceMixin):
     ) -> dict[str, Any]:
         project = app_state._require_project(self.app)
         shot = app_state._find_shot(project, shot_id)
-        default_w, default_h = project_manager.get_canvas_size(project)
+        from .canvas_settings import get_shot_canvas_size
+        default_w, default_h = get_shot_canvas_size(project, shot)
         canvas_width, canvas_height = project_manager.normalize_canvas_size(
             width if width is not None else default_w,
             height if height is not None else default_h,
@@ -2217,17 +1758,34 @@ class StoryboardBackendService(ExportServiceMixin):
         app_state._autosave(self.app)
         return app_state._project_payload(project, self.app.state.dirty)
 
-    def method_save_shot_drawing(self, shot_id: str, image_data: str) -> dict[str, Any]:
+    def method_load_shot_drawing_project(self, shot_id: str) -> dict[str, str | None]:
+        project = app_state._require_project(self.app)
+        shot = app_state._find_shot(project, shot_id)
+        return {"editor_data": project_manager.load_drawing_project_for_shot(project, shot)}
+
+    @project_mutation(MutationPolicy.SERIALIZED)
+    def method_save_shot_drawing(
+        self,
+        shot_id: str,
+        image_data: str,
+        editor_data: str | None = None,
+    ) -> dict[str, Any]:
         project = app_state._require_project(self.app)
         shot = app_state._find_shot(project, shot_id)
         try:
             with project_transaction.mutate_project(project):
-                project_manager.save_drawing_for_shot(project, shot, str(image_data or ""))
+                project_manager.save_drawing_for_shot(
+                    project,
+                    shot,
+                    str(image_data or ""),
+                    editor_data,
+                )
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         app_state._autosave(self.app)
         return app_state._project_payload(project, self.app.state.dirty)
 
+    @project_mutation(MutationPolicy.SERIALIZED)
     def method_sync_all_shots(self, force: bool = False) -> dict[str, Any]:
         project = app_state._refresh_project_from_disk(self.app)
         try:
@@ -2239,6 +1797,7 @@ class StoryboardBackendService(ExportServiceMixin):
             app_state._autosave(self.app)
         return {"results": results, **app_state._project_payload(project, self.app.state.dirty)}
 
+    @project_mutation(MutationPolicy.SERIALIZED)
     def method_upload_project_reference(self, filename: str, data: list[int] | bytes | bytearray) -> dict[str, Any]:
         project = app_state._require_project(self.app)
         try:
@@ -2253,6 +1812,7 @@ class StoryboardBackendService(ExportServiceMixin):
         app_state._autosave(self.app)
         return {"reference": entry, **app_state._project_payload(project, self.app.state.dirty)}
 
+    @project_mutation(MutationPolicy.SERIALIZED)
     def method_upload_reference_video(self, filename: str, data: list[int] | bytes | bytearray) -> dict[str, Any]:
         project = app_state._require_project(self.app)
         try:
@@ -2267,22 +1827,8 @@ class StoryboardBackendService(ExportServiceMixin):
         app_state._autosave(self.app)
         return app_state._project_payload(project, self.app.state.dirty)
 
-    def method_import_scene3d(self, filename: str, data: list[int] | bytes | bytearray) -> dict[str, Any]:
-        project = app_state._require_project(self.app)
-        try:
-            blender_bridge.require_released(self.app, "replacing the active Scene 3D asset")
-        except ValueError as exc:
-            raise HTTPException(status_code=409, detail=str(exc)) from exc
-        try:
-            scene_payload = scene3d.import_active_scene_file(project, str(filename or "scene.glb"), _normalize_upload_bytes(data))
-        except (FileNotFoundError, ValueError) as exc:
-            logger.exception("Failed to import Scene3D file: %s", filename)
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-        app_state.persist_project_mutation(self.app)
-        app_state._touch_live_bridge(self.app)
-        payload = app_state._project_payload(project, self.app.state.dirty)
-        return {"scene3d": project.settings.get("scene3d") or {}, "scenes3d": scene_payload, **payload}
 
+    @project_mutation(MutationPolicy.SERIALIZED)
     def method_import_shot_image(
         self,
         shot_id: str,
@@ -2299,6 +1845,7 @@ class StoryboardBackendService(ExportServiceMixin):
         app_state._autosave(self.app)
         return app_state._project_payload(project, self.app.state.dirty)
 
+    @project_mutation(MutationPolicy.SERIALIZED)
     def method_add_shot_reference_image(
         self,
         shot_id: str,
@@ -2315,6 +1862,7 @@ class StoryboardBackendService(ExportServiceMixin):
         app_state._autosave(self.app)
         return app_state._project_payload(project, self.app.state.dirty)
 
+    @project_mutation(MutationPolicy.SERIALIZED)
     def method_import_shot_source(
         self,
         shot_id: str,
@@ -2349,151 +1897,3 @@ class StoryboardBackendService(ExportServiceMixin):
         except (FileNotFoundError, ValueError) as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return {"path": validated, "cancelled": False}
-
-
-# ── Serialized project mutation ──────────────────────────────────────────────
-# Every method below performs a read-modify-write-save transaction on the single
-# shared app.state.project. FastAPI runs these sync endpoints on a threadpool and
-# the bridge/plugin is a second concurrent client, so two mutations (or a mutation
-# and a save/reload) can otherwise interleave and corrupt project.shots or persist a
-# torn snapshot. Holding project_manager.PROJECT_LOCK for the whole method makes each
-# transaction atomic. The lock is reentrant, so nested save_project /
-# _refresh_project_from_disk calls (which also take it) compose without deadlock.
-
-
-_LAYOUT2_TRANSACTIONAL_METHODS = frozenset(
-    {
-        "method_open_blender_scene",
-        "method_import_scene3d",
-        "method_import_scene3d_to_scene",
-        "method_create_scene3d",
-        "method_update_scene3d",
-        "method_delete_scene3d",
-        "method_set_active_scene3d",
-        "method_create_scene2d",
-        "method_update_scene2d",
-        "method_delete_scene2d",
-        "method_open_scene2d",
-        "method_add_scene2d_to_references",
-        "method_create_scene2d_perspective",
-        "method_update_scene2d_perspective",
-        "method_delete_scene2d_perspective",
-        "method_reorder_scene2d_perspectives",
-        "method_import_scene2d_perspective",
-        "method_duplicate_scene2d_perspective",
-        "method_set_primary_scene2d_perspective",
-        "method_refresh_scene2d_preview",
-        "method_refresh_scene2d_perspective_preview",
-        "method_move_scene2d_perspective",
-        "method_open_scene2d_perspective",
-        "method_add_scene2d_perspective_to_references",
-        "method_plugin_scene2d_export_preview",
-        "method_plugin_scene2d_psd_saved",
-        "method_plugin_scene2d_next_perspective",
-    }
-)
-
-
-def _serialized_mutation(method):
-    @functools.wraps(method)
-    def wrapper(self, *args, **kwargs):
-        if method.__name__ == "method_convert_project":
-            # The coordinator owns quiesce and the transition -> project lock order.
-            with project_manager.PROJECT_TRANSITION_LOCK:
-                return method(self, *args, **kwargs)
-
-        if method.__name__ == "method_save_project_as":
-            # Save As must serialize against all project transitions. Layout 2
-            # then acquires PROJECT_LOCK inside its coordinator, preserving the
-            # global transition-lock -> project-lock order; Layout 1 keeps its
-            # historical whole-method project lock.
-            with project_manager.PROJECT_TRANSITION_LOCK:
-                project = getattr(self.app.state, "project", None)
-                if project is not None and project.layout == LAYOUT_2:
-                    return method(self, *args, **kwargs)
-                with project_manager.PROJECT_LOCK:
-                    return method(self, *args, **kwargs)
-
-        with project_manager.PROJECT_LOCK:
-            project = getattr(self.app.state, "project", None)
-            if (
-                project is None
-                or project.layout != LAYOUT_2
-                or method.__name__ not in _LAYOUT2_TRANSACTIONAL_METHODS
-            ):
-                return method(self, *args, **kwargs)
-            revision_before = int(project.storage_revision)
-            app_state_before = {
-                name: getattr(self.app.state, name, None)
-                for name in (
-                    "dirty",
-                    "project_disk_mtime",
-                    "external_blender_context_revision",
-                )
-            }
-            try:
-                with project_document.layout2_mutation_transaction(
-                    project.project_root
-                ):
-                    with project_transaction.mutate_project(project):
-                        return method(self, *args, **kwargs)
-            except BaseException:
-                self.app.state.project = project
-                project.storage_revision = revision_before
-                for name, value in app_state_before.items():
-                    setattr(self.app.state, name, value)
-                raise
-
-    return wrapper
-
-
-# Methods whose whole body must run under PROJECT_LOCK. Read-only endpoints
-# (get_project, list_*, get_*_preview, exports) are intentionally excluded so
-# concurrent reads and media serving are never blocked by a mutation.
-_MUTATING_METHODS = (
-    # Project lifecycle
-    "method_save_project", "method_save_project_as", "method_convert_project",
-    # Shot CRUD / ordering
-    "method_add_shot", "method_duplicate_shot", "method_update_shot", "method_update_shots_batch",
-    "method_delete_shot", "method_delete_shots_batch", "method_restore_shots_batch",
-    "method_restore_shot", "method_reorder_shots", "method_move_shot_up", "method_move_shot_down",
-    "method_create_generation_request", "method_create_queue_batch_requests", "method_create_codex_batch_requests", "method_delete_generation_request", "method_pull_generation_results", "method_reconcile_generation_results",
-    "method_accept_generation_candidate", "method_remove_fixed_layer",
-    # Shot media / sources
-    "method_import_image_path", "method_import_shot_image", "method_add_shot_reference_image",
-    "method_import_shot_source", "method_remove_shot_image", "method_relink_preview",
-    "method_recover_shot_source", "method_set_shot_reference_image_paths",
-    "method_remove_shot_reference_image", "method_create_shot_canvas", "method_save_shot_drawing",
-    "method_sync_shot", "method_sync_all_shots", "method_save_annotations",
-    "method_add_comment", "method_resolve_comment",
-    # Settings / canvas / references
-    "method_update_settings", "method_set_canvas_color", "method_delete_project_reference",
-    "method_upload_project_reference", "method_upload_reference_video",
-    # Reference-segment bakes (destructive; snapshot + write board images)
-    "method_apply_ref_segment", "method_apply_ref_segment_image", "method_apply_ref_segment_3d",
-    "method_apply_ref_segment_model_captures", "method_restore_ref_apply",
-    "method_delete_ref_segment", "method_snapshot_ref_boards",
-    # Scene 3D
-    "method_open_blender_scene",
-    "method_import_scene3d", "method_import_scene3d_to_scene", "method_create_scene3d",
-    "method_update_scene3d", "method_delete_scene3d", "method_set_active_scene3d",
-    # Scene 2D
-    "method_create_scene2d", "method_update_scene2d", "method_delete_scene2d",
-    "method_open_scene2d", "method_add_scene2d_to_references",
-    "method_create_scene2d_perspective", "method_update_scene2d_perspective",
-    "method_delete_scene2d_perspective", "method_reorder_scene2d_perspectives",
-    "method_import_scene2d_perspective", "method_duplicate_scene2d_perspective",
-    "method_set_primary_scene2d_perspective", "method_move_scene2d_perspective",
-    "method_refresh_scene2d_preview", "method_refresh_scene2d_perspective_preview",
-    "method_open_scene2d_perspective", "method_add_scene2d_perspective_to_references",
-    # Plugin-driven state updates
-    "method_plugin_write_intent", "method_plugin_export_preview", "method_plugin_psd_saved",
-    "method_plugin_focus_shot", "method_plugin_next_shot",
-    "method_plugin_scene2d_export_preview", "method_plugin_scene2d_psd_saved",
-    "method_plugin_scene2d_next_perspective",
-)
-
-for _name in _MUTATING_METHODS:
-    _method = getattr(StoryboardBackendService, _name, None)
-    if _method is not None:
-        setattr(StoryboardBackendService, _name, _serialized_mutation(_method))

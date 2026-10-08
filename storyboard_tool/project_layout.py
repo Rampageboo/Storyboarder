@@ -527,6 +527,7 @@ def shot_metadata_relative(project: ProjectPathContext, shot_id: str, role: str)
     try:
         directory, filename = {
             "annotations": ("annotations", f"{shot_id}.json"),
+            "drawing": ("drawings", f"{shot_id}.json"),
             "notes": ("notes", f"{shot_id}.json"),
         }[role]
     except KeyError as exc:

@@ -41,6 +41,28 @@ def _make_project(tmp_dir: str) -> Project:
     return project_manager.create_project(Path(tmp_dir))
 
 
+def test_model_capture_segment_timing_preserves_short_frames(tmp_path):
+    project = project_manager.create_project(tmp_path)
+    for seconds in (1 / 24, 1 / 60):
+        shot = project_manager.add_shot(project)
+        shot.duration_seconds = seconds
+    model_path = project.references_dir / "frame-model.glb"
+    model_path.write_bytes(b"glTF")
+    model_relative = model_path.relative_to(project.root_path).as_posix()
+    project.settings["reference_model_path"] = model_relative
+    project.settings["ref_segments"] = [{"id": "frame-model", "anchor_shot_id": project.shots[0].shot_id,
+        "end_shot_id": project.shots[1].shot_id, "source_type": "model", "reference_path": model_relative}]
+    captures = [{"shot_id": shot.shot_id, "data_url": "data:image/png;base64," + base64.b64encode(_make_png()).decode("ascii"),
+        "animation_time": 0 if index == 0 else 1 / 24} for index, shot in enumerate(project.shots)]
+    result = reference_segments.apply_model_captures_to_boards(project, project.shots[0].shot_id,
+        project.shots[1].shot_id, "frame-model", "Camera_A", captures)
+    assert reference_segments._segment_storyboard_duration(project.shots, 0, 1) == 1 / 24 + 1 / 60
+    assert result["segment_duration"] == .058
+    assert result["applied"][1]["segment_time"] == .042
+    assert project.shots[1].ref_segment_time == .042
+    assert project.shots[1].ref_video_time == round(1 / 24, 3)
+
+
 # ---------------------------------------------------------------------------
 # _segment_board_range
 # ---------------------------------------------------------------------------

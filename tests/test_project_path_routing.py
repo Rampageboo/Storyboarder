@@ -30,6 +30,8 @@ ROUTED_MODULES = (
     "scene2d.py",
     "scene3d.py",
     "service_exports.py",
+    "service_scene2d.py",
+    "service_scene3d.py",
     "shot_assets.py",
     "shot_files.py",
     "shot_store.py",

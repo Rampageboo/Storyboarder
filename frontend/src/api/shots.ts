@@ -164,6 +164,12 @@ export function saveShotDrawing(shotId: string, body: DrawingSaveRequest): Promi
   })
 }
 
+export function loadShotDrawingProject(shotId: string): Promise<{ editor_data: string | null }> {
+  return requestJson<{ editor_data: string | null }>(
+    `/api/shots/${encodeURIComponent(shotId)}/drawing-project`,
+  )
+}
+
 export function syncShot(shotId: string, force = false): Promise<ProjectPayload> {
   const query = force ? '?force=true' : ''
   return requestJson<ProjectPayload>(`/api/shots/${encodeURIComponent(shotId)}/sync${query}`, {

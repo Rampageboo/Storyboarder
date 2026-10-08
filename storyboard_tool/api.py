@@ -73,6 +73,7 @@ from .schemas import (
     Scene3DUpdateRequest,
     SetReferencePathsRequest,
     SettingsUpdateRequest,
+    StoryGraphBranchRequest,
     ShotUpdateRequest,
     ShotBatchDeleteRequest,
     ShotBatchRestoreRequest,
@@ -605,7 +606,9 @@ def create_app(base_dir: Path, bridge_port: int = 8000) -> FastAPI:
 
     @app.post("/api/project/new")
     def new_project(request: ProjectPathRequest) -> dict[str, Any]:
-        return _svc().method_new_project(request.path, request.canvas_width, request.canvas_height)
+        return _svc().method_new_project(
+            request.path, request.canvas_width, request.canvas_height, request.project_type
+        )
 
     @app.post("/api/project/open")
     def open_project(request: OpenProjectRequest) -> dict[str, Any]:
@@ -650,6 +653,41 @@ def create_app(base_dir: Path, bridge_port: int = 8000) -> FastAPI:
     @app.post("/api/system/browse-photoshop")
     def browse_photoshop() -> dict[str, str]:
         return _svc().method_browse_photoshop()
+
+    @app.put("/api/project/story-graph")
+    def update_story_graph(graph: dict[str, Any]) -> dict[str, Any]:
+        return _svc().method_update_story_graph(graph)
+
+    @app.put("/api/project/comic")
+    def update_comic(request: dict[str, Any]) -> dict[str, Any]:
+        return _svc().method_update_comic(request.get("document", {}), str(request.get("project_path") or ""))
+
+    @app.get("/api/project/comic/pages/{page_id}/image")
+    def comic_page_image(page_id: str) -> Response:
+        content = _svc().method_render_comic(page_id)
+        # Validate the ID before using it in a download filename.
+        filename = re.sub(r"[^A-Za-z0-9_-]", "_", page_id)[:96]
+        return Response(content, media_type="image/png", headers={
+            "Content-Disposition": f'attachment; filename="comic-{filename}.png"',
+        })
+
+    @app.post("/api/project/comic/export")
+    def export_comic(request: dict[str, Any]) -> dict[str, str]:
+        return _svc().method_export_comic(str(request.get("project_path") or ""),
+            str(request.get("page_id") or ""), str(request.get("chapter_id") or ""), format=str(request.get("format") or ""))
+
+    @app.post("/api/project/comic/export/open")
+    def open_comic_export(request: dict[str, Any]) -> dict[str, str]:
+        return _svc().method_export_comic(str(request.get("project_path") or ""),
+            str(request.get("page_id") or ""), str(request.get("chapter_id") or ""), open_file=True, format=str(request.get("format") or ""))
+
+    @app.get("/api/project/comic/prompts/{shot_id}")
+    def comic_prompt_preview(shot_id: str) -> dict[str, Any]:
+        return _svc().method_comic_prompt_preview(shot_id)
+
+    @app.post("/api/project/story-graph/branch")
+    def create_story_branch(request: StoryGraphBranchRequest) -> dict[str, Any]:
+        return _svc().method_create_story_branch(request.route_id, request.from_shot_id, request.title)
 
     @app.patch("/api/project/settings")
     def update_settings(request: SettingsUpdateRequest) -> dict[str, Any]:
@@ -878,7 +916,7 @@ def create_app(base_dir: Path, bridge_port: int = 8000) -> FastAPI:
     @app.post("/api/shots/batch/restore")
     def restore_shots_batch(request: ShotBatchRestoreRequest) -> dict[str, Any]:
         return _svc().method_restore_shots_batch(
-            [item.model_dump() for item in request.items]
+            [item.model_dump() for item in request.items], request.story_graph
         )
 
     @app.post("/api/shots/batch/generation-requests")
@@ -952,7 +990,7 @@ def create_app(base_dir: Path, bridge_port: int = 8000) -> FastAPI:
 
     @app.post("/api/shots/restore")
     def restore_shot(request: RestoreShotRequest) -> dict[str, Any]:
-        return _svc().method_restore_shot(request.shot, request.index)
+        return _svc().method_restore_shot(request.shot, request.index, request.story_graph)
 
     @app.post("/api/shots/reorder")
     def reorder_shots(request: ReorderShotsRequest) -> dict[str, Any]:
@@ -1001,9 +1039,17 @@ def create_app(base_dir: Path, bridge_port: int = 8000) -> FastAPI:
     def create_canvas(shot_id: str, request: CanvasRequest) -> dict[str, Any]:
         return _svc().method_create_shot_canvas(shot_id, request.width, request.height, request.background_color)
 
+    @app.get("/api/shots/{shot_id}/drawing-project")
+    def load_drawing_project(shot_id: str) -> dict[str, str | None]:
+        return _svc().method_load_shot_drawing_project(shot_id)
+
     @app.post("/api/shots/{shot_id}/drawing")
     def save_drawing(shot_id: str, request: DrawingSaveRequest) -> dict[str, Any]:
-        return _svc().method_save_shot_drawing(shot_id, request.image_data)
+        return _svc().method_save_shot_drawing(
+            shot_id,
+            request.image_data,
+            request.editor_data,
+        )
 
     @app.post("/api/shots/{shot_id}/sync")
     def sync_shot(shot_id: str, force: bool = False) -> dict[str, Any]:
@@ -1111,11 +1157,13 @@ def create_app(base_dir: Path, bridge_port: int = 8000) -> FastAPI:
             fps=request.fps,
             seconds_per_board=request.seconds_per_board,
             captions=request.captions,
+            boards=request.boards,
+            route_id=request.route_id,
         )
 
     @app.get("/api/export/animatic")
-    def download_animatic() -> FileResponse:
-        return _file_response_from_meta(_svc().method_download_animatic())
+    def download_animatic(boards: str = "", route_id: str = "") -> FileResponse:
+        return _file_response_from_meta(_svc().method_download_animatic(boards, route_id))
 
     @app.post("/api/export/resolve-range")
     def resolve_board_range(request: ExportScopeRequest = ExportScopeRequest()) -> dict[str, Any]:
@@ -1123,7 +1171,7 @@ def create_app(base_dir: Path, bridge_port: int = 8000) -> FastAPI:
 
     @app.post("/api/export/open")
     def open_export(request: ExportOpenRequest) -> dict[str, str]:
-        return _svc().method_open_export(request.type, boards=request.boards)
+        return _svc().method_open_export(request.type, boards=request.boards, route_id=request.route_id)
 
     return app
 

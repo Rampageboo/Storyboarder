@@ -8,6 +8,7 @@ to the appropriate status codes.
 from __future__ import annotations
 
 from copy import deepcopy
+from math import isfinite
 from typing import Any
 
 from . import project_manager
@@ -80,7 +81,7 @@ def update_shot(shot: Shot, data: dict[str, Any]) -> None:
     shot.dialogue = str(data.get("dialogue", shot.dialogue))
     shot.lighting_note = str(data.get("lighting_note", shot.lighting_note))
     shot.transition_note = str(data.get("transition_note", shot.transition_note))
-    shot.duration_seconds = max(0.1, float(data.get("duration_seconds", shot.duration_seconds)))
+    shot.duration_seconds = _duration_seconds(data.get("duration_seconds", shot.duration_seconds))
     shot.camera_data = (
         data.get("camera_data")
         if isinstance(data.get("camera_data"), dict)
@@ -108,7 +109,13 @@ def update_shot(shot: Shot, data: dict[str, Any]) -> None:
 
 
 def update_shot_duration(shot: Shot, seconds: float) -> None:
-    shot.duration_seconds = max(0.1, float(seconds))
+    shot.duration_seconds = _duration_seconds(seconds)
+
+
+def _duration_seconds(value: Any) -> float:
+    seconds = float(value)
+    # Preserve sub-second frame timing while keeping invalid durations usable.
+    return seconds if isfinite(seconds) and seconds > 0 else 0.1
 
 
 def normalize_shot_payload(shot: Shot, data: dict[str, Any]) -> None:

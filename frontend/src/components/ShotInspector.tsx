@@ -259,7 +259,7 @@ function ShotInspectorEditor({
               </label>
               <label>
                 <div className="field-label">Duration (seconds)</div>
-                <input type="number" step="0.1" min="0.1" value={String(draft?.duration_seconds ?? shot.duration_seconds ?? 3)} onChange={(event) => editShotField(shotId, 'duration_seconds', Number(event.target.value))} />
+                <input type="number" step="any" min="0.000001" value={String(draft?.duration_seconds ?? shot.duration_seconds ?? 3)} onChange={(event) => editShotField(shotId, 'duration_seconds', Number(event.target.value))} />
               </label>
               <label>
                 <div className="field-label">Tags</div>

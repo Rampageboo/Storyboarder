@@ -134,6 +134,10 @@ def save_codex_layer_from_path(project: Project, shot: Shot, source_path: Path) 
     """Atomically replace the fixed Codex layer without touching artist artwork."""
     width = max(1, int(project.settings.get("canvas_width") or 1920))
     height = max(1, int(project.settings.get("canvas_height") or 1080))
+    from .comic import panel_context
+    context = panel_context(project, shot.shot_id)
+    if context:
+        width, height = context["panel"]["width"], context["panel"]["height"]
     destination = resolve_shot_asset(project, shot.shot_id, "codex")
     destination.parent.mkdir(parents=True, exist_ok=True)
     tmp = destination.with_suffix(".tmp.png")
@@ -227,6 +231,7 @@ def _refresh_thumbnail_for_shot(project: Project, shot: Shot) -> Path | None:
         thumb_path.unlink(missing_ok=True)
         shot.thumbnail_path = ""
         return None
+    thumb_path.parent.mkdir(parents=True, exist_ok=True)
     tmp = thumb_path.with_suffix(".tmp.png")
     try:
         composite.thumbnail(THUMBNAIL_SIZE)
@@ -243,6 +248,10 @@ def render_shot_composite_image(project: Project, shot: Shot) -> Image.Image | N
     """Render the fixed three-layer board composite without mutating any layer."""
     width = max(1, int(project.settings.get("canvas_width") or 1920))
     height = max(1, int(project.settings.get("canvas_height") or 1080))
+    from .comic import panel_context
+    context = panel_context(project, shot.shot_id)
+    if context:
+        width, height = context["panel"]["width"], context["panel"]["height"]
     preview_path = resolve_shot_preview_path(project, shot)
     if preview_path is not None and is_solid_color_image(preview_path):
         preview_path = None

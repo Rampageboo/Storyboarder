@@ -47,6 +47,7 @@ import {
 } from './workspacePrimitives'
 import type { WorkspacePrimitiveType, WorkspaceTransformMode } from './workspaceTypes'
 import { captureRendererPng } from './workspaceCapture'
+import { bindPanelResize } from '../../utils/panelResize'
 import {
   exportViewState,
   getCameraStateFromEditor,
@@ -219,6 +220,7 @@ export class Scene3DEditor {
   hintEl!: HTMLElement | null
   transformInputs: Record<string, HTMLInputElement>
   _resizeObserver!: ResizeObserver
+  _disposePanelResize?: () => void
   _keydownHandler!: (event: KeyboardEvent) => void
   _pointerdownHandler!: (event: PointerEvent) => void
 
@@ -346,6 +348,9 @@ export class Scene3DEditor {
             <label>缩放 Z <input type="number" step="0.1" min="0.01" data-tf="sz" /></label>
           </div>
         </aside>
+        <div class="panel-resize-handle scene3d-sidebar-resize" data-edge="right" data-sidebar-resize
+          role="separator" tabindex="0" aria-label="Resize Scene 3D sidebar" aria-orientation="vertical"
+          title="Drag or use arrow keys to resize. Double-click or press Home to reset."></div>
         <div class="scene3d-main">
           <div class="scene3d-toolbar">
             <div class="scene3d-tool-group scene3d-builtin-only">
@@ -391,6 +396,11 @@ export class Scene3DEditor {
         </div>
       </div>
     `
+    const layout = this.rootEl.querySelector('.scene3d-layout') as HTMLElement
+    this._disposePanelResize = bindPanelResize(this.rootEl.querySelector('[data-sidebar-resize]') as HTMLElement, {
+      key: 'scene3d-sidebar', edge: 'right', panel: this.rootEl.querySelector('.scene3d-sidebar') as HTMLElement,
+      host: layout, bounds: layout, width: { property: '--scene3d-sidebar-width', min: 200, max: 620, fraction: 0.4 },
+    })
     this.outlinerEl = this.rootEl.querySelector('[data-outliner]') as HTMLElement
     this.viewportEl = this.rootEl.querySelector('[data-viewport]') as HTMLElement
     this.formatFrameEl = this.rootEl.querySelector('[data-format-frame]') as HTMLElement
@@ -1410,6 +1420,7 @@ export class Scene3DEditor {
       this._sceneSettingsSaveTimer = null
     }
 
+    this._disposePanelResize?.()
     this._resizeObserver?.disconnect()
     if (this._keydownHandler) window.removeEventListener('keydown', this._keydownHandler)
     if (this._pointerdownHandler && this.renderer?.domElement) {

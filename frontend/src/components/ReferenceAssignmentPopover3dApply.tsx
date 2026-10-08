@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
 import {
   applyRefSegment,
@@ -12,7 +12,7 @@ import {
 } from '../api'
 import type { ProjectPayload, ReferenceLink } from '../types'
 import { useProject } from '../state/useProject'
-import { shotDisplayLabel } from '../utils/shotDisplay'
+import { shotDisplayLabel, shotDurationSeconds } from '../utils/shotDisplay'
 import { findRefSegment, refSegmentsWithoutOverlap } from '../utils/refSegmentDisplay'
 import { describeScene3dView, resolveScene3dReferenceView } from '../utils/scene3dView'
 import { applyModelCaptures } from '../scene3d/applyModelCaptures'
@@ -53,7 +53,7 @@ function formatClock(seconds: number) {
 
 function segmentDurationSeconds(shots: { duration_seconds?: number }[], lo: number, hi: number) {
   let total = 0
-  for (let i = lo; i <= hi; i += 1) total += Math.max(0.1, Number(shots[i]?.duration_seconds) || 3)
+  for (let i = lo; i <= hi; i += 1) total += shotDurationSeconds(shots[i]?.duration_seconds)
   return total
 }
 
@@ -144,13 +144,15 @@ function SourceTimeScrubber({
 
   // Keep mutable values accessible inside the stable effect closure via refs.
   const totalRef = useRef(totalDuration)
-  totalRef.current = totalDuration
   const maxStartRef = useRef(maxStart)
-  maxStartRef.current = maxStart
   const onStartChangeRef = useRef(onStartChange)
-  onStartChangeRef.current = onStartChange
   const onVideoSeekRef = useRef(onVideoSeek)
-  onVideoSeekRef.current = onVideoSeek
+  useLayoutEffect(() => {
+    totalRef.current = totalDuration
+    maxStartRef.current = maxStart
+    onStartChangeRef.current = onStartChange
+    onVideoSeekRef.current = onVideoSeek
+  }, [totalDuration, maxStart, onStartChange, onVideoSeek])
 
   useEffect(() => {
     if (!dragging) return

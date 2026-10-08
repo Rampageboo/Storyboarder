@@ -21,6 +21,7 @@ export interface ReferenceLink {
 }
 
 export interface ProjectSettings {
+  project_type?: 'video' | 'comic'
   photoshop_path?: string
   blender_path?: string
   canvas_background_color?: string

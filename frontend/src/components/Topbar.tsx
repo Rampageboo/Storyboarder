@@ -7,10 +7,11 @@ import './Topbar.css'
 const PREHEAT_COUNTDOWN_SECONDS = 10
 let preheatSessionState: 'ready' | 'countdown' | 'cancelled' | 'attempted' = 'ready'
 
-type WorkspaceMode = 'board' | 'scene2d' | 'scene3d'
+type WorkspaceMode = 'board' | 'comic' | 'scene2d' | 'scene3d'
 
 const workspaceLabels: Record<WorkspaceMode, string> = {
   board: 'Board workspace',
+  comic: 'Comic workspace',
   scene2d: 'Scene library',
   scene3d: 'Scene 3D workspace',
 }

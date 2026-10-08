@@ -22,6 +22,7 @@ import { useProject } from '../state/useProject'
 import { useBridgeStatus } from '../state/liveBridgeUtils'
 import type { Scene2D, Scene2DPerspective, Scene3DRecord } from '../types'
 import { ContextMenu, type ContextMenuItem, type ContextMenuState } from './ContextMenu'
+import { PanelResizeHandle } from './PanelResizeHandle'
 import './Scene2DPanel.css'
 
 // TODO(Part 4): Perspective ordering — backend does not yet persist order, so
@@ -180,7 +181,21 @@ export function Scene2DPanel({ active = false }: { active?: boolean }) {
     void loadScenes()
   }, [loadScenes, project?.project_json_path, active])
 
-  useEffect(() => {
+  // Metadata responses can replace objects without changing the edited fields.
+  // Reset drafts only for a changed scalar source, before children render.
+  const sceneSourceKey = JSON.stringify([
+    selectedScene?.id,
+    selectedScene?.title,
+    selectedScene?.description,
+    selectedScene?.location,
+    selectedScene?.time_of_day,
+    selectedScene?.environment_prompt,
+    selectedSceneConsistencyText,
+    selectedScene?.linked_scene3d_id,
+  ])
+  const [previousSceneSourceKey, setPreviousSceneSourceKey] = useState(sceneSourceKey)
+  if (sceneSourceKey !== previousSceneSourceKey) {
+    setPreviousSceneSourceKey(sceneSourceKey)
     setSceneTitle(selectedScene?.title ?? '')
     setSceneDescription(selectedScene?.description ?? '')
     setSceneLocation(selectedScene?.location ?? '')
@@ -193,25 +208,22 @@ export function Scene2DPanel({ active = false }: { active?: boolean }) {
       if (current && perspectives.some((perspective) => perspective.id === current)) return current
       return selectedScene?.primary_perspective_id || perspectives[0]?.id || ''
     })
-  }, [
-    selectedScene?.id,
-    selectedScene?.title,
-    selectedScene?.description,
-    selectedScene?.location,
-    selectedScene?.time_of_day,
-    selectedScene?.environment_prompt,
-    selectedSceneConsistencyText,
-    selectedScene?.linked_scene3d_id,
-    selectedScene?.primary_perspective_id,
-  ])
+  }
 
-  useEffect(() => {
+  const perspectiveSourceKey = JSON.stringify([
+    selectedPerspective?.id,
+    selectedPerspective?.title,
+    selectedPerspective?.linked_scene3d_id,
+  ])
+  const [previousPerspectiveSourceKey, setPreviousPerspectiveSourceKey] = useState(perspectiveSourceKey)
+  if (perspectiveSourceKey !== previousPerspectiveSourceKey) {
+    setPreviousPerspectiveSourceKey(perspectiveSourceKey)
     setPerspectiveTitle(selectedPerspective?.title ?? '')
     setPerspective3dLink(selectedPerspective?.linked_scene3d_id ?? '')
     setPreviewFailedFor('')
     setPreviewZoom(100)
     setFitPreview(true)
-  }, [selectedPerspective?.id, selectedPerspective?.title, selectedPerspective?.linked_scene3d_id])
+  }
 
   // Auto-dismiss action feedback toast
   useEffect(() => {
@@ -677,11 +689,16 @@ export function Scene2DPanel({ active = false }: { active?: boolean }) {
           </button>
         </aside>
 
+        <PanelResizeHandle panelKey="scene2d-list" label="Resize Scene list" edge="right" className="scene2d-list-resize"
+          host=".scene2d-workspace" target=".scene2d-scene-list" width={{ property: '--scene2d-list-width', min: 160, max: 520, fraction: 0.3 }} />
         {/* ── RIGHT: perspective strip + canvas ───────────────────────── */}
         <div className="scene2d-main-col">
 
           {/* Horizontal perspective strip */}
           {selectedScene && (
+            <div className="scene2d-perspectives-frame">
+            <PanelResizeHandle panelKey="scene2d-perspectives" label="Resize Perspectives" edge="bottom" bounds=".scene2d-main-col"
+              height={{ property: '--scene2d-perspectives-height', min: 155, max: 400, fraction: 0.45 }} />
             <div className="scene2d-perspective-strip">
               {selectedScene.perspectives.map((perspective) => (
                 <button
@@ -747,6 +764,7 @@ export function Scene2DPanel({ active = false }: { active?: boolean }) {
                 Import image/PSD
               </button>
             </div>
+            </div>
           )}
 
           {/* ── Canvas area ──────────────────────────────────────────── */}
@@ -795,6 +813,13 @@ export function Scene2DPanel({ active = false }: { active?: boolean }) {
                 </button>
               ) : (
                 <>
+                  <PanelResizeHandle panelKey="scene2d-inspector" label="Resize Scene inspector width" edge="left" bounds=".scene2d-canvas-area"
+                    width={{ property: '--scene2d-inspector-width', min: 250, max: 720, reserve: 48 }} />
+                  <PanelResizeHandle panelKey="scene2d-inspector" label="Resize Scene inspector height" edge="bottom" bounds=".scene2d-canvas-area"
+                    height={{ property: '--scene2d-inspector-height', min: 160, max: 1000, reserve: 80 }} />
+                  <PanelResizeHandle panelKey="scene2d-inspector" label="Resize Scene inspector" edge="bottom-left" bounds=".scene2d-canvas-area"
+                    width={{ property: '--scene2d-inspector-width', min: 250, max: 720, reserve: 48 }}
+                    height={{ property: '--scene2d-inspector-height', min: 160, max: 1000, reserve: 80 }} />
                   <div className="scene2d-inspector-header">
                     <span className="scene2d-inspector-heading">Inspector</span>
                     <button

@@ -2,17 +2,12 @@ import { useCallback, useEffect, useRef, useState, type CSSProperties } from 're
 import { reportUiReady } from './api'
 import { Topbar } from './components/Topbar'
 import { HomePage } from './components/HomePage'
-import { ShotInspector } from './components/ShotInspector'
-import { BoardGrid } from './components/BoardGrid'
-import { BoardStrip } from './components/BoardStrip'
-import { BulkBoardActions } from './components/BulkBoardActions'
-import { CanvasBoard } from './components/CanvasBoard'
+import { StoryWorkspace } from './components/StoryWorkspace'
+import { ComicWorkspace } from './components/ComicWorkspace'
 import { ReferenceSidebar } from './components/ReferenceSidebar'
 import { ReferenceAssignmentPopover } from './components/ReferenceAssignmentPopover'
 import { Scene2DPanel } from './components/Scene2DPanel'
 import { Scene3DPanel } from './components/Scene3DPanel'
-import { NeighborContext } from './components/NeighborContext'
-import { AdvancedPanel } from './components/AdvancedPanel'
 import { SettingsModal } from './components/SettingsModal'
 import { ExportModal } from './components/ExportModal'
 import { ProjectProvider } from './state/ProjectContext'
@@ -24,7 +19,7 @@ import { useAutosave } from './hooks/useAutosave'
 import type { ProjectPathRequest } from './types'
 import './App.css'
 
-type WorkspaceMode = 'board' | 'scene2d' | 'scene3d'
+type WorkspaceMode = 'board' | 'comic' | 'scene2d' | 'scene3d'
 
 function LeftRail({
   showNav,
@@ -76,6 +71,11 @@ function LeftRail({
               <span className="left-rail-icon">&#9638;</span>
               <span>Board</span>
             </button>
+            <button type="button" className={`left-rail-item ${workspaceMode === 'comic' ? 'is-active' : ''}`}
+              onClick={() => onSetWorkspaceMode('comic')} title="Comic pages, spreads and long scrolls"
+              aria-current={workspaceMode === 'comic' ? 'page' : undefined} aria-pressed={workspaceMode === 'comic'}>
+              <span className="left-rail-icon">&#9707;</span><span>Comic</span>
+            </button>
             <button
               type="button"
               className={`left-rail-item ${workspaceMode === 'scene2d' ? 'is-active' : ''}`}
@@ -122,48 +122,8 @@ function LeftRail({
   )
 }
 
-function BoardWorkspace() {
-  const [boardView, setBoardView] = useState<'strip' | 'grid'>('strip')
-  return (
-    <>
-      <main className="main-center">
-        <BulkBoardActions />
-        <div className="board-view-toggle" role="tablist" aria-label="Board view">
-          <button
-            type="button"
-            role="tab"
-            aria-selected={boardView === 'strip'}
-            className={boardView === 'strip' ? 'is-active' : ''}
-            onClick={() => setBoardView('strip')}
-          >
-            Strip
-          </button>
-          <button
-            type="button"
-            role="tab"
-            aria-selected={boardView === 'grid'}
-            className={boardView === 'grid' ? 'is-active' : ''}
-            onClick={() => setBoardView('grid')}
-          >
-            Grid
-          </button>
-        </div>
-        {boardView === 'grid' ? (
-          <BoardGrid />
-        ) : (
-          <>
-            <CanvasBoard />
-            <NeighborContext />
-            <BoardStrip />
-          </>
-        )}
-      </main>
-      <aside className="main-right">
-        <ShotInspector />
-        <AdvancedPanel />
-      </aside>
-    </>
-  )
+function BoardWorkspace({ active }: { active: boolean }) {
+  return <StoryWorkspace active={active} />
 }
 
 function RightRail({
@@ -334,9 +294,12 @@ function RightRail({
 }
 
 function AppInner() {
-  const { project, initialLoading, lastError, clearError, reloadProject, closeProjectToHome, projectActionBusy } =
+  const { lifecycle, project, initialLoading, lastError, clearError, reloadProject, closeProjectToHome, projectActionBusy, drawingActive, reportError, runProjectMutation } =
     useProject()
-  const [workspaceMode, setWorkspaceMode] = useState<WorkspaceMode>('board')
+  const workspaceKey = project ? `${lifecycle.capture()}:${project.project_json_path}:${project.project_path}` : ''
+  const [workspace, setWorkspace] = useState<{ key: string; mode: WorkspaceMode }>({ key: '', mode: 'board' })
+  const workspaceMode = workspace.key === workspaceKey ? workspace.mode : project?.settings.project_type === 'comic' ? 'comic' : 'board'
+  const setWorkspaceMode = (mode: WorkspaceMode) => setWorkspace({ key: workspaceKey, mode })
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [exportOpen, setExportOpen] = useState(false)
   const [refsOpen, setRefsOpen] = useState(false)
@@ -362,10 +325,6 @@ function AppInner() {
     void reloadProject()
   }, [reloadProject])
 
-  useEffect(() => {
-    setWorkspaceMode('board')
-  }, [project?.project_json_path, project?.project_path])
-
   // Report UI-ready after Welcome or Board UI paints (double rAF = 2 frames).
   // This lets the native splash window close at the right moment.
   useEffect(() => {
@@ -387,7 +346,10 @@ function AppInner() {
           workspaceMode={workspaceMode}
           refsOpen={refsOpen}
           onToggleRefs={() => setRefsOpen((v) => !v)}
-          onSetWorkspaceMode={setWorkspaceMode}
+          onSetWorkspaceMode={mode => {
+            if (drawingActive && mode !== workspaceMode) { reportError(new Error('请先保存或关闭绘画编辑器，再切换工作区。')); return }
+            void runProjectMutation(async () => { setWorkspaceMode(mode) }).catch(reportError)
+          }}
           onOpenSettings={() => setSettingsOpen(true)}
           onGoHome={() => void handleGoHome()}
           homeBusy={projectActionBusy}
@@ -413,10 +375,13 @@ function AppInner() {
               <>
                 <ReferenceSidebar open={refsOpen} onOpenChange={setRefsOpen} />
                 <div className="workspace-content workspace-content-board" hidden={workspaceMode !== 'board'}>
-                  <BoardWorkspace />
+                  <BoardWorkspace active={workspaceMode === 'board'} />
+                </div>
+                <div className="workspace-content workspace-content-comic" hidden={workspaceMode !== 'comic'}>
+                  <ComicWorkspace key={workspaceKey} active={workspaceMode === 'comic'} />
                 </div>
                 <div className="workspace-content workspace-content-scene" hidden={workspaceMode !== 'scene2d'}>
-                  <Scene2DPanel active={workspaceMode === 'scene2d'} />
+                  <Scene2DPanel key={workspaceKey} active={workspaceMode === 'scene2d'} />
                 </div>
                 <div className="workspace-content workspace-content-scene" hidden={workspaceMode !== 'scene3d'}>
                   <Scene3DPanel active={workspaceMode === 'scene3d'} />

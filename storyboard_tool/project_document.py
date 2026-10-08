@@ -69,7 +69,8 @@ LAYOUT2_JSON_MEMBER_MAX_BYTES = 16 * 1024 * 1024
 LAYOUT2_ARCHIVE_MAX_UNCOMPRESSED_BYTES = 64 * 1024 * 1024
 LAYOUT2_ARCHIVE_MAX_MEMBERS = 10_000
 _LAYOUT2_REQUIRED_MEMBERS = frozenset({"project.json", "settings.json", "shots.json"})
-_LAYOUT2_JSON_PREFIXES = frozenset({"annotations", "notes", "scenes2d", "scenes3d"})
+_LAYOUT2_OPTIONAL_MEMBERS = frozenset({"workspace/cache/preview_analysis.json"})
+_LAYOUT2_JSON_PREFIXES = frozenset({"annotations", "drawings", "notes", "scenes2d", "scenes3d"})
 _LAYOUT2_GENERATION_GROUPS = frozenset({"requests", "state", "results"})
 _LAYOUT2_COVER_MEMBER = "cover.png"
 _LAYOUT2_STATE_MEMBER = "state.json"
@@ -585,7 +586,7 @@ def _layout2_member_kind(name: str) -> str:
     except ProjectPathError as exc:
         raise Layout2DocumentError(str(exc)) from exc
     parts = relative.parts
-    if name in _LAYOUT2_REQUIRED_MEMBERS:
+    if name in _LAYOUT2_REQUIRED_MEMBERS or name in _LAYOUT2_OPTIONAL_MEMBERS:
         return "json"
     if name == _LAYOUT2_COVER_MEMBER:
         return "cover"

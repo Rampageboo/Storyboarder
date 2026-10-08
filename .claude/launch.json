@@ -4,14 +4,34 @@
     {
       "name": "uxp-plugin-preview",
       "runtimeExecutable": "npx",
-      "runtimeArgs": ["serve", "-p", "5900", "-s", "photoshop_uxp_plugin"],
+      "runtimeArgs": [
+        "serve",
+        "-p",
+        "5900",
+        "-s",
+        "photoshop_uxp_plugin"
+      ],
       "port": 5900
     },
     {
       "name": "frontend-dev",
       "runtimeExecutable": "npm.cmd",
-      "runtimeArgs": ["--prefix", "frontend", "run", "dev"],
+      "runtimeArgs": [
+        "--prefix",
+        "frontend",
+        "run",
+        "dev"
+      ],
       "port": 5173
+    },
+    {
+      "name": "backend-dev",
+      "runtimeExecutable": "python",
+      "runtimeArgs": [
+        "-c",
+        "from pathlib import Path;import uvicorn;from storyboard_tool.api import create_app;uvicorn.run(create_app(Path.cwd()),host='127.0.0.1',port=8000)"
+      ],
+      "port": 8000
     }
   ]
 }

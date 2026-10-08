@@ -1,5 +1,10 @@
 import type { Shot } from '../types'
 
+export function shotDurationSeconds(value: unknown): number {
+  const duration = Number(value)
+  return Number.isFinite(duration) && duration > 0 ? duration : 3
+}
+
 export function shortShotId(shotId: string, length = 8): string {
   const id = shotId.trim()
   if (id.length <= length) return id

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
 import {
   createShotCanvas,
   openShotPreview,
@@ -7,6 +7,7 @@ import {
   relinkPreview,
   removeShotImage,
   removeShotLayer,
+  saveShotDrawing,
   shotBoardBackgroundUrl,
   shotCodexLayerUrl,
   shotImageUrl,
@@ -18,13 +19,14 @@ import { useProject } from '../state/useProject'
 import { shotDisplayLabel } from '../utils/shotDisplay'
 import { shotHasPreview, shotShouldOverlayPreview } from '../utils/shotPreview'
 import { FloatingLayersPanel, type CanvasLayerId } from './FloatingLayersPanel'
+import { FullDrawingEditor } from './FullDrawingEditor'
 import './CanvasBoard.css'
 
 type SyncResult = { synced?: boolean; message?: string }
 const ALL_LAYERS_VISIBLE: Record<CanvasLayerId, boolean> = { background: true, codex: true, artwork: true }
 
-export function CanvasBoard() {
-  const { project, selectedShotId, setProject, flushDirtyShots, projectActionBusy, reportError, missingFiles } = useProject()
+export function CanvasBoard({ panelsInitiallyOpen = true, panelSize }: { panelsInitiallyOpen?: boolean; panelSize?: { width: number; height: number } }) {
+  const { project, selectedShotId, setProject, flushDirtyShots, projectActionBusy, reportError, missingFiles, setDrawingActive } = useProject()
   const [bust, setBust] = useState(0)
   const [loadFailed, setLoadFailed] = useState(false)
   const [busy, setBusy] = useState(false)
@@ -40,10 +42,11 @@ export function CanvasBoard() {
   const [previewZoom, setPreviewZoom] = useState(100)
   const [fitPreview, setFitPreview] = useState(true)
   const [layerVisibility, setLayerVisibility] = useState<Record<CanvasLayerId, boolean>>(ALL_LAYERS_VISIBLE)
-  // Keep the inspector available by default, then preserve the user's explicit
-  // open/closed choice while they move between boards.
-  const [layersPanelOpen, setLayersPanelOpen] = useState(true)
-  const [queuePanelOpen, setQueuePanelOpen] = useState(true)
+  // Workspaces choose the initial panel visibility; later board/view switches
+  // preserve the user's explicit open/closed choices.
+  const [layersPanelOpen, setLayersPanelOpen] = useState(panelsInitiallyOpen)
+  const [queuePanelOpen, setQueuePanelOpen] = useState(panelsInitiallyOpen)
+  const [fullEditorMode, setFullEditorMode] = useState(false)
   const imageInputRef = useRef<HTMLInputElement | null>(null)
   const sourceInputRef = useRef<HTMLInputElement | null>(null)
   const canvasBodyRef = useRef<HTMLDivElement | null>(null)
@@ -67,7 +70,9 @@ export function CanvasBoard() {
     || (hasArtworkImage && layerVisibility.artwork)
   )
   const hasVisual = hasVisibleLayer && !loadFailed
-  const canvasAspect = `${Number(project?.settings?.canvas_width || 1920)} / ${Number(project?.settings?.canvas_height || 1080)}`
+  const canvasWidth = panelSize?.width ?? Number(project?.settings?.canvas_width || 1920)
+  const canvasHeight = panelSize?.height ?? Number(project?.settings?.canvas_height || 1080)
+  const canvasAspect = `${canvasWidth} / ${canvasHeight}`
   const linkedCount = [hasBoardBg, hasCodexLayer, hasPreview].filter(Boolean).length
   const linkedTotal = 3
   const linkedLabel = `Layers ${linkedCount}/${linkedTotal}`
@@ -83,6 +88,12 @@ export function CanvasBoard() {
     const v = shot.preview_disk_mtime || shot.thumbnail_disk_mtime || bust || 0
     return `${shotImageUrl(shot.shot_id)}?v=${encodeURIComponent(String(v))}`
   }, [shot, bust, layerVisibility.artwork])
+
+  const drawingArtworkSrc = useMemo(() => {
+    if (!shot || !shotShouldOverlayPreview(shot)) return ''
+    const v = shot.preview_disk_mtime || shot.thumbnail_disk_mtime || bust || 0
+    return `${shotImageUrl(shot.shot_id)}?v=${encodeURIComponent(String(v))}`
+  }, [shot, bust])
 
   const backgroundSrc = useMemo(() => {
     if (!shot || shot.has_board_background !== true || !layerVisibility.background) return ''
@@ -112,14 +123,21 @@ export function CanvasBoard() {
     setLayerVisibility(ALL_LAYERS_VISIBLE)
     setPreviewZoom(100)
     setFitPreview(true)
+    setFullEditorMode(false)
     const cur = project?.shots.find((s) => s.shot_id === selectedShotId)
     setRelinkPath(cur?.preview_image_path || cur?.image_path || '')
   }
 
+  const editorActive = fullEditorMode
+  useLayoutEffect(() => {
+    setDrawingActive(editorActive)
+    return () => setDrawingActive(false)
+  }, [editorActive, setDrawingActive])
+
   // Keep the zoom guard in sync with whether the canvas has something to zoom
   useEffect(() => {
-    canWheelZoomRef.current = hasVisual
-  }, [hasVisual])
+    canWheelZoomRef.current = hasVisual && !editorActive
+  }, [hasVisual, editorActive])
 
   // Wheel-to-zoom on the canvas body
   useEffect(() => {
@@ -300,6 +318,29 @@ export function CanvasBoard() {
     })
   }
 
+  const handleSaveDrawing = async (imageData: string, editorData?: string): Promise<boolean> => {
+    if (!shot) return false
+    const shotId = shot.shot_id
+    setBusy(true)
+    try {
+      await flushDirtyShots()
+      setProject(await saveShotDrawing(shotId, {
+        image_data: imageData,
+        ...(editorData ? { editor_data: editorData } : {}),
+      }))
+      setLoadFailed(false)
+      setBust((x) => x + 1)
+      setFullEditorMode(false)
+      setNote(editorData ? 'Editable drawing saved to this shot.' : 'Drawing saved to this shot.')
+      return true
+    } catch (error) {
+      reportError(error)
+      return false
+    } finally {
+      setBusy(false)
+    }
+  }
+
   if (!project) {
     return (
       <div className="canvas canvas-empty-state">
@@ -327,9 +368,17 @@ export function CanvasBoard() {
         <div className="canvas-toolbar" aria-label="Preview actions">
           <button
             type="button"
+            onClick={() => setFullEditorMode(true)}
+            disabled={disabled || editorActive}
+            title="Draw directly in the storyboard canvas"
+          >
+            Draw
+          </button>
+          <button
+            type="button"
             className="primary"
             onClick={() => handleOpenInPhotoshop()}
-            disabled={disabled}
+            disabled={disabled || editorActive}
             title="Open the shot's source in Photoshop (creates a blank canvas if none exists)"
           >
             Open in Photoshop
@@ -337,7 +386,7 @@ export function CanvasBoard() {
           <button
             type="button"
             onClick={() => handleSync()}
-            disabled={disabled || !hasSource}
+            disabled={disabled || editorActive || !hasSource}
             title="Sync the preview from the linked source file"
           >
             Sync
@@ -345,12 +394,12 @@ export function CanvasBoard() {
           <button
             type="button"
             onClick={() => handleOpenPreview()}
-            disabled={disabled || !hasPreview}
+            disabled={disabled || editorActive || !hasPreview}
             title="Open the preview image externally"
           >
             Preview
           </button>
-          <button type="button" onClick={() => imageInputRef.current?.click()} disabled={disabled}>
+          <button type="button" onClick={() => imageInputRef.current?.click()} disabled={disabled || editorActive}>
             {busy ? 'Working...' : 'Upload'}
           </button>
           <button
@@ -360,7 +409,7 @@ export function CanvasBoard() {
               setLoadFailed(false)
               setBust((x) => x + 1)
             }}
-            disabled={disabled || (!hasArtworkImage && !hasBoardBg)}
+            disabled={disabled || editorActive || (!hasArtworkImage && !hasBoardBg)}
             title="Reload preview from server"
             aria-label="Refresh preview"
           >
@@ -373,6 +422,7 @@ export function CanvasBoard() {
             aria-label={linkedTitle}
             aria-pressed={layersPanelOpen}
             onClick={() => setLayersPanelOpen((open) => !open)}
+            disabled={disabled || editorActive}
           >
             {linkedLabel}
           </button>
@@ -383,10 +433,11 @@ export function CanvasBoard() {
             aria-label="Generation Queue"
             aria-pressed={queuePanelOpen}
             onClick={() => setQueuePanelOpen((open) => !open)}
+            disabled={disabled || editorActive}
           >
             Queue
           </button>
-          <details className="canvas-more">
+          <details className="canvas-more" hidden={editorActive}>
             <summary aria-label="More preview actions">More</summary>
             <div className="canvas-more-menu">
               <button type="button" onClick={() => sourceInputRef.current?.click()} disabled={disabled}>
@@ -508,9 +559,24 @@ export function CanvasBoard() {
 
       <div
         ref={canvasBodyRef}
-        className={`canvas-body${fitPreview ? '' : ' is-zoomed'}`}
+        className={`canvas-body${fitPreview ? '' : ' is-zoomed'}${fullEditorMode ? ' is-full-editor' : ''}`}
       >
-        {hasVisual ? (
+        {fullEditorMode ? (
+          <FullDrawingEditor
+            key={shot.shot_id}
+            shotId={shot.shot_id}
+            width={Math.max(1, canvasWidth)}
+            height={Math.max(1, canvasHeight)}
+            artworkImage={drawingArtworkSrc}
+            boardBackgroundImage={backgroundSrc}
+            codexImage={codexSrc}
+            canvasColor={project.settings?.canvas_background_color || '#E8E8E8'}
+            disabled={disabled}
+            onCancel={() => setFullEditorMode(false)}
+            onError={reportError}
+            onSave={handleSaveDrawing}
+          />
+        ) : hasVisual ? (
           <div
             className={`canvas-media${fitPreview ? '' : ' is-zoomed'}`}
             style={fitPreview ? {} : ({ '--canvas-zoom': `${previewZoom}%` } as CSSProperties)}
@@ -561,7 +627,7 @@ export function CanvasBoard() {
             <p>Start drawing this shot</p>
             <p className="canvas-empty-hint">Create a blank PSD canvas, upload an image, or upload an existing PSD.</p>
             <p className="canvas-empty-hint">
-              New canvases use {project.settings?.canvas_width ?? 1920}×{project.settings?.canvas_height ?? 1080},{' '}
+              New canvases use {canvasWidth}×{canvasHeight},{' '}
               {project.settings?.canvas_background_color ?? '#E8E8E8'}.
             </p>
             <div className="canvas-actions">
@@ -596,7 +662,7 @@ export function CanvasBoard() {
         )}
 
         {/* Zoom HUD — appears when not in fit mode */}
-        {hasVisual && !fitPreview && (
+        {hasVisual && !editorActive && !fitPreview && (
           <div className="canvas-zoom-hud">
             <span className="canvas-zoom-hud-pct">{previewZoom}%</span>
             <button
@@ -610,7 +676,7 @@ export function CanvasBoard() {
           </div>
         )}
       </div>
-      {layersPanelOpen || queuePanelOpen ? (
+      {!editorActive && (layersPanelOpen || queuePanelOpen) ? (
         <FloatingLayersPanel
           key={`${project.project_json_path}:${shot.shot_id}`}
           shot={shot}

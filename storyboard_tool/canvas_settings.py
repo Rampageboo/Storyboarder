@@ -39,6 +39,14 @@ def get_canvas_size(project: Project) -> tuple[int, int]:
     return normalize_canvas_size(width, height)
 
 
+def get_shot_canvas_size(project: Project, shot: Shot) -> tuple[int, int]:
+    from .comic import panel_context
+    context = panel_context(project, shot.shot_id)
+    if context:
+        return context["panel"]["width"], context["panel"]["height"]
+    return get_canvas_size(project)
+
+
 def shot_is_blank_canvas(project: Project, shot: Shot) -> bool:
     if shot.preview_image_path or shot.image_path:
         linked = _pm().resolve_project_path(project, shot.preview_image_path or shot.image_path)
@@ -144,7 +152,7 @@ def _sync_shot_canvas_color_assets(project: Project, shot: Shot, color: str) -> 
 
 def write_canvas_color_files(project: Project, color: str, shot: Shot | None = None) -> None:
     normalized = normalize_hex_color(color)
-    canvas_width, canvas_height = get_canvas_size(project)
+    canvas_width, canvas_height = get_shot_canvas_size(project, shot) if shot is not None else get_canvas_size(project)
     payload = {
         "canvas_background_color": normalized,
         "canvas_width": canvas_width,
@@ -198,11 +206,15 @@ def create_canvas_for_shot(
     height: int | None = None,
     background_color: str | None = None,
 ) -> Path:
-    default_width, default_height = get_canvas_size(project)
-    canvas_width, canvas_height = normalize_canvas_size(
-        default_width if width is None else width,
-        default_height if height is None else height,
-    )
+    default_width, default_height = get_shot_canvas_size(project, shot)
+    from .comic import panel_context
+    if panel_context(project, shot.shot_id):
+        canvas_width, canvas_height = default_width, default_height
+    else:
+        canvas_width, canvas_height = normalize_canvas_size(
+            default_width if width is None else width,
+            default_height if height is None else height,
+        )
     color = persist_canvas_color(
         project,
         background_color or get_canvas_color(project),

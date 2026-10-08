@@ -121,6 +121,21 @@ class TestScopeToBoards(unittest.TestCase):
                 export_service.scope_to_boards(project, "9")
 
 
+    def test_distinct_gappy_exports_preserve_both_files(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            project = self._project(tmp, 10)
+            first_view, first_suffix = export_service.scope_to_boards(project, "1,3,5,9")
+            first_path = export_service.export_shot_list(first_view, first_suffix)
+            first_content = first_path.read_bytes()
+            second_view, second_suffix = export_service.scope_to_boards(project, "1,4,7,9")
+            second_path = export_service.export_shot_list(second_view, second_suffix)
+
+            self.assertNotEqual(first_path, second_path)
+            self.assertEqual(first_path.read_bytes(), first_content)
+            self.assertNotEqual(second_path.read_bytes(), first_content)
+            self.assertEqual(len(project.shots), 10)
+
+
 class TestCheckExportExists(unittest.TestCase):
     def test_missing_file_raises_file_not_found(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

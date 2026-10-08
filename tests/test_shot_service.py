@@ -10,6 +10,30 @@ from storyboard_tool import project_manager, shot_service
 from storyboard_tool.models import Project, Shot
 
 
+class TestFrameDurationContract(unittest.TestCase):
+    def test_subsecond_frame_durations_survive_both_write_paths(self) -> None:
+        for seconds in (1 / 24, 1 / 60, .001):
+            with self.subTest(seconds=seconds):
+                shot = Shot(shot_id="frame")
+                shot_service.update_shot(shot, {"duration_seconds": seconds})
+                self.assertEqual(shot.duration_seconds, seconds)
+                shot_service.update_shot_duration(shot, seconds)
+                self.assertEqual(shot.duration_seconds, seconds)
+
+    def test_nonpositive_and_nonfinite_duration_values_use_safe_fallback(self) -> None:
+        for seconds in (float("nan"), float("inf"), -float("inf"), 0, -1):
+            with self.subTest(seconds=seconds):
+                shot = Shot(shot_id="frame")
+                shot_service.update_shot(shot, {"duration_seconds": seconds})
+                self.assertEqual(shot.duration_seconds, .1)
+                shot_service.update_shot_duration(shot, seconds)
+                self.assertEqual(shot.duration_seconds, .1)
+
+    def test_non_numeric_duration_still_raises(self) -> None:
+        with self.assertRaises(ValueError):
+            shot_service.update_shot_duration(Shot(shot_id="frame"), "invalid")
+
+
 def _project_with_shots(*shot_ids: str) -> Project:
     """In-memory project — no filesystem, for lookup-only tests."""
     project = Project(root_path=Path("/fake"))

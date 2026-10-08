@@ -20,6 +20,7 @@ function isTypingTarget(target: EventTarget | null): boolean {
 export function useGlobalShortcuts() {
   const {
     project,
+    activeRouteShots,
     selectedShotId,
     selectedShotIds,
     setSelectedShotId,
@@ -28,7 +29,6 @@ export function useGlobalShortcuts() {
     reportError,
     projectActionBusy,
     activeAppliedSegmentId,
-    dismissRefSegmentUi,
     addShotAfterSelection,
     deleteSelectedShot,
     deleteActiveRefSegment,
@@ -39,9 +39,9 @@ export function useGlobalShortcuts() {
   } = useProject()
 
   const runningRef = useRef(false)
-  const stateRef = useRef({ project, selectedShotId, selectedShotIds, projectActionBusy, activeAppliedSegmentId })
+  const stateRef = useRef({ project, activeRouteShots, selectedShotId, selectedShotIds, projectActionBusy, activeAppliedSegmentId })
   useLayoutEffect(() => {
-    stateRef.current = { project, selectedShotId, selectedShotIds, projectActionBusy, activeAppliedSegmentId }
+    stateRef.current = { project, activeRouteShots, selectedShotId, selectedShotIds, projectActionBusy, activeAppliedSegmentId }
   })
 
   useEffect(() => {
@@ -59,6 +59,8 @@ export function useGlobalShortcuts() {
     }
 
     const onKeyDown = (event: KeyboardEvent) => {
+      // The Fabric editor owns save/undo/delete while open; never also mutate boards.
+      if (document.body.classList.contains('storyboard-drawing-active')) return
       const { project, activeAppliedSegmentId } = stateRef.current
       const selectedShotId = stateRef.current.selectedShotId
       if (!project) return
@@ -77,6 +79,7 @@ export function useGlobalShortcuts() {
       }
 
       if (isTypingTarget(event.target)) return
+      if (document.querySelector('[data-comic-active="true"]')) return
 
       // Undo / redo of board operations. Skipped above when focus is in a text field
       // so the browser's native text undo still works while editing metadata.
@@ -93,7 +96,8 @@ export function useGlobalShortcuts() {
 
       if (mod || event.altKey) return
 
-      const shots = project.shots
+      const allBoards = document.querySelector('[data-story-view="all"]')
+      const shots = allBoards ? project.shots : stateRef.current.activeRouteShots
       const idx = shots.findIndex((s) => s.shot_id === selectedShotId)
 
       switch (event.key) {
@@ -113,7 +117,6 @@ export function useGlobalShortcuts() {
           event.preventDefault()
           if (activeAppliedSegmentId) {
             if (!window.confirm('Delete this applied reference segment and clear its generated board backgrounds/previews?')) break
-            dismissRefSegmentUi()
             void run(deleteActiveRefSegment)
             break
           }
@@ -155,7 +158,6 @@ export function useGlobalShortcuts() {
     saveProject,
     setSelectedShotId,
     reportError,
-    dismissRefSegmentUi,
     addShotAfterSelection,
     deleteSelectedShot,
     deleteActiveRefSegment,

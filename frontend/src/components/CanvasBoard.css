@@ -412,3 +412,396 @@
   overflow: hidden;
   text-overflow: ellipsis;
 }
+
+.full-drawing-editor {
+  position: absolute;
+  inset: 0;
+  z-index: 20;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  background: #101217;
+}
+
+.canvas-body.is-full-editor {
+  padding: 0;
+  overflow: hidden;
+}
+
+.native-drawing-toolbar {
+  position: relative;
+  z-index: 2;
+  flex: 0 0 auto;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  min-height: 42px;
+  padding: 5px 8px;
+  border-bottom: 1px solid var(--color-border);
+  background: color-mix(in srgb, var(--color-surface) 96%, transparent);
+}
+
+.native-drawing-options {
+  min-height: 36px;
+  gap: 6px;
+}
+
+.native-drawing-fill,
+.native-drawing-opacity {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--color-text-muted);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.native-drawing-fill input {
+  accent-color: var(--color-accent);
+}
+
+.native-drawing-opacity input {
+  width: 64px;
+  accent-color: var(--color-accent);
+}
+
+.native-drawing-stabilize {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--color-text-muted);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.native-drawing-stabilize input {
+  width: 70px;
+  accent-color: var(--color-accent);
+}
+
+.native-drawing-brush-hint {
+  color: var(--color-text-muted);
+  font-size: 10px;
+}
+
+.native-drawing-opacity span,
+.native-drawing-zoom {
+  min-width: 32px;
+  color: var(--color-text);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+}
+
+.native-drawing-tool-group,
+.native-drawing-history {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.full-drawing-toolbar-spacer {
+  flex: 1 1 auto;
+}
+
+.native-drawing-toolbar button {
+  min-height: 26px;
+  padding: 3px 8px;
+  border: 1px solid var(--color-border);
+  border-radius: 7px;
+  background: color-mix(in srgb, var(--bg-elevated) 82%, transparent);
+  color: var(--color-text);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.native-drawing-toolbar button:hover:not(:disabled),
+.native-drawing-toolbar button.is-active {
+  border-color: color-mix(in srgb, var(--color-accent) 75%, var(--color-border));
+  background: color-mix(in srgb, var(--color-accent) 24%, var(--bg-elevated));
+}
+
+.native-drawing-toolbar button.is-active {
+  color: var(--color-accent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--color-accent) 32%, transparent);
+}
+
+.native-drawing-toolbar button.primary {
+  border-color: var(--color-accent);
+  background: var(--color-accent);
+  color: #120d05;
+  font-weight: 650;
+}
+
+.native-drawing-toolbar button:disabled {
+  opacity: 0.48;
+}
+
+.native-drawing-color,
+.native-drawing-size {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--color-text-muted);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.native-drawing-color input {
+  width: 27px;
+  height: 25px;
+  padding: 2px;
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  background: var(--bg-elevated);
+}
+
+.native-drawing-size input {
+  width: 88px;
+  accent-color: var(--color-accent);
+}
+
+.native-drawing-size span {
+  min-width: 31px;
+  color: var(--color-text);
+  font-variant-numeric: tabular-nums;
+}
+
+.native-drawing-workspace {
+  position: relative;
+  flex: 1 1 0;
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  background: #0d0f13;
+}
+
+.native-drawing-stage-wrap {
+  position: relative;
+  flex: 1 1 0;
+  min-width: 0;
+  min-height: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+  background:
+    linear-gradient(45deg, #171a20 25%, transparent 25%),
+    linear-gradient(-45deg, #171a20 25%, transparent 25%),
+    linear-gradient(45deg, transparent 75%, #171a20 75%),
+    linear-gradient(-45deg, transparent 75%, #171a20 75%),
+    #111318;
+  background-position: 0 0, 0 10px, 10px -10px, -10px 0;
+  background-size: 20px 20px;
+}
+
+.native-drawing-stage-position {
+  min-width: 100%;
+  min-height: 100%;
+  display: grid;
+  place-items: center;
+}
+
+.native-drawing-stage-wrap.is-hand {
+  cursor: grab;
+  touch-action: none;
+}
+
+.native-drawing-stage-wrap.is-hand:active {
+  cursor: grabbing;
+}
+
+.native-drawing-stage {
+  position: relative;
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.45);
+  overflow: hidden;
+}
+
+.native-drawing-reference,
+.native-drawing-stage > .canvas-container {
+  position: absolute !important;
+  inset: 0;
+  width: 100% !important;
+  height: 100% !important;
+}
+
+.native-drawing-reference {
+  object-fit: fill;
+  pointer-events: none;
+  user-select: none;
+}
+
+.native-drawing-reference-codex {
+  z-index: 1;
+}
+
+.native-drawing-stage > .canvas-container {
+  z-index: 2;
+}
+
+.native-drawing-stage .lower-canvas,
+.native-drawing-stage .upper-canvas {
+  width: 100% !important;
+  height: 100% !important;
+}
+
+.native-drawing-layers {
+  flex: 0 0 240px;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  border-left: 1px solid var(--color-border);
+  background: color-mix(in srgb, var(--color-surface) 96%, #090a0d);
+}
+
+.native-drawing-layers-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-height: 34px;
+  padding: 0 10px;
+  border-bottom: 1px solid var(--color-border);
+  color: var(--color-text);
+  font-size: 12px;
+}
+
+.native-drawing-layers-heading span {
+  color: var(--color-text-muted);
+  font-size: 10px;
+}
+
+.native-drawing-layer-list {
+  flex: 1 1 0;
+  min-height: 0;
+  padding: 6px;
+  overflow: auto;
+}
+
+.native-drawing-layer {
+  display: grid;
+  grid-template-columns: 22px minmax(0, 1fr) 22px 20px 20px 20px;
+  align-items: stretch;
+  min-height: 38px;
+  margin-bottom: 4px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--bg-elevated) 75%, transparent);
+}
+
+.native-layer-rename {
+  width: 100%;
+  min-width: 0;
+  padding: 4px;
+  border: 1px solid var(--color-accent);
+  border-radius: 4px;
+  background: var(--bg-elevated);
+  color: var(--color-text);
+  font-size: 11px;
+}
+
+.native-drawing-layer button:disabled {
+  opacity: 0.4;
+}
+
+.native-drawing-layer.is-active {
+  border-color: color-mix(in srgb, var(--color-accent) 70%, var(--color-border));
+  background: color-mix(in srgb, var(--color-accent) 13%, var(--bg-elevated));
+}
+
+.native-drawing-layer button {
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: var(--color-text-muted);
+  font-size: 11px;
+}
+
+.native-drawing-layer button:hover:not(:disabled) {
+  color: var(--color-text);
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.native-drawing-layer .native-layer-name {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: center;
+  padding: 3px 5px;
+  overflow: hidden;
+  text-align: left;
+}
+
+.native-layer-name span {
+  max-width: 100%;
+  overflow: hidden;
+  color: var(--color-text);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.native-layer-name small {
+  color: var(--color-text-muted);
+  font-size: 9px;
+}
+
+.native-drawing-layer .native-layer-delete:hover:not(:disabled) {
+  color: #fca5a5;
+}
+
+.native-drawing-layers-empty,
+.native-drawing-shortcuts {
+  padding: 12px 8px;
+  color: var(--color-text-muted);
+  font-size: 10px;
+  line-height: 1.5;
+}
+
+.native-drawing-shortcuts .is-dirty {
+  color: var(--color-accent);
+}
+
+.native-drawing-shortcuts {
+  flex: 0 0 auto;
+  border-top: 1px solid var(--color-border);
+}
+
+.full-drawing-loading {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  display: grid;
+  place-items: center;
+  background: #16191f;
+  color: #b9bec9;
+  font-size: 12px;
+}
+
+.storyboard-drawing-active .board-strip,
+.storyboard-drawing-active .neighbors {
+  pointer-events: none;
+}
+
+@media (max-width: 980px) {
+  .canvas-header,
+  .canvas-toolbar {
+    flex-wrap: wrap;
+  }
+
+  .native-drawing-toolbar {
+    gap: 5px;
+  }
+
+  .native-drawing-size input {
+    width: 64px;
+  }
+
+  .native-drawing-layers {
+    flex-basis: 200px;
+  }
+}

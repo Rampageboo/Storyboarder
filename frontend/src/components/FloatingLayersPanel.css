@@ -3,20 +3,30 @@
   z-index: 24;
   top: 72px;
   right: 14px;
-  width: min(370px, calc(100% - 28px));
+  width: calc(100% - 28px);
   height: calc(100% - 88px);
-  display: grid;
-  grid-template-columns: minmax(0, 1fr);
-  align-items: start;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  align-items: flex-start;
+  align-content: flex-start;
+  overflow-y: auto;
+  overflow-x: hidden;
+  pointer-events: none;
   gap: 10px;
 }
 
 .floating-panel-stack.is-split {
-  width: min(700px, calc(100% - 28px));
-  grid-template-columns: minmax(260px, 0.9fr) minmax(320px, 1.1fr);
+  width: calc(100% - 28px);
 }
 
 .floating-island {
+  position: relative;
+  pointer-events: auto;
+  flex: 0 0 auto;
+  min-width: min(220px, 100%);
+  max-width: 100%;
+  max-height: 100%;
   min-height: 0;
   display: flex;
   flex-direction: column;
@@ -29,12 +39,20 @@
 }
 
 .floating-layers-island {
-  flex: 0 0 auto;
+  width: var(--layers-panel-width, 330px);
+  height: var(--layers-panel-height, auto);
+  min-height: min(180px, 100%);
 }
 
+.floating-layers-island > .floating-panel-section { min-height: 0; overflow-y: auto; }
+
 .floating-queue-island {
-  height: 100%;
+  width: var(--queue-panel-width, 370px);
+  height: min(var(--queue-panel-height, 100%), 100%);
+  min-height: min(260px, 100%);
 }
+
+.floating-generation-dialog-backdrop { pointer-events: auto; }
 
 .floating-panel-header {
   flex: 0 0 auto;
@@ -645,12 +663,11 @@
   .floating-panel-stack {
     top: 64px;
     right: 8px;
-    width: min(370px, calc(100% - 16px));
+    width: calc(100% - 16px);
     height: calc(100% - 76px);
   }
 
   .floating-panel-stack.is-split {
     width: calc(100% - 16px);
-    grid-template-columns: minmax(220px, 0.85fr) minmax(280px, 1.15fr);
   }
 }

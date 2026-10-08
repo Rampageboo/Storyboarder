@@ -314,15 +314,18 @@ def initialize_layout2_metadata(project: Project) -> None:
     _save(project, "", [])
 
 
-def list_scenes(project: Project) -> dict[str, Any]:
+def list_scenes(project: Project, *, read_only: bool = False) -> dict[str, Any]:
     loaded = _read_index(project)
     if loaded is None:
         # First read of legacy settings.scene3d migrates it into scenes3d
         # and mirrors the active Scene 3D back for backward compatibility.
         legacy = _legacy_scene(project)
         if legacy:
-            _save(project, legacy["id"], [legacy])
-            loaded = _read_index(project)
+            if read_only:
+                loaded = (legacy["id"], [legacy])
+            else:
+                _save(project, legacy["id"], [legacy])
+                loaded = _read_index(project)
         else:
             loaded = ("", [])
     active_scene3d_id, scenes = loaded

@@ -1441,7 +1441,17 @@ def _list_layout2_scenes(project: Project) -> list[dict[str, Any]]:
     return _sort_scenes(scenes)
 
 
-def list_scenes(project: Project) -> list[dict[str, Any]]:
+def list_scenes(project: Project, *, read_only: bool = False) -> list[dict[str, Any]]:
+    if read_only:
+        if project.layout == LAYOUT_2:
+            return _list_layout2_scenes(project)
+        index = _index_path(project)
+        if not index.is_file():
+            return _sort_scenes(_load_from_meta(project))
+        data = _read_json(index)
+        raw = data.get("scenes") if isinstance(data, dict) else data
+        return _sort_scenes([_normalize_scene(item, legacy=True, project=project)
+                             for item in (raw if isinstance(raw, list) else []) if isinstance(item, dict)])
     _recover_perspective_moves(project)
     if project.layout == LAYOUT_2:
         return _list_layout2_scenes(project)

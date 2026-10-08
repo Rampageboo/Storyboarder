@@ -45,9 +45,11 @@ def _layout2_project(tmp_path: Path, *, revision: int = 1) -> tuple[Path, Path]:
         },
     )
     _json(work / "annotations" / "shot-1.json", [])
+    _json(work / "drawings" / "shot-1.json", {"info": {"width": 1920, "height": 1080}, "layers": []})
     _json(work / "notes" / "production" / "day-1.json", {"note": "Ready"})
     _json(work / "scenes2d" / "scenes2d.json", {"scenes": []})
     _json(work / "scenes3d" / "scenes3d.json", {"scenes": []})
+    _json(work / "workspace" / "cache" / "preview_analysis.json", {"version": 1, "entries": {}})
     _json(work / "generation" / "requests" / "request-1.json", {"status": "queued"})
     _json(work / "generation" / "state" / "request-1.json", {"status": "queued"})
     _json(work / "generation" / "results" / "request-1.json", {"outputs": []})
@@ -79,9 +81,11 @@ def test_layout2_document_is_allowlist_only_and_cover_is_stored(tmp_path: Path) 
             "settings.json",
             "shots.json",
             "annotations/shot-1.json",
+            "drawings/shot-1.json",
             "notes/production/day-1.json",
             "scenes2d/scenes2d.json",
             "scenes3d/scenes3d.json",
+            "workspace/cache/preview_analysis.json",
             "generation/requests/request-1.json",
             "generation/state/request-1.json",
             "generation/results/request-1.json",

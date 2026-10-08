@@ -388,6 +388,17 @@ class TestSaveDrawingTransaction(unittest.TestCase):
     def tearDown(self):
         shutil.rmtree(self._tmp, ignore_errors=True)
 
+    @staticmethod
+    def _data_url() -> str:
+        import base64
+        import io as _io
+        from PIL import Image as _Image
+
+        img = _Image.new("RGB", (4, 4), (10, 20, 30))
+        buf = _io.BytesIO()
+        img.save(buf, "PNG")
+        return "data:image/png;base64," + base64.b64encode(buf.getvalue()).decode()
+
     def test_save_drawing_bad_data_url_leaves_metadata_unchanged(self):
         project = _make_project(self._tmp)
         shot = project_manager.add_shot(project)
@@ -407,18 +418,56 @@ class TestSaveDrawingTransaction(unittest.TestCase):
         shot = project_manager.add_shot(project)
         shot_dir = project_manager.get_shot_dir(project, shot)
 
-        import base64
-        from PIL import Image as _Image
-        import io as _io
-        img = _Image.new("RGB", (4, 4), (10, 20, 30))
-        buf = _io.BytesIO()
-        img.save(buf, "PNG")
-        data_url = "data:image/png;base64," + base64.b64encode(buf.getvalue()).decode()
-
-        project_manager.save_drawing_for_shot(project, shot, data_url)
+        project_manager.save_drawing_for_shot(project, shot, self._data_url())
 
         tmp_files = list(shot_dir.glob("*.tmp*"))
         self.assertEqual(tmp_files, [], "No stale .tmp files after save_drawing_for_shot")
+
+    def test_save_drawing_persists_editable_native_project(self):
+        project = _make_project(self._tmp)
+        shot = project_manager.add_shot(project)
+        editor_data = '{"info":{"format":"storyboarder-fabric","version":1,"width":4,"height":4},"layers":[],"canvas":{"version":"7.4.0","objects":[]}}'
+
+        project_manager.save_drawing_for_shot(
+            project,
+            shot,
+            self._data_url(),
+            editor_data,
+        )
+
+        editor_path = project_manager.resolve_shot_metadata(project, shot.shot_id, "drawing")
+        self.assertTrue(editor_path.is_file())
+        self.assertEqual(editor_path.read_text(encoding="utf-8"), editor_data)
+        self.assertEqual(project_manager.load_drawing_project_for_shot(project, shot), editor_data)
+        self.assertEqual(list(editor_path.parent.glob(f"{editor_path.name}.*.tmp")), [])
+
+    def test_invalid_editor_data_is_rejected_before_preview_write(self):
+        project = _make_project(self._tmp)
+        shot = project_manager.add_shot(project)
+        preview_path = project_manager.resolve_shot_asset(project, shot.shot_id, "preview")
+
+        with self.assertRaisesRegex(ValueError, "valid JSON"):
+            project_manager.save_drawing_for_shot(
+                project,
+                shot,
+                self._data_url(),
+                "not-json",
+            )
+
+        self.assertFalse(preview_path.exists())
+        self.assertEqual(shot.preview_image_path, "")
+
+    def test_newer_preview_invalidates_stale_editable_project(self):
+        project = _make_project(self._tmp)
+        shot = project_manager.add_shot(project)
+        editor_data = '{"info":{"format":"storyboarder-fabric","version":1,"width":4,"height":4},"layers":[],"canvas":{"version":"7.4.0","objects":[]}}'
+        project_manager.save_drawing_for_shot(project, shot, self._data_url(), editor_data)
+        editor_path = project_manager.resolve_shot_metadata(project, shot.shot_id, "drawing")
+        preview_path = project_manager.resolve_shot_asset(project, shot.shot_id, "preview")
+        newer = max(editor_path.stat().st_mtime_ns, preview_path.stat().st_mtime_ns) + 1_000_000
+        os.utime(preview_path, ns=(newer, newer))
+
+        self.assertIsNone(project_manager.load_drawing_project_for_shot(project, shot))
 
 
 if __name__ == "__main__":

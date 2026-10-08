@@ -415,6 +415,10 @@ class PluginBridgeService:
         )
         if selected_shot_id and all(shot.shot_id != selected_shot_id for shot in project.shots):
             selected_shot_id = ""
+        if selected_shot_id:
+            from .canvas_settings import get_shot_canvas_size
+            selected = next(shot for shot in project.shots if shot.shot_id == selected_shot_id)
+            canvas_width, canvas_height = get_shot_canvas_size(project, selected)
         focused_shot_id = runtime_state.live_focus_shot_id(self.app)
         shots = [
             shot.to_dict() if project.layout == LAYOUT_2 else self.shot_payload(project, shot)

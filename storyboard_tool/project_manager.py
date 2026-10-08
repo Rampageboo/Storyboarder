@@ -53,7 +53,7 @@ from .image_utils import (
 )
 from .linked_sync import linked_mtime, sync_shot_from_linked_files
 from .models import Project, Shot
-from . import project_document
+from . import project_document, story_graph
 from .project_layout import (
     LAYOUT_1,
     LAYOUT_2,
@@ -132,12 +132,20 @@ PROJECT_LOCK = threading.RLock()
 PROJECT_TRANSITION_LOCK = threading.RLock()
 
 
+def validate_project_type(project_type: str) -> str:
+    if project_type not in ("video", "comic"):
+        raise ValueError("Project type must be video or comic.")
+    return project_type
+
+
 def create_project(
     parent_or_project_dir: Path,
     *,
     canvas_width: int = 1920,
     canvas_height: int = 1080,
+    project_type: str = "video",
 ) -> Project:
+    validate_project_type(project_type)
     root = layout1_project_root(parent_or_project_dir)
 
     root.mkdir(parents=True, exist_ok=True)
@@ -145,6 +153,7 @@ def create_project(
 
     width, height = normalize_canvas_size(canvas_width, canvas_height)
     settings = DEFAULT_SETTINGS.copy()
+    settings["project_type"] = project_type
     settings["canvas_width"] = width
     settings["canvas_height"] = height
     project = Project(root_path=root, settings=settings)
@@ -158,8 +167,10 @@ def create_document(
     *,
     canvas_width: int = 1920,
     canvas_height: int = 1080,
+    project_type: str = "video",
 ) -> Project:
     """Create a user-visible single-file project backed by a private work tree."""
+    validate_project_type(project_type)
     document = document_path.expanduser().resolve()
     if document.suffix.lower() != project_document.DOCUMENT_SUFFIX:
         document = document.with_suffix(project_document.DOCUMENT_SUFFIX)
@@ -170,6 +181,7 @@ def create_document(
         _ensure_project_dirs(root)
         width, height = normalize_canvas_size(canvas_width, canvas_height)
         settings = DEFAULT_SETTINGS.copy()
+        settings["project_type"] = project_type
         settings["canvas_width"] = width
         settings["canvas_height"] = height
         project = Project(root_path=root, settings=settings, document_path=document)
@@ -232,10 +244,12 @@ def create_layout2_document(
     *,
     canvas_width: int = 1920,
     canvas_height: int = 1080,
+    project_type: str = "video",
 ) -> Project:
     """Atomically create a portable Layout 2 folder project."""
     from . import scene2d, scene3d  # noqa: PLC0415
 
+    validate_project_type(project_type)
     ensure_layout_enabled(LAYOUT_2)
     destination_root, destination_document = _layout2_creation_paths(document_path)
     operation = Path(
@@ -250,6 +264,7 @@ def create_layout2_document(
         work.mkdir(parents=True)
         width, height = normalize_canvas_size(canvas_width, canvas_height)
         settings = DEFAULT_SETTINGS.copy()
+        settings["project_type"] = project_type
         settings["canvas_width"] = width
         settings["canvas_height"] = height
         project = Project(
@@ -314,7 +329,15 @@ def reload_project_if_changed(project: Project, loaded_mtime: float) -> tuple[Pr
     disk_mtime = project_disk_mtime(project)
     if disk_mtime <= loaded_mtime + 1e-6:
         return project, loaded_mtime, False
-    reloaded = open_project(project.json_path)
+    if project.layout == LAYOUT_2:
+        # A work/project.json is metadata, not the portable asset root. Opening
+        # it as a legacy folder loses the Layout 2 root and makes every image,
+        # PSD and thumbnail resolve beneath .storyboarder/work after refresh.
+        reloaded = _open_expanded_project(
+            project.json_path, project_root_path=project.project_root
+        )
+    else:
+        reloaded = open_project(project.json_path)
     reloaded.document_path = project.document_path
     return reloaded, disk_mtime, True
 
@@ -407,6 +430,8 @@ def _open_expanded_project(
         else:
             project.shots = []
 
+    # Reject invalid persisted routes before open-time writes can overwrite them.
+    story_graph.get_graph(project)
     for shot in project.shots:
         _ensure_shot_files(project, shot)
 
@@ -435,6 +460,7 @@ def save_project(project: Project, *, flush_document: bool = True) -> None:
     """
     with PROJECT_LOCK:
         ensure_layout_enabled(project.layout)
+        story_graph.get_graph(project)
         _ensure_project_dirs(project.metadata_root)
         if project.settings.get("backup_on_save", True):
             _write_backup(project)
@@ -553,6 +579,10 @@ def cleanup_document_working_root(project: Project | None) -> bool:
 
 
 def add_shot(project: Project, *, after_index: int | None = None) -> Shot:
+    if after_index is not None:
+        _require_index(project, after_index)
+    previous_ids = [item.shot_id for item in project.shots]
+    after_id = previous_ids[after_index] if after_index is not None else (previous_ids[-1] if previous_ids else None)
     shot = Shot(shot_id=new_shot_id())
     _ensure_shot_files(project, shot)
     # A blank PSD is created only when the user chooses Create canvas or Open
@@ -561,13 +591,14 @@ def add_shot(project: Project, *, after_index: int | None = None) -> Shot:
     if after_index is None:
         project.shots.append(shot)
     else:
-        _require_index(project, after_index)
         project.shots.insert(after_index + 1, shot)
+    story_graph.reconcile_shots(project, previous_ids, after_id)
     return shot
 
 
 def duplicate_shot(project: Project, index: int) -> Shot:
     _require_index(project, index)
+    previous_ids = [item.shot_id for item in project.shots]
     source = project.shots[index]
     duplicate = Shot.from_dict(source.to_dict())
     duplicate.shot_id = new_shot_id()
@@ -584,21 +615,27 @@ def duplicate_shot(project: Project, index: int) -> Shot:
     duplicate.comments = []
     _ensure_shot_files(project, duplicate)
     project.shots.insert(index + 1, duplicate)
+    story_graph.reconcile_shots(project, previous_ids, source.shot_id)
     create_canvas_for_shot(project, duplicate)
     return duplicate
 
 
 def delete_shot(project: Project, index: int) -> Shot:
     _require_index(project, index)
-    return project.shots.pop(index)
+    previous_ids = [item.shot_id for item in project.shots]
+    shot = project.shots.pop(index)
+    story_graph.reconcile_shots(project, previous_ids)
+    return shot
 
 
 def restore_shot(project: Project, shot_data: dict[str, Any], index: int) -> Shot:
     index = max(0, min(int(index), len(project.shots)))
+    previous_ids = [item.shot_id for item in project.shots]
     shot = Shot.from_dict(shot_data)
     if any(existing.shot_id == shot.shot_id for existing in project.shots):
         raise ValueError(f"Shot already exists: {shot.shot_id}")
     project.shots.insert(index, shot)
+    story_graph.reconcile_shots(project, previous_ids, previous_ids[index - 1] if index else None)
     return shot
 
 
@@ -769,7 +806,8 @@ def _apply_reference_frame_to_shot(
     """
     from PIL import Image
 
-    width, height = get_canvas_size(project)
+    from .canvas_settings import get_shot_canvas_size
+    width, height = get_shot_canvas_size(project, shot)
     bg_color = get_canvas_color(project)
     background_path = resolve_shot_asset(project, shot.shot_id, "board_background")
     background_path.parent.mkdir(parents=True, exist_ok=True)
@@ -804,7 +842,8 @@ def _apply_model_capture_to_shot(
     """
     from PIL import Image
 
-    width, height = get_canvas_size(project)
+    from .canvas_settings import get_shot_canvas_size
+    width, height = get_shot_canvas_size(project, shot)
     background_path = resolve_shot_asset(project, shot.shot_id, "board_background")
     mode = normalize_reference_fit_mode(fit_mode)
     background_path.parent.mkdir(parents=True, exist_ok=True)
@@ -955,13 +994,56 @@ def import_source_file_stream(
     return destination
 
 
-def save_drawing_for_shot(project: Project, shot: Shot, data_url: str) -> Path:
+def _validate_drawing_editor_data(editor_data: str) -> str:
+    try:
+        payload = json.loads(editor_data)
+    except json.JSONDecodeError as exc:
+        raise ValueError("Drawing editor data must be valid JSON.") from exc
+    if not isinstance(payload, dict):
+        raise ValueError("Drawing editor data must be a JSON object.")
+    info = payload.get("info")
+    layers = payload.get("layers")
+    if not isinstance(info, dict) or not isinstance(layers, list):
+        raise ValueError("Drawing editor data is missing info or layers.")
+    return editor_data
+
+
+def save_drawing_for_shot(
+    project: Project,
+    shot: Shot,
+    data_url: str,
+    editor_data: str | None = None,
+) -> Path:
+    validated_editor_data = (
+        _validate_drawing_editor_data(editor_data)
+        if editor_data is not None
+        else None
+    )
     preview_path = save_png_data_url(
         data_url,
         resolve_shot_asset(project, shot.shot_id, "preview"),
     )
+    if validated_editor_data is not None:
+        _atomic_write_text(
+            resolve_shot_metadata(project, shot.shot_id, "drawing"),
+            validated_editor_data,
+        )
     _set_shot_preview_paths(project, shot, preview_path)
     return preview_path
+
+
+def load_drawing_project_for_shot(project: Project, shot: Shot) -> str | None:
+    editor_path = resolve_shot_metadata(project, shot.shot_id, "drawing")
+    if not editor_path.is_file():
+        return None
+    preview_path = resolve_shot_preview_path(project, shot)
+    try:
+        if preview_path is not None and preview_path.is_file():
+            if editor_path.stat().st_mtime_ns < preview_path.stat().st_mtime_ns:
+                return None
+        return editor_path.read_text(encoding="utf-8")
+    except OSError:
+        return None
 
 
 def sync_shot(project: Project, shot: Shot, force: bool = False) -> dict[str, object]:
@@ -1029,10 +1111,15 @@ from .external_tools import (  # noqa: E402
     open_project_file,
 )
 
-from .reference_segments import (  # noqa: E402
+from .reference_metadata import (
     REFERENCE_IMAGE_EXTENSIONS,
     REFERENCE_MODEL_EXTENSIONS,
     REFERENCE_VIDEO_EXTENSIONS,
+    ensure_reference_library,
+    normalize_reference_links,
+    reference_media_type,
+)
+from .reference_segments import (  # noqa: E402
     apply_ref_segment_3d_to_boards,
     apply_ref_segment_image_to_boards,
     apply_ref_segment_to_boards,
@@ -1040,14 +1127,11 @@ from .reference_segments import (  # noqa: E402
     clear_active_reference_model,
     clear_active_reference_video,
     delete_ref_segment,
-    ensure_reference_library,
     find_ref_segment,
     import_project_reference_stream,
     import_reference_video_stream,
     new_ref_segment_id,
     normalize_ref_segments,
-    normalize_reference_links,
-    reference_media_type,
     remove_project_reference,
     resolve_segment_reference,
     restore_boards_from_undo,

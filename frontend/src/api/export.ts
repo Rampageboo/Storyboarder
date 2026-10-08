@@ -16,6 +16,7 @@ export interface ExportResult {
  */
 export interface ExportScope {
   boards?: string
+  route_id?: string
 }
 
 export interface ResolvedRange {

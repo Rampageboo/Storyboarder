@@ -1,4 +1,5 @@
 import type { RefSegmentModelCapture, Scene3dCaptureRequest, Scene3dReferenceView } from './scene3dTypes'
+import { shotDurationSeconds } from '../utils/shotDisplay'
 
 export type ModelCaptureFrameFn = (options: Scene3dCaptureRequest) => Promise<string>
 
@@ -47,7 +48,7 @@ export async function applyModelCaptures(options: ApplyModelCapturesOptions): Pr
     await nextFrame()
     const dataUrl = await captureFrame({ time: animationTime, view, width, height })
     captures.push({ shot_id: shot.shot_id, data_url: dataUrl, animation_time: animationTime })
-    offset += Math.max(0.1, Number(shot.duration_seconds) || 3)
+    offset += shotDurationSeconds(shot.duration_seconds)
     await nextFrame()
   }
   return captures

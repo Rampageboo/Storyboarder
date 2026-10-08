@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import csv
 import json
+from math import isfinite
 from pathlib import Path
 
 from PIL import Image, ImageDraw, ImageFont
@@ -92,21 +93,23 @@ def export_timing_json(project: Project, output_path: Path) -> Path:
     cursor = 0.0
     rows = []
     for number, shot in numbered_shots(project):
-        duration = max(0.1, float(shot.duration_seconds))
+        duration = float(shot.duration_seconds)
+        if not isfinite(duration) or duration <= 0:
+            duration = 3.0
         rows.append(
             {
                 "board": number,
                 "title": shot.title,
-                "start_seconds": round(cursor, 3),
-                "duration_seconds": round(duration, 3),
-                "end_seconds": round(cursor + duration, 3),
+                "start_seconds": round(cursor, 6),
+                "duration_seconds": round(duration, 6),
+                "end_seconds": round(cursor + duration, 6),
                 "camera_data": shot.camera_data,
                 # Trailing: the board number is the identity; the id is for tooling.
                 "shot_id": shot.shot_id,
             }
         )
         cursor += duration
-    output_path.write_text(json.dumps({"total_seconds": round(cursor, 3), "shots": rows}, indent=2), encoding="utf-8")
+    output_path.write_text(json.dumps({"total_seconds": round(cursor, 6), "shots": rows}, indent=2), encoding="utf-8")
     return output_path
 
 

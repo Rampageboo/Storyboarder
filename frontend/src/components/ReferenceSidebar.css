@@ -15,9 +15,9 @@
   top: var(--topbar-height, 48px);
   bottom: 0;
   z-index: 35;
-  width: var(--reference-sidebar-width);
-  min-width: var(--reference-sidebar-width);
-  max-width: var(--reference-sidebar-width);
+  width: min(var(--reference-drawer-width, var(--reference-sidebar-width)), calc(100vw - 100px));
+  min-width: 0;
+  max-width: calc(100vw - 100px);
   display: flex;
   flex-direction: column;
   overflow: hidden;

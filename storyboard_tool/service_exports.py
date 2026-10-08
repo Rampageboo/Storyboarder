@@ -38,7 +38,7 @@ _FILENAMES: dict[str, str] = {
 class ExportServiceMixin:
     """Export generation, download lookups, and project file serving."""
 
-    def _export_scope(self, boards: str = ""):
+    def _export_scope(self, boards: str = "", route_id: str = ""):
         """Resolve (project view, filename suffix) for a whole or partial export.
 
         ``boards`` is the range spec the export dialog collects, e.g. "1-5, 8";
@@ -46,7 +46,9 @@ class ExportServiceMixin:
         """
         project = app_state._require_project(self.app)
         try:
-            scoped, suffix = export_service.scope_to_boards(project, boards)
+            if route_id and boards.strip():
+                raise ValueError("Choose a route or a board range, not both.")
+            scoped, suffix = export_service.scope_to_route(project, route_id) if route_id else export_service.scope_to_boards(project, boards)
         except ValueError as exc:
             raise app_error(AppErrorCode.INVALID_REQUEST, str(exc)) from exc
         return project, scoped, suffix
@@ -127,8 +129,9 @@ class ExportServiceMixin:
         seconds_per_board: float | None = None,
         captions: bool = False,
         boards: str = "",
+        route_id: str = "",
     ) -> dict[str, str]:
-        _, scoped, suffix = self._export_scope(boards)
+        _, scoped, suffix = self._export_scope(boards, route_id)
         try:
             output_path = export_service.export_animatic(
                 scoped,
@@ -142,12 +145,16 @@ class ExportServiceMixin:
         except Exception as exc:
             logger.exception("Animatic export failed")
             raise app_error(AppErrorCode.EXPORT_FAILED, str(exc), status=500) from exc
-        return {"path": str(output_path), "download_url": _DOWNLOAD_URLS["animatic"]}
+        from urllib.parse import urlencode
+        query = urlencode({"route_id": route_id} if route_id else {"boards": boards}) if route_id or boards else ""
+        return {"path": str(output_path), "download_url": _DOWNLOAD_URLS["animatic"] + ("?" + query if query else "")}
 
-    def method_open_export(self, export_type: str, boards: str = "") -> dict[str, str]:
+    def method_open_export(self, export_type: str, boards: str = "", route_id: str = "") -> dict[str, str]:
         # The client sends back the same (type, boards) it exported with, so the
         # path is recomputed here rather than accepted from the request.
-        _, scoped, suffix = self._export_scope(boards)
+        if route_id and export_type != "animatic":
+            raise app_error(AppErrorCode.INVALID_REQUEST, "Route scope currently supports animatic exports.")
+        _, scoped, suffix = self._export_scope(boards, route_id)
         try:
             output_path = export_service.open_export(scoped, export_type, suffix)
         except FileNotFoundError as exc:
@@ -159,16 +166,16 @@ class ExportServiceMixin:
             raise app_error(AppErrorCode.EXPORT_FAILED, str(exc), status=500) from exc
         return {"path": str(output_path)}
 
-    def method_download_animatic(self) -> dict[str, str]:
-        project = app_state._require_project(self.app)
+    def method_download_animatic(self, boards: str = "", route_id: str = "") -> dict[str, str]:
+        _, project, suffix = self._export_scope(boards, route_id)
         try:
-            output_path = export_service.check_export_exists(project, "animatic")
+            output_path = export_service.check_export_exists(project, "animatic", suffix)
         except FileNotFoundError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         return {
             "path": str(output_path),
             "media_type": _MEDIA_TYPES["animatic"],
-            "filename": _FILENAMES["animatic"],
+            "filename": output_path.name,
         }
 
     def method_export_image_sequence(self, boards: str = "") -> dict[str, str]:
@@ -179,17 +186,6 @@ class ExportServiceMixin:
             logger.exception("Image sequence export failed")
             raise app_error(AppErrorCode.EXPORT_FAILED, str(exc), status=500) from exc
         return {"path": str(output_dir)}
-
-    def method_get_scene3d_file(self) -> dict[str, str]:
-        project = app_state._require_project(self.app)
-        try:
-            path = project_manager.get_scene3d_file_path(project)
-        except (FileNotFoundError, ValueError) as exc:
-            raise app_error(AppErrorCode.MEDIA_NOT_FOUND, str(exc), status=404) from exc
-        if path is None:
-            raise app_error(AppErrorCode.MEDIA_NOT_FOUND, "No Blender scene imported.", status=404)
-        media_type = "model/gltf-binary" if path.suffix.lower() == ".glb" else "model/gltf+json"
-        return {"path": str(path), "media_type": media_type, "filename": path.name}
 
     def method_get_shot_image(self, shot_id: str) -> dict[str, str]:
         project = app_state._require_project(self.app)

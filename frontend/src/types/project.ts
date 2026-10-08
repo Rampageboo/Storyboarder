@@ -1,7 +1,11 @@
 import type { ProjectSettings } from './settings'
+import type { StoryGraph } from './storyGraph'
+import type { ComicDocument } from './comic'
 import type { Shot, ShotStatus } from './shot'
 
 export interface ProjectPayload {
+  comic_document?: ComicDocument
+  story_graph?: StoryGraph
   project_path: string
   project_json_path: string
   document_path?: string
@@ -17,6 +21,7 @@ export interface ProjectPayload {
 }
 
 export interface ProjectPathRequest {
+  project_type?: 'video' | 'comic'
   path?: string | null
   canvas_width?: number | null
   canvas_height?: number | null

@@ -81,17 +81,11 @@ export function HomePage() {
   const [recents, setRecents] = useState<RecentProject[]>([])
   const [loading, setLoading] = useState(true)
 
-  const refresh = useCallback(async () => {
-    try {
-      const result = await listRecents()
-      setRecents(result.recents)
-    } catch {
-      // A recents read failure must not block New/Open — leave the grid empty.
-      setRecents([])
-    } finally {
-      setLoading(false)
-    }
-  }, [])
+  const refresh = useCallback(() => listRecents()
+    .then(result => setRecents(result.recents))
+    // A recents read failure must not block New/Open — leave the grid empty.
+    .catch(() => setRecents([]))
+    .finally(() => setLoading(false)), [])
 
   useEffect(() => {
     void refresh()

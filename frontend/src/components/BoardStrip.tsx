@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type DragEvent, type MouseEvent } from 'react'
 import { useProject } from '../state/useProject'
-import { shotDisplayLabel } from '../utils/shotDisplay'
+import { shotDisplayLabel, shotDurationSeconds } from '../utils/shotDisplay'
 import {
   resolveVisibleSegmentMarkerSpans,
   segmentCssType,
@@ -31,11 +31,6 @@ function scrollCardIntoViewport(viewport: HTMLElement, card: HTMLElement, option
 function dropIsAfter(e: DragEvent<HTMLButtonElement>): boolean {
   const rect = e.currentTarget.getBoundingClientRect()
   return e.clientX > rect.left + rect.width / 2
-}
-
-function shotDurationSeconds(value: unknown): number {
-  const duration = Number(value)
-  return Number.isFinite(duration) && duration > 0 ? duration : 3
 }
 
 function formatClock(seconds: number): string {
@@ -138,7 +133,7 @@ export function BoardStrip() {
   useEffect(() => {
     if (!playing || disabled || selectedIndex < 0 || shots.length === 0) return
     if (selectedIndex >= shots.length - 1) return
-    const durationMs = Math.max(500, shotDurationSeconds(shots[selectedIndex]?.duration_seconds) * 1000)
+    const durationMs = shotDurationSeconds(shots[selectedIndex]?.duration_seconds) * 1000
     const timer = window.setTimeout(() => {
       const nextIndex = selectedIndex + 1
       const next = shots[nextIndex]

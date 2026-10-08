@@ -51,6 +51,21 @@ def scope_to_boards(project: Project, boards: str) -> tuple[Project, str]:
     return view, board_range.filename_suffix(indexes, total)
 
 
+def scope_to_route(project: Project, route_id: str) -> tuple[Project, str]:
+    """Keep route order, including shared boards, independently of global board order."""
+    import hashlib
+    from .story_graph import get_graph
+    route = next((route for route in get_graph(project)["routes"] if route["id"] == route_id), None)
+    if route is None:
+        raise ValueError("Story route not found.")
+    if not route["shot_ids"]:
+        raise ValueError("This story route has no boards to export.")
+    shots = {shot.shot_id: (index + 1, shot) for index, shot in enumerate(project.shots)}
+    ordered = [shots[shot_id] for shot_id in route["shot_ids"]]
+    suffix = "_route-" + hashlib.sha256(route_id.encode("utf-8")).hexdigest()[:12]
+    return replace(project, shots=[item[1] for item in ordered], board_numbers=[item[0] for item in ordered]), suffix
+
+
 def resolve_output_path(project: Project, export_type: str, suffix: str = "") -> Path:
     filename = _OUTPUT_PATHS.get(export_type)
     if filename is None:

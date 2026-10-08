@@ -8,18 +8,25 @@ OpenCV's ``mp4v`` writer, mirroring the cv2/ffmpeg convention in ``video_utils``
 from __future__ import annotations
 
 import shutil
+import math
 import subprocess
 import tempfile
 from pathlib import Path
 
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageDraw
 
 from .export_utils import numbered_shots
 from .models import Project, Shot
 from .shot_assets import render_shot_composite_image
 
 DEFAULT_FPS = 24
-DEFAULT_MIN_SECONDS = 0.5
+DEFAULT_MIN_SECONDS = 0.0
+
+
+def duration_frames(seconds: float, fps: int) -> int:
+    """Same positive half-up frame rounding as the interactive timeline."""
+    safe = seconds if math.isfinite(seconds) and seconds > 0 else 3.0
+    return max(1, math.floor(safe * fps + .5))
 _CAPTION_BAR_HEIGHT = 30
 
 
@@ -37,7 +44,7 @@ def export_animatic(
     if not shots:
         raise ValueError("The project has no boards to export.")
     fps = max(1, min(60, int(fps)))
-    min_seconds = max(0.05, float(min_seconds))
+    min_seconds = max(0.0, float(min_seconds))
     width = int(project.settings.get("canvas_width") or 1920)
     height = int(project.settings.get("canvas_height") or 1080)
     # H.264 requires even dimensions.
@@ -54,7 +61,7 @@ def export_animatic(
             duration = float(seconds_per_board)
         else:
             duration = float(shot.duration_seconds or 0.0)
-        frames.append((frame, max(min_seconds, duration)))
+        frames.append((frame, duration_frames(max(min_seconds, duration), fps) / fps))
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     if _encode_ffmpeg(frames, output_path, fps):
@@ -81,7 +88,8 @@ def _normalize_frame(image: Image.Image | None, width: int, height: int) -> Imag
 
 def _draw_caption(frame: Image.Image, number: int, shot: Shot) -> None:
     draw = ImageDraw.Draw(frame)
-    font = ImageFont.load_default()
+    from .comic_lettering import lettering_font
+    font = lettering_font(14)
     # Board number, never the UUID — the caption is for a viewer, not a database.
     label = f"Board {number:03d}"
     if shot.title:
@@ -90,7 +98,11 @@ def _draw_caption(frame: Image.Image, number: int, shot: Shot) -> None:
         label = f"{label}  —  {shot.dialogue}"
     bar_top = frame.height - _CAPTION_BAR_HEIGHT
     draw.rectangle((0, bar_top, frame.width, frame.height), fill=(0, 0, 0))
-    draw.text((10, bar_top + 9), label[:140], fill=(232, 232, 232), font=font)
+    label = label.replace("\n", " ")
+    visible = label
+    while visible and draw.textlength(visible + ("…" if visible != label else ""), font=font) > frame.width - 20:
+        visible = visible[:-1]
+    draw.text((10, bar_top + 6), visible + ("…" if visible != label else ""), fill=(232, 232, 232), font=font)
 
 
 def _encode_ffmpeg(frames: list[tuple[Image.Image, float]], output_path: Path, fps: int) -> bool:
@@ -105,18 +117,19 @@ def _encode_ffmpeg(frames: list[tuple[Image.Image, float]], output_path: Path, f
             frame.save(tmp_dir / name, "PNG")
             # Relative names + cwd avoid Windows path-escaping issues in the concat demuxer.
             lines.append(f"file '{name}'")
-            lines.append(f"duration {max(0.001, duration):.3f}")
+            lines.append(f"option framerate {fps}")
+            lines.append(f"duration {duration:.12f}")
         # The concat demuxer ignores the final entry's duration; repeat the last
         # frame so the last board stays visible, then trim the output to the exact
         # total with -t (the repeated frame otherwise over-holds the ending).
         lines.append(f"file 'f{len(frames) - 1:05d}.png'")
+        lines.append(f"option framerate {fps}")
         (tmp_dir / "list.txt").write_text("\n".join(lines), encoding="utf-8")
-        total_seconds = sum(max(0.001, duration) for _, duration in frames)
         cmd = [
             ffmpeg, "-hide_banner", "-loglevel", "error", "-y",
             "-f", "concat", "-safe", "0", "-i", "list.txt",
             "-vf", f"fps={fps},format=yuv420p",
-            "-t", f"{total_seconds:.3f}",
+            "-frames:v", str(sum(duration_frames(duration, fps) for _, duration in frames)),
             "-c:v", "libx264", "-preset", "medium", "-movflags", "+faststart",
             str(output_path.resolve()),
         ]

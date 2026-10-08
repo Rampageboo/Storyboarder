@@ -211,7 +211,7 @@ function v(e, t) {
 		source: "workspace"
 	};
 }
-function ee(e, t, n, r, i = [
+function y(e, t, n, r, i = [
 	6,
 	4,
 	8
@@ -221,24 +221,24 @@ function ee(e, t, n, r, i = [
 	0
 ]) {
 	if (!r?.position) return !1;
-	let o = b(r.position, i);
+	let o = x(r.position, i);
 	if (t.position.set(o[0], o[1], o[2]), r.target) {
-		let e = b(r.target, a);
+		let e = x(r.target, a);
 		n.target.set(e[0], e[1], e[2]);
 	} else if (r.rotation) {
-		let [i, a, o] = b(r.rotation);
+		let [i, a, o] = x(r.rotation);
 		t.rotation.set(i, a, o), n.target.copy(t.position.clone().add(t.getWorldDirection(new e.Vector3())));
 	}
 	return r.fov && (t.fov = Number(r.fov) || 50, t.updateProjectionMatrix()), n.update(), !0;
 }
-function y(e, t, n, r) {
+function b(e, t, n, r) {
 	if (!n?.object3d) return !1;
 	let i = n.viewNode || n.object3d;
 	i.updateWorldMatrix(!0, !1), i.matrixWorld.decompose(r.position, r.quaternion, r.scale), e.position.copy(r.position), e.quaternion.copy(r.quaternion);
 	let a = n.object3d.isCamera ? n.object3d : null;
 	return a?.isPerspectiveCamera && (e.fov = a.fov, e.near = Math.max(.001, a.near), e.far = Math.max(e.near + 1, a.far), e.updateProjectionMatrix()), t.enabled = !1, !0;
 }
-function b(e, t = [
+function x(e, t = [
 	0,
 	0,
 	0
@@ -251,16 +251,16 @@ function b(e, t = [
 }
 //#endregion
 //#region src/scene3d/workspace/workspaceScene.ts
-var x = 1711393, S = [
+var S = 1711393, C = [
 	6,
 	4,
 	8
-], C = [
+], w = [
 	0,
 	.5,
 	0
 ];
-function te(e, t, n = {}) {
+function ee(e, t, n = {}) {
 	let r = new e.WebGLRenderer({
 		antialias: !0,
 		alpha: !1,
@@ -268,11 +268,11 @@ function te(e, t, n = {}) {
 	}), i = n.maxPixelRatio ?? 2;
 	return r.setPixelRatio(Math.min(window.devicePixelRatio, i)), r.outputColorSpace = e.SRGBColorSpace, r.toneMapping = e.AgXToneMapping ?? e.ACESFilmicToneMapping, r.toneMappingExposure = 1, r.shadowMap.enabled = !0, r.shadowMap.type = e.PCFSoftShadowMap, t.appendChild(r.domElement), r;
 }
-function ne(e) {
+function te(e) {
 	let t = new e.Scene();
-	t.background = new e.Color(x);
+	t.background = new e.Color(S);
 	let n = new e.PerspectiveCamera(50, 1, .01, 1e3);
-	n.position.set(...S);
+	n.position.set(...C);
 	let r = new e.AmbientLight(16777215, .45);
 	t.add(r);
 	let i = new e.DirectionalLight(16777215, 1.1);
@@ -293,23 +293,23 @@ function ne(e) {
 		programHemisphere: o,
 		grid: s,
 		axes: c,
-		builtinBackground: new e.Color(x),
+		builtinBackground: new e.Color(S),
 		pmremGenerator: null
 	};
 }
-function re(e, t) {
+function ne(e, t) {
 	let n = new e.PMREMGenerator(t);
 	return n.compileEquirectangularShader(), n;
 }
 //#endregion
 //#region src/scene3d/workspace/workspaceControls.ts
-function ie(e, t, n, r = {}) {
+function re(e, t, n, r = {}) {
 	let i = new e(t, n);
 	i.enableDamping = !0;
-	let [a, o, s] = r.target ?? C;
+	let [a, o, s] = r.target ?? w;
 	return i.target.set(a, o, s), r.onChange && i.addEventListener("change", r.onChange), i;
 }
-function ae(e, t, n, r, i = {}) {
+function ie(e, t, n, r, i = {}) {
 	let a = new e(t, n);
 	return a.setMode(i.mode ?? "translate"), a.addEventListener("dragging-changed", (e) => {
 		i.onDraggingChanged?.(!!e.value);
@@ -319,8 +319,8 @@ function ae(e, t, n, r, i = {}) {
 }
 //#endregion
 //#region src/scene3d/workspace/workspaceBridge.ts
-function oe(e, t, n, r) {
-	let i = te(e, r.mountEl), a = ne(e), o = re(e, i), s = ie(t, a.camera, i.domElement, { onChange: r.onOrbitChange }), c = ae(n, a.camera, i.domElement, a.scene, {
+function T(e, t, n, r) {
+	let i = ee(e, r.mountEl), a = te(e), o = ne(e, i), s = re(t, a.camera, i.domElement, { onChange: r.onOrbitChange }), c = ie(n, a.camera, i.domElement, a.scene, {
 		mode: r.transformMode ?? "translate",
 		onDraggingChanged: r.onTransformDraggingChanged,
 		onObjectChange: r.onTransformObjectChange
@@ -335,11 +335,11 @@ function oe(e, t, n, r) {
 }
 //#endregion
 //#region src/scene3d/workspace/workspaceState.ts
-function w(e) {
+function E(e) {
 	let t = Math.max(0, Number(e) || 0), n = Math.floor(t / 60), r = (t % 60).toFixed(1).padStart(n > 0 ? 4 : 1, "0");
 	return n > 0 ? `${n}:${r}` : `${r}s`;
 }
-function se(e, t) {
+function ae(e, t) {
 	return {
 		id: e,
 		name: String(t.userData?.objectName || t.userData?.objectType || e),
@@ -350,20 +350,20 @@ function se(e, t) {
 		color: `#${t.material.color.getHexString()}`
 	};
 }
-function ce(e) {
+function oe(e) {
 	let t = [];
-	for (let [n, r] of e) t.push(se(n, r));
+	for (let [n, r] of e) t.push(ae(n, r));
 	return t;
 }
-function le(e, t, n) {
+function se(e, t, n) {
 	return {
 		source: "builtin",
-		objects: ce(e),
+		objects: oe(e),
 		wireframe_mode: t,
 		object_color_preview: n
 	};
 }
-function ue(e) {
+function ce(e) {
 	return {
 		...e.sceneMeta,
 		source: "blender",
@@ -376,12 +376,12 @@ function ue(e) {
 		wireframe_mode: e.wireframeMode
 	};
 }
-function de(e) {
+function le(e) {
 	return e && typeof e == "object" ? { ...e } : {};
 }
 //#endregion
 //#region src/scene3d/previewStyle.ts
-var fe = [
+var ue = [
 	13138542,
 	7256186,
 	7245512,
@@ -399,15 +399,15 @@ var fe = [
 	7895240,
 	13158520
 ];
-function pe(e) {
+function de(e) {
 	let t = 0;
 	for (let n = 0; n < e.length; n += 1) t = t * 31 + e.charCodeAt(n) | 0;
 	return Math.abs(t);
 }
-function T(e) {
+function fe(e) {
 	return e === "on" || e === "strong" ? e : "off";
 }
-function E(e, t) {
+function D(e, t) {
 	let n = e;
 	for (; n.parent && n.parent !== t;) {
 		if (n.name) return n.name;
@@ -415,57 +415,57 @@ function E(e, t) {
 	}
 	return e.name || e.uuid;
 }
-function me(e) {
-	return fe[pe(String(e)) % fe.length];
+function pe(e) {
+	return ue[de(String(e)) % ue.length];
 }
-function D(e, t) {
-	return new e.Color(me(t));
+function O(e, t) {
+	return new e.Color(pe(t));
 }
-function he(e, t) {
+function me(e, t) {
 	e instanceof Set ? e.add(t) : e.push(t);
 }
-function ge(e) {
+function he(e) {
 	e?.traverse((e) => {
 		!e.isMesh || e.userData.scene3dOriginalMaterial !== void 0 || (e.userData.scene3dOriginalMaterial = e.material);
 	});
 }
-function _e(e) {
+function ge(e) {
 	e?.traverse((e) => {
 		!e.isMesh || e.userData.scene3dOriginalMaterial === void 0 || (e.material = e.userData.scene3dOriginalMaterial, delete e.userData.scene3dOriginalMaterial);
 	});
 }
-function O(e) {
+function k(e) {
 	let t = e instanceof Set ? [...e] : e;
 	for (let e of t) try {
 		e.dispose?.();
 	} catch {}
 	e instanceof Set ? e.clear() : e.length = 0;
 }
-function ve(e, t, n, r, i) {
+function _e(e, t, n, r, i) {
 	if (!t) return;
 	if (!i) {
-		_e(t), O(r);
+		ge(t), k(r);
 		return;
 	}
-	ge(t), O(r);
+	he(t), k(r);
 	let a = /* @__PURE__ */ new Map(), o = /* @__PURE__ */ new Set();
 	t.traverse((e) => {
-		e.isMesh && o.add(E(e, n ?? t));
+		e.isMesh && o.add(D(e, n ?? t));
 	});
-	for (let t of [...o].sort()) a.set(t, D(e, t));
+	for (let t of [...o].sort()) a.set(t, O(e, t));
 	t.traverse((i) => {
 		if (!i.isMesh) return;
-		let o = E(i, n ?? t), s = new e.MeshBasicMaterial({ color: a.get(o) || D(e, o) });
-		he(r, s), i.material = s, i.frustumCulled = !1;
+		let o = D(i, n ?? t), s = new e.MeshBasicMaterial({ color: a.get(o) || O(e, o) });
+		me(r, s), i.material = s, i.frustumCulled = !1;
 	});
 }
-function k() {
+function A() {
 	return {
 		geometries: /* @__PURE__ */ new Set(),
 		materials: /* @__PURE__ */ new Set()
 	};
 }
-function ye(e) {
+function ve(e) {
 	e?.traverse((e) => {
 		if (!e.isMesh || e.userData.scene3dWireframeFillOpacity == null) return;
 		let t = Array.isArray(e.material) ? e.material : [e.material];
@@ -473,9 +473,9 @@ function ye(e) {
 		delete e.userData.scene3dWireframeFillOpacity, delete e.userData.scene3dWireframeFillTransparent;
 	});
 }
-function A(e, t) {
+function j(e, t) {
 	let n = Array.isArray(e) ? e : [e];
-	for (let e of n) e && (ye(e), e.traverse((e) => {
+	for (let e of n) e && (ve(e), e.traverse((e) => {
 		let t = e.userData?.scene3dWireframeLine;
 		t && (e.remove(t), delete e.userData.scene3dWireframeLine);
 	}));
@@ -487,9 +487,9 @@ function A(e, t) {
 	} catch {}
 	t.geometries.clear(), t.materials.clear();
 }
-function be(e, t, n, r) {
-	let i = Array.isArray(t) ? t : [t], a = T(n);
-	if (A(i, r), a === "off") return;
+function ye(e, t, n, r) {
+	let i = Array.isArray(t) ? t : [t], a = fe(n);
+	if (j(i, r), a === "off") return;
 	let o = a === "strong", s = o ? 1 : 35, c = new e.LineBasicMaterial({
 		color: o ? 16777215 : 1381653,
 		transparent: !o,
@@ -509,63 +509,63 @@ function be(e, t, n, r) {
 }
 //#endregion
 //#region src/scene3d/dispose.ts
-function xe(e) {
+function be(e) {
 	if (!e || typeof e != "object") return;
 	let t = e;
 	try {
 		t.dispose?.();
 	} catch {}
 }
-function j(e) {
+function M(e) {
 	let t = Array.isArray(e) ? e : [e];
 	for (let e of t) {
 		if (!e || typeof e != "object") continue;
 		let t = e;
-		for (let e of Object.keys(t)) xe(t[e]);
+		for (let e of Object.keys(t)) be(t[e]);
 		try {
 			t.dispose?.();
 		} catch {}
 	}
 }
-function M(e) {
+function N(e) {
 	try {
 		e?.dispose?.();
 	} catch {}
 }
-function Se(e) {
+function xe(e) {
 	try {
-		M(e.geometry), j(e.material);
+		N(e.geometry), M(e.material);
 	} catch {}
 }
 //#endregion
 //#region src/scene3d/workspace/workspaceDispose.ts
-function N(e) {
+function P(e) {
 	e?.traverse?.((e) => {
 		let t = e.userData?.scene3dOriginalMaterial;
 		if (t) {
-			j(t);
+			M(t);
 			return;
 		}
-		Se(e);
+		xe(e);
 	});
 }
-function P(e) {
-	e && (M(e.geometry), j(e.material));
+function F(e) {
+	e && (N(e.geometry), M(e.material));
 }
 //#endregion
 //#region src/scene3d/workspace/workspaceGlb.ts
-function F(e) {
+function I(e) {
 	let t = 0;
 	return e?.traverse?.((e) => {
 		e.isLight && (t += 1);
 	}), t;
 }
-function I(e) {
+function L(e) {
 	e?.traverse?.((e) => {
 		!e.isLight || typeof e.intensity != "number" || (e.isDirectionalLight ? e.intensity = Math.min(e.intensity * Math.PI * .35, 4) : (e.isPointLight || e.isSpotLight) && e.intensity > 0 && e.intensity < 800 && (e.intensity = Math.min(e.intensity * 1.5, 600)));
 	});
 }
-function L(e, t) {
+function R(e, t) {
 	let n = t;
 	for (; n;) {
 		if (n === e) return !0;
@@ -573,7 +573,7 @@ function L(e, t) {
 	}
 	return !1;
 }
-function R(e) {
+function z(e) {
 	let t = [], n = /* @__PURE__ */ new Set(), r = e.scene, i = (e, r = {}) => {
 		if (!e?.isCamera || n.has(e.uuid)) return;
 		n.add(e.uuid);
@@ -588,59 +588,59 @@ function R(e) {
 	for (let e of a) e?.traverse?.((e) => i(e, { source: "scene" }));
 	if (e.parser?.associations) for (let [t] of e.parser.associations.entries()) i(t, { source: "parser" });
 	for (let t of e.cameras || []) i(t, { source: "gltf.cameras" });
-	for (let e of t) L(r, e.object3d) || (r.add(e.object3d), e.orphan = !0);
+	for (let e of t) R(r, e.object3d) || (r.add(e.object3d), e.orphan = !0);
 	return t.sort((e, t) => e.name.localeCompare(t.name, void 0, { numeric: !0 }));
 }
-function z(e) {
+function B(e) {
 	let t = ((e.parser?.json || {}).nodes || []).filter((e) => e.camera !== void 0).length, n = e.cameras?.length || 0;
 	return n > 0 || t > 0 ? `GLB 元数据含 ${Math.max(n, t)} 个相机，但未能正确挂到场景。 请检查 Blender：相机不要隐藏（眼睛图标），Limit to 不要勾选 Visible/Active Collection，或把相机放进导出集合。` : "GLB 内完全没有相机数据（不是勾选 Cameras 就行）。 请确认场景里有 Camera 对象、导出时 Limit to 留空、相机可见，并重新导出。";
 }
-function B(e, t) {
+function V(e, t) {
 	let n = 0, r = e.object3d;
 	for (; r;) r.name && t.has(r.name) && (n += 10), r = r.parent ?? null;
 	return n;
 }
-function V(e, t, n = "") {
+function Se(e, t, n = "") {
 	if (!e.length) return "";
 	if (n) {
 		let t = e.find((e) => e.name === n);
 		if (t) return t.id;
 	}
-	let r = e[0], i = B(r, t);
+	let r = e[0], i = V(r, t);
 	for (let n of e.slice(1)) {
-		let e = B(n, t);
+		let e = V(n, t);
 		e > i && (r = n, i = e);
 	}
 	return r.id;
 }
-function H(e, t, n, r) {
+function Ce(e, t, n, r) {
 	let i = new e.Box3().setFromObject(t);
 	if (i.isEmpty?.()) return;
 	let a = i.getSize(new e.Vector3()), o = i.getCenter(new e.Vector3()), s = Math.max(a.x, a.y, a.z) * .6 || 4;
 	r.target.copy(o), n.position.copy(o.clone().add(new e.Vector3(s, s * .7, s))), n.near = Math.max(.01, s / 100), n.far = Math.max(100, s * 40), n.updateProjectionMatrix(), r.update();
 }
-function U(e, t) {
+function H(e, t) {
 	if (!e || t.animationDuration <= 0) return !1;
 	let n = t.animationTime;
 	t.setMixerTime(0), e.getWorldPosition(t.probeA);
 	let r = Math.min(Math.max(t.animationDuration * .25, .1), t.animationDuration);
 	return t.setMixerTime(r), e.getWorldPosition(t.probeB), t.setMixerTime(n), t.probeA.distanceToSquared(t.probeB) > 1e-10;
 }
-function W(e, t, n, r) {
-	if (U(e.object3d, r)) return e.object3d;
+function we(e, t, n, r) {
+	if (H(e.object3d, r)) return e.object3d;
 	let i = e.object3d.parent ?? null;
 	for (; i && i !== t;) {
-		if (i.name && n.has(i.name) && U(i, r)) return e.object3d;
+		if (i.name && n.has(i.name) && H(i, r)) return e.object3d;
 		i = i.parent ?? null;
 	}
 	return e.object3d;
 }
-function G(e, t) {
+function Te(e, t) {
 	e?.traverse?.((e) => {
 		e.isLight && (e.visible = t);
 	});
 }
-function Ce(e, t) {
+function Ee(e, t) {
 	e?.traverse?.((e) => {
 		if (!e.isMesh) return;
 		let n = Array.isArray(e.material) ? e.material : [e.material];
@@ -649,59 +649,59 @@ function Ce(e, t) {
 }
 //#endregion
 //#region src/scene3d/workspace/workspaceLighting.ts
-function we(e) {
+function De(e) {
 	return e === "on" || e === "off" ? e : "auto";
 }
-function K(e) {
+function U(e) {
 	return !(e.workspaceMode !== "blender" || e.mode === "off");
 }
-function q(e) {
+function W(e) {
 	return e.workspaceMode !== "blender" || e.mode === "off" ? !1 : (e.mode, e.importedLightCount === 0);
 }
-function J(e) {
+function G(e) {
 	return e.workspaceMode !== "blender" || e.mode === "off" || e.objectColorPreview ? !1 : (e.mode, e.importedLightCount > 0);
 }
-function Te(e) {
-	return K(e) ? e.importedLightCount > 0 ? .35 : 1 : 0;
+function Oe(e) {
+	return U(e) ? e.importedLightCount > 0 ? .35 : 1 : 0;
 }
-function Ee(e) {
+function ke(e) {
 	return e.mode === "on" ? "手动：环境 + 柔光" : e.mode === "off" ? "手动：仅 GLB 灯光" : e.importedLightCount > 0 ? `自动：GLB ${e.importedLightCount} 盏灯 + 弱环境反射` : "自动：GLB 无灯，全程序补光";
 }
-function Y(e) {
+function K(e) {
 	switch (e) {
 		case "on": return "始终开启";
 		case "off": return "关闭";
 		default: return "自动";
 	}
 }
-function De(e) {
-	let t = e.importedLightCount > 0 ? `GLB 已导出 ${e.importedLightCount} 盏灯` : "GLB 未导出灯光（导出时请勾选 Punctual Lights）", n = K(e) && !e.objectColorPreview ? "环境反射：开" : "环境反射：关", r = q(e) ? "柔光补光：开" : J(e) ? "柔光补光：弱" : "柔光补光：关", i = e.objectColorPreview ? "对象色：开（不受灯光影响）" : "对象色：关";
-	return `${t} · ${Y(e.mode)} · ${n} · ${r} · ${i}`;
+function Ae(e) {
+	let t = e.importedLightCount > 0 ? `GLB 已导出 ${e.importedLightCount} 盏灯` : "GLB 未导出灯光（导出时请勾选 Punctual Lights）", n = U(e) && !e.objectColorPreview ? "环境反射：开" : "环境反射：关", r = W(e) ? "柔光补光：开" : G(e) ? "柔光补光：弱" : "柔光补光：关", i = e.objectColorPreview ? "对象色：开（不受灯光影响）" : "对象色：关";
+	return `${t} · ${K(e.mode)} · ${n} · ${r} · ${i}`;
 }
-function Oe(e, t, n) {
+function je(e, t, n) {
 	if (t.workspaceMode !== "blender") return;
-	let r = K(t) && !t.objectColorPreview, i = q(t), a = J(t);
+	let r = U(t) && !t.objectColorPreview, i = W(t), a = G(t);
 	r ? (n.scene.environment = n.ensureBlenderEnvMap(), n.scene.background = new e.Color(3158064)) : t.objectColorPreview ? (n.scene.environment = null, n.scene.background = new e.Color(3815994)) : (n.scene.environment = null, n.scene.background = n.builtinBackground.clone()), n.programAmbient.intensity = i ? .1 : .22, n.programAmbient.visible = i || a, n.programHemisphere.visible = i, n.setImportedLightsVisible(!t.objectColorPreview);
 }
-function ke(e, t) {
+function Me(e, t) {
 	let n = new e(), r = t.fromScene(n, .04).texture;
 	return n.dispose?.(), r;
 }
 //#endregion
 //#region src/scene3d/workspace/workspaceAnimation.ts
-function X(e) {
+function q(e) {
 	let t = String(e || "").lastIndexOf(".");
 	return t > 0 ? e.slice(0, t) : e;
 }
-function Ae(e) {
+function Ne(e) {
 	let t = /* @__PURE__ */ new Set();
 	for (let n of e || []) for (let e of n.tracks || []) {
-		let n = X(e.name);
+		let n = q(e.name);
 		n && t.add(n);
 	}
 	return t;
 }
-function Z(e) {
+function J(e) {
 	let t = 0;
 	for (let n of e || []) {
 		t = Math.max(t, Number(n.duration) || 0);
@@ -712,19 +712,19 @@ function Z(e) {
 	}
 	return t;
 }
-function Q(e) {
+function Y(e) {
 	return e || [];
 }
-function je(e, t) {
+function Pe(e, t) {
 	return t > 0 ? Math.min(Math.max(0, e), t) : Math.max(0, e);
 }
-function Me(e, t, n) {
+function Fe(e, t, n) {
 	if (!t || !e.length) return Math.max(0, Number(n) || 0);
 	let r = Math.max(0, Number(n) || 0);
 	for (let t of e) t.enabled = !0, t.paused = !1, t.time = r;
 	return t.update(0), r;
 }
-function Ne(e, t, n) {
+function Ie(e, t, n) {
 	let r = t || 0;
 	return {
 		max: r.toFixed(2),
@@ -733,11 +733,11 @@ function Ne(e, t, n) {
 		displayText: `${n(e)} / ${n(r)}`
 	};
 }
-function Pe(e) {
+function Le(e) {
 	let t = e.animationDuration || 0;
 	return t ? e.activeCameraName ? e.cameraMoves ? "拖动时间条或点 ▶ 播放 · 跟随相机视角 · 「印到当前分镜」保存当前画面" : `动画 ${e.formatTime(t)} · 当前相机「${e.activeCameraName}」未随时间变化。请换其他相机，或在 Blender 给该相机（或其父级）打关键帧后重新导出。` : `动画 ${e.formatTime(t)} · 请在左侧选择相机` : "未检测到 GLB 动画。Blender 导出请勾选 Animation，Animation mode 建议选 Scene，并勾选 Bake All Objects Animations。";
 }
-function Fe(e, t, n) {
+function Re(e, t, n) {
 	let r = n || 0, i = e + t;
 	return r > 0 && i >= r ? {
 		nextTime: r,
@@ -749,17 +749,17 @@ function Fe(e, t, n) {
 }
 //#endregion
 //#region src/scene3d/workspace/workspaceMaterials.ts
-function Ie(e) {
+function ze(e) {
 	e?.traverse?.((e) => {
 		!e.isMesh || e.userData.scene3dOriginalMaterial !== void 0 || (e.userData.scene3dOriginalMaterial = e.material);
 	});
 }
-function Le(e) {
+function Be(e) {
 	e?.traverse?.((e) => {
 		!e.isMesh || e.userData.scene3dOriginalMaterial === void 0 || (e.material = e.userData.scene3dOriginalMaterial);
 	});
 }
-function Re(e, t) {
+function Ve(e, t) {
 	let n = /* @__PURE__ */ new Set();
 	return e?.traverse?.((e) => {
 		e.isMesh && n.add(t(e));
@@ -767,8 +767,8 @@ function Re(e, t) {
 }
 //#endregion
 //#region src/scene3d/workspace/workspaceGlbLoad.ts
-function ze(e, t, n) {
-	let r = Q(n || []), i = e.AnimationMixer, a = new i(t), o = [], s = e.LoopOnce;
+function He(e, t, n) {
+	let r = Y(n || []), i = e.AnimationMixer, a = new i(t), o = [], s = e.LoopOnce;
 	for (let e of r) {
 		let t = a.clipAction(e);
 		t.setLoop(s, 1), t.play(), o.push(t);
@@ -776,32 +776,32 @@ function ze(e, t, n) {
 	return {
 		mixer: a,
 		mixerActions: o,
-		animationDuration: Z(r.length ? r : n)
+		animationDuration: J(r.length ? r : n)
 	};
 }
-function Be(e) {
+function Ue(e) {
 	let { gltf: t, importedCameras: n, animationDuration: r, importedLightCount: i, programLightingMode: a } = e, o = [];
-	return n.length === 0 ? (o.push(z(t)), o) : (n.some((e) => e.orphan) ? o.push(`已找到 ${n.length} 个相机（部分未挂到场景树，已自动修复）。`) : (t.animations || []).length ? r <= 0 ? o.push("已找到动画轨道，但时长为 0。请检查 Blender 时间轴范围与关键帧。") : a === "auto" && (i > 0 ? o.push(`检测到 GLB 含 ${i} 盏灯，已校准强度并启用弱环境反射（模拟 Blender World）。`) : o.push("GLB 无导出灯光，已自动开启全程序补光。")) : o.push("场景已加载，但未找到动画。请在 Blender 导出时勾选 Animation。"), o);
+	return n.length === 0 ? (o.push(B(t)), o) : (n.some((e) => e.orphan) ? o.push(`已找到 ${n.length} 个相机（部分未挂到场景树，已自动修复）。`) : (t.animations || []).length ? r <= 0 ? o.push("已找到动画轨道，但时长为 0。请检查 Blender 时间轴范围与关键帧。") : a === "auto" && (i > 0 ? o.push(`检测到 GLB 含 ${i} 盏灯，已校准强度并启用弱环境反射（模拟 Blender World）。`) : o.push("GLB 无导出灯光，已自动开启全程序补光。")) : o.push("场景已加载，但未找到动画。请在 Blender 导出时勾选 Animation。"), o);
 }
-function Ve(e, t) {
+function We(e, t) {
 	if (t != null && !Number.isNaN(Number(t))) return Number(t);
 	let n = Number(e.animation_time);
 	return !Number.isNaN(n) && n >= 0 ? n : null;
 }
-function He(e, t) {
+function Ge(e, t) {
 	return e <= 0 ? 0 : Math.min(e, t || e);
 }
-function Ue(e, t) {
+function Ke(e, t) {
 	let n = t.blend_file_path || "scene3d/scene.blend", r = t.file_name || t.file_path || "";
 	return e === "blender" && r ? `GLB: ${String(r).split("/").pop()}` : n.split("/").pop() || "scene.blend";
 }
-function We(e, t) {
+function qe(e, t) {
 	let n = [];
 	e && n.push(e);
 	for (let e of t) n.push(e);
 	return n;
 }
-function Ge(e, t, n) {
+function Je(e, t, n) {
 	let r = e?.objects?.length ? e : t(), i = (r.objects || []).filter((e) => n.has(String(e.type || "")));
 	return {
 		...r,
@@ -810,25 +810,25 @@ function Ge(e, t, n) {
 }
 //#endregion
 //#region src/scene3d/workspace/workspaceTransform.ts
-function Ke(e, t, n, r, i) {
+function Ye(e, t, n, r, i) {
 	let a = (e, t) => Number(n[e]?.value) || t, o = e.MathUtils;
 	t.position.set(a("px", t.position.x), a("py", t.position.y), a("pz", t.position.z)), t.rotation.set(o.degToRad(a("rx", o.radToDeg(t.rotation.x))), o.degToRad(a("ry", o.radToDeg(t.rotation.y))), o.degToRad(a("rz", o.radToDeg(t.rotation.z)))), t.scale.set(Math.max(.01, a("sx", t.scale.x)), Math.max(.01, a("sy", t.scale.y)), Math.max(.01, a("sz", t.scale.z))), r && i?.updateMatrixWorld();
 }
-function qe(e, t, n) {
+function Xe(e, t, n) {
 	let r = !t;
 	for (let e of Object.values(n)) e.disabled = r;
 	if (!t) return;
 	let i = e.MathUtils;
 	n.px.value = t.position.x.toFixed(2), n.py.value = t.position.y.toFixed(2), n.pz.value = t.position.z.toFixed(2), n.rx.value = i.radToDeg(t.rotation.x).toFixed(1), n.ry.value = i.radToDeg(t.rotation.y).toFixed(1), n.rz.value = i.radToDeg(t.rotation.z).toFixed(1), n.sx.value = t.scale.x.toFixed(2), n.sy.value = t.scale.y.toFixed(2), n.sz.value = t.scale.z.toFixed(2);
 }
-var Je = {
+var Ze = {
 	off: "关闭",
 	on: "标准",
 	strong: "强化"
 };
 //#endregion
 //#region src/scene3d/workspace/workspaceOutliner.ts
-function Ye(e, t, n, r, i) {
+function Qe(e, t, n, r, i) {
 	if (e === "blender") return n.length ? n.map((e) => ({
 		kind: "camera",
 		id: e.id,
@@ -847,14 +847,14 @@ function Ye(e, t, n, r, i) {
 	});
 	return a;
 }
-function Xe(e, t) {
+function $e(e, t) {
 	e.innerHTML = "";
 	for (let n of t) {
 		let t = document.createElement("li");
 		n.kind === "empty" ? (t.className = "scene3d-empty", t.textContent = n.label) : n.kind === "camera" ? (t.dataset.cameraId = n.id, t.className = n.active ? "active" : "", t.textContent = `📷 ${n.label}`) : (t.dataset.objectId = n.id, t.className = n.active ? "active" : "", t.textContent = n.label), e.appendChild(t);
 	}
 }
-function Ze(e) {
+function et(e) {
 	return e.length ? e.map((e) => ({
 		value: e.id,
 		label: e.name
@@ -863,7 +863,7 @@ function Ze(e) {
 		label: "（无相机）"
 	}];
 }
-function Qe(e, t, n = "") {
+function tt(e, t, n = "") {
 	e.innerHTML = "";
 	for (let n of t) {
 		let t = document.createElement("option");
@@ -873,41 +873,41 @@ function Qe(e, t, n = "") {
 }
 //#endregion
 //#region src/scene3d/workspace/workspaceMode.ts
-function $e(e, t) {
+function nt(e, t) {
 	e.classList.toggle("scene3d-mode-blender", t === "blender"), e.classList.toggle("scene3d-mode-builtin", t === "builtin"), e.querySelectorAll(".scene3d-blender-only").forEach((e) => {
 		e.hidden = t !== "blender";
 	}), e.querySelectorAll(".scene3d-builtin-only").forEach((e) => {
 		e.hidden = t === "blender";
 	});
 }
-function et(e, t) {
+function rt(e, t) {
 	let n = e === "builtin";
 	t.grid.visible = n, t.axes.visible = n, t.defaultAmbient.visible = n, t.defaultSun.visible = n, n && (t.scene.environment = null, t.scene.background = t.builtinBackground.clone(), t.programAmbient.visible = !1, t.programHemisphere.visible = !1);
 }
-function tt(e, t) {
+function it(e, t) {
 	return !(t && e === "blender");
 }
 //#endregion
 //#region src/scene3d/workspace/workspaceSelection.ts
-function $(e) {
+function X(e) {
 	return !!(e && e !== "ground");
 }
-function nt(e, t) {
+function at(e, t) {
 	return !!(t && e === "builtin");
 }
-function rt(e, t) {
+function ot(e, t) {
 	return e ? e.position.clone() : t.target.clone();
 }
-function it(e, t) {
-	let [n, r, i] = S, [a, o, s] = C;
+function st(e, t) {
+	let [n, r, i] = C, [a, o, s] = w;
 	e.position.set(n, r, i), t.target.set(a, o, s), t.update();
 }
 //#endregion
 //#region src/scene3d/workspace/workspaceInput.ts
-function at(e) {
+function ct(e) {
 	return !!(e && e instanceof Element && e.matches("input, textarea, select"));
 }
-function ot(e) {
+function lt(e) {
 	return e.code === "Space" ? { type: "togglePlayback" } : e.code === "F5" ? { type: "reloadGlb" } : e.key === "Home" ? { type: "goToStart" } : e.key === "ArrowLeft" ? {
 		type: "stepAnimation",
 		delta: e.shiftKey ? -.5 : -.1
@@ -916,7 +916,7 @@ function ot(e) {
 		delta: e.shiftKey ? .5 : .1
 	} : null;
 }
-function st(e) {
+function ut(e) {
 	let t = e.key.toLowerCase();
 	return t === "g" ? {
 		type: "setTransformMode",
@@ -929,7 +929,7 @@ function st(e) {
 		mode: "scale"
 	} : t === "delete" ? { type: "deleteSelected" } : t === "f" ? { type: "focusSelected" } : null;
 }
-function ct(e, t) {
+function dt(e, t) {
 	switch (e.type) {
 		case "togglePlayback":
 			t.togglePlayback();
@@ -956,7 +956,7 @@ function ct(e, t) {
 }
 //#endregion
 //#region src/scene3d/workspace/workspaceClear.ts
-function lt() {
+function ft() {
 	return {
 		mixer: null,
 		mixerActions: [],
@@ -968,12 +968,117 @@ function lt() {
 		isPlaying: !1
 	};
 }
-function ut(e) {
+function Z(e) {
 	e?.stopAllAction?.();
 }
 //#endregion
+//#region src/utils/panelResize.ts
+var Q = "storyboarder.panel-size.";
+function $(e) {
+	try {
+		let t = JSON.parse(localStorage.getItem(Q + e) ?? "{}");
+		return t && typeof t == "object" ? t : {};
+	} catch {
+		return {};
+	}
+}
+function pt(e, t) {
+	let { key: n, edge: r, panel: i, host: a, bounds: o, width: s, height: c } = t, l = {
+		width: s,
+		height: c
+	}, u = $(n);
+	for (let e of ["width", "height"]) {
+		let t = l[e], n = u[e];
+		t && Number.isFinite(n) && n > 0 && a.style.setProperty(t.property, `${Math.min(t.max ?? Infinity, Math.max(t.min, n))}px`);
+	}
+	let d = (e, t) => {
+		let n = o.getBoundingClientRect()[e], r = Math.max(0, Math.min(t.max ?? Infinity, n * (t.fraction ?? 1) - (t.reserve ?? 0)));
+		return {
+			min: Math.min(t.min, r),
+			max: r
+		};
+	}, f = (e, t) => {
+		let n = l[e];
+		if (!n) return;
+		let { min: r, max: i } = d(e, n);
+		a.style.setProperty(n.property, `${Math.round(Math.max(r, Math.min(i, t)))}px`);
+	}, p = () => {
+		let e = $(n), t = i.getBoundingClientRect();
+		for (let n of ["width", "height"]) l[n] && (e[n] = Math.round(t[n]));
+		try {
+			localStorage.setItem(Q + n, JSON.stringify(e));
+		} catch {}
+	}, m = () => {
+		let e = $(n);
+		for (let t of ["width", "height"]) {
+			let n = l[t];
+			n && (a.style.removeProperty(n.property), delete e[t]);
+		}
+		try {
+			localStorage.setItem(Q + n, JSON.stringify(e));
+		} catch {}
+	}, h = new ResizeObserver(() => {
+		if (s && c) return;
+		let t = s ? "width" : "height", n = l[t];
+		if (!n) return;
+		let { min: r, max: a } = d(t, n);
+		e.setAttribute("aria-valuemin", String(Math.round(r))), e.setAttribute("aria-valuemax", String(Math.round(a))), e.setAttribute("aria-valuenow", String(Math.round(i.getBoundingClientRect()[t])));
+	});
+	h.observe(i), h.observe(o);
+	let g = null, _ = (t) => {
+		if (!g) return;
+		let n = g;
+		g = null, t ? (s && a.style.setProperty(s.property, n.previousWidth), c && a.style.setProperty(c.property, n.previousHeight)) : p(), document.body.style.cursor = n.cursor, document.body.style.userSelect = n.selection, e.removeAttribute("data-resizing"), e.hasPointerCapture(n.id) && e.releasePointerCapture(n.id);
+	}, v = (t) => {
+		if (t.button !== 0 || !t.isPrimary || g) return;
+		t.preventDefault(), t.stopPropagation();
+		let n = i.getBoundingClientRect();
+		g = {
+			id: t.pointerId,
+			x: t.clientX,
+			y: t.clientY,
+			width: n.width,
+			height: n.height,
+			cursor: document.body.style.cursor,
+			selection: document.body.style.userSelect,
+			previousWidth: s ? a.style.getPropertyValue(s.property) : "",
+			previousHeight: c ? a.style.getPropertyValue(c.property) : ""
+		}, e.focus({ preventScroll: !0 }), e.setPointerCapture(t.pointerId), e.setAttribute("data-resizing", "true"), document.body.style.cursor = getComputedStyle(e).cursor, document.body.style.userSelect = "none";
+	}, y = (e) => {
+		!g || g.id !== e.pointerId || (s && f("width", g.width + (e.clientX - g.x) * (r.includes("left") ? -1 : 1)), c && f("height", g.height + (e.clientY - g.y) * (r === "top" ? -1 : 1)));
+	}, b = (e) => {
+		g?.id === e.pointerId && _(!1);
+	}, x = () => _(!0), S = (e) => {
+		e.preventDefault(), e.stopPropagation(), m();
+	}, C = (e) => {
+		if (e.key === "Escape" && g) {
+			e.preventDefault(), e.stopPropagation(), _(!0);
+			return;
+		}
+		if (e.key === "Home") {
+			e.preventDefault(), e.stopPropagation(), m();
+			return;
+		}
+		if (![
+			"ArrowLeft",
+			"ArrowRight",
+			"ArrowUp",
+			"ArrowDown"
+		].includes(e.key)) return;
+		e.preventDefault(), e.stopPropagation();
+		let t = e.shiftKey ? 50 : 10, n = i.getBoundingClientRect();
+		if (s && (e.key === "ArrowLeft" || e.key === "ArrowRight")) f("width", n.width + t * (e.key === "ArrowRight" ? 1 : -1) * (r.includes("left") ? -1 : 1));
+		else if (c && (e.key === "ArrowUp" || e.key === "ArrowDown")) f("height", n.height + t * (e.key === "ArrowDown" ? 1 : -1) * (r === "top" ? -1 : 1));
+		else return;
+		p();
+	};
+	return e.addEventListener("pointerdown", v), e.addEventListener("pointermove", y), e.addEventListener("pointerup", b), e.addEventListener("pointercancel", x), e.addEventListener("lostpointercapture", x), e.addEventListener("dblclick", S), e.addEventListener("keydown", C), () => {
+		_(!0), h.disconnect(), e.removeEventListener("pointerdown", v), e.removeEventListener("pointermove", y), e.removeEventListener("pointerup", b), e.removeEventListener("pointercancel", x), e.removeEventListener("lostpointercapture", x), e.removeEventListener("dblclick", S), e.removeEventListener("keydown", C);
+	};
+}
+//#endregion
 //#region src/scene3d/workspace/workspaceEditor.ts
-var dt = class {
+var mt = class {
 	rootEl;
 	callbacks;
 	sceneData;
@@ -1044,19 +1149,34 @@ var dt = class {
 	hintEl;
 	transformInputs;
 	_resizeObserver;
+	_disposePanelResize;
 	_keydownHandler;
 	_pointerdownHandler;
 	constructor(t, n = {}) {
-		this.rootEl = t, this.callbacks = n, this.sceneData = u(), this.sceneMeta = {}, this.mode = "builtin", this.objects = /* @__PURE__ */ new Map(), this.selectedId = null, this.transformMode = "translate", this.shotCameraHelper = null, this.animationId = null, this.clock = new e.Clock(), this.blenderRoot = null, this.mixer = null, this.mixerActions = [], this.importedCameras = [], this.activeCameraId = "", this.followCamera = !0, this.isPlaying = !1, this.programLightingMode = "auto", this.importedLightCount = 0, this.objectColorPreview = !0, this.previewMaterials = /* @__PURE__ */ new Set(), this.wireframeMode = "off", this.wireframeResources = k(), this.animationTime = 0, this.animationDuration = 0, this.animatedNodeNames = /* @__PURE__ */ new Set(), this._followPos = new e.Vector3(), this._followQuat = new e.Quaternion(), this._followScale = new e.Vector3(), this._probePosA = new e.Vector3(), this._probePosB = new e.Vector3(), this._sceneSettingsSaveTimer = null, this._suppressViewChange = !1, this._disposed = !1, this.renderer = null, this.scene = null, this.camera = null, this.defaultAmbient = null, this.defaultSun = null, this.programAmbient = null, this.programHemisphere = null, this.grid = null, this.axes = null, this.builtinBackground = null, this.pmremGenerator = null, this.blenderEnvMap = null, this.orbit = null, this.transform = null, this.raycaster = null, this.pointer = null, this.transformInputs = {}, this._buildDom(), this._initThree(), this._bindUi();
+		this.rootEl = t, this.callbacks = n, this.sceneData = u(), this.sceneMeta = {}, this.mode = "builtin", this.objects = /* @__PURE__ */ new Map(), this.selectedId = null, this.transformMode = "translate", this.shotCameraHelper = null, this.animationId = null, this.clock = new e.Clock(), this.blenderRoot = null, this.mixer = null, this.mixerActions = [], this.importedCameras = [], this.activeCameraId = "", this.followCamera = !0, this.isPlaying = !1, this.programLightingMode = "auto", this.importedLightCount = 0, this.objectColorPreview = !0, this.previewMaterials = /* @__PURE__ */ new Set(), this.wireframeMode = "off", this.wireframeResources = A(), this.animationTime = 0, this.animationDuration = 0, this.animatedNodeNames = /* @__PURE__ */ new Set(), this._followPos = new e.Vector3(), this._followQuat = new e.Quaternion(), this._followScale = new e.Vector3(), this._probePosA = new e.Vector3(), this._probePosB = new e.Vector3(), this._sceneSettingsSaveTimer = null, this._suppressViewChange = !1, this._disposed = !1, this.renderer = null, this.scene = null, this.camera = null, this.defaultAmbient = null, this.defaultSun = null, this.programAmbient = null, this.programHemisphere = null, this.grid = null, this.axes = null, this.builtinBackground = null, this.pmremGenerator = null, this.blenderEnvMap = null, this.orbit = null, this.transform = null, this.raycaster = null, this.pointer = null, this.transformInputs = {}, this._buildDom(), this._initThree(), this._bindUi();
 	}
 	_buildDom() {
-		this.rootEl.innerHTML = "\n      <div class=\"scene3d-layout\">\n        <aside class=\"scene3d-sidebar\">\n          <div class=\"scene3d-panel-title\">当前分镜预览</div>\n          <div class=\"scene3d-board-preview\" data-board-preview>\n            <img data-board-preview-img alt=\"\" hidden />\n            <span class=\"scene3d-board-preview-empty\" data-board-preview-empty>无预览 · Capture 后显示</span>\n          </div>\n          <div class=\"scene3d-board-label\" data-board-label>—</div>\n          <div class=\"scene3d-panel-title\">Blender 场景</div>\n          <div class=\"scene3d-blender-panel\">\n            <div class=\"scene3d-file-name\" data-blend-name>scene3d/scene.blend</div>\n            <button type=\"button\" data-action=\"open-blender\" class=\"scene3d-import-btn\">在 Blender 中打开</button>\n            <div class=\"scene3d-light-status\">在 Blender 保存后自动更新预览</div>\n            <label class=\"scene3d-check\">\n              <input type=\"checkbox\" data-follow-camera checked />\n              跟随相机视角\n            </label>\n            <label class=\"scene3d-check\">\n              <input type=\"checkbox\" data-object-colors checked />\n              对象随机色（低饱和，便于区分）\n            </label>\n            <label class=\"scene3d-field\">\n              <span>线框</span>\n              <select data-wireframe-mode>\n                <option value=\"off\">关闭</option>\n                <option value=\"on\">标准（叠加边线）</option>\n                <option value=\"strong\">强化（全边线 + 高亮）</option>\n              </select>\n            </label>\n            <label class=\"scene3d-field\">\n              <span>程序补光</span>\n              <select data-program-lighting>\n                <option value=\"auto\">自动（有灯：环境反射；无灯：全补光）</option>\n                <option value=\"on\">始终开启（环境 + 柔光）</option>\n                <option value=\"off\">关闭（仅 GLB 灯光）</option>\n              </select>\n            </label>\n            <div class=\"scene3d-light-status\" data-light-status>—</div>\n            <label class=\"scene3d-field\">\n              <span>相机</span>\n              <select data-camera-select disabled>\n                <option value=\"\">（无相机）</option>\n              </select>\n            </label>\n          </div>\n          <div class=\"scene3d-panel-title\">Outliner</div>\n          <ul class=\"scene3d-outliner\" data-outliner></ul>\n          <div class=\"scene3d-panel-title scene3d-builtin-only\">Transform</div>\n          <div class=\"scene3d-transform-fields scene3d-builtin-only\">\n            <label>位置 X <input type=\"number\" step=\"0.1\" data-tf=\"px\" /></label>\n            <label>位置 Y <input type=\"number\" step=\"0.1\" data-tf=\"py\" /></label>\n            <label>位置 Z <input type=\"number\" step=\"0.1\" data-tf=\"pz\" /></label>\n            <label>旋转 X <input type=\"number\" step=\"1\" data-tf=\"rx\" /></label>\n            <label>旋转 Y <input type=\"number\" step=\"1\" data-tf=\"ry\" /></label>\n            <label>旋转 Z <input type=\"number\" step=\"1\" data-tf=\"rz\" /></label>\n            <label>缩放 X <input type=\"number\" step=\"0.1\" min=\"0.01\" data-tf=\"sx\" /></label>\n            <label>缩放 Y <input type=\"number\" step=\"0.1\" min=\"0.01\" data-tf=\"sy\" /></label>\n            <label>缩放 Z <input type=\"number\" step=\"0.1\" min=\"0.01\" data-tf=\"sz\" /></label>\n          </div>\n        </aside>\n        <div class=\"scene3d-main\">\n          <div class=\"scene3d-toolbar\">\n            <div class=\"scene3d-tool-group scene3d-builtin-only\">\n              <button type=\"button\" data-mode=\"translate\" class=\"active\" title=\"移动 (G)\">移动</button>\n              <button type=\"button\" data-mode=\"rotate\" title=\"旋转 (R)\">旋转</button>\n              <button type=\"button\" data-mode=\"scale\" title=\"缩放 (S)\">缩放</button>\n            </div>\n            <div class=\"scene3d-tool-group scene3d-builtin-only\">\n              <button type=\"button\" data-add=\"cube\">立方体</button>\n              <button type=\"button\" data-add=\"sphere\">球体</button>\n              <button type=\"button\" data-add=\"plane\">平面</button>\n              <button type=\"button\" data-add=\"cylinder\">圆柱</button>\n              <button type=\"button\" data-add=\"cone\">圆锥</button>\n            </div>\n            <div class=\"scene3d-tool-group scene3d-blender-only\" hidden>\n              <button type=\"button\" data-action=\"play-pause\">▶ 播放</button>\n              <button type=\"button\" data-action=\"go-to-start\" title=\"回到开头\">⏮ 开头</button>\n              <button type=\"button\" data-action=\"step-back\" title=\"后退 0.1s\">◀</button>\n              <button type=\"button\" data-action=\"step-forward\" title=\"前进 0.1s\">▶</button>\n              <button type=\"button\" data-action=\"capture-board\">印到当前分镜</button>\n              <button type=\"button\" data-action=\"free-view\">自由视角</button>\n            </div>\n            <div class=\"scene3d-tool-group scene3d-builtin-only\">\n              <button type=\"button\" data-action=\"delete\" title=\"删除 (Del)\">删除</button>\n              <button type=\"button\" data-action=\"focus\" title=\"聚焦 (F)\">聚焦</button>\n              <button type=\"button\" data-action=\"reset-view\">重置视图</button>\n            </div>\n            <div class=\"scene3d-tool-group scene3d-tool-group-right scene3d-builtin-only\">\n              <button type=\"button\" data-action=\"load-shot-camera\">加载镜头相机</button>\n              <button type=\"button\" data-action=\"apply-shot-camera\">保存镜头相机</button>\n            </div>\n          </div>\n          <div class=\"scene3d-viewport\" data-viewport>\n            <div class=\"scene3d-format-frame\" data-format-frame></div>\n          </div>\n          <div class=\"scene3d-timeline scene3d-blender-only\" hidden>\n            <input type=\"range\" min=\"0\" max=\"0\" step=\"0.01\" value=\"0\" data-time-slider />\n            <span data-time-display>0.0s / 0.0s</span>\n          </div>\n          <div class=\"scene3d-hint\" data-hint>\n            拖动旋转 · 滚轮缩放 · 右键平移 · 自由视角/相机视角 · Blender 保存后自动更新\n          </div>\n        </div>\n      </div>\n    ", this.outlinerEl = this.rootEl.querySelector("[data-outliner]"), this.viewportEl = this.rootEl.querySelector("[data-viewport]"), this.formatFrameEl = this.rootEl.querySelector("[data-format-frame]"), this.fileNameEl = this.rootEl.querySelector("[data-blend-name]"), this.cameraSelectEl = this.rootEl.querySelector("[data-camera-select]"), this.followCameraEl = this.rootEl.querySelector("[data-follow-camera]"), this.objectColorsEl = this.rootEl.querySelector("[data-object-colors]"), this.wireframeModeEl = this.rootEl.querySelector("[data-wireframe-mode]"), this.programLightingEl = this.rootEl.querySelector("[data-program-lighting]"), this.lightStatusEl = this.rootEl.querySelector("[data-light-status]"), this.timeSliderEl = this.rootEl.querySelector("[data-time-slider]"), this.timeDisplayEl = this.rootEl.querySelector("[data-time-display]"), this.boardPreviewImg = this.rootEl.querySelector("[data-board-preview-img]"), this.boardPreviewEmpty = this.rootEl.querySelector("[data-board-preview-empty]"), this.boardLabelEl = this.rootEl.querySelector("[data-board-label]"), this.playPauseBtn = this.rootEl.querySelector("[data-action='play-pause']"), this.hintEl = this.rootEl.querySelector("[data-hint]"), this.transformInputs = {}, this.rootEl.querySelectorAll("[data-tf]").forEach((e) => {
+		this.rootEl.innerHTML = "\n      <div class=\"scene3d-layout\">\n        <aside class=\"scene3d-sidebar\">\n          <div class=\"scene3d-panel-title\">当前分镜预览</div>\n          <div class=\"scene3d-board-preview\" data-board-preview>\n            <img data-board-preview-img alt=\"\" hidden />\n            <span class=\"scene3d-board-preview-empty\" data-board-preview-empty>无预览 · Capture 后显示</span>\n          </div>\n          <div class=\"scene3d-board-label\" data-board-label>—</div>\n          <div class=\"scene3d-panel-title\">Blender 场景</div>\n          <div class=\"scene3d-blender-panel\">\n            <div class=\"scene3d-file-name\" data-blend-name>scene3d/scene.blend</div>\n            <button type=\"button\" data-action=\"open-blender\" class=\"scene3d-import-btn\">在 Blender 中打开</button>\n            <div class=\"scene3d-light-status\">在 Blender 保存后自动更新预览</div>\n            <label class=\"scene3d-check\">\n              <input type=\"checkbox\" data-follow-camera checked />\n              跟随相机视角\n            </label>\n            <label class=\"scene3d-check\">\n              <input type=\"checkbox\" data-object-colors checked />\n              对象随机色（低饱和，便于区分）\n            </label>\n            <label class=\"scene3d-field\">\n              <span>线框</span>\n              <select data-wireframe-mode>\n                <option value=\"off\">关闭</option>\n                <option value=\"on\">标准（叠加边线）</option>\n                <option value=\"strong\">强化（全边线 + 高亮）</option>\n              </select>\n            </label>\n            <label class=\"scene3d-field\">\n              <span>程序补光</span>\n              <select data-program-lighting>\n                <option value=\"auto\">自动（有灯：环境反射；无灯：全补光）</option>\n                <option value=\"on\">始终开启（环境 + 柔光）</option>\n                <option value=\"off\">关闭（仅 GLB 灯光）</option>\n              </select>\n            </label>\n            <div class=\"scene3d-light-status\" data-light-status>—</div>\n            <label class=\"scene3d-field\">\n              <span>相机</span>\n              <select data-camera-select disabled>\n                <option value=\"\">（无相机）</option>\n              </select>\n            </label>\n          </div>\n          <div class=\"scene3d-panel-title\">Outliner</div>\n          <ul class=\"scene3d-outliner\" data-outliner></ul>\n          <div class=\"scene3d-panel-title scene3d-builtin-only\">Transform</div>\n          <div class=\"scene3d-transform-fields scene3d-builtin-only\">\n            <label>位置 X <input type=\"number\" step=\"0.1\" data-tf=\"px\" /></label>\n            <label>位置 Y <input type=\"number\" step=\"0.1\" data-tf=\"py\" /></label>\n            <label>位置 Z <input type=\"number\" step=\"0.1\" data-tf=\"pz\" /></label>\n            <label>旋转 X <input type=\"number\" step=\"1\" data-tf=\"rx\" /></label>\n            <label>旋转 Y <input type=\"number\" step=\"1\" data-tf=\"ry\" /></label>\n            <label>旋转 Z <input type=\"number\" step=\"1\" data-tf=\"rz\" /></label>\n            <label>缩放 X <input type=\"number\" step=\"0.1\" min=\"0.01\" data-tf=\"sx\" /></label>\n            <label>缩放 Y <input type=\"number\" step=\"0.1\" min=\"0.01\" data-tf=\"sy\" /></label>\n            <label>缩放 Z <input type=\"number\" step=\"0.1\" min=\"0.01\" data-tf=\"sz\" /></label>\n          </div>\n        </aside>\n        <div class=\"panel-resize-handle scene3d-sidebar-resize\" data-edge=\"right\" data-sidebar-resize\n          role=\"separator\" tabindex=\"0\" aria-label=\"Resize Scene 3D sidebar\" aria-orientation=\"vertical\"\n          title=\"Drag or use arrow keys to resize. Double-click or press Home to reset.\"></div>\n        <div class=\"scene3d-main\">\n          <div class=\"scene3d-toolbar\">\n            <div class=\"scene3d-tool-group scene3d-builtin-only\">\n              <button type=\"button\" data-mode=\"translate\" class=\"active\" title=\"移动 (G)\">移动</button>\n              <button type=\"button\" data-mode=\"rotate\" title=\"旋转 (R)\">旋转</button>\n              <button type=\"button\" data-mode=\"scale\" title=\"缩放 (S)\">缩放</button>\n            </div>\n            <div class=\"scene3d-tool-group scene3d-builtin-only\">\n              <button type=\"button\" data-add=\"cube\">立方体</button>\n              <button type=\"button\" data-add=\"sphere\">球体</button>\n              <button type=\"button\" data-add=\"plane\">平面</button>\n              <button type=\"button\" data-add=\"cylinder\">圆柱</button>\n              <button type=\"button\" data-add=\"cone\">圆锥</button>\n            </div>\n            <div class=\"scene3d-tool-group scene3d-blender-only\" hidden>\n              <button type=\"button\" data-action=\"play-pause\">▶ 播放</button>\n              <button type=\"button\" data-action=\"go-to-start\" title=\"回到开头\">⏮ 开头</button>\n              <button type=\"button\" data-action=\"step-back\" title=\"后退 0.1s\">◀</button>\n              <button type=\"button\" data-action=\"step-forward\" title=\"前进 0.1s\">▶</button>\n              <button type=\"button\" data-action=\"capture-board\">印到当前分镜</button>\n              <button type=\"button\" data-action=\"free-view\">自由视角</button>\n            </div>\n            <div class=\"scene3d-tool-group scene3d-builtin-only\">\n              <button type=\"button\" data-action=\"delete\" title=\"删除 (Del)\">删除</button>\n              <button type=\"button\" data-action=\"focus\" title=\"聚焦 (F)\">聚焦</button>\n              <button type=\"button\" data-action=\"reset-view\">重置视图</button>\n            </div>\n            <div class=\"scene3d-tool-group scene3d-tool-group-right scene3d-builtin-only\">\n              <button type=\"button\" data-action=\"load-shot-camera\">加载镜头相机</button>\n              <button type=\"button\" data-action=\"apply-shot-camera\">保存镜头相机</button>\n            </div>\n          </div>\n          <div class=\"scene3d-viewport\" data-viewport>\n            <div class=\"scene3d-format-frame\" data-format-frame></div>\n          </div>\n          <div class=\"scene3d-timeline scene3d-blender-only\" hidden>\n            <input type=\"range\" min=\"0\" max=\"0\" step=\"0.01\" value=\"0\" data-time-slider />\n            <span data-time-display>0.0s / 0.0s</span>\n          </div>\n          <div class=\"scene3d-hint\" data-hint>\n            拖动旋转 · 滚轮缩放 · 右键平移 · 自由视角/相机视角 · Blender 保存后自动更新\n          </div>\n        </div>\n      </div>\n    ";
+		let e = this.rootEl.querySelector(".scene3d-layout");
+		this._disposePanelResize = pt(this.rootEl.querySelector("[data-sidebar-resize]"), {
+			key: "scene3d-sidebar",
+			edge: "right",
+			panel: this.rootEl.querySelector(".scene3d-sidebar"),
+			host: e,
+			bounds: e,
+			width: {
+				property: "--scene3d-sidebar-width",
+				min: 200,
+				max: 620,
+				fraction: .4
+			}
+		}), this.outlinerEl = this.rootEl.querySelector("[data-outliner]"), this.viewportEl = this.rootEl.querySelector("[data-viewport]"), this.formatFrameEl = this.rootEl.querySelector("[data-format-frame]"), this.fileNameEl = this.rootEl.querySelector("[data-blend-name]"), this.cameraSelectEl = this.rootEl.querySelector("[data-camera-select]"), this.followCameraEl = this.rootEl.querySelector("[data-follow-camera]"), this.objectColorsEl = this.rootEl.querySelector("[data-object-colors]"), this.wireframeModeEl = this.rootEl.querySelector("[data-wireframe-mode]"), this.programLightingEl = this.rootEl.querySelector("[data-program-lighting]"), this.lightStatusEl = this.rootEl.querySelector("[data-light-status]"), this.timeSliderEl = this.rootEl.querySelector("[data-time-slider]"), this.timeDisplayEl = this.rootEl.querySelector("[data-time-display]"), this.boardPreviewImg = this.rootEl.querySelector("[data-board-preview-img]"), this.boardPreviewEmpty = this.rootEl.querySelector("[data-board-preview-empty]"), this.boardLabelEl = this.rootEl.querySelector("[data-board-label]"), this.playPauseBtn = this.rootEl.querySelector("[data-action='play-pause']"), this.hintEl = this.rootEl.querySelector("[data-hint]"), this.transformInputs = {}, this.rootEl.querySelectorAll("[data-tf]").forEach((e) => {
 			let t = e;
 			this.transformInputs[t.dataset.tf] = t;
 		});
 	}
 	_initThree() {
-		let r = oe(e, t, n, {
+		let r = T(e, t, n, {
 			mountEl: this.formatFrameEl,
 			transformMode: this.transformMode,
 			onOrbitChange: () => {
@@ -1153,9 +1273,9 @@ var dt = class {
 		}
 	}
 	_onKeyDown(e) {
-		if (at(e.target)) return;
-		let t = this.mode === "blender" ? ot(e) : st(e);
-		t && (this.mode === "blender" && e.preventDefault(), ct(t, {
+		if (ct(e.target)) return;
+		let t = this.mode === "blender" ? lt(e) : ut(e);
+		t && (this.mode === "blender" && e.preventDefault(), dt(t, {
 			togglePlayback: () => this.toggleAnimationPlayback(),
 			reloadGlb: () => this.reloadBlenderScene(),
 			goToStart: () => this.goToAnimationStart(),
@@ -1203,27 +1323,27 @@ var dt = class {
 			await this.loadBlenderFromProject(this.sceneMeta);
 			return;
 		}
-		this.setMode("builtin"), this.sceneData = Ge(this.sceneMeta, u, a), this.clearBlenderScene(), this.clearObjects();
+		this.setMode("builtin"), this.sceneData = Je(this.sceneMeta, u, a), this.clearBlenderScene(), this.clearObjects();
 		for (let e of this.sceneData.objects || []) this._addMeshFromSpec(e);
 		this.selectObject(this.sceneData.objects?.[0]?.id || null), this._renderOutliner(), this._updateFileName(), this._applyWireframeMode();
 	}
 	_normalizeWireframeMode(e) {
-		return T(e);
+		return fe(e);
 	}
 	setWireframeMode(e, { persist: t = !0, notify: n = !1 } = {}) {
 		this.wireframeMode = this._normalizeWireframeMode(e), this.wireframeModeEl && (this.wireframeModeEl.value = this.wireframeMode), t && (this.sceneMeta = {
 			...this.sceneMeta || {},
 			wireframe_mode: this.wireframeMode
-		}), this._applyWireframeMode(), t && this._scheduleSceneSettingsSave(), n && this.callbacks.onMessage?.(`线框：${Je[this.wireframeMode] || this.wireframeMode}`);
+		}), this._applyWireframeMode(), t && this._scheduleSceneSettingsSave(), n && this.callbacks.onMessage?.(`线框：${Ze[this.wireframeMode] || this.wireframeMode}`);
 	}
 	_getWireframeRoots() {
-		return We(this.blenderRoot, this.objects.values());
+		return qe(this.blenderRoot, this.objects.values());
 	}
 	_clearWireframeOverlays() {
-		this.wireframeResources ||= k(), A(this._getWireframeRoots(), this.wireframeResources);
+		this.wireframeResources ||= A(), j(this._getWireframeRoots(), this.wireframeResources);
 	}
 	_applyWireframeMode() {
-		this.wireframeResources ||= k(), be(e, this._getWireframeRoots(), this.wireframeMode, this.wireframeResources);
+		this.wireframeResources ||= A(), ye(e, this._getWireframeRoots(), this.wireframeMode, this.wireframeResources);
 	}
 	async loadBlenderFromProject(e) {
 		this.setMode("blender"), this._suppressViewChange = !0;
@@ -1234,7 +1354,7 @@ var dt = class {
 			});
 			let t = `/api/project/scene3d/file?t=${Date.now()}`;
 			await this._loadBlenderUrl(t, String(e.file_name || e.file_path || "")), e.camera_name ? this.setActiveCamera(this._pickBestCameraId(String(e.camera_name)), !1) : this.importedCameras.length && this.setActiveCamera(this._pickBestCameraId(""), !1);
-			let n = this.callbacks.getShotScene3dTime?.(), r = Ve(e, n);
+			let n = this.callbacks.getShotScene3dTime?.(), r = We(e, n);
 			r != null && this.setAnimationTime(r), this._updateFileName(), this._updateAnimationHint();
 		} finally {
 			this._suppressViewChange = !1;
@@ -1249,7 +1369,7 @@ var dt = class {
 		this.isPlaying = !1, this._updatePlayButton(), this._suppressViewChange = !0;
 		try {
 			let n = `/api/project/scene3d/file?t=${Date.now()}`;
-			await this._loadBlenderUrl(n, String(this.sceneMeta.file_name || this.sceneMeta.file_path)), t && this.setActiveCamera(this._pickBestCameraId(String(t)), !1), e > 0 && this.setAnimationTime(He(e, this.animationDuration)), this.callbacks.onMessage?.("已更新 Blender 预览（保留时间与显示设置）");
+			await this._loadBlenderUrl(n, String(this.sceneMeta.file_name || this.sceneMeta.file_path)), t && this.setActiveCamera(this._pickBestCameraId(String(t)), !1), e > 0 && this.setAnimationTime(Ge(e, this.animationDuration)), this.callbacks.onMessage?.("已更新 Blender 预览（保留时间与显示设置）");
 		} catch (e) {
 			this.callbacks.onMessage?.(`更新 Blender 预览失败：${e instanceof Error ? e.message : String(e)}`);
 		} finally {
@@ -1274,74 +1394,74 @@ var dt = class {
 		};
 	}
 	_trackNodeName(e) {
-		return X(e);
+		return q(e);
 	}
 	_collectAnimatedNodeNames(e) {
-		return Ae(e);
+		return Ne(e);
 	}
 	_isNodeInSceneGraph(e, t) {
-		return L(e, t);
+		return R(e, t);
 	}
 	_collectImportedCameras(e) {
-		return R(e);
-	}
-	_diagnoseMissingCameras(e) {
 		return z(e);
 	}
+	_diagnoseMissingCameras(e) {
+		return B(e);
+	}
 	_scoreCameraForAnimation(e) {
-		return B(e, this.animatedNodeNames);
+		return V(e, this.animatedNodeNames);
 	}
 	_pickBestCameraId(e) {
-		return V(this.importedCameras, this.animatedNodeNames, e);
+		return Se(this.importedCameras, this.animatedNodeNames, e);
 	}
 	_computeClipDuration(e) {
-		return Z(e);
+		return J(e);
 	}
 	_selectAnimationClips(e) {
-		return Q(e);
+		return Y(e);
 	}
 	_cameraMovesOverTime(e) {
-		return !this.mixer || !e || this.animationDuration <= 0 ? !1 : U(e, this._cameraMotionProbe());
+		return !this.mixer || !e || this.animationDuration <= 0 ? !1 : H(e, this._cameraMotionProbe());
 	}
 	_resolveViewNode(e) {
-		return W(e, this.blenderRoot, this.animatedNodeNames, this._cameraMotionProbe());
+		return we(e, this.blenderRoot, this.animatedNodeNames, this._cameraMotionProbe());
 	}
 	_updateAnimationHint() {
 		if (!this.hintEl) return;
 		let e = this.importedCameras.find((e) => e.id === this.activeCameraId), t = e?.object3d ? this._cameraMovesOverTime(e.object3d) : !1;
-		this.hintEl.textContent = Pe({
+		this.hintEl.textContent = Le({
 			animationDuration: this.animationDuration,
 			activeCameraName: e?.name || "",
 			cameraMoves: t,
-			formatTime: w
+			formatTime: E
 		});
 	}
 	_countImportedLights(e) {
-		return F(e);
+		return I(e);
 	}
 	_shouldUseProgramIbl() {
-		return K(this._programLightingContext());
+		return U(this._programLightingContext());
 	}
 	_shouldUseProgramFill() {
-		return q(this._programLightingContext());
+		return W(this._programLightingContext());
 	}
 	_shouldUseProgramWeakFill() {
-		return J(this._programLightingContext());
+		return G(this._programLightingContext());
 	}
 	_getEnvMapIntensity() {
-		return Te(this._programLightingContext());
+		return Oe(this._programLightingContext());
 	}
 	_calibrateImportedLights(e) {
-		I(e);
+		L(e);
 	}
 	_setImportedLightsVisible(e) {
-		G(this.blenderRoot, e);
+		Te(this.blenderRoot, e);
 	}
 	_programLightingReason() {
-		return Ee(this._programLightingContext());
+		return ke(this._programLightingContext());
 	}
 	setProgramLightingMode(e, { persist: t = !0, notify: n = !0 } = {}) {
-		let r = we(e);
+		let r = De(e);
 		this.programLightingMode = r, this.programLightingEl && (this.programLightingEl.value = r), t && (this.sceneMeta = {
 			...this.sceneMeta || {},
 			program_lighting: r
@@ -1353,14 +1473,14 @@ var dt = class {
 				this.lightStatusEl.textContent = "—";
 				return;
 			}
-			this.lightStatusEl.textContent = De(this._programLightingContext());
+			this.lightStatusEl.textContent = Ae(this._programLightingContext());
 		}
 	}
 	_ensureBlenderEnvMap() {
-		return this.blenderEnvMap ||= ke(i, this.pmremGenerator), this.blenderEnvMap;
+		return this.blenderEnvMap ||= Me(i, this.pmremGenerator), this.blenderEnvMap;
 	}
 	_applyProgramLighting() {
-		Oe(e, this._programLightingContext(), {
+		je(e, this._programLightingContext(), {
 			scene: this.scene,
 			programAmbient: this.programAmbient,
 			programHemisphere: this.programHemisphere,
@@ -1371,22 +1491,22 @@ var dt = class {
 		}), this._updateLightStatusUi();
 	}
 	_generateBlenderObjectColor(t) {
-		return D(e, t);
+		return O(e, t);
 	}
 	_collectObjectColorKeys(e) {
-		return Re(e, (e) => this._objectColorKey(e));
+		return Ve(e, (e) => this._objectColorKey(e));
 	}
 	_objectColorKey(e) {
-		return E(e, this.blenderRoot);
+		return D(e, this.blenderRoot);
 	}
 	_cacheImportedMaterials(e) {
-		Ie(e);
+		ze(e);
 	}
 	_restoreImportedMaterials(e) {
-		Le(e);
+		Be(e);
 	}
 	_disposePreviewMaterials() {
-		O(this.previewMaterials);
+		k(this.previewMaterials);
 	}
 	setObjectColorPreview(e, { persist: t = !0, notify: n = !1 } = {}) {
 		this.objectColorPreview = !!e, this.objectColorsEl && (this.objectColorsEl.checked = this.objectColorPreview), t && (this.sceneMeta = {
@@ -1395,22 +1515,22 @@ var dt = class {
 		}), this._applyProgramLighting(), this._applyObjectColorPreview(this.objectColorPreview), !this.objectColorPreview && this.blenderRoot && this._prepareImportedMaterials(this.blenderRoot), this._applyWireframeMode(), t && this._scheduleSceneSettingsSave(), n && this.callbacks.onMessage?.(this.objectColorPreview ? "已启用对象随机色（不受灯光影响，便于区分）" : "已恢复 GLB 原始材质");
 	}
 	_applyObjectColorPreview(t) {
-		this.blenderRoot && (ve(e, this.blenderRoot, this.blenderRoot, this.previewMaterials, t), !t && this.blenderRoot && this._prepareImportedMaterials(this.blenderRoot));
+		this.blenderRoot && (_e(e, this.blenderRoot, this.blenderRoot, this.previewMaterials, t), !t && this.blenderRoot && this._prepareImportedMaterials(this.blenderRoot));
 	}
 	_prepareImportedMaterials(e) {
-		this.objectColorPreview || Ce(e, this._getEnvMapIntensity());
+		this.objectColorPreview || Ee(e, this._getEnvMapIntensity());
 	}
 	async _loadBlenderUrl(t, n) {
 		this.clearBlenderScene(), this.clearObjects();
 		let i = await new r().loadAsync(t);
 		this.blenderRoot = i.scene, this.scene.add(this.blenderRoot), this.importedLightCount = this._countImportedLights(i.scene), this._calibrateImportedLights(this.blenderRoot), this._applyProgramLighting(), this._prepareImportedMaterials(this.blenderRoot), this._cacheImportedMaterials(this.blenderRoot), this._applyObjectColorPreview(this.objectColorPreview), this.objectColorPreview && this._applyProgramLighting(), this._applyWireframeMode(), this.importedCameras = this._collectImportedCameras(i), this.animatedNodeNames = this._collectAnimatedNodeNames(i.animations);
-		let a = ze(e, i.scene, i.animations || []);
+		let a = He(e, i.scene, i.animations || []);
 		if (this.mixer = a.mixer, this.mixerActions = a.mixerActions, this.animationDuration = a.animationDuration, this.animationTime = 0, this.isPlaying = !1, this._syncMixerTime(0), this._populateCameraSelect(), this._renderOutliner(), this._updateTimelineUi(), (!this.followCamera || !this.importedCameras.length) && this._frameImportedScene(), this.sceneMeta.file_name = n || this.sceneMeta.file_name, this.importedCameras.length) {
 			let e = this._pickBestCameraId(""), t = this.importedCameras.find((t) => t.id === e);
 			t && (t.viewNode = this._resolveViewNode(t)), this.setActiveCamera(e, !1);
 		}
 		this.setFollowCamera(this.followCamera), this._updateAnimationHint();
-		for (let e of Be({
+		for (let e of Ue({
 			gltf: i,
 			importedCameras: this.importedCameras,
 			animationDuration: this.animationDuration,
@@ -1419,13 +1539,13 @@ var dt = class {
 		})) this.callbacks.onMessage?.(e);
 	}
 	_programLightingModeLabel() {
-		return Y(this.programLightingMode);
+		return K(this.programLightingMode);
 	}
 	_frameImportedScene() {
-		this.blenderRoot && H(e, this.blenderRoot, this.camera, this.orbit);
+		this.blenderRoot && Ce(e, this.blenderRoot, this.camera, this.orbit);
 	}
 	_populateCameraSelect() {
-		Qe(this.cameraSelectEl, Ze(this.importedCameras), this.activeCameraId);
+		tt(this.cameraSelectEl, et(this.importedCameras), this.activeCameraId);
 	}
 	setActiveCamera(e, t = !0) {
 		let n = this.importedCameras.find((t) => t.id === e);
@@ -1441,7 +1561,7 @@ var dt = class {
 		this._suppressViewChange || this.callbacks.onViewChange?.();
 	}
 	setMode(e) {
-		this.mode = e, $e(this.rootEl, e), et(e, {
+		this.mode = e, nt(this.rootEl, e), rt(e, {
 			grid: this.grid,
 			axes: this.axes,
 			defaultAmbient: this.defaultAmbient,
@@ -1455,7 +1575,7 @@ var dt = class {
 	exportSceneData() {
 		if (this.mode === "blender") {
 			let e = this.importedCameras.find((e) => e.id === this.activeCameraId);
-			return ue({
+			return ce({
 				sceneMeta: this.sceneMeta,
 				activeCameraName: e?.name || String(this.sceneMeta.camera_name || ""),
 				followCamera: this.followCamera,
@@ -1466,13 +1586,13 @@ var dt = class {
 				wireframeMode: this.wireframeMode
 			});
 		}
-		return le(this.objects.entries(), this.wireframeMode, this.objectColorPreview);
+		return se(this.objects.entries(), this.wireframeMode, this.objectColorPreview);
 	}
 	clearBlenderScene() {
-		ut(this.mixer), Object.assign(this, lt()), this._clearWireframeOverlays(), this.blenderRoot &&= (this._restoreImportedMaterials(this.blenderRoot), this._disposePreviewMaterials(), this.scene.remove(this.blenderRoot), N(this.blenderRoot), null), this._populateCameraSelect(), this._updateTimelineUi();
+		Z(this.mixer), Object.assign(this, ft()), this._clearWireframeOverlays(), this.blenderRoot &&= (this._restoreImportedMaterials(this.blenderRoot), this._disposePreviewMaterials(), this.scene.remove(this.blenderRoot), P(this.blenderRoot), null), this._populateCameraSelect(), this._updateTimelineUi();
 	}
 	clearObjects() {
-		for (let e of this.objects.values()) this.scene.remove(e), P(e);
+		for (let e of this.objects.values()) this.scene.remove(e), F(e);
 		this.objects.clear(), this.transform.detach(), this.selectedId = null;
 	}
 	_addMeshFromSpec(t) {
@@ -1486,15 +1606,15 @@ var dt = class {
 	selectObject(e) {
 		this.selectedId = e;
 		let t = e ? this.objects.get(e) : null;
-		nt(this.mode, t) ? this.transform.attach(t) : this.transform.detach(), this._renderOutliner(), this._updateTransformInputs();
+		at(this.mode, t) ? this.transform.attach(t) : this.transform.detach(), this._renderOutliner(), this._updateTransformInputs();
 	}
 	deleteSelected() {
-		if (!$(this.selectedId)) return;
+		if (!X(this.selectedId)) return;
 		let e = this.objects.get(this.selectedId);
-		e && (this.transform.detach(), this.scene.remove(e), P(e), this.objects.delete(this.selectedId), this.selectedId = null, this._renderOutliner(), this._updateTransformInputs());
+		e && (this.transform.detach(), this.scene.remove(e), F(e), this.objects.delete(this.selectedId), this.selectedId = null, this._renderOutliner(), this._updateTransformInputs());
 	}
 	focusSelected() {
-		let e = rt(this.selectedId ? this.objects.get(this.selectedId) : null, this.orbit);
+		let e = ot(this.selectedId ? this.objects.get(this.selectedId) : null, this.orbit);
 		this.orbit.target.copy(e), this.orbit.update();
 	}
 	resetView() {
@@ -1502,7 +1622,7 @@ var dt = class {
 			this._frameImportedScene();
 			return;
 		}
-		it(this.camera, this.orbit);
+		st(this.camera, this.orbit);
 	}
 	getCameraState() {
 		return _(this.camera, this.orbit);
@@ -1525,7 +1645,7 @@ var dt = class {
 			this.callbacks.onMessage?.("当前镜头没有保存的 3D 相机数据");
 			return;
 		}
-		this.setFollowCamera(!1), ee(e, this.camera, this.orbit, t);
+		this.setFollowCamera(!1), y(e, this.camera, this.orbit, t);
 	}
 	_fovToFocalLength(e) {
 		return m(e);
@@ -1535,20 +1655,20 @@ var dt = class {
 	}
 	_applyTransformInputs(t) {
 		let n = this.selectedId ? this.objects.get(this.selectedId) : null;
-		n && Ke(e, n, this.transformInputs, t, this.transform);
+		n && Ye(e, n, this.transformInputs, t, this.transform);
 	}
 	_updateTransformInputs() {
-		qe(e, this.selectedId ? this.objects.get(this.selectedId) : null, this.transformInputs);
+		Xe(e, this.selectedId ? this.objects.get(this.selectedId) : null, this.transformInputs);
 	}
 	_renderOutliner() {
-		Xe(this.outlinerEl, Ye(this.mode, this.objects, this.importedCameras, this.activeCameraId, this.selectedId));
+		$e(this.outlinerEl, Qe(this.mode, this.objects, this.importedCameras, this.activeCameraId, this.selectedId));
 	}
 	refreshBoardPreview() {
 		let e = this.callbacks.getBoardPreviewUrl?.() || "", t = this.callbacks.getBoardLabel?.() || "—";
 		this.boardLabelEl && (this.boardLabelEl.textContent = t), !(!this.boardPreviewImg || !this.boardPreviewEmpty) && (e ? (this.boardPreviewImg.src = e, this.boardPreviewImg.hidden = !1, this.boardPreviewEmpty.hidden = !0) : (this.boardPreviewImg.hidden = !0, this.boardPreviewEmpty.hidden = !1));
 	}
 	_updateFileName() {
-		this.fileNameEl.textContent = Ue(this.mode, this.sceneMeta);
+		this.fileNameEl.textContent = Ke(this.mode, this.sceneMeta);
 	}
 	setBlendFilePath(e) {
 		this.sceneMeta = {
@@ -1557,10 +1677,10 @@ var dt = class {
 		}, this._updateFileName();
 	}
 	_syncMixerTime(e) {
-		!this.mixer || !this.mixerActions.length || (this.animationTime = Me(this.mixerActions, this.mixer, e), this.blenderRoot?.updateMatrixWorld(!0));
+		!this.mixer || !this.mixerActions.length || (this.animationTime = Fe(this.mixerActions, this.mixer, e), this.blenderRoot?.updateMatrixWorld(!0));
 	}
 	setAnimationTime(e) {
-		let t = je(e, this.animationDuration || 0);
+		let t = Pe(e, this.animationDuration || 0);
 		this._syncMixerTime(t), this._updateTimelineUi(), this.followCamera && this._applyFollowCamera(), this._notifyViewChange();
 	}
 	toggleAnimationPlayback() {
@@ -1602,12 +1722,12 @@ var dt = class {
 		this.playPauseBtn && (this.playPauseBtn.textContent = this.isPlaying ? "⏸ 暂停" : "▶ 播放");
 	}
 	_updateTimelineUi() {
-		let e = Ne(this.animationTime, this.animationDuration, w);
+		let e = Ie(this.animationTime, this.animationDuration, E);
 		this.timeSliderEl.max = String(e.max), this.timeSliderEl.value = String(e.value), this.timeSliderEl.disabled = e.disabled, this.timeDisplayEl.textContent = e.displayText;
 	}
 	_applyFollowCamera() {
 		let e = this.importedCameras.find((e) => e.id === this.activeCameraId);
-		y(this.camera, this.orbit, e, {
+		b(this.camera, this.orbit, e, {
 			position: this._followPos,
 			quaternion: this._followQuat,
 			scale: this._followScale
@@ -1624,14 +1744,14 @@ var dt = class {
 		this.animationId = requestAnimationFrame(() => this._animate());
 		let e = this.clock.getDelta();
 		if (this.mode === "blender" && this.mixer && this.isPlaying) {
-			let t = this.animationDuration || 0, { nextTime: n, reachedEnd: r } = Fe(this.animationTime, e, t);
+			let t = this.animationDuration || 0, { nextTime: n, reachedEnd: r } = Re(this.animationTime, e, t);
 			r && (this.isPlaying = !1, this._updatePlayButton()), this._syncMixerTime(n), this._updateTimelineUi();
 		}
-		tt(this.mode, this.followCamera) ? this.orbit.update() : this._applyFollowCamera(), this.renderer.render(this.scene, this.camera);
+		it(this.mode, this.followCamera) ? this.orbit.update() : this._applyFollowCamera(), this.renderer.render(this.scene, this.camera);
 	}
 	dispose() {
-		this._disposed || (this._disposed = !0, this.animationId && cancelAnimationFrame(this.animationId), this.animationId = null, this._sceneSettingsSaveTimer != null && (window.clearTimeout(this._sceneSettingsSaveTimer), this._sceneSettingsSaveTimer = null), this._resizeObserver?.disconnect(), this._keydownHandler && window.removeEventListener("keydown", this._keydownHandler), this._pointerdownHandler && this.renderer?.domElement && this.renderer.domElement.removeEventListener("pointerdown", this._pointerdownHandler), this.clearBlenderScene(), this.clearObjects(), this.transform?.dispose(), this.orbit?.dispose(), this.blenderEnvMap?.dispose(), this.blenderEnvMap = null, this.pmremGenerator?.dispose(), this.pmremGenerator = null, this._clearWireframeOverlays(), this.renderer && (this.renderer.dispose(), this.renderer.domElement.parentNode && this.renderer.domElement.parentNode.removeChild(this.renderer.domElement)));
+		this._disposed || (this._disposed = !0, this.animationId && cancelAnimationFrame(this.animationId), this.animationId = null, this._sceneSettingsSaveTimer != null && (window.clearTimeout(this._sceneSettingsSaveTimer), this._sceneSettingsSaveTimer = null), this._disposePanelResize?.(), this._resizeObserver?.disconnect(), this._keydownHandler && window.removeEventListener("keydown", this._keydownHandler), this._pointerdownHandler && this.renderer?.domElement && this.renderer.domElement.removeEventListener("pointerdown", this._pointerdownHandler), this.clearBlenderScene(), this.clearObjects(), this.transform?.dispose(), this.orbit?.dispose(), this.blenderEnvMap?.dispose(), this.blenderEnvMap = null, this.pmremGenerator?.dispose(), this.pmremGenerator = null, this._clearWireframeOverlays(), this.renderer && (this.renderer.dispose(), this.renderer.domElement.parentNode && this.renderer.domElement.parentNode.removeChild(this.renderer.domElement)));
 	}
 };
 //#endregion
-export { a as PRIMITIVE_TYPES, dt as Scene3DEditor, Je as WIREFRAME_MODE_LABELS, Fe as advancePlaybackTime, y as applyFollowCameraToEditor, Ke as applyTransformFromInputs, ct as applyWorkspaceKeyboardAction, $e as applyWorkspaceModeUi, Oe as applyWorkspaceProgramLighting, et as applyWorkspaceSceneModeFlags, Pe as buildAnimationHint, Ze as buildCameraSelectOptions, Be as buildGlbLoadNotifications, De as buildLightStatusText, Ye as buildOutlinerEntries, Ne as buildTimelineUiState, Ie as cacheImportedMaterialsOnRoot, I as calibrateImportedLights, U as cameraMovesOverTime, $ as canDeleteWorkspaceObject, p as captureRendererPng, je as clampAnimationTime, Ae as collectAnimatedNodeNames, R as collectImportedCameras, Re as collectMeshObjectColorKeys, l as colorFrom, Z as computeClipDuration, F as countImportedLights, ke as createBlenderEnvMap, lt as createEmptyBlenderPlaybackState, f as createMeshFromSpec, ze as createWorkspaceAnimationMixer, d as defaultAddObjectSpec, u as defaultSceneData, z as diagnoseMissingCameras, N as disposeObject3DRoot, P as disposePrimitiveMesh, c as eulerFrom, ue as exportBlenderSceneData, le as exportBuiltinSceneData, ce as exportBuiltinSceneObjects, v as exportViewState, Ge as filterBuiltinObjectSpecs, Ue as formatWorkspaceFileName, w as formatWorkspaceTime, m as fovToFocalLength, H as frameImportedScene, _ as getCameraStateFromEditor, Te as getEnvMapIntensity, g as getProjectCanvasAspect, h as getProjectCanvasSize, We as getWireframeRoots, rt as getWorkspaceFocusTarget, oe as initWorkspaceEditorThree, L as isNodeInSceneGraph, ee as loadShotCameraIntoEditor, o as makeId, we as normalizeProgramLightingMode, de as normalizeWorkspaceSceneMeta, V as pickBestCameraId, Qe as populateCameraSelectDom, Ce as prepareImportedMaterials, Y as programLightingModeLabel, Ee as programLightingReason, Xe as renderOutlinerDom, it as resetBuiltinCameraView, ot as resolveBlenderKeyboardAction, st as resolveBuiltinKeyboardAction, Ve as resolveInitialAnimationTime, He as resolveReloadAnimationTime, W as resolveViewNode, Le as restoreImportedMaterialsOnRoot, B as scoreCameraForAnimation, Q as selectAnimationClips, G as setImportedLightsVisible, nt as shouldAttachTransformToSelection, at as shouldIgnoreWorkspaceKeyboard, tt as shouldUseOrbitControls, q as shouldUseProgramFill, K as shouldUseProgramIbl, J as shouldUseProgramWeakFill, ut as stopWorkspaceMixer, Me as syncMixerActionsTime, qe as syncTransformInputsFromMesh, X as trackNodeName, s as vec3From };
+export { a as PRIMITIVE_TYPES, mt as Scene3DEditor, Ze as WIREFRAME_MODE_LABELS, Re as advancePlaybackTime, b as applyFollowCameraToEditor, Ye as applyTransformFromInputs, dt as applyWorkspaceKeyboardAction, nt as applyWorkspaceModeUi, je as applyWorkspaceProgramLighting, rt as applyWorkspaceSceneModeFlags, Le as buildAnimationHint, et as buildCameraSelectOptions, Ue as buildGlbLoadNotifications, Ae as buildLightStatusText, Qe as buildOutlinerEntries, Ie as buildTimelineUiState, ze as cacheImportedMaterialsOnRoot, L as calibrateImportedLights, H as cameraMovesOverTime, X as canDeleteWorkspaceObject, p as captureRendererPng, Pe as clampAnimationTime, Ne as collectAnimatedNodeNames, z as collectImportedCameras, Ve as collectMeshObjectColorKeys, l as colorFrom, J as computeClipDuration, I as countImportedLights, Me as createBlenderEnvMap, ft as createEmptyBlenderPlaybackState, f as createMeshFromSpec, He as createWorkspaceAnimationMixer, d as defaultAddObjectSpec, u as defaultSceneData, B as diagnoseMissingCameras, P as disposeObject3DRoot, F as disposePrimitiveMesh, c as eulerFrom, ce as exportBlenderSceneData, se as exportBuiltinSceneData, oe as exportBuiltinSceneObjects, v as exportViewState, Je as filterBuiltinObjectSpecs, Ke as formatWorkspaceFileName, E as formatWorkspaceTime, m as fovToFocalLength, Ce as frameImportedScene, _ as getCameraStateFromEditor, Oe as getEnvMapIntensity, g as getProjectCanvasAspect, h as getProjectCanvasSize, qe as getWireframeRoots, ot as getWorkspaceFocusTarget, T as initWorkspaceEditorThree, R as isNodeInSceneGraph, y as loadShotCameraIntoEditor, o as makeId, De as normalizeProgramLightingMode, le as normalizeWorkspaceSceneMeta, Se as pickBestCameraId, tt as populateCameraSelectDom, Ee as prepareImportedMaterials, K as programLightingModeLabel, ke as programLightingReason, $e as renderOutlinerDom, st as resetBuiltinCameraView, lt as resolveBlenderKeyboardAction, ut as resolveBuiltinKeyboardAction, We as resolveInitialAnimationTime, Ge as resolveReloadAnimationTime, we as resolveViewNode, Be as restoreImportedMaterialsOnRoot, V as scoreCameraForAnimation, Y as selectAnimationClips, Te as setImportedLightsVisible, at as shouldAttachTransformToSelection, ct as shouldIgnoreWorkspaceKeyboard, it as shouldUseOrbitControls, W as shouldUseProgramFill, U as shouldUseProgramIbl, G as shouldUseProgramWeakFill, Z as stopWorkspaceMixer, Fe as syncMixerActionsTime, Xe as syncTransformInputsFromMesh, q as trackNodeName, s as vec3From };

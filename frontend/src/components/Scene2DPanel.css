@@ -98,7 +98,7 @@
 /* ── Two-column root grid: scene list | right column ───────────────── */
 .scene2d-workspace {
   display: grid;
-  grid-template-columns: minmax(200px, 240px) minmax(0, 1fr);
+  grid-template-columns: min(var(--scene2d-list-width, 240px), 30%) minmax(0, 1fr);
   flex: 1 1 auto;
   min-height: 0;
   overflow: hidden;
@@ -106,6 +106,8 @@
 
 /* ── Left: Scene list ───────────────────────────────────────────────── */
 .scene2d-scene-list {
+  grid-column: 1;
+  grid-row: 1;
   display: flex;
   flex-direction: column;
   min-height: 0;
@@ -234,6 +236,8 @@
 
 /* ── Right column: perspective strip stacked above canvas ───────────── */
 .scene2d-main-col {
+  grid-column: 2;
+  grid-row: 1;
   display: flex;
   flex-direction: column;
   min-width: 0;
@@ -242,6 +246,9 @@
 }
 
 /* ── Perspective horizontal strip (top of right column) ─────────────── */
+.scene2d-workspace > .scene2d-list-resize { position: relative; grid-column: 1; grid-row: 1; justify-self: end; align-self: stretch; }
+.scene2d-perspectives-frame { position: relative; display: flex; flex: 0 0 auto; min-height: min(155px, 45%); height: var(--scene2d-perspectives-height, auto); max-height: 45%; }
+.scene2d-perspectives-frame > .scene2d-perspective-strip { flex: 1 1 auto; min-height: 0; }
 .scene2d-perspective-strip {
   flex: 0 0 auto;
   display: grid;
@@ -429,7 +436,8 @@
   top: 24px;
   right: 24px;
   z-index: 10;
-  width: min(375px, calc(100% - 48px));
+  width: min(var(--scene2d-inspector-width, 375px), calc(100% - 48px));
+  height: var(--scene2d-inspector-height, auto);
   max-height: calc(100% - 80px);
   display: flex;
   flex-direction: column;
@@ -442,6 +450,7 @@
 /* Collapsed pill state */
 .scene2d-inspector.is-collapsed {
   width: auto;
+  height: auto;
   max-height: none;
   border-radius: 999px;
   background: color-mix(in srgb, var(--bg-panel) 90%, transparent);
@@ -996,21 +1005,21 @@ details[open] > .scene2d-insp-desc-summary::before {
 /* ── Responsive ─────────────────────────────────────────────────────── */
 @media (max-width: 1180px) {
   .scene2d-workspace {
-    grid-template-columns: minmax(170px, 210px) minmax(0, 1fr);
+    grid-template-columns: min(var(--scene2d-list-width, 210px), 30%) minmax(0, 1fr);
   }
 
   .scene2d-inspector {
-    width: min(340px, calc(100% - 48px));
+    width: min(var(--scene2d-inspector-width, 340px), calc(100% - 48px));
   }
 }
 
 @media (max-width: 900px) {
   .scene2d-workspace {
-    grid-template-columns: minmax(150px, 180px) minmax(0, 1fr);
+    grid-template-columns: min(var(--scene2d-list-width, 180px), 30%) minmax(0, 1fr);
   }
 
   .scene2d-inspector {
-    width: min(300px, calc(100% - 48px));
+    width: min(var(--scene2d-inspector-width, 300px), calc(100% - 48px));
   }
 
   .scene2d-zoom-slider { display: none; }

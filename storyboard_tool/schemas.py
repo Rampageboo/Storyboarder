@@ -8,7 +8,7 @@ frontend polling code, and UXP plugin.
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
@@ -110,6 +110,7 @@ class PluginContextResponse(BaseModel):
 
 
 class ProjectPathRequest(BaseModel):
+    project_type: Literal["video", "comic"] = "video"
     path: str | None = None
     canvas_width: int | None = None
     canvas_height: int | None = None
@@ -121,6 +122,12 @@ class OpenProjectRequest(BaseModel):
 
 class SaveProjectAsRequest(BaseModel):
     path: str
+
+
+class StoryGraphBranchRequest(BaseModel):
+    route_id: str
+    from_shot_id: str
+    title: str
 
 
 class ShotUpdateRequest(BaseModel):
@@ -197,6 +204,7 @@ class CanvasRequest(BaseModel):
 
 class DrawingSaveRequest(BaseModel):
     image_data: str
+    editor_data: str | None = None
 
 
 class ExportScopeRequest(BaseModel):
@@ -210,14 +218,16 @@ class PdfExportRequest(ExportScopeRequest):
 
 
 class AnimaticExportRequest(ExportScopeRequest):
-    fps: int = 24
+    fps: int = Field(default=24, ge=1, le=60)
     # None: hold each board for its own duration_seconds. Otherwise a global override.
-    seconds_per_board: float | None = None
+    seconds_per_board: float | None = Field(default=None, gt=0, allow_inf_nan=False)
     captions: bool = False
+    route_id: str = ""
 
 
 class ExportOpenRequest(ExportScopeRequest):
     type: str
+    route_id: str = ""
 
 
 class RecentForgetRequest(BaseModel):
@@ -323,6 +333,7 @@ class AppSessionUpdateRequest(BaseModel):
 class RestoreShotRequest(BaseModel):
     shot: dict[str, Any]
     index: int = 0
+    story_graph: dict[str, Any] | None = None
 
 
 class ShotBatchUpdateItem(BaseModel):
@@ -345,6 +356,7 @@ class ShotBatchRestoreItem(BaseModel):
 
 class ShotBatchRestoreRequest(BaseModel):
     items: list[ShotBatchRestoreItem] = Field(default_factory=list)
+    story_graph: dict[str, Any] | None = None
 
 
 class GenerationBatchQueueRequest(BaseModel):

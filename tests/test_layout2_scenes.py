@@ -523,6 +523,11 @@ def test_layout2_real_blender_native_save_cannot_bypass_broker(
     if not template.is_file():
         pytest.skip("Storyboarder Blender template is unavailable.")
 
+    # This fixture does not run the app's periodic lease publisher. Allow the
+    # native process its 90-second startup budget; a cold start can exceed the
+    # production seven-second lease before reaching its first save. The stale
+    # phase below still explicitly expires the lease and proves write denial.
+    monkeypatch.setattr(blender_bridge, "HEARTBEAT_MAX_AGE_SECONDS", 120.0)
     monkeypatch.setattr(project_layout, "LAYOUT_2_ENABLED", True)
     project = _project(tmp_path)
     project.settings["backup_on_save"] = False
@@ -590,7 +595,7 @@ def test_layout2_real_blender_native_save_cannot_bypass_broker(
     authorized_heartbeat = json.loads(
         heartbeat_path.read_text(encoding="utf-8")
     )
-    assert authorized_heartbeat["save_authorized"] is True
+    assert authorized_heartbeat["save_authorized"] is True, authorized_heartbeat
     assert authorized_heartbeat["blend_path"] == str(working.resolve())
 
     blender_bridge.status(app)

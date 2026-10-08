@@ -6,8 +6,8 @@ Run all checks or a targeted subset before merging a branch.
 Usage:
     python scripts/verify_dev.py                  # full gate
     python scripts/verify_dev.py --backend        # py_compile + migration + pytest
-    python scripts/verify_dev.py --frontend       # lint + build
-    python scripts/verify_dev.py --fast           # py_compile + migration + smoke + lint
+    python scripts/verify_dev.py --frontend       # state tests + lint + build
+    python scripts/verify_dev.py --fast           # py_compile + migration + smoke + state tests + lint
     python scripts/verify_dev.py --continue-on-fail  # don't stop on first failure
 """
 from __future__ import annotations
@@ -30,6 +30,11 @@ BACKEND_MODULES = [
     "storyboard_tool/external_tools.py",
     "storyboard_tool/export_service.py",
     "storyboard_tool/project_transaction.py",
+    "storyboard_tool/mutation_executor.py",
+    "storyboard_tool/reference_metadata.py",
+    "storyboard_tool/service_scene2d.py",
+    "storyboard_tool/service_scene3d.py",
+    "storyboard_tool/upload_payload.py",
     "storyboard_tool/app_state.py",
     "storyboard_tool/shot_service.py",
     "storyboard_tool/api.py",
@@ -87,6 +92,14 @@ def check_pytest_smoke() -> bool:
     )
 
 
+def check_frontend_tests() -> bool:
+    return _run(
+        "Frontend state and lifecycle tests",
+        [NPM, "test"],
+        cwd=ROOT / "frontend",
+    )
+
+
 def check_frontend_lint() -> bool:
     return _run(
         "Frontend lint (eslint)",
@@ -117,6 +130,7 @@ def _steps_backend() -> list[tuple]:
 
 def _steps_frontend() -> list[tuple]:
     return [
+        (check_frontend_tests, "frontend state tests"),
         (check_frontend_lint, "frontend lint"),
         (check_frontend_build, "frontend build"),
     ]
@@ -127,6 +141,7 @@ def _steps_fast() -> list[tuple]:
         (check_py_compile, "py_compile"),
         (check_validate_migration, "validate_migration"),
         (check_pytest_smoke, "pytest smoke"),
+        (check_frontend_tests, "frontend state tests"),
         (check_frontend_lint, "frontend lint"),
     ]
 
@@ -136,6 +151,7 @@ def _steps_full() -> list[tuple]:
         (check_py_compile, "py_compile"),
         (check_validate_migration, "validate_migration"),
         (check_pytest_full, "pytest full"),
+        (check_frontend_tests, "frontend state tests"),
         (check_frontend_lint, "frontend lint"),
         (check_frontend_build, "frontend build"),
     ]
@@ -181,8 +197,8 @@ def main() -> int:
     )
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument("--backend", action="store_true", help="py_compile + migration + pytest")
-    mode.add_argument("--frontend", action="store_true", help="lint + build")
-    mode.add_argument("--fast", action="store_true", help="py_compile + migration + smoke + lint")
+    mode.add_argument("--frontend", action="store_true", help="state tests + lint + build")
+    mode.add_argument("--fast", action="store_true", help="py_compile + migration + smoke + state tests + lint")
     parser.add_argument(
         "--continue-on-fail",
         action="store_true",

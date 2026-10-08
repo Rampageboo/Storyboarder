@@ -8,19 +8,24 @@
     "build": "tsc -b && vite build && npm run build:workspace",
     "build:workspace": "vite build --config vite.workspace.config.ts",
     "lint": "eslint .",
+    "test": "node --loader ./tests/typescript-loader.mjs --test tests/*.test.mjs",
     "preview": "vite preview",
     "tauri:vite-dev": "vite --config vite.config.tauri.ts",
     "tauri:vite-build": "tsc -b && vite build --config vite.config.tauri.ts",
     "tauri": "tauri"
   },
   "dependencies": {
+    "@phosphor-icons/react": "^2.1.10",
     "@tauri-apps/api": "^2",
+    "@xyflow/react": "^12.11.6",
+    "fabric": "^7.4.0",
+    "perfect-freehand": "^1.2.3",
     "react": "^19.2.6",
     "react-dom": "^19.2.6"
   },
   "devDependencies": {
-    "@tauri-apps/cli": "^2",
     "@eslint/js": "^10.0.1",
+    "@tauri-apps/cli": "^2",
     "@types/node": "^24.12.3",
     "@types/react": "^19.2.14",
     "@types/react-dom": "^19.2.3",

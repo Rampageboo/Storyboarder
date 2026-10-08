@@ -10,6 +10,7 @@ import type { ReferenceLink } from '../types'
 import { useProject } from '../state/useProject'
 import { shotDisplayLabel } from '../utils/shotDisplay'
 import { ReferenceModelPreview } from './ReferenceModelPreview'
+import { PanelResizeHandle } from './PanelResizeHandle'
 import './ReferenceSidebar.css'
 
 type Segment = {
@@ -174,6 +175,8 @@ export function ReferenceSidebar({ open, onOpenChange }: ReferenceSidebarProps) 
         aria-label="Project references"
         aria-hidden={!open}
       >
+        <PanelResizeHandle panelKey="references" label="Resize References" edge="right" hidden={!open} bounds=".app-root"
+          width={{ property: '--reference-drawer-width', min: 220, max: 760, reserve: 100 }} />
         <div className="ref-sidebar-scroll">
           <div className="ref-sidebar-head">
             <span className="ref-sidebar-title">References ({links.length})</span>

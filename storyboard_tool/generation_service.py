@@ -403,6 +403,7 @@ def _keyword_asset_snapshot(
     project: Project,
     shot: Shot,
     scene_context: dict[str, Any] | None,
+    *, read_only: bool = False,
 ) -> list[dict[str, Any]]:
     from . import scene3d
 
@@ -413,7 +414,7 @@ def _keyword_asset_snapshot(
         json.dumps(scene_context or {}, ensure_ascii=False, sort_keys=True),
     ])
     result: list[dict[str, Any]] = []
-    for asset in scene3d.list_scenes(project).get("scenes", []):
+    for asset in scene3d.list_scenes(project, read_only=read_only).get("scenes", []):
         file_path = str(asset.get("file_path") or "").strip()
         blend_file_path = str(asset.get("blend_file_path") or "").strip()
         if not file_path and not blend_file_path:
@@ -511,6 +512,7 @@ def build_request_snapshot(
     provider: str = "codex",
     mode: str = "",
     clear_queue_on_result: bool = True,
+    read_only: bool = False,
 ) -> dict[str, Any]:
     destination = str(destination or "").strip().lower()
     if destination not in DESTINATIONS:
@@ -531,17 +533,22 @@ def build_request_snapshot(
     request_id = _new_id("gen")
     canvas_width = int(project.settings.get("canvas_width") or 1920)
     canvas_height = int(project.settings.get("canvas_height") or 1080)
+    from .comic import panel_context, compile_context
+    comic_context = panel_context(project, shot.shot_id)
+    if comic_context:
+        canvas_width = comic_context["panel"]["width"]
+        canvas_height = comic_context["panel"]["height"]
     scene_context = None
     if shot.scene_id:
         from . import scene2d
 
         scene_context = next(
-            (scene for scene in scene2d.list_scenes(project) if scene.get("id") == shot.scene_id),
+            (scene for scene in scene2d.list_scenes(project, read_only=read_only) if scene.get("id") == shot.scene_id),
             None,
         )
     character_bible_prompt = str(project.settings.get("character_bible_prompt") or "").strip()
     character_bible = {"prompt": character_bible_prompt}
-    keyword_assets = _keyword_asset_snapshot(project, shot, scene_context)
+    keyword_assets = _keyword_asset_snapshot(project, shot, scene_context, read_only=read_only)
     authored = {
         "shot_id": shot.shot_id,
         "title": shot.title,
@@ -572,6 +579,9 @@ def build_request_snapshot(
         "canvas": {"width": canvas_width, "height": canvas_height},
     }
     generation_plan = _build_generation_plan(mode, canvas_width, canvas_height)
+    if comic_context:
+        input_snapshot["comic_context"] = comic_context
+        generation_plan["style_hint"] = "comic panel artwork; " + generation_plan["style_hint"]
     generation_plan["prior_frame"] = (
         _prior_frame_ref(project, shot_assets.get_shot_codex_layer_path(project, shot))
         if generation_plan["use_prior_frame_as_reference"]
@@ -604,26 +614,30 @@ def build_request_snapshot(
         }),
         **input_snapshot,
         "prompt": {
-            "mode": "auto",
-            "compiled_prompt": compile_prompt(
+            "mode": str(shot.prompt_config.get("mode") or "auto") if comic_context else "auto",
+            "compiled_prompt": (compile_context(comic_context) + "\n\n" if comic_context else "") + (
+                str(shot.prompt_config.get("manual_prompt") or "")
+                if comic_context and shot.prompt_config.get("mode") == "manual"
+                else compile_prompt(
                 shot,
                 scene_bible=scene_context,
                 character_bible_prompt=character_bible_prompt,
                 keyword_assets=keyword_assets,
-            ),
+                )
+            ) + ("\n" + str(shot.prompt_config.get("prompt_extra") or "") if comic_context else ""),
             "layers": {
                 "scene": str((scene_context or {}).get("title") or shot.scene or ""),
                 "scene_context": scene_context or {},
                 "characters": character_bible_prompt,
                 "shot": _compile_shot_override(shot),
             },
-            "negative_prompt": "",
+            "negative_prompt": str(shot.prompt_config.get("negative_prompt") or "") if comic_context else "",
             "style_profile_id": str(shot.prompt_config.get("style_profile_id") or ""),
-            "aspect_ratio": str(shot.prompt_config.get("aspect_ratio_override") or f"{canvas_width}:{canvas_height}"),
+            "aspect_ratio": f"{canvas_width}:{canvas_height}" if comic_context else str(shot.prompt_config.get("aspect_ratio_override") or f"{canvas_width}:{canvas_height}"),
             "variant_count": int(shot.prompt_config.get("variant_count") or 1),
         },
         "output_contract": {
-            "kind": "storyboard-image",
+            "kind": "comic-panel-image" if comic_context else "storyboard-image",
             "width": canvas_width,
             "height": canvas_height,
             "accepted_formats": ["png", "jpg", "jpeg", "webp"],
@@ -921,6 +935,18 @@ def submit_result(
     return result
 
 
+def _result_freshness(project: Project, shot: Shot, request: dict[str, Any]) -> str:
+    from .comic import panel_context
+    if request.get("comic_context") != panel_context(project, shot.shot_id):
+        return "stale"
+    # Comic requests also protect edits to the panel's authored input while in flight.
+    if request.get("comic_context"):
+        current = build_request_snapshot(project, shot, str(request.get("destination") or "codex"),
+                                         provider=str(request.get("provider") or "codex"), mode=str(request.get("mode") or ""), read_only=True)
+        return "current" if request.get("input_revision") == current["input_revision"] else "stale"
+    return "current"
+
+
 def reconcile_results(project: Project) -> dict[str, Any]:
     """Import deposited result state into requests and their canonical shots."""
     by_shot = {shot.shot_id: shot for shot in project.shots}
@@ -951,7 +977,7 @@ def reconcile_results(project: Project) -> dict[str, Any]:
         desired = {
             "execution_status": "succeeded",
             "review_status": "needs-review",
-            "freshness_status": "current",
+            "freshness_status": _result_freshness(project, shot, request),
             "active_output_id": result_id,
             "latest_attempt_id": request_id,
         }
@@ -1045,7 +1071,7 @@ def accept_candidate_as_codex_layer(
     shot.generation_state.update({
         "execution_status": "succeeded",
         "review_status": "accepted",
-        "freshness_status": "current",
+        "freshness_status": _result_freshness(project, shot, request),
         "active_output_id": result_id,
         "approved_output_id": result_id,
         "latest_attempt_id": request_id,

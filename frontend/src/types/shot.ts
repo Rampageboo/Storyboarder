@@ -1,3 +1,5 @@
+import type { StoryGraph } from './storyGraph'
+
 export const SHOT_STATUSES = [
   'Draft',
   'In Progress',
@@ -136,6 +138,7 @@ export interface AddShotRequest {
 }
 
 export interface RestoreShotRequest {
+  story_graph?: StoryGraph
   shot: Shot
   index?: number
 }
@@ -149,6 +152,7 @@ export interface ShotBatchDeleteRequest {
 }
 
 export interface ShotBatchRestoreRequest {
+  story_graph?: StoryGraph
   items: Array<{ shot: Shot; index: number }>
 }
 
@@ -176,6 +180,7 @@ export interface CanvasRequest {
 
 export interface DrawingSaveRequest {
   image_data: string
+  editor_data?: string
 }
 
 export interface CommentRequest {

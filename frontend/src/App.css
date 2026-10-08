@@ -179,6 +179,8 @@
   grid-template-columns: minmax(0, 1fr) minmax(300px, var(--inspector-width)) 14px;
 }
 
+.workspace-comic { grid-template-columns: minmax(0, 1fr) 14px; }
+
 .workspace-scene2d,
 .workspace-scene3d {
   grid-template-columns: minmax(0, 1fr) 14px;
@@ -205,6 +207,8 @@
 .workspace-content-scene {
   grid-column: 1 / 2;
 }
+
+.workspace-content-comic { grid-column: 1 / 2; }
 
 .main-center {
   min-width: 0;
