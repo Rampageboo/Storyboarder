@@ -9,7 +9,7 @@ from fastapi.testclient import TestClient
 from storyboard_tool import api, project_manager
 
 
-CREATORS = ["create_project", "create_document", "create_layout2_document"]
+CREATORS = ["create_project"]
 
 
 @pytest.mark.parametrize("creator_name", CREATORS)
@@ -31,7 +31,7 @@ def test_project_type_is_present_at_first_save_and_reopens(
 
     assert saved_types and all(value == expected for value in saved_types)
     assert json.loads(project.settings_path.read_text(encoding="utf-8"))["project_type"] == expected
-    reopened = project_manager.open_project(project.document_path or project.json_path)
+    reopened = project_manager.open_project(project.document_path)
     assert reopened.settings["project_type"] == expected
 
 
@@ -49,15 +49,14 @@ def test_opening_old_project_does_not_add_type_or_rewrite_document(
     original_save = project_manager.save_project
 
     def save_old_settings(project, *args, **kwargs):
-        # Model the historical writer from its first persistence pass. Removing
-        # metadata after publication would require a new Layout 2 revision.
+        # Model a project written without a type from its first persistence pass.
         project.settings.pop("project_type", None)
         return original_save(project, *args, **kwargs)
 
     with monkeypatch.context() as old_writer:
         old_writer.setattr(project_manager, "save_project", save_old_settings)
         project = getattr(project_manager, creator_name)(tmp_path / "Legacy.sbd")
-    path = project.document_path or project.json_path
+    path = project.document_path
     before = path.read_bytes()
     settings_before = project.settings_path.read_bytes()
 
@@ -110,7 +109,7 @@ def test_api_invalid_type_preserves_active_project_and_destination(tmp_path: Pat
 
 
 @pytest.mark.parametrize("project_type", ["video", "comic"])
-def test_new_and_reopened_layout2_project_can_save_without_edits(tmp_path: Path, project_type: str) -> None:
+def test_new_and_reopened_project_can_save_without_edits(tmp_path: Path, project_type: str) -> None:
     app_root = tmp_path / "app"
     app_root.mkdir()
     app = api.create_app(app_root)
@@ -142,7 +141,7 @@ def test_new_and_reopened_layout2_project_can_save_without_edits(tmp_path: Path,
 
 
 @pytest.mark.parametrize("project_type", ["video", "comic"])
-def test_forgetting_recent_does_not_mutate_layout2_settings(
+def test_forgetting_recent_does_not_mutate_project_settings(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, project_type: str
 ) -> None:
     forgotten_path = str(tmp_path / "PreviouslyOpened.sbd")

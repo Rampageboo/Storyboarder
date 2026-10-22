@@ -14,7 +14,7 @@ from storyboard_tool.models import Project, Shot
 
 
 def _make_project(tmp_dir: str) -> Project:
-    return project_manager.create_project(Path(tmp_dir))
+    return project_manager.create_project(Path(tmp_dir) / "Demo.sbd")
 
 
 class TestMutateProjectRollback(unittest.TestCase):
@@ -177,7 +177,7 @@ class TestAtomicWriteJson(unittest.TestCase):
             project.settings["canvas_height"] = 720
             project_manager.save_settings(project)
 
-            reloaded = project_manager.open_project(project.json_path)
+            reloaded = project_manager.open_project(project.document_path)
             self.assertEqual(reloaded.settings.get("canvas_width"), 1280)
             self.assertEqual(reloaded.settings.get("canvas_height"), 720)
 

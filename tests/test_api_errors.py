@@ -56,7 +56,7 @@ class TestShotNotFoundError(unittest.TestCase):
     def setUp(self) -> None:
         self._tmp = tempfile.TemporaryDirectory()
         self.client = _make_client(self._tmp.name)
-        response = _quiet(lambda: self.client.post("/api/project/new", json={"path": self._tmp.name}))
+        response = _quiet(lambda: self.client.post("/api/project/new", json={"path": str(Path(self._tmp.name) / "Demo.sbd")}))
         self.assertEqual(response.status_code, 200)
 
     def tearDown(self) -> None:
@@ -92,7 +92,7 @@ class TestInvalidProjectOperation(unittest.TestCase):
     def setUp(self) -> None:
         self._tmp = tempfile.TemporaryDirectory()
         self.client = _make_client(self._tmp.name)
-        response = _quiet(lambda: self.client.post("/api/project/new", json={"path": self._tmp.name}))
+        response = _quiet(lambda: self.client.post("/api/project/new", json={"path": str(Path(self._tmp.name) / "Demo.sbd")}))
         self.assertEqual(response.status_code, 200)
 
     def tearDown(self) -> None:
@@ -126,7 +126,7 @@ class TestMediaNotFoundError(unittest.TestCase):
     def setUp(self) -> None:
         self._tmp = tempfile.TemporaryDirectory()
         self.client = _make_client(self._tmp.name)
-        response = _quiet(lambda: self.client.post("/api/project/new", json={"path": self._tmp.name}))
+        response = _quiet(lambda: self.client.post("/api/project/new", json={"path": str(Path(self._tmp.name) / "Demo.sbd")}))
         self.assertEqual(response.status_code, 200)
         # Add a shot to the project for these tests.
         add = _quiet(lambda: self.client.post("/api/shots", json={}))
@@ -160,7 +160,7 @@ class TestExportError(unittest.TestCase):
     def setUp(self) -> None:
         self._tmp = tempfile.TemporaryDirectory()
         self.client = _make_client(self._tmp.name)
-        response = _quiet(lambda: self.client.post("/api/project/new", json={"path": self._tmp.name}))
+        response = _quiet(lambda: self.client.post("/api/project/new", json={"path": str(Path(self._tmp.name) / "Demo.sbd")}))
         self.assertEqual(response.status_code, 200)
 
     def tearDown(self) -> None:
@@ -199,7 +199,7 @@ class TestCorruptUploadError(unittest.TestCase):
     def setUp(self) -> None:
         self._tmp = tempfile.TemporaryDirectory()
         self.client = _make_client(self._tmp.name)
-        response = _quiet(lambda: self.client.post("/api/project/new", json={"path": self._tmp.name}))
+        response = _quiet(lambda: self.client.post("/api/project/new", json={"path": str(Path(self._tmp.name) / "Demo.sbd")}))
         self.assertEqual(response.status_code, 200)
         add = _quiet(lambda: self.client.post("/api/shots", json={}))
         self.assertEqual(add.status_code, 200)

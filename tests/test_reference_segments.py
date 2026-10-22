@@ -38,15 +38,16 @@ MINI_PNG = _make_png(1, 1)
 
 
 def _make_project(tmp_dir: str) -> Project:
-    return project_manager.create_project(Path(tmp_dir))
+    return project_manager.create_project(Path(tmp_dir) / "Demo.sbd")
 
 
 def test_model_capture_segment_timing_preserves_short_frames(tmp_path):
-    project = project_manager.create_project(tmp_path)
+    project = project_manager.create_project(tmp_path / "Demo.sbd")
     for seconds in (1 / 24, 1 / 60):
         shot = project_manager.add_shot(project)
         shot.duration_seconds = seconds
-    model_path = project.references_dir / "frame-model.glb"
+    model_path = project.root_path / "Blender" / "References" / "frame-model.glb"
+    model_path.parent.mkdir(parents=True, exist_ok=True)
     model_path.write_bytes(b"glTF")
     model_relative = model_path.relative_to(project.root_path).as_posix()
     project.settings["reference_model_path"] = model_relative
@@ -218,7 +219,7 @@ class TestClearActiveReference(unittest.TestCase):
 
     def test_clear_model_resets_path_and_mode(self) -> None:
         project = _make_project(self._tmp)
-        project.settings["reference_model_path"] = "references/model.glb"
+        project.settings["reference_model_path"] = "Blender/References/model.glb"
         project.settings["reference_segment_mode"] = "model"
 
         reference_segments.clear_active_reference_model(project)
@@ -228,7 +229,7 @@ class TestClearActiveReference(unittest.TestCase):
 
     def test_clear_model_does_not_touch_other_modes(self) -> None:
         project = _make_project(self._tmp)
-        project.settings["reference_model_path"] = "references/model.glb"
+        project.settings["reference_model_path"] = "Blender/References/model.glb"
         project.settings["reference_segment_mode"] = "video"
 
         reference_segments.clear_active_reference_model(project)
@@ -237,7 +238,7 @@ class TestClearActiveReference(unittest.TestCase):
 
     def test_clear_image_resets_path_and_mode(self) -> None:
         project = _make_project(self._tmp)
-        project.settings["reference_image_path"] = "references/ref.png"
+        project.settings["reference_image_path"] = "Images/References/ref.png"
         project.settings["reference_segment_mode"] = "image"
 
         reference_segments.clear_active_reference_image(project)
@@ -247,7 +248,7 @@ class TestClearActiveReference(unittest.TestCase):
 
     def test_clear_image_does_not_touch_other_modes(self) -> None:
         project = _make_project(self._tmp)
-        project.settings["reference_image_path"] = "references/ref.png"
+        project.settings["reference_image_path"] = "Images/References/ref.png"
         project.settings["reference_segment_mode"] = "video"
 
         reference_segments.clear_active_reference_image(project)
@@ -269,7 +270,7 @@ class TestDeleteRefSegment(unittest.TestCase):
     def _make_shot_with_provenance(self, shot_id: str, seg_id: str) -> Shot:
         shot = Shot(shot_id=shot_id)
         shot.camera_data = {"ref_segment_id": seg_id, "ref_source_type": "image"}
-        shot.ref_video_path = "references/ref.png"
+        shot.ref_video_path = "Images/References/ref.png"
         return shot
 
     def test_delete_clears_provenance_for_range_shots(self) -> None:
@@ -283,7 +284,7 @@ class TestDeleteRefSegment(unittest.TestCase):
                 "anchor_shot_id": "s0",
                 "end_shot_id": "s1",
                 "source_type": "image",
-                "reference_path": "references/ref.png",
+                "reference_path": "Images/References/ref.png",
             }
         ]
 
@@ -305,7 +306,7 @@ class TestDeleteRefSegment(unittest.TestCase):
                 "anchor_shot_id": "s0",
                 "end_shot_id": "s0",
                 "source_type": "image",
-                "reference_path": "references/ref.png",
+                "reference_path": "Images/References/ref.png",
             }
         ]
 
@@ -386,7 +387,7 @@ class TestSnapshotAndRestore(unittest.TestCase):
         cap = reference_segments.MAX_REF_UNDO_SNAPSHOTS
         tokens = [reference_segments.snapshot_boards_for_undo(project, 0, 0) for _ in range(cap + 5)]
 
-        undo_root = project.root_path / "backups" / "ref_undo"
+        undo_root = project.backups_dir / "ref_undo"
         kept = [child for child in undo_root.iterdir() if child.is_dir()]
         self.assertLessEqual(len(kept), cap + 1)  # at most the cap (+1 protected current)
         # The most recent snapshot must survive and still be restorable.
@@ -408,7 +409,7 @@ class TestSnapshotAndRestore(unittest.TestCase):
         shot_dir.mkdir(parents=True, exist_ok=True)
 
         token = reference_segments.snapshot_boards_for_undo(project, 0, 0)
-        undo_root = project.root_path / "backups" / "ref_undo" / token
+        undo_root = project.backups_dir / "ref_undo" / token
         self.assertTrue(undo_root.is_dir())
 
         reference_segments.restore_boards_from_undo(project, token)
@@ -433,7 +434,7 @@ class TestApplyImageSegment(unittest.TestCase):
             project_manager.add_shot(project)
         self.assertGreaterEqual(len(project.shots), 3)
 
-        ref_dir = project.root_path / "references"
+        ref_dir = project.references_dir
         ref_dir.mkdir(parents=True, exist_ok=True)
         ref_image = ref_dir / "ref_test.png"
         ref_image.write_bytes(MINI_PNG)
@@ -478,7 +479,7 @@ class TestApplyImageSegment(unittest.TestCase):
                 "anchor_shot_id": project.shots[0].shot_id,
                 "end_shot_id": project.shots[0].shot_id,
                 "source_type": "image",
-                "reference_path": "references/missing.png",
+                "reference_path": "Images/References/missing.png",
             }
         ]
         project.settings["active_ref_segment_id"] = "seg_img"
@@ -506,7 +507,7 @@ class TestApplyModelCaptures(unittest.TestCase):
         project.shots[0].duration_seconds = 1.5
         project.shots[1].duration_seconds = 2.0
 
-        model_path = project.root_path / "references" / "model.glb"
+        model_path = project.root_path / "Blender" / "References" / "model.glb"
         model_path.parent.mkdir(parents=True, exist_ok=True)
         model_path.write_bytes(b"glb placeholder")
         model_rel = model_path.relative_to(project.root_path).as_posix()
@@ -578,7 +579,7 @@ class TestDeleteProjectReference(unittest.TestCase):
     def test_removing_ref_b_does_not_clear_ref_a_provenance(self) -> None:
         project = _make_project(self._tmp)
         project_manager.add_shot(project)
-        ref_dir = project.root_path / "references"
+        ref_dir = project.references_dir
         ref_dir.mkdir(parents=True, exist_ok=True)
         ref_a = ref_dir / "ref_a.png"
         ref_b = ref_dir / "ref_b.png"
@@ -586,11 +587,11 @@ class TestDeleteProjectReference(unittest.TestCase):
         ref_b.write_bytes(MINI_PNG)
 
         project.settings["reference_links"] = [
-            {"id": "id_a", "title": "A", "type": "image", "path": "references/ref_a.png"},
-            {"id": "id_b", "title": "B", "type": "image", "path": "references/ref_b.png"},
+            {"id": "id_a", "title": "A", "type": "image", "path": "Images/References/ref_a.png"},
+            {"id": "id_b", "title": "B", "type": "image", "path": "Images/References/ref_b.png"},
         ]
         project.shots[0].camera_data = {"ref_segment_id": "seg_a", "ref_source_type": "image"}
-        project.shots[0].ref_video_path = "references/ref_a.png"
+        project.shots[0].ref_video_path = "Images/References/ref_a.png"
         project.settings["ref_segments"] = [
             {
                 "id": "seg_a",
@@ -598,7 +599,7 @@ class TestDeleteProjectReference(unittest.TestCase):
                 "end_shot_id": project.shots[0].shot_id,
                 "source_type": "image",
                 "reference_id": "id_a",
-                "reference_path": "references/ref_a.png",
+                "reference_path": "Images/References/ref_a.png",
             }
         ]
 
@@ -606,7 +607,7 @@ class TestDeleteProjectReference(unittest.TestCase):
 
         cam = project.shots[0].camera_data or {}
         self.assertEqual(cam.get("ref_segment_id"), "seg_a", "seg_a provenance should be intact")
-        self.assertEqual(project.shots[0].ref_video_path, "references/ref_a.png")
+        self.assertEqual(project.shots[0].ref_video_path, "Images/References/ref_a.png")
 
 
 if __name__ == "__main__":

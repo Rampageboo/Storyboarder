@@ -3,7 +3,6 @@ import { CaretDown, DownloadSimple, GearSix, Images } from '@phosphor-icons/reac
 import { preheatPhotoshop } from '../api'
 import { useProject } from '../state/useProject'
 import { useBridgeStatus } from '../state/liveBridgeUtils'
-import { canConvertProjectToLayout2 } from '../projectCapabilities'
 import { useDetailsMenu } from '../hooks/useDetailsMenu'
 import './Topbar.css'
 
@@ -131,10 +130,10 @@ function PhotoshopStatus() {
 }
 
 function ProjectMenu({ onOpenSettings, onGoHome }: { onOpenSettings: () => void; onGoHome: () => void }) {
-  const { project, newProject, openProjectFromDialog, saveProject, saveProjectAs, convertProject, dirtyShotIds, projectActionBusy, initialLoading } = useProject()
+  const { project, newProject, openProjectFromDialog, saveProject, saveProjectAs, dirtyShotIds, projectActionBusy, initialLoading } = useProject()
   const { ref, close } = useDetailsMenu()
   const busy = projectActionBusy || initialLoading
-  const hasUnsaved = !!project && (project.dirty || dirtyShotIds.length > 0)
+  const hasUnsaved = !!project && dirtyShotIds.length > 0
   const run = (action: () => Promise<unknown> | void) => {
     close()
     void Promise.resolve(action()).catch(() => { /* surfaced via the app error banner */ })
@@ -160,9 +159,6 @@ function ProjectMenu({ onOpenSettings, onGoHome }: { onOpenSettings: () => void;
           Save<span className="menu-hint">Ctrl S</span>
         </button>
         <button type="button" role="menuitem" disabled={busy} onClick={() => run(saveProjectAs)}>Save as…</button>
-        {canConvertProjectToLayout2(project) ? (
-          <button type="button" role="menuitem" disabled={busy} onClick={() => run(convertProject)}>Convert to Layout 2…</button>
-        ) : null}
         <div className="menu-divider" />
         <button type="button" role="menuitem" disabled={busy} onClick={() => run(onOpenSettings)}>Project settings…</button>
       </div>
@@ -174,7 +170,7 @@ function SaveState() {
   const { project, dirtyShotIds, savingShots, projectActionBusy } = useProject()
   if (!project) return null
   const saving = projectActionBusy || Object.values(savingShots).some(Boolean)
-  const dirty = project.dirty || dirtyShotIds.length > 0
+  const dirty = dirtyShotIds.length > 0
   const state = saving ? 'is-saving' : dirty ? 'is-dirty' : 'is-saved'
   const label = saving ? 'Saving…' : dirty ? 'Unsaved changes' : 'Saved'
   return (

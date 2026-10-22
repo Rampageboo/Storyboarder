@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from storyboard_tool import project_manager
+from conftest import make_project
 from storyboard_tool import external_tools
 
 
@@ -22,7 +22,7 @@ def test_open_blender_does_not_register_bundled_addon_by_default(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
-    project = project_manager.create_project(tmp_path)
+    project = make_project(tmp_path)
     fake_blender = tmp_path / "blender.exe"
     fake_blender.write_bytes(b"")
     project.settings["blender_path"] = str(fake_blender)

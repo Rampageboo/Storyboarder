@@ -23,16 +23,14 @@ export function updateAppSession(body: AppSession): Promise<AppSession> {
 
 /** One Home-screen card. Described without opening the document. */
 export interface RecentProject {
-  /** User-visible path: the .sbd itself, or the project folder. */
+  /** The project's .sbd file. */
   path: string
-  /** What openProject needs — the folder variant points at project.json. */
+  /** What openProject needs (the same .sbd). */
   open_path: string
   name: string
-  kind: 'document' | 'folder'
   location: string
   exists: boolean
   modified_ms: number
-  size_bytes: number
   shot_count: number
   /** Data URL of the first board, or '' when none could be read. */
   thumbnail: string

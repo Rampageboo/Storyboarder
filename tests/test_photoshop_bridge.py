@@ -16,6 +16,10 @@ with warnings.catch_warnings():
 from storyboard_tool import api as api_module
 from storyboard_tool import backend_service as backend_service_module
 from storyboard_tool import live_bridge
+from storyboard_tool.plugin_service import (
+    EXPLICIT_ASSET_PATHS_CAPABILITY,
+    PLUGIN_PROTOCOL_VERSION,
+)
 from storyboard_tool.schemas import BridgeStatusResponse, PluginContextResponse
 
 
@@ -52,12 +56,40 @@ class PhotoshopBridgeContractTests(unittest.TestCase):
         self._tmp.cleanup()
 
     def _open_project_with_shot(self) -> tuple[Path, str]:
-        created = _quiet(lambda: self.client.post("/api/project/new", json={"path": self._tmp.name}))
-        self.assertEqual(created.status_code, 200)
-        project_root = Path(created.json()["project_path"])
+        created = _quiet(
+            lambda: self.client.post(
+                "/api/project/new", json={"path": str(self.root / "Demo.sbd")}
+            )
+        )
+        self.assertEqual(created.status_code, 200, created.text)
+        project_root = Path(created.json()["project_path"]).parent
         added = _quiet(lambda: self.client.post("/api/shots", json={}))
         self.assertEqual(added.status_code, 200)
         return project_root, added.json()["shot"]["shot_id"]
+
+    def _headers(self, *, work_key: str = "", asset_role: str = "", token: str = "") -> dict[str, str]:
+        headers = {
+            "x-storyboarder-protocol": str(PLUGIN_PROTOCOL_VERSION),
+            "x-storyboarder-capabilities": EXPLICIT_ASSET_PATHS_CAPABILITY,
+            "x-storyboarder-project-session": str(self.app.state.project_session_id),
+            "x-storyboarder-context-revision": str(self.app.state.project.storage_revision),
+        }
+        if work_key:
+            headers["x-storyboarder-work-key"] = work_key
+        if asset_role:
+            headers["x-storyboarder-asset-role"] = asset_role
+        if token:
+            headers["x-storyboarder-write-intent"] = token
+        return headers
+
+    def _write_intent(self, shot_id: str, role: str) -> dict:
+        issued = self.client.post(
+            "/api/plugin/write-intents",
+            headers=self._headers(),
+            json={"work_key": f"shot:{shot_id}", "asset_role": role},
+        )
+        self.assertEqual(issued.status_code, 200, issued.text)
+        return issued.json()
 
     def test_bridge_status_no_project_has_stable_contract(self) -> None:
         response = self.client.get("/api/bridge/status")
@@ -117,39 +149,50 @@ class PhotoshopBridgeContractTests(unittest.TestCase):
         _project_root, shot_id = self._open_project_with_shot()
         self.client.post("/api/plugin/heartbeat", json={"selected_shot_id": shot_id, "open_shot_ids": [shot_id]})
 
-        response = self.client.get("/api/plugin/context")
-        self.assertEqual(response.status_code, 200)
+        response = self.client.get("/api/plugin/context", headers=self._headers())
+        self.assertEqual(response.status_code, 200, response.text)
         context = PluginContextResponse.model_validate(response.json())
         self.assertEqual(context.selected_shot_id, shot_id)
-        self.assertTrue(context.project_root)
-        self.assertTrue(context.project_json_path.endswith("project.json"))
+        # The plugin context never discloses filesystem paths of the project.
+        self.assertEqual(context.project_root, "")
+        self.assertEqual(context.project_json_path, "")
         self.assertGreaterEqual(len(context.shots), 1)
         self.assertIn("width", context.canvas)
         self.assertIn("background_color", context.canvas)
         self.assertIn("plugin_project_revision", context.bridge)
 
     def test_plugin_export_preview_and_psd_saved_increment_project_revision(self) -> None:
-        project_root, shot_id = self._open_project_with_shot()
-        shot_dir = project_root / "shots" / shot_id
-        shot_dir.mkdir(parents=True, exist_ok=True)
-        preview_rel = f"shots/{shot_id}/{shot_id}_preview.png"
-        source_rel = f"shots/{shot_id}/{shot_id}.psd"
-        (shot_dir / f"{shot_id}_preview.png").write_bytes(MINI_PNG)
-        (shot_dir / f"{shot_id}.psd").write_bytes(b"8BPS" + b"\0" * 32)
+        _project_root, shot_id = self._open_project_with_shot()
+        key = f"shot:{shot_id}"
+        preview_rel = f"Images/Shots/{shot_id}_preview.png"
+        source_rel = f"PSD/Shots/{shot_id}.psd"
 
+        preview_intent = self._write_intent(shot_id, "preview")
+        Path(preview_intent["write_path"]).write_bytes(MINI_PNG)
         exported = self.client.post(
             f"/api/plugin/shots/{shot_id}/export-preview",
-            json={"preview_image_path": preview_rel, "source_file_path": source_rel},
+            headers=self._headers(
+                work_key=key, asset_role="preview", token=preview_intent["token"]
+            ),
+            json={},
         )
-        self.assertEqual(exported.status_code, 200)
+        self.assertEqual(exported.status_code, 200, exported.text)
         exported_body = exported.json()
         self.assertEqual(exported_body["shot"]["preview_image_path"], preview_rel)
         self.assertIn("context", exported_body)
         revision_after_export = self.client.get("/api/bridge/status").json()["plugin_project_revision"]
         self.assertGreaterEqual(revision_after_export, 1)
 
-        saved = self.client.post(f"/api/plugin/shots/{shot_id}/psd-saved", json={"source_file_path": source_rel})
-        self.assertEqual(saved.status_code, 200)
+        psd_intent = self._write_intent(shot_id, "source_psd")
+        Path(psd_intent["canonical_path"]).write_bytes(b"8BPS" + b"\0" * 32)
+        saved = self.client.post(
+            f"/api/plugin/shots/{shot_id}/psd-saved",
+            headers=self._headers(
+                work_key=key, asset_role="source_psd", token=psd_intent["token"]
+            ),
+            json={},
+        )
+        self.assertEqual(saved.status_code, 200, saved.text)
         saved_body = saved.json()
         self.assertEqual(saved_body["shot"]["source_file_path"], source_rel)
         self.assertIn("context", saved_body)

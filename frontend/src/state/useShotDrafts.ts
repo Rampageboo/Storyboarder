@@ -24,7 +24,7 @@ export function useShotDrafts(lifecycle: ProjectLifecycle, projectRef: RefObject
             if (!current || !acceptsProjectPayload(lifecycle, epoch, current, payload)) return current
             const saved = payload.shots.find(shot => shot.shot_id === id)
             return { ...current, shots: current.shots.map(shot => shot.shot_id === id && saved ? saved : shot),
-              dirty: payload.dirty, storage_revision: payload.storage_revision }
+              storage_revision: payload.storage_revision }
           })
           return snapshot
         })

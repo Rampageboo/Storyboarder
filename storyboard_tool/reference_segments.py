@@ -17,7 +17,7 @@ from .image_utils import (
     save_png_data_url,
 )
 from .models import Project, Shot
-from .shot_store import save_shots
+from .shot_store import save_shots_json
 
 # Keep these imports public for existing workflow and project_manager callers.
 from .reference_metadata import (
@@ -108,11 +108,7 @@ def snapshot_boards_for_undo(project: Project, min_index: int, max_index: int) -
     manifest: list[dict[str, Any]] = []
     for index in range(min_index, max_index + 1):
         shot = project.shots[index]
-        shot_backup = (
-            backup_root
-            if project.layout == pm.LAYOUT_2
-            else pm.resolve_root_child(backup_root, shot.shot_id)
-        )
+        shot_backup = backup_root
         saved_files: list[str] = []
         for role, name in _board_bake_assets(shot):
             source = pm.resolve_shot_asset(project, shot.shot_id, role)
@@ -150,11 +146,7 @@ def restore_boards_from_undo(project: Project, token: str) -> dict[str, Any]:
         saved_files = set(entry.get("files", []))
         for role, name in _board_bake_assets(current):
             target = pm.resolve_shot_asset(project, current.shot_id, role)
-            backup_file = (
-                pm.resolve_root_child(backup_root, name)
-                if project.layout == pm.LAYOUT_2
-                else pm.resolve_root_child(backup_root, str(shot_id), name)
-            )
+            backup_file = pm.resolve_root_child(backup_root, name)
             if name in saved_files and backup_file.is_file():
                 atomic_copy_file(backup_file, target)
             else:
@@ -584,7 +576,7 @@ def import_project_reference_stream(
 ) -> dict[str, str]:
     project.references_dir.mkdir(parents=True, exist_ok=True)
     suffix = Path(source_name or "").suffix.lower()
-    ref_id = str(uuid.uuid4()) if project.layout == pm.LAYOUT_2 else uuid.uuid4().hex
+    ref_id = str(uuid.uuid4())
     if suffix in REFERENCE_VIDEO_EXTENSIONS:
         destination = pm.resolve_reference_asset(project, ref_id, suffix)
         atomic_copy_stream(source_stream, destination)
@@ -850,7 +842,7 @@ def _persist_ref_segment_apply(
         project.settings["active_ref_segment_id"] = seg_id
     sync_ref_segment_settings(project)
     pm.save_settings(project)
-    save_shots(project.metadata_root, project.shots)
+    save_shots_json(project.metadata_root, project.shots)
 
 
 def _apply_ref_segment_template(
@@ -1354,5 +1346,5 @@ def delete_ref_segment(project: Project, segment_id: str) -> dict[str, Any]:
 
     sync_ref_segment_settings(project)
     pm.save_settings(project)
-    save_shots(project.metadata_root, project.shots)
+    save_shots_json(project.metadata_root, project.shots)
     return {"deleted_segment_id": seg_id, "cleared_boards": cleared}

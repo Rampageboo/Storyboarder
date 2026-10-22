@@ -34,7 +34,7 @@ class Scene3DServiceMixin:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return blender_bridge.read_manifest(project, scene3d_id)
 
-    @project_mutation(MutationPolicy.LAYOUT2)
+    @project_mutation(MutationPolicy.TRANSACTION)
     def method_open_blender_scene(self) -> dict[str, Any]:
         project = app_state._require_project(self.app)
         existing = blender_bridge.status(self.app)
@@ -48,7 +48,7 @@ class Scene3DServiceMixin:
                 "path": str(opened),
                 "relative_path": relative_path,
                 "blender_bridge": existing,
-                **app_state._project_payload(project, self.app.state.dirty),
+                **app_state._project_payload(project),
             }
         try:
             active_scene = scene3d.ensure_active_scene(project)
@@ -110,14 +110,14 @@ class Scene3DServiceMixin:
                 project_manager.project_relative_posix(project, opened) if opened.exists() else ""
             ),
             "blender_bridge": blender_bridge.status(self.app),
-            **app_state._project_payload(project, self.app.state.dirty),
+            **app_state._project_payload(project),
         }
 
     def method_list_scene3d(self) -> dict[str, Any]:
         project = app_state._require_project(self.app)
         return scene3d.list_scenes(project)
 
-    @project_mutation(MutationPolicy.LAYOUT2)
+    @project_mutation(MutationPolicy.TRANSACTION)
     def method_create_scene3d(self, data: dict[str, Any]) -> dict[str, Any]:
         project = app_state._require_project(self.app)
         try:
@@ -132,7 +132,7 @@ class Scene3DServiceMixin:
         app_state.persist_project_mutation(self.app)
         return payload
 
-    @project_mutation(MutationPolicy.LAYOUT2)
+    @project_mutation(MutationPolicy.TRANSACTION)
     def method_update_scene3d(self, scene3d_id: str, data: dict[str, Any]) -> dict[str, Any]:
         project = app_state._require_project(self.app)
         try:
@@ -160,7 +160,7 @@ class Scene3DServiceMixin:
         app_state.persist_project_mutation(self.app)
         return payload
 
-    @project_mutation(MutationPolicy.LAYOUT2)
+    @project_mutation(MutationPolicy.TRANSACTION)
     def method_delete_scene3d(self, scene3d_id: str) -> dict[str, Any]:
         project = app_state._require_project(self.app)
         try:
@@ -176,7 +176,7 @@ class Scene3DServiceMixin:
         app_state.persist_project_mutation(self.app)
         return payload
 
-    @project_mutation(MutationPolicy.LAYOUT2)
+    @project_mutation(MutationPolicy.TRANSACTION)
     def method_set_active_scene3d(self, scene3d_id: str) -> dict[str, Any]:
         project = app_state._require_project(self.app)
         try:
@@ -192,7 +192,7 @@ class Scene3DServiceMixin:
         app_state.persist_project_mutation(self.app)
         return payload
 
-    @project_mutation(MutationPolicy.LAYOUT2)
+    @project_mutation(MutationPolicy.TRANSACTION)
     def method_import_scene3d_to_scene(self, scene3d_id: str, filename: str, data: list[int] | bytes | bytearray) -> dict[str, Any]:
         project = app_state._require_project(self.app)
         try:
@@ -230,7 +230,7 @@ class Scene3DServiceMixin:
             raise app_error(AppErrorCode.MEDIA_NOT_FOUND, "No Scene 3D file linked.", status=404)
         return {"path": str(path), "media_type": "model/gltf-binary", "filename": path.name}
 
-    @project_mutation(MutationPolicy.LAYOUT2)
+    @project_mutation(MutationPolicy.TRANSACTION)
     def method_import_scene3d(self, filename: str, data: list[int] | bytes | bytearray) -> dict[str, Any]:
         project = app_state._require_project(self.app)
         try:
@@ -244,5 +244,5 @@ class Scene3DServiceMixin:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         app_state.persist_project_mutation(self.app)
         app_state._touch_live_bridge(self.app)
-        payload = app_state._project_payload(project, self.app.state.dirty)
+        payload = app_state._project_payload(project)
         return {"scene3d": project.settings.get("scene3d") or {}, "scenes3d": scene_payload, **payload}

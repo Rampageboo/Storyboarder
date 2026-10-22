@@ -10,27 +10,33 @@ Photoshop panel for drawing storyboards without switching back to Storyboard Too
 4. Restart Photoshop
 5. Open **Plugins → Storyboard Bridge**
 
-## Protocol v2 and Layout 2
+## Protocol v2 (required)
 
-Plugin 0.7.0 negotiates protocol v2 with `explicit_asset_paths_v2`. When a
-Layout 2 project is linked, every asset is opened or written through the exact
-role path supplied by Storyboarder; the plugin does not derive a shot folder or
-write project metadata offline. Preview exports use a short-lived backend write
+Storyboarder accepts only protocol v2. Install plugin **0.7.0** from this folder;
+older plugins such as 0.6.7 are rejected with HTTP 426. Plugin 0.7.0 negotiates
+protocol v2 with `explicit_asset_paths_v2`: every asset is opened or written
+through the exact role path supplied by Storyboarder; the plugin does not derive
+a shot folder or write project metadata itself.
+
+The plugin works only while Storyboard Tool is running with the project open.
+Its offline file mode no longer works: project metadata lives only under the
+project's `.storyboarder/data` folder, and the backend always reports
+`offline_write_allowed: false`, so the plugin refuses to write while
+disconnected. Preview exports use a short-lived backend write
 intent and transaction inbox. Native Photoshop saves remain available for an
 already-open canonical PSD; after Ctrl+S, the plugin reconnects the save to its
 work key and source role so Storyboarder can validate the canonical file.
 
 ## Recommended workflow (stay in Photoshop)
 
-1. Open Storyboard Tool once and open your project (for the shot list and canvas color).
-2. In Photoshop, open **Storyboard Bridge**.
-3. Click **Choose project folder** → your `Storyboard_Project` folder (the one with `project.json`).
-4. Pick a shot from the dropdown, or click **Open / create canvas**.
-5. Draw on the 16:9 canvas.
-6. Click **Save & next shot**:
+1. Open Storyboard Tool and open your project; keep it running.
+2. In Photoshop, open **Storyboard Bridge**. It links to the open project automatically.
+3. Pick a shot from the dropdown, or click **Open / create canvas**.
+4. Draw on the 16:9 canvas.
+5. Click **Save & next shot**:
    - Exports `shot_XXX_preview.png` for Storyboard Tool
    - Saves the open document with Photoshop's native save (use **Ctrl+S** for the PSD on disk)
-   - Reports the export to the Storyboard Tool backend, which updates `shots.json` and regenerates `shots.csv`
+   - Reports the export to the Storyboard Tool backend, which updates the project metadata
    - Closes the current document and opens the next shot in the **same Photoshop window**
    - Creates a new shot automatically when you reach the end (toggle **Auto-add shot at end**)
 
@@ -40,14 +46,14 @@ Storyboard Tool polls for file changes in the background, so previews and new sh
 
 | Button | Action |
 |--------|--------|
-| **Choose project folder** | Load `project.json` and shot list |
+| **Choose project folder** | Offline file mode; no longer works (see Protocol v2) |
 | **Open / create canvas** | Open existing PSD or create a new canvas at the project size |
 | **Save** | Export transparent drawing preview to Storyboard Tool (`shot_XXX_preview.png`). **Does not overwrite the PSD** — press **Ctrl+S** in Photoshop to save layers. |
 | **Save & next shot** | Export preview, native-save the open document (Ctrl+S equivalent), then move to the next shot |
 
 ## Canvas color
 
-Storyboard Tool stores `canvas_background_color` in `settings.json`. The plugin reads `canvas_color.txt` / `storyboard_bridge.json` and can fill the **Background** layer to match.
+Storyboard Tool stores `canvas_background_color` in `settings.json`. The plugin reads it from the backend context (`canvas.background_color`; Storyboarder also writes `.storyboarder/canvas_color.txt`) and can fill the **Background** layer to match.
 
 ## Save = export the drawing; you keep the PSD with Ctrl+S
 
@@ -64,10 +70,10 @@ Saves always target the shot shown in the **active Photoshop tab** (from the tab
 ## PSD recovery (broken files)
 
 To recover a PSD Photoshop refuses to open:
-- **Rebuild from layers** — when opening a shot whose PSD Photoshop refuses to open, the panel asks Storyboard Tool to rebuild it. Storyboard Tool reads the file with `psd_tools` (which tolerates files Photoshop rejects) and assembles a **brand-new, clean PSD** (so Photoshop can open it) that keeps each layer's pixels, **blend mode, opacity, and visibility**, plus layer order and names. (Text/smart-object editability and masks are not retained — those rasterise to pixels.)  The broken original is backed up under `_history/` first, then the rebuilt PSD is re-opened automatically.
+- **Rebuild from layers** — when opening a shot whose PSD Photoshop refuses to open, the panel asks Storyboard Tool to rebuild it. Storyboard Tool reads the file with `psd_tools` (which tolerates files Photoshop rejects) and assembles a **brand-new, clean PSD** (so Photoshop can open it) that keeps each layer's pixels, **blend mode, opacity, and visibility**, plus layer order and names. (Text/smart-object editability and masks are not retained — those rasterise to pixels.)  The broken original is backed up under the project's `.storyboarder/backups/psd_recovery/` first, then the rebuilt PSD is re-opened automatically.
 - **Flatten fallback** — if the layer-preserving rebuild *still* won't open, the panel automatically retries with a flattened rebuild: every layer is baked to its rendered appearance with normal blend/opacity — the most robust path.
 - **Report PS error (manual)** — if Photoshop shows *"Could not open … because of a program error"*, select the shot and click **Recover broken PSD**. This runs the same rebuild (layers-preserving first, flatten if needed) and re-opens the shot. Recovery needs Storyboard Tool running with the project open (`POST /api/shots/{id}/recover-source`, optional `?preserve_layers=false` to force flatten).
-- **Last resort** — if even `psd_tools` can't read the file, the panel keeps the broken copy in `_history/` and creates a fresh canvas so you can keep working.
+- **Last resort** — if even `psd_tools` can't read the file, the panel keeps the broken copy in `.storyboarder/backups/psd_recovery/` and creates a fresh canvas so you can keep working.
 
 ## No duplicate tabs (open from Storyboard Tool)
 

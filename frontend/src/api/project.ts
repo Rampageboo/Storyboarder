@@ -42,12 +42,6 @@ export function saveProjectAs(body: SaveProjectAsRequest): Promise<ProjectPayloa
   })
 }
 
-export function convertProject(body: SaveProjectAsRequest): Promise<ProjectPayload> {
-  return requestJson<ProjectPayload>('/api/project/convert', {
-    method: 'POST',
-    body,
-  })
-}
 
 /** Open the project's Blender scene with the configured Blender executable. Returns a ProjectPayload. */
 export function openBlenderScene(): Promise<ProjectPayload> {

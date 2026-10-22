@@ -22,7 +22,7 @@ SIGNATURES = json.loads(
 
 
 def _service(project=None):
-    app = SimpleNamespace(state=SimpleNamespace(project=project, dirty=False))
+    app = SimpleNamespace(state=SimpleNamespace(project=project))
     return StoryboardBackendService(app)
 
 
@@ -131,9 +131,18 @@ def test_facade_active_scene3d_import_keeps_release_persist_and_bridge_order(tmp
     monkeypatch.setattr(scene3d, "import_active_scene_file", import_scene)
     monkeypatch.setattr(app_state, "persist_project_mutation", lambda app: calls.append(("persist", app)))
     monkeypatch.setattr(app_state, "_touch_live_bridge", lambda app: calls.append(("bridge", app)))
-    monkeypatch.setattr(app_state, "_project_payload", lambda current, dirty: {"project_marker": "kept", "dirty": dirty})
+    monkeypatch.setattr(
+        app_state,
+        "_project_payload",
+        lambda current: {"project_marker": "kept", "project_id": current.project_id},
+    )
     result = service.call("import_scene3d", ["", bytearray(b"glb")])
-    assert result == {"scene3d": {"source": "active"}, "scenes3d": scene_payload, "project_marker": "kept", "dirty": False}
+    assert result == {
+        "scene3d": {"source": "active"},
+        "scenes3d": scene_payload,
+        "project_marker": "kept",
+        "project_id": project.project_id,
+    }
     assert calls == [
         ("release", service.app, "replacing the active Scene 3D asset"),
         ("import", project, "scene.glb", b"glb"),

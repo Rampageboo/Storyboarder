@@ -1,369 +1,382 @@
+"""The on-disk project format: the ``.sbd`` handle, opening, and mutation rollback."""
 from __future__ import annotations
 
 import json
-import os
-import threading
-import time
+import shutil
+import subprocess
+import sys
 import zipfile
 from pathlib import Path
 
 import pytest
-from fastapi.testclient import TestClient
 
-from storyboard_tool import api as api_module
-from storyboard_tool import app_state as app_state_module
+from conftest import make_project
 from storyboard_tool import project_document, project_manager
+from storyboard_tool.project_document import (
+    DOCUMENT_SUFFIX,
+    MutationRecoveryError,
+    ProjectDocumentError,
+    data_root,
+    enlist_mutation_paths,
+    mutation_transaction,
+    private_root,
+    read_handle,
+    recover_incomplete_mutation,
+    write_handle,
+)
 
 
-def test_create_save_and_reopen_single_file_document(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(project_document.tempfile, "tempdir", str(tmp_path))
-    document = tmp_path / "My Film.sbd"
+PROJECT_ID = "5f44cc8d-cc3f-45dd-8e84-88606d69a3ef"
 
-    project = project_manager.create_document(document, canvas_width=1280, canvas_height=720)
-    shot = project_manager.add_shot(project)
-    shot.title = "Opening image"
-    # A freshly added shot has no PSD; the canvas is created on demand. Creating it
-    # here verifies a shot canvas round-trips into the single-file document.
-    project_manager.create_canvas_for_shot(project, shot)
-    project_manager.save_project(project)
 
-    assert document.is_file()
-    assert not (tmp_path / "Storyboard_Project").exists()
-    with zipfile.ZipFile(document) as archive:
-        assert "project.json" in archive.namelist()
-        assert "shots.json" in archive.namelist()
-        assert f"shots/{shot.shot_id}/{shot.shot_id}.psd" in archive.namelist()
+def _transactions(root: Path) -> Path:
+    return root / ".storyboarder" / "transactions"
 
-    reopened = project_manager.open_project(document)
-    assert reopened.document_path == document.resolve()
-    assert reopened.name == "My Film"
-    assert reopened.shots[0].title == "Opening image"
+
+def _pending(root: Path) -> list[Path]:
+    transactions = _transactions(root)
+    if not transactions.is_dir():
+        return []
+    return [path for path in transactions.iterdir() if path.name.startswith("mutation-")]
+
+
+def _settings(project) -> dict:
+    return json.loads(project.settings_path.read_text(encoding="utf-8"))
+
+
+def _write_settings(project, **changes) -> None:
+    payload = _settings(project)
+    payload.update(changes)
+    project.settings_path.write_text(json.dumps(payload), encoding="utf-8")
+
+
+# -- handle -----------------------------------------------------------------
+
+
+def test_handle_write_read_round_trip(tmp_path: Path) -> None:
+    handle = tmp_path / f"Demo{DOCUMENT_SUFFIX}"
+
+    write_handle(handle, PROJECT_ID)
+
+    assert read_handle(handle) == PROJECT_ID
+    assert json.loads(handle.read_text(encoding="utf-8")) == {
+        "format": "storyboarder-project",
+        "version": 1,
+        "project_id": PROJECT_ID,
+    }
+    assert [path.name for path in tmp_path.iterdir()] == ["Demo.sbd"]
+
+
+def test_read_handle_rejects_old_zip_document(tmp_path: Path) -> None:
+    handle = tmp_path / "Old.sbd"
+    with zipfile.ZipFile(handle, "w") as archive:
+        archive.writestr("project.json", json.dumps({"version": 4}))
+
+    with pytest.raises(ProjectDocumentError, match="older Storyboarder"):
+        read_handle(handle)
+
+
+def test_read_handle_rejects_oversized_file(tmp_path: Path) -> None:
+    handle = tmp_path / "Huge.sbd"
+    payload = {"format": "storyboarder-project", "version": 1, "project_id": PROJECT_ID}
+    text = json.dumps(payload)
+    handle.write_text(text + " " * (64 * 1024 + 1 - len(text)), encoding="utf-8")
+
+    with pytest.raises(ProjectDocumentError, match="older Storyboarder"):
+        read_handle(handle)
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        b"",
+        b"not json at all",
+        b"\xff\xfe\x00garbage",
+        b"[]",
+        b"null",
+        json.dumps({"format": "something-else", "version": 1, "project_id": PROJECT_ID}).encode(),
+        json.dumps({"format": "storyboarder-project", "version": 2, "project_id": PROJECT_ID}).encode(),
+        json.dumps({"format": "storyboarder-project", "version": 1, "project_id": ""}).encode(),
+        json.dumps({"format": "storyboarder-project", "version": 1, "project_id": 7}).encode(),
+        json.dumps({"format": "storyboarder-project", "version": 1}).encode(),
+    ],
+)
+def test_read_handle_rejects_garbage_and_wrong_format(tmp_path: Path, raw: bytes) -> None:
+    handle = tmp_path / "Bad.sbd"
+    handle.write_bytes(raw)
+
+    with pytest.raises(ProjectDocumentError, match="not a Storyboarder project"):
+        read_handle(handle)
+
+
+def test_read_handle_rejects_boolean_version(tmp_path: Path) -> None:
+    handle = tmp_path / "Bool.sbd"
+    handle.write_text(
+        json.dumps({"format": "storyboarder-project", "version": True, "project_id": PROJECT_ID}),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ProjectDocumentError, match="not a Storyboarder project"):
+        read_handle(handle)
+
+
+def test_read_handle_requires_sbd_suffix_and_existing_file(tmp_path: Path) -> None:
+    other = tmp_path / "Demo.json"
+    write_handle(other, PROJECT_ID)
+
+    with pytest.raises(ProjectDocumentError):
+        read_handle(other)
+    with pytest.raises(FileNotFoundError):
+        read_handle(tmp_path / "Missing.sbd")
+
+
+def test_roots_are_inside_the_project_folder(tmp_path: Path) -> None:
+    assert private_root(tmp_path) == (tmp_path / ".storyboarder").resolve()
+    assert data_root(tmp_path) == (tmp_path / ".storyboarder" / "data").resolve()
+
+
+# -- open_project -----------------------------------------------------------
+
+
+def test_open_project_via_handle_and_via_folder(tmp_path: Path) -> None:
+    project = make_project(tmp_path, "Demo", canvas_width=640, canvas_height=360)
+
+    by_handle = project_manager.open_project(project.document_path)
+    by_folder = project_manager.open_project(project.project_root)
+
+    for opened in (by_handle, by_folder):
+        assert opened.project_id == project.project_id
+        assert opened.document_path == project.document_path
+        assert opened.reopen_path == project.document_path
+        assert opened.project_root == project.project_root
+        assert opened.settings["canvas_width"] == 640
+
+
+def test_open_project_rejects_handle_for_another_project(tmp_path: Path) -> None:
+    project = make_project(tmp_path)
+    write_handle(project.document_path, "910b2631-641e-4d28-aa4a-1d18d66b2425")
+
+    with pytest.raises(ValueError, match="does not belong"):
+        project_manager.open_project(project.document_path)
+
+
+def test_open_project_rejects_old_zip_handle(tmp_path: Path) -> None:
+    project = make_project(tmp_path)
+    with zipfile.ZipFile(project.document_path, "w") as archive:
+        archive.writestr("project.json", json.dumps({"version": 4}))
+
+    with pytest.raises(ProjectDocumentError, match="older Storyboarder"):
+        project_manager.open_project(project.document_path)
+
+
+# -- mutation_transaction ---------------------------------------------------
+
+
+def test_mutation_transaction_restores_data_on_exception(tmp_path: Path) -> None:
+    project = make_project(tmp_path, canvas_width=1920)
+    root = project.project_root
+    before = {
+        path.relative_to(root): path.read_bytes()
+        for path in data_root(root).rglob("*")
+        if path.is_file()
+    }
+
+    with pytest.raises(RuntimeError, match="fault"):
+        with mutation_transaction(root):
+            _write_settings(project, canvas_width=999)
+            (data_root(root) / "added.json").write_text("{}", encoding="utf-8")
+            raise RuntimeError("fault")
+
+    after = {
+        path.relative_to(root): path.read_bytes()
+        for path in data_root(root).rglob("*")
+        if path.is_file()
+    }
+    assert after == before
+    assert _settings(project)["canvas_width"] == 1920
+    assert _pending(root) == []
+
+
+def test_mutation_transaction_keeps_successful_changes(tmp_path: Path) -> None:
+    project = make_project(tmp_path)
+    root = project.project_root
+
+    with mutation_transaction(root):
+        _write_settings(project, canvas_width=1280)
+
+    assert _settings(project)["canvas_width"] == 1280
+    assert _pending(root) == []
+    assert recover_incomplete_mutation(root) is False
+    assert _settings(project)["canvas_width"] == 1280
+
+
+def test_recovery_rolls_back_process_crash_inside_mutation(tmp_path: Path) -> None:
+    project = make_project(tmp_path, canvas_width=1920)
+    root = project.project_root
+    existing_asset = root / "assets" / "scene.blend"
+    existing_asset.parent.mkdir(parents=True)
+    existing_asset.write_bytes(b"original-blend")
+    command = "\n".join(
+        (
+            "import json, os",
+            "from pathlib import Path",
+            "from storyboard_tool import project_document",
+            f"root = Path({str(root)!r})",
+            "transaction = project_document.mutation_transaction(root)",
+            "transaction.__enter__()",
+            "existing = root / 'assets' / 'scene.blend'",
+            "created = root / 'assets' / 'new-preview.png'",
+            "project_document.enlist_mutation_paths(root, (existing, created))",
+            "existing.write_bytes(b'changed-blend'); created.write_bytes(b'new-preview')",
+            "settings = project_document.data_root(root) / 'settings.json'",
+            "settings.write_text(json.dumps({'canvas_width': 999}), encoding='utf-8')",
+            "os._exit(23)",
+        )
+    )
+
+    crashed = subprocess.run(
+        [sys.executable, "-c", command],
+        cwd=Path(__file__).parents[1],
+        check=False,
+    )
+
+    assert crashed.returncode == 23
+    assert len(_pending(root)) == 1
+    assert _settings(project) == {"canvas_width": 999}
+
+    assert recover_incomplete_mutation(root) is True
+
+    assert _settings(project)["canvas_width"] == 1920
+    assert _pending(root) == []
+    assert existing_asset.read_bytes() == b"original-blend"
+    assert not (root / "assets" / "new-preview.png").exists()
+    assert recover_incomplete_mutation(root) is False
+
+
+def test_open_project_rolls_back_a_pending_mutation(tmp_path: Path) -> None:
+    project = make_project(tmp_path, canvas_width=1920)
+    root = project.project_root
+
+    # Construct the state a process leaves behind when it dies mid-mutation:
+    # a pending snapshot of data/ and a data/ that was changed afterwards.
+    pending = _transactions(root) / f"mutation-{'0' * 32}"
+    shutil.copytree(data_root(root), pending / "data")
+    (pending / "manifest.json").write_text(
+        json.dumps({"version": 1, "data_present": True, "assets": []}),
+        encoding="utf-8",
+    )
+    _write_settings(project, canvas_width=999)
+
+    reopened = project_manager.open_project(project.document_path)
+
+    assert reopened.settings["canvas_width"] == 1920
+    assert _pending(root) == []
+
+
+def test_mutation_restores_enlisted_file_on_failure(tmp_path: Path) -> None:
+    project = make_project(tmp_path)
+    root = project.project_root
+    asset = root / "Images" / "Shots" / "board_preview.png"
+    asset.parent.mkdir(parents=True, exist_ok=True)
+    asset.write_bytes(b"before")
+    created = root / "Images" / "Shots" / "created.png"
+
+    with pytest.raises(RuntimeError, match="fault"):
+        with mutation_transaction(root):
+            journaled = enlist_mutation_paths(root, (asset, created))
+            assert set(journaled) == {
+                "Images/Shots/board_preview.png",
+                "Images/Shots/created.png",
+            }
+            asset.write_bytes(b"after")
+            created.write_bytes(b"new")
+            raise RuntimeError("fault")
+
+    assert asset.read_bytes() == b"before"
+    assert not created.exists()
+    assert _pending(root) == []
+
+
+def test_mutation_restores_enlisted_directory_on_failure(tmp_path: Path) -> None:
+    project = make_project(tmp_path)
+    root = project.project_root
+    asset_dir = root / "assets" / "scene"
+    asset_dir.mkdir(parents=True)
+    (asset_dir / "kept.bin").write_bytes(b"before")
+
+    with pytest.raises(RuntimeError, match="fault"):
+        with mutation_transaction(root):
+            enlist_mutation_paths(root, (asset_dir,))
+            (asset_dir / "kept.bin").write_bytes(b"after")
+            (asset_dir / "new.bin").write_bytes(b"new")
+            raise RuntimeError("fault")
+
+    assert (asset_dir / "kept.bin").read_bytes() == b"before"
+    assert not (asset_dir / "new.bin").exists()
+    assert _pending(root) == []
+
+
+def test_enlist_outside_a_transaction_is_a_no_op(tmp_path: Path) -> None:
+    project = make_project(tmp_path)
+
+    assert enlist_mutation_paths(project.project_root, (project.project_root / "x.bin",)) == ()
+
+
+def test_enlist_rejects_paths_outside_the_project_and_the_journal(tmp_path: Path) -> None:
+    project = make_project(tmp_path)
+    root = project.project_root
+
+    with mutation_transaction(root):
+        with pytest.raises(MutationRecoveryError, match="escapes"):
+            enlist_mutation_paths(root, (tmp_path / "outside.bin",))
+        with pytest.raises(MutationRecoveryError, match="transaction journal"):
+            enlist_mutation_paths(root, (_transactions(root) / "anything",))
+
+
+def test_resolved_transactions_are_never_replayed(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    project = make_project(tmp_path, canvas_width=1920)
+    root = project.project_root
+    real_rmtree = project_document.shutil.rmtree
+    accepted_asset = root / "assets" / "kept.bin"
+    accepted_asset.parent.mkdir(parents=True)
+
+    def leave_resolved(path, *args, **kwargs):
+        if Path(path).name.startswith(".mutation-resolved-"):
+            return None
+        return real_rmtree(path, *args, **kwargs)
+
+    with monkeypatch.context() as cleanup_fault:
+        cleanup_fault.setattr(project_document.shutil, "rmtree", leave_resolved)
+        with mutation_transaction(root):
+            enlist_mutation_paths(root, (accepted_asset,))
+            accepted_asset.write_bytes(b"accepted")
+            _write_settings(project, canvas_width=1280)
+
+    transactions = _transactions(root)
+    assert any(path.name.startswith(".mutation-resolved-") for path in transactions.iterdir())
+    assert _pending(root) == []
+
+    assert recover_incomplete_mutation(root) is False
+    reopened = project_manager.open_project(project.document_path)
+
     assert reopened.settings["canvas_width"] == 1280
+    assert accepted_asset.read_bytes() == b"accepted"
+    assert not any(path.name.startswith(".mutation-resolved-") for path in transactions.iterdir())
 
 
-def test_document_save_replaces_previous_archive(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(project_document.tempfile, "tempdir", str(tmp_path))
-    document = tmp_path / "Replace.sbd"
-    project = project_manager.create_document(document)
-    first_bytes = document.read_bytes()
-
-    shot = project_manager.add_shot(project)
-    shot.title = "Replacement"
-    project_manager.save_project(project)
-
-    assert document.read_bytes() != first_bytes
-    assert not list(tmp_path.glob(".Replace.sbd.*.tmp"))
-    assert project_manager.open_project(document).shots[0].title == "Replacement"
-
-
-def test_save_as_switches_document_and_preserves_original(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr(project_document.tempfile, "tempdir", str(tmp_path))
-    original = tmp_path / "Original.sbd"
-    copied = tmp_path / "Copy.sbd"
-    app_dir = tmp_path / "app"
-    app_dir.mkdir()
-    legacy = project_manager.create_document(original)
-    assert project_manager.cleanup_document_working_root(legacy)
-    client = TestClient(api_module.create_app(app_dir))
-    assert client.post("/api/project/open", json={"project_json_path": str(original)}).status_code == 200
-    added = client.post("/api/shots", json={})
-    shot_id = added.json()["shot"]["shot_id"]
-    assert client.post("/api/project/save").status_code == 200
-    original_bytes = original.read_bytes()
-
-    saved_as = client.post("/api/project/save-as", json={"path": str(copied)})
-    assert saved_as.status_code == 200, saved_as.text
-    assert saved_as.json()["project_path"] == str(copied.resolve())
-    assert original.read_bytes() == original_bytes
-
-    updated = client.patch(f"/api/shots/{shot_id}", json={"title": "Only in copy"})
-    assert updated.status_code == 200, updated.text
-    assert client.post("/api/project/save").status_code == 200
-    assert project_manager.open_project(original).shots[0].title == ""
-    assert project_manager.open_project(copied).shots[0].title == "Only in copy"
-
-
-def test_save_as_converts_folder_project_without_future_writes_to_source(tmp_path: Path) -> None:
-    source_parent = tmp_path / "legacy"
-    source_parent.mkdir()
-    app_dir = tmp_path / "app"
-    app_dir.mkdir()
-    destination = tmp_path / "Converted.sbd"
-    client = TestClient(api_module.create_app(app_dir))
-    assert client.post("/api/project/new", json={"path": str(source_parent)}).status_code == 200
-    added = client.post("/api/shots", json={})
-    shot_id = added.json()["shot"]["shot_id"]
-    original_project_json = source_parent / "Storyboard_Project" / "project.json"
-
-    saved_as = client.post("/api/project/save-as", json={"path": str(destination)})
-    assert saved_as.status_code == 200, saved_as.text
-    assert saved_as.json()["project_json_path"] == str(destination.resolve())
-    assert client.patch(f"/api/shots/{shot_id}", json={"title": "Converted"}).status_code == 200
-    assert client.post("/api/project/save").status_code == 200
-
-    assert project_manager.open_project(original_project_json).shots[0].title == ""
-    assert project_manager.open_project(destination).shots[0].title == "Converted"
-
-
-def test_rejects_unsafe_document_member(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(project_document.tempfile, "tempdir", str(tmp_path))
-    document = tmp_path / "Unsafe.sbd"
-    with zipfile.ZipFile(document, "w") as archive:
-        archive.writestr("project.json", '{"version": 1}')
-        archive.writestr("../outside.txt", "no")
-
-    with pytest.raises(ValueError, match="unsafe archive path"):
-        project_document.extract_document(document)
-    assert not (tmp_path / "outside.txt").exists()
-
-
-def test_document_api_create_scene_and_reopen_without_rewriting_on_open(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr(project_document.tempfile, "tempdir", str(tmp_path))
-    requested = tmp_path / "API Film.sbd"
-    document = tmp_path / "API Film" / "API Film.sbd"
-    first_app_dir = tmp_path / "app-one"
-    first_app_dir.mkdir()
-    client = TestClient(api_module.create_app(first_app_dir))
-
-    created = client.post("/api/project/new", json={"path": str(requested)})
-    assert created.status_code == 200, created.text
-    assert created.json()["project_path"] == str(document.resolve())
-    assert created.json()["project_json_path"] == str(document.resolve())
-    scene = client.post(
-        "/api/project/scenes2d",
-        json={"title": "Street", "location": "Old town", "time_of_day": "Dusk"},
-    )
-    assert scene.status_code == 200, scene.text
-    before_open = document.read_bytes()
-    with zipfile.ZipFile(document) as archive:
-        assert "scenes2d/scenes2d.json" in archive.namelist()
-
-    second_app_dir = tmp_path / "app-two"
-    second_app_dir.mkdir()
-    reopened = TestClient(api_module.create_app(second_app_dir)).post(
-        "/api/project/open",
-        json={"project_json_path": str(document)},
-    )
-    assert reopened.status_code == 200, reopened.text
-    assert reopened.json()["name"] == "API Film"
-    assert document.read_bytes() == before_open
-
-
-def test_mutations_defer_sbd_pack_until_save(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(project_document.tempfile, "tempdir", str(tmp_path))
-    document = tmp_path / "Deferred.sbd"
-    app_dir = tmp_path / "app"
-    app_dir.mkdir()
-    legacy = project_manager.create_document(document)
-    assert project_manager.cleanup_document_working_root(legacy)
-    client = TestClient(api_module.create_app(app_dir))
-    assert client.post("/api/project/open", json={"project_json_path": str(document)}).status_code == 200
-
-    added = client.post("/api/shots")
-    assert added.status_code == 200, added.text
-    shot_id = added.json()["shot"]["shot_id"]
-
-    # Interactive autosave keeps the working tree current but DEFERS the .sbd pack.
-    with zipfile.ZipFile(document) as archive:
-        assert not any(f"shots/{shot_id}/" in name for name in archive.namelist())
-
-    # Manual save flushes the document.
-    assert client.post("/api/project/save").status_code == 200
-    with zipfile.ZipFile(document) as archive:
-        assert any(f"shots/{shot_id}/" in name for name in archive.namelist())
-
-
-def test_autosave_interval_setting_persists(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(project_document.tempfile, "tempdir", str(tmp_path))
-    document = tmp_path / "Interval.sbd"
-    app_dir = tmp_path / "app-interval"
-    app_dir.mkdir()
-    client = TestClient(api_module.create_app(app_dir))
-    assert client.post("/api/project/new", json={"path": str(document)}).status_code == 200
-
-    resp = client.patch("/api/project/settings", json={"autosave_interval_minutes": 10})
-    assert resp.status_code == 200, resp.text
-    assert resp.json()["settings"]["autosave_interval_minutes"] == 10
-
-
-def test_backups_are_not_packed_into_sbd(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(project_document.tempfile, "tempdir", str(tmp_path))
-    document = tmp_path / "NoBackups.sbd"
-    project = project_manager.create_document(document, canvas_width=1280, canvas_height=720)
-    project_manager.add_shot(project)
-    project_manager.save_project(project)  # backup_on_save default True -> writes backups/
-    project_manager.add_shot(project)
-    project_manager.save_project(project)
-
-    # The working tree keeps local recovery snapshots...
-    assert any((project.root_path / "backups").glob("shots_*.json"))
-    # ...but the shared single-file document never embeds them.
-    with zipfile.ZipFile(document) as archive:
-        assert not any(name.startswith("backups/") for name in archive.namelist())
-
-
-def test_session_marker_is_not_packed_into_sbd(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(project_document.tempfile, "tempdir", str(tmp_path))
-    document = tmp_path / "Marked.sbd"
-    project = project_manager.create_document(document, canvas_width=1280, canvas_height=720)
-
-    # The work tree knows which process owns it...
-    marker = project.root_path / project_document.SESSION_MARKER
-    assert marker.is_file()
-    assert json.loads(marker.read_text(encoding="utf-8"))["pid"] == os.getpid()
-
-    # ...but that is machine-local and must never travel inside the document.
-    project_manager.save_project(project)
-    with zipfile.ZipFile(document) as archive:
-        assert project_document.SESSION_MARKER not in archive.namelist()
-
-    # Reopening re-stamps the tree for the process that now owns it.
-    reopened = project_manager.open_project(document)
-    assert (reopened.root_path / project_document.SESSION_MARKER).is_file()
-
-
-def test_failed_document_creation_leaves_no_work_tree(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    temp_root = tmp_path / "temp"
-    temp_root.mkdir()
-    monkeypatch.setattr(project_document.tempfile, "tempdir", str(temp_root))
-
-    def boom(*_args, **_kwargs):
-        raise OSError("disk full")
-
-    monkeypatch.setattr(project_manager, "save_project", boom)
-    with pytest.raises(OSError):
-        project_manager.create_document(tmp_path / "Doomed.sbd")
-
-    assert list(temp_root.glob(f"{project_document.WORKING_ROOT_PREFIX}*")) == []
-
-
-class TestSweepOrphanedWorkingRoots:
-    """The sweep must reclaim abandoned trees without ever discarding unsaved work."""
-
-    def _tree(self, temp_root: Path, name: str, *, marker: dict | None, project_json: bool) -> Path:
-        root = temp_root / f"{project_document.WORKING_ROOT_PREFIX}{name}"
-        root.mkdir()
-        if project_json:
-            (root / "project.json").write_text('{"version": 1}', encoding="utf-8")
-        if marker is not None:
-            (root / project_document.SESSION_MARKER).write_text(json.dumps(marker), encoding="utf-8")
-        return root
-
-    def test_empty_legacy_shell_is_removed(self, tmp_path: Path) -> None:
-        root = self._tree(tmp_path, "Husk", marker=None, project_json=False)
-        result = project_document.sweep_orphaned_working_roots(tmp_path)
-        assert not root.exists()
-        assert str(root) in result["removed"]
-
-    def test_legacy_tree_holding_data_is_kept(self, tmp_path: Path) -> None:
-        root = self._tree(tmp_path, "Legacy", marker=None, project_json=True)
-        result = project_document.sweep_orphaned_working_roots(tmp_path)
-        assert root.is_dir()
-        assert str(root) in result["kept"]
-
-    def test_live_owner_tree_is_untouched(self, tmp_path: Path) -> None:
-        document = tmp_path / "Live.sbd"
-        document.write_bytes(b"x")
-        root = self._tree(
-            tmp_path, "Live", marker={"pid": os.getpid(), "document_path": str(document)}, project_json=True
+def test_multiple_pending_mutations_require_manual_recovery(tmp_path: Path) -> None:
+    project = make_project(tmp_path)
+    root = project.project_root
+    for token in ("a" * 32, "b" * 32):
+        pending = _transactions(root) / f"mutation-{token}"
+        pending.mkdir(parents=True)
+        (pending / "manifest.json").write_text(
+            json.dumps({"version": 1, "data_present": False, "assets": []}),
+            encoding="utf-8",
         )
-        result = project_document.sweep_orphaned_working_roots(tmp_path)
-        assert root.is_dir()
-        assert str(root) not in result["removed"] and str(root) not in result["kept"]
 
-    def test_orphan_already_flushed_is_removed(self, tmp_path: Path) -> None:
-        root = self._tree(tmp_path, "Flushed", marker=None, project_json=True)
-        document = tmp_path / "Flushed.sbd"
-        document.write_bytes(b"x")
-        # Document packed after every file in the tree: nothing here is unsaved.
-        os.utime(document, (time.time() + 60, time.time() + 60))
-        (root / project_document.SESSION_MARKER).write_text(
-            json.dumps({"pid": 2**31 - 1, "document_path": str(document)}), encoding="utf-8"
-        )
-        result = project_document.sweep_orphaned_working_roots(tmp_path)
-        assert not root.exists()
-        assert str(root) in result["removed"]
-
-    def test_orphan_with_unflushed_work_is_kept(self, tmp_path: Path) -> None:
-        document = tmp_path / "Crashed.sbd"
-        document.write_bytes(b"x")
-        os.utime(document, (time.time() - 600, time.time() - 600))
-        root = self._tree(
-            tmp_path,
-            "Crashed",
-            marker={"pid": 2**31 - 1, "document_path": str(document)},
-            project_json=True,
-        )
-        # project.json is newer than the last pack -> a crashed session's only copy.
-        result = project_document.sweep_orphaned_working_roots(tmp_path)
-        assert root.is_dir()
-        assert str(root) in result["kept"]
-
-    def test_orphan_whose_document_vanished_is_kept(self, tmp_path: Path) -> None:
-        root = self._tree(
-            tmp_path,
-            "Gone",
-            marker={"pid": 2**31 - 1, "document_path": str(tmp_path / "missing.sbd")},
-            project_json=True,
-        )
-        result = project_document.sweep_orphaned_working_roots(tmp_path)
-        assert root.is_dir()
-        assert str(root) in result["kept"]
-
-
-def test_running_app_exposes_its_background_loops_for_shutdown(tmp_path: Path) -> None:
-    """Shutdown can only stop the watchers if the app publishes them.
-
-    The loops write into the open project's work tree, so removing that tree
-    without stopping them first is what leaves undeletable TEMP directories.
-    """
-    with TestClient(api_module.create_app(tmp_path)) as client:
-        app = client.app
-        assert app.state.background_stop is not None
-        names = {thread.name for thread in app.state.background_threads}
-        assert names == {
-            "storyboard-bridge-refresh",
-            "storyboard-generation-results",
-            "storyboard-blender-session",
-        }
-        assert all(thread.is_alive() for thread in app.state.background_threads)
-
-
-def test_stop_background_loops_actually_ends_the_threads(tmp_path: Path) -> None:
-    app = api_module.create_app(tmp_path)
-    stop_event = threading.Event()
-    exited = threading.Event()
-
-    def loop() -> None:
-        while not stop_event.wait(0.01):
-            pass
-        exited.set()
-
-    thread = threading.Thread(target=loop, daemon=True)
-    thread.start()
-    app.state.background_stop = stop_event
-    app.state.background_threads = (thread,)
-
-    app_state_module.stop_background_loops(app)
-
-    assert exited.is_set()
-    assert not thread.is_alive()
-    app_state_module.stop_background_loops(app)  # idempotent
-
-
-def test_sweep_reports_trees_it_cannot_reclaim(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    root = tmp_path / f"{project_document.WORKING_ROOT_PREFIX}Stuck"
-    root.mkdir()  # No project.json -> a removal candidate.
-    monkeypatch.setattr(project_document, "remove_working_root", lambda _root: False)
-
-    result = project_document.sweep_orphaned_working_roots(tmp_path)
-
-    # Neither silently dropped nor reported as removed.
-    assert result["removed"] == []
-    assert str(root) in result["failed"]
+    with pytest.raises(MutationRecoveryError, match="Multiple"):
+        recover_incomplete_mutation(root)

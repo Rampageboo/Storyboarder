@@ -1,4 +1,4 @@
-"""Transactional Layout 2 Save As materialization."""
+"""Transactional Save As: copy a project folder to a new, independent project."""
 from __future__ import annotations
 
 import copy
@@ -7,16 +7,13 @@ import json
 import os
 import shutil
 import stat
-import tempfile
 import uuid
-import zipfile
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 
 from . import project_document
 from .models import Project
 from .project_layout import (
-    LAYOUT_2,
     ProjectPathError,
     ensure_no_casefold_collisions,
     generation_metadata_path,
@@ -33,15 +30,14 @@ _REPARSE_POINT_ATTRIBUTE = 0x400
 _RUNTIME_DIRS = frozenset({"locks", "runtime", "session", "sessions", "transactions"})
 _PRIMARY_MUTABLE_MEMBERS = frozenset(
     {
-        ".storyboarder/state.json",
-        ".storyboarder/work/project.json",
-        ".storyboarder/work/settings.json",
-        ".storyboarder/work/shots.json",
+        ".storyboarder/data/project.json",
+        ".storyboarder/data/settings.json",
+        ".storyboarder/data/shots.json",
     }
 )
 
 
-class Layout2SaveAsError(RuntimeError):
+class SaveAsError(RuntimeError):
     """A failed stage, including its recoverable staging path when retained."""
 
     def __init__(
@@ -56,7 +52,7 @@ class Layout2SaveAsError(RuntimeError):
         self.staging_path = staging_path
         self.destination_root = destination_root
         suffix = f" Staging preserved at: {staging_path}." if staging_path else ""
-        super().__init__(f"Layout 2 Save As failed during {stage}: {message}.{suffix}")
+        super().__init__(f"Save As failed during {stage}: {message}.{suffix}")
 
 
 @dataclass(frozen=True)
@@ -74,7 +70,7 @@ class TreeInventory:
 
 
 @dataclass(frozen=True)
-class Layout2SaveAsResult:
+class SaveAsResult:
     destination_root: Path
     document_path: Path
     snapshot_hash: str
@@ -113,8 +109,6 @@ def _is_reparse(path: Path) -> bool:
 
 def _runtime_excluded(relative: PurePosixPath) -> bool:
     parts = relative.parts
-    if relative.as_posix() == project_document.SESSION_MARKER:
-        return True
     folded_name = parts[-1].casefold()
     blend_version = folded_name.rpartition(".blend")[2]
     if (
@@ -139,7 +133,7 @@ def _runtime_excluded(relative: PurePosixPath) -> bool:
 def _scan_tree(root: Path, *, source_document: Path | None = None) -> TreeInventory:
     raw_root = Path(root).expanduser().absolute()
     if not raw_root.is_dir() or _is_reparse(raw_root):
-        raise ValueError("Layout 2 source root must be a regular directory.")
+        raise ValueError("Save As source root must be a regular directory.")
     root = raw_root.resolve()
     document = Path(source_document).resolve() if source_document is not None else None
     files: dict[str, FileRecord] = {}
@@ -235,16 +229,7 @@ def _reject_target_document_collision(
             )
 
 
-def _source_cover(document: Path) -> bytes | None:
-    project_document.validate_layout2_document(document)
-    with zipfile.ZipFile(document, "r") as archive:
-        try:
-            return archive.read("cover.png")
-        except KeyError:
-            return None
-
-
-def _snapshot_hash(records: dict[str, FileRecord], cover: bytes | None) -> str:
+def _snapshot_hash(records: dict[str, FileRecord]) -> str:
     digest = hashlib.sha256()
     for name, record in sorted(records.items()):
         digest.update(name.encode("utf-8"))
@@ -252,9 +237,6 @@ def _snapshot_hash(records: dict[str, FileRecord], cover: bytes | None) -> str:
         digest.update(str(record.size).encode("ascii"))
         digest.update(b"\0")
         digest.update(bytes.fromhex(record.sha256))
-    if cover is not None:
-        digest.update(b"@cover.png\0")
-        digest.update(hashlib.sha256(cover).digest())
     return digest.hexdigest()
 
 
@@ -274,9 +256,11 @@ def _copy_inventory(source: Path, stage: Path, inventory: TreeInventory) -> None
 
 def _snapshot_project(project: Project, root: Path) -> Project:
     frozen = copy.deepcopy(project)
-    frozen.project_root_path = root
-    frozen.root_path = resolve_root_child(root, ".storyboarder", "work")
+    frozen.root_path = root
     frozen.document_path = resolve_root_child(root, f"{root.name}.sbd")
+    # The copy is an independent project: Blender sessions and the plugin key
+    # their state by project id, so it must not share the source's identity.
+    frozen.project_id = str(uuid.uuid4())
     return frozen
 
 
@@ -337,7 +321,11 @@ def _stored_asset_paths(project: Project) -> list[tuple[str, str]]:
 
     for scene in scene2d.list_scenes(project):
         for perspective in scene.get("perspectives") or []:
-            for field in ("source_file_path", "preview_image_path"):
+            # A PSD perspective's preview is exported from the PSD later, so a
+            # new perspective legitimately has none yet.
+            fields = ("source_file_path",) if perspective.get("type") == "psd" else (
+                "source_file_path", "preview_image_path")
+            for field in fields:
                 value = str(perspective.get(field) or "")
                 if value:
                     values.append((f"Scene 2D {perspective.get('id')} {field}", value))
@@ -349,7 +337,7 @@ def _stored_asset_paths(project: Project) -> list[tuple[str, str]]:
     return values
 
 
-def validate_layout2_stored_references(project: Project) -> None:
+def validate_stored_references(project: Project) -> None:
     for label, relative in _stored_asset_paths(project):
         try:
             path = resolve_project_path(project, relative, field_name=label)
@@ -523,31 +511,26 @@ def _rebase_generation_metadata(project: Project, published_root: Path) -> set[s
     return rewritten
 
 
-def materialize_layout2_save_as(project: Project, requested: Path) -> Layout2SaveAsResult:
+def materialize_save_as(project: Project, requested: Path) -> SaveAsResult:
     """Publish a complete validated snapshot with one directory rename."""
-    if project.layout != LAYOUT_2:
-        raise ValueError("Transactional folder Save As requires Layout 2.")
     source_root = Path(project.project_root).absolute()
     if _is_reparse(source_root):
-        raise ValueError("Layout 2 source root cannot be a reparse point.")
+        raise ValueError("Save As source root cannot be a reparse point.")
     source_root = source_root.resolve()
     source_document = Path(project.document_path or "").resolve()
     if not source_document.is_file() or source_document.parent != source_root:
-        raise ValueError("Layout 2 Save As requires its canonical source .sbd.")
+        raise ValueError("Save As requires the project's .sbd file.")
     destination_root, destination_document = _destination_paths(source_root, requested)
-    project_document.validate_layout2_source_lineage(source_root, document_path=source_document)
-    validate_layout2_stored_references(project)
+    validate_stored_references(project)
     source_before = _scan_tree(source_root, source_document=source_document)
     _reject_target_document_collision(source_before, destination_document)
-    cover = _source_cover(source_document)
     if source_before.files.get(source_document.name) != _record(source_document):
         raise OSError("Source project changed during Save As preflight.")
     required_bytes = sum(record.size for record in source_before.copy_files.values())
     required_bytes += sum(
         record.size for name, record in source_before.copy_files.items()
-        if name.startswith(".storyboarder/work/")
+        if name.startswith(".storyboarder/data/")
     )
-    required_bytes += len(cover or b"")
     if shutil.disk_usage(destination_root.parent).free < required_bytes:
         raise OSError("Insufficient free space for the staged Save As snapshot.")
 
@@ -559,40 +542,21 @@ def materialize_layout2_save_as(project: Project, requested: Path) -> Layout2Sav
         staged_project = _snapshot_project(project, stage)
         _write_frozen_primary_metadata(staged_project)
         rewritten_members = _rebase_generation_metadata(staged_project, destination_root)
-        validate_layout2_stored_references(staged_project)
+        validate_stored_references(staged_project)
         staged_before_commit = _scan_tree(stage)
         for name, expected in source_before.copy_files.items():
             if (name not in _PRIMARY_MUTABLE_MEMBERS and name not in rewritten_members
                     and staged_before_commit.files.get(name) != expected):
                 raise OSError(f"Staged source member differs from its source: {name}.")
-        snapshot_hash = _snapshot_hash(staged_before_commit.files, cover)
+        snapshot_hash = _snapshot_hash(staged_before_commit.files)
 
-        current_stage = "archive"
-        if cover is not None:
-            descriptor, cover_name = tempfile.mkstemp(
-                dir=str(destination_root.parent),
-                prefix=f".{destination_root.name}.cover-",
-                suffix=".png",
-            )
-            cover_path = Path(cover_name)
-            try:
-                with os.fdopen(descriptor, "wb") as stream:
-                    stream.write(cover)
-                    stream.flush()
-                    os.fsync(stream.fileno())
-                project_document.commit_layout2_document(stage, cover_path=cover_path)
-            finally:
-                cover_path.unlink(missing_ok=True)
-        else:
-            project_document.commit_layout2_document(stage)
-        staged_document = resolve_root_child(stage, f"{stage.name}.sbd")
+        current_stage = "handle"
         final_staged_document = resolve_root_child(stage, destination_document.name)
         if final_staged_document.exists():
             raise FileExistsError(
                 "Save As target document collides with a copied source member."
             )
-        os.replace(staged_document, final_staged_document)
-        project_document.validate_layout2_document(final_staged_document)
+        project_document.write_handle(final_staged_document, staged_project.project_id)
 
         current_stage = "verification"
         source_after = _scan_tree(source_root, source_document=source_document)
@@ -603,7 +567,7 @@ def materialize_layout2_save_as(project: Project, requested: Path) -> Layout2Sav
             raise OSError("Source project changed during Save As snapshotting.")
         final_inventory = _scan_tree(stage)
         expected_names = set(staged_before_commit.files)
-        expected_names.update({".storyboarder/state.json", destination_document.name})
+        expected_names.add(destination_document.name)
         if set(final_inventory.files) != expected_names:
             raise OSError("Staged Save As file counts do not reconcile.")
 
@@ -624,7 +588,7 @@ def materialize_layout2_save_as(project: Project, requested: Path) -> Layout2Sav
         # existing destination. The immediate collision recheck also produces
         # a recoverable staging report if another process races publication.
         os.rename(stage, destination_root)
-        return Layout2SaveAsResult(
+        return SaveAsResult(
             destination_root=destination_root,
             document_path=destination_document,
             snapshot_hash=snapshot_hash,
@@ -637,7 +601,7 @@ def materialize_layout2_save_as(project: Project, requested: Path) -> Layout2Sav
         if stage.exists() and not preserve:
             shutil.rmtree(stage, ignore_errors=True)
         retained_stage = stage if stage.exists() else None
-        raise Layout2SaveAsError(
+        raise SaveAsError(
             current_stage,
             str(exc),
             staging_path=retained_stage,

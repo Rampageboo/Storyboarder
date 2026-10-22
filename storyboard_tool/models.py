@@ -5,7 +5,6 @@ from pathlib import Path
 from typing import Any
 
 from .project_layout import (
-    LAYOUT_2,
     metadata_path_for,
     project_path_for,
     scene2d_metadata_path,
@@ -225,6 +224,8 @@ class Shot:
 
 @dataclass
 class Project:
+    """An open project folder; see ``project_document`` for the on-disk format."""
+
     root_path: Path
     shots: list[Shot] = field(default_factory=list)
     settings: dict[str, Any] = field(default_factory=dict)
@@ -234,21 +235,18 @@ class Project:
     # selection, and sets this so exported board numbers stay the ones the user
     # sees in the strip instead of restarting at 1.
     board_numbers: list[int] = field(default_factory=list)
-    layout: int = 1
     project_id: str = ""
     storage_revision: int = 0
-    project_root_path: Path | None = None
-    converted_from: dict[str, Any] = field(default_factory=dict)
-
-    @property
-    def metadata_root(self) -> Path:
-        """Expanded metadata/work root (the historical ``root_path``)."""
-        return self.root_path
 
     @property
     def project_root(self) -> Path:
-        """Portable project folder; identical to ``root_path`` for Layout 1."""
-        return self.project_root_path or self.root_path
+        """The project folder: assets are stored relative to it."""
+        return self.root_path
+
+    @property
+    def metadata_root(self) -> Path:
+        """``.storyboarder/data``: the only copy of the project's metadata."""
+        return self.root_path / ".storyboarder" / "data"
 
     @property
     def json_path(self) -> Path:
@@ -259,32 +257,20 @@ class Project:
         return project_path_for(self, "images_dir")
 
     @property
-    def shots_dir(self) -> Path:
-        return project_path_for(self, "shots_dir")
-
-    @property
     def references_dir(self) -> Path:
         return project_path_for(self, "references_dir")
 
     @property
     def scenes2d_dir(self) -> Path:
-        if self.layout == LAYOUT_2:
-            return scene2d_metadata_path(self)
-        return project_path_for(self, "scenes2d_dir")
+        return scene2d_metadata_path(self)
 
     @property
     def scenes3d_dir(self) -> Path:
-        if self.layout == LAYOUT_2:
-            return scene3d_metadata_path(self)
-        return project_path_for(self, "scenes3d_dir")
+        return scene3d_metadata_path(self)
 
     @property
     def exports_dir(self) -> Path:
         return project_path_for(self, "exports_dir")
-
-    @property
-    def scripts_dir(self) -> Path:
-        return project_path_for(self, "scripts_dir")
 
     @property
     def backups_dir(self) -> Path:
@@ -304,7 +290,7 @@ class Project:
 
     @property
     def reopen_path(self) -> Path:
-        return self.document_path or self.json_path
+        return self.document_path or self.root_path
 
     def to_dict(self) -> dict[str, Any]:
         return {

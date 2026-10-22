@@ -40,7 +40,7 @@ class BootstrapTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             client = _make_client(tmp)
             with contextlib.redirect_stderr(io.StringIO()):
-                created = client.post("/api/project/new", json={"path": tmp})
+                created = client.post("/api/project/new", json={"path": str(Path(tmp) / "Demo.sbd")})
             self.assertEqual(created.status_code, 200)
             project_json = created.json()["project_json_path"]
 
@@ -58,7 +58,7 @@ class BootstrapTests(unittest.TestCase):
             # First client: create project and record session
             client1 = _make_client(tmp)
             with contextlib.redirect_stderr(io.StringIO()):
-                created = client1.post("/api/project/new", json={"path": tmp})
+                created = client1.post("/api/project/new", json={"path": str(Path(tmp) / "Demo.sbd")})
             self.assertEqual(created.status_code, 200)
             project_json = created.json()["project_json_path"]
 
@@ -110,7 +110,6 @@ class BootstrapTests(unittest.TestCase):
             entries = resp.json()["recents"]
             entry = next(item for item in entries if item["path"] == canonical)
             self.assertTrue(entry["exists"])
-            self.assertEqual(entry["kind"], "document")
             self.assertEqual(entry["name"], "Board")
             self.assertEqual(entry["open_path"], canonical)
 

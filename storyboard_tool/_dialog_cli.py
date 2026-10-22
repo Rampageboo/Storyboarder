@@ -37,10 +37,9 @@ def _pick_file(initial_dir: str | None, kind: str) -> str:
     from tkinter import filedialog
 
     if kind == "project-json":
-        title = "Open Storyboarder document"
+        title = "Open Storyboarder project"
         filetypes = [
-            ("Storyboarder document", "*.sbd"),
-            ("Legacy project", "project.json"),
+            ("Storyboarder project", "*.sbd"),
             ("All files", "*.*"),
         ]
     elif kind == "blender":

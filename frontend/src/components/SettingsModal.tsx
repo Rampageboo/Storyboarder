@@ -13,7 +13,6 @@ export function SettingsModal({ open, onClose }: SettingsModalProps) {
   const { project, setProject, flushDirtyShots, projectActionBusy, reportError } = useProject()
   const [canvasColor, setCanvasColor] = useState(() => String(project?.settings?.canvas_background_color ?? '#E8E8E8'))
   const [preheatPhotoshop, setPreheatPhotoshop] = useState(() => Boolean(project?.settings?.preheat_photoshop_on_open))
-  const [autosaveInterval, setAutosaveInterval] = useState(() => Number(project?.settings?.autosave_interval_minutes ?? 5))
   const [saving, setSaving] = useState(false)
   const [note, setNote] = useState('')
 
@@ -36,7 +35,6 @@ export function SettingsModal({ open, onClose }: SettingsModalProps) {
         await updateSettings({
           canvas_background_color: color,
           preheat_photoshop_on_open: preheatPhotoshop,
-          autosave_interval_minutes: autosaveInterval,
         }),
       )
       setNote('Settings saved.')
@@ -45,7 +43,7 @@ export function SettingsModal({ open, onClose }: SettingsModalProps) {
     } finally {
       setSaving(false)
     }
-  }, [project, canvasColor, preheatPhotoshop, autosaveInterval, flushDirtyShots, setProject, reportError])
+  }, [project, canvasColor, preheatPhotoshop, flushDirtyShots, setProject, reportError])
 
   if (!open || !project) return null
 
@@ -97,20 +95,6 @@ export function SettingsModal({ open, onClose }: SettingsModalProps) {
               disabled={disabled}
             />
             <span>Preheat Photoshop when Storyboarder opens</span>
-          </label>
-
-          <label className="settings-field">
-            <span>Autosave interval</span>
-            <select
-              value={autosaveInterval}
-              onChange={(event) => setAutosaveInterval(Number(event.target.value))}
-              disabled={disabled}
-            >
-              <option value={3}>Every 3 minutes</option>
-              <option value={5}>Every 5 minutes</option>
-              <option value={10}>Every 10 minutes</option>
-            </select>
-            <small>Edits are kept in memory; the document is written on this interval, on manual Save (Ctrl+S), and on close.</small>
           </label>
 
           <ComfyCloudSettings />

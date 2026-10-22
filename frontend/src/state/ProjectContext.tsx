@@ -60,7 +60,6 @@ export interface ProjectContextValue {
   closeProjectToHome: () => Promise<void>
   saveProject: () => Promise<void>
   saveProjectAs: () => Promise<void>
-  convertProject: () => Promise<void>
   addShotAfterSelection: () => Promise<void>
   insertShotAtIndex: (index: number) => Promise<void>
   deleteSelectedShot: () => Promise<void>
@@ -134,8 +133,7 @@ function mixHash(hash: number, value: unknown): number {
 
 function projectVisualEpoch(payload: ProjectPayload | null): number {
   if (!payload) return 0
-  let hash = payload.dirty ? 17 : 0
-  hash = (hash * 31 + payload.shots.length) >>> 0
+  let hash = payload.shots.length
   for (const shot of payload.shots) {
     hash = mixHash(hash, shot.shot_id)
     hash = mixHash(hash, shot.preview_disk_mtime)
@@ -247,9 +245,8 @@ export function ProjectProvider({ children }: PropsWithChildren) {
     void updateAppSession({
       last_project_json_path: project.project_json_path,
       selected_shot_id: selectedShotId,
-      recent_projects: [project.project_path, ...(project.settings.recent_projects ?? [])],
     }).catch(() => {})
-  }, [project?.project_json_path, project?.project_path, project?.settings.recent_projects, selectedShotId])
+  }, [project?.project_json_path, selectedShotId])
 
   const resetEditState = useCallback(() => {
     resetDrafts()
@@ -360,9 +357,9 @@ export function ProjectProvider({ children }: PropsWithChildren) {
   }, [replaceProject, lifecycle])
 
   const { initialLoading, reloadProject, newProjectAction, newProjectType, finishNewProjectChoice, openProjectFromDialog, openProjectPath, closeProjectToHome,
-    saveProjectAction, saveProjectAsAction, convertProjectAction } = useProjectActions({
+    saveProjectAction, saveProjectAsAction } = useProjectActions({
     lifecycle, runProjectTransition, flushDirtyShots, openPayload, resetEditState, beginProject, commitProject,
-    setSelectedShotId, selectedShotId, setLastError,
+    setSelectedShotId, setLastError,
   })
 
   const requestedAnalysisSignaturesRef = useRef(new Set<string>())
@@ -427,7 +424,6 @@ export function ProjectProvider({ children }: PropsWithChildren) {
       closeProjectToHome,
       saveProject: saveProjectAction,
       saveProjectAs: saveProjectAsAction,
-      convertProject: convertProjectAction,
       initialLoading,
       projectActionBusy,
       getDraft,
@@ -453,7 +449,7 @@ export function ProjectProvider({ children }: PropsWithChildren) {
       runProjectTransition, story, drawingActive, setDrawingActive, project, selectedShotId, selectedShotIds,
       setSelectedShotId, selectShot, clearShotSelection, refreshProjectFromBridge, refreshProjectFromGeneration,
       reloadProject, newProjectAction, openProjectFromDialog, openProjectPath, closeProjectToHome,
-      saveProjectAction, saveProjectAsAction, convertProjectAction, initialLoading, projectActionBusy,
+      saveProjectAction, saveProjectAsAction, initialLoading, projectActionBusy,
       getDraft, editShotField, isShotDirty, dirtyShotIds, savingShots, saveShot, flushDirtyShots, visualEpoch,
       lastError, clearError, reportError, missingFiles, missingFilesLoading, refreshMissingFiles, refreshPreviewFields],
   )

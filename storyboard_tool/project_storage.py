@@ -6,7 +6,7 @@ Handles the storage-level concerns of a project's non-shot files:
 - settings.json read/write with defaults and normalization.
 - Project file modification-time tracking for change detection.
 
-Shot metadata storage lives in storyboard_tool.shot_store (shots.json, shots.csv).
+Shot metadata storage lives in storyboard_tool.shot_store (shots.json).
 Reference normalization lives in reference_metadata, a pure metadata module.
 Loading settings does not import project or reference workflow services.
 """
@@ -19,15 +19,12 @@ from pathlib import Path
 from typing import Any
 
 from .models import Project
-from .project_layout import PROJECT_JSON_VERSION, resolve_root_child
-from .shot_store import shots_csv_mtime, shots_json_mtime
+from .project_layout import resolve_root_child
+from .shot_store import shots_json_mtime
 from .reference_metadata import ensure_reference_library, normalize_reference_links
 
 DEFAULT_SETTINGS: dict = {
-    "autosave": True,
-    "autosave_interval_minutes": 5,
     "pdf_layout": "two_per_page",
-    "recent_projects": [],
     "backup_on_save": True,
     "photoshop_path": "",
     "blender_path": "",
@@ -49,11 +46,15 @@ DEFAULT_SETTINGS: dict = {
 }
 
 
+PROJECT_DIRS = ("Images", "PSD", "Blender", "Exports", "Videos")
+
+
 def ensure_project_dirs(root: Path) -> None:
-    """Create the standard project directory structure under *root*."""
+    """Create the user-visible asset folders and the private metadata folder."""
     root.mkdir(parents=True, exist_ok=True)
-    for dirname in ("shots", "references", "exports", "scripts", "backups", "scene3d", "scenes2d", "scenes3d"):
+    for dirname in PROJECT_DIRS:
         resolve_root_child(root, dirname).mkdir(exist_ok=True)
+    resolve_root_child(root, ".storyboarder", "data").mkdir(parents=True, exist_ok=True)
 
 
 def atomic_write_text(path: Path, text: str) -> None:
@@ -107,17 +108,10 @@ def save_settings(project: Project) -> None:
 
 
 def project_disk_mtime(project: Project) -> float:
-    """Return the most recent mtime across canonical project files.
-
-    shots.json is checked first (canonical store).  shots.csv is the
-    fallback for legacy projects that have not yet migrated to shots.json.
-    """
+    """Return the most recent mtime across canonical project files."""
     manifest_mtime = project.json_path.stat().st_mtime if project.json_path.is_file() else 0.0
     settings_mtime = project.settings_path.stat().st_mtime if project.settings_path.is_file() else 0.0
     shots_mtime = shots_json_mtime(project.metadata_root)
-    # shots.csv only matters for legacy projects that have not migrated to shots.json yet.
-    if shots_mtime <= 0.0:
-        shots_mtime = shots_csv_mtime(project.metadata_root)
     scenes2d_dir = project.scenes2d_dir
     scenes2d_index = scenes2d_dir / "scenes2d.json"
     scenes2d_mtime = scenes2d_index.stat().st_mtime if scenes2d_index.is_file() else 0.0

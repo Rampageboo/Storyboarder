@@ -6,7 +6,6 @@ import io
 import json
 import os
 import time
-import uuid
 import subprocess
 from pathlib import Path
 
@@ -18,9 +17,8 @@ from storyboard_tool import (
     blender_bridge,
     external_tools,
     file_transactions,
-    project_document,
-    project_layout,
     project_manager,
+    project_storage,
     reference_segments,
     scene2d,
     system_utils,
@@ -35,24 +33,11 @@ from storyboard_tool.plugin_service import (
     PluginBridgeService,
 )
 
+from conftest import make_project
+
 
 def _project(tmp_path: Path) -> Project:
-    root = tmp_path / "Portable"
-    work = root / ".storyboarder" / "work"
-    work.mkdir(parents=True)
-    project = Project(
-        root_path=work,
-        project_root_path=root,
-        document_path=root / "Portable.sbd",
-        layout=2,
-        project_id=str(uuid.uuid4()),
-        storage_revision=12,
-        settings=dict(project_manager.DEFAULT_SETTINGS),
-    )
-
-    scene3d.initialize_layout2_metadata(project)
-    scene2d.initialize_layout2_metadata(project)
-    return project
+    return make_project(tmp_path, "Portable")
 
 
 def _v2_protocol(
@@ -74,7 +59,7 @@ def _v2_protocol(
     }
 
 
-def test_layout2_scene2d_assets_are_flat_and_metadata_stays_in_work(
+def test_scene2d_assets_are_flat_and_metadata_stays_in_work(
     tmp_path: Path,
 ) -> None:
     project = _project(tmp_path)
@@ -99,7 +84,7 @@ def test_layout2_scene2d_assets_are_flat_and_metadata_stays_in_work(
     assert not (project.project_root / "scenes2d").exists()
 
 
-def test_layout2_scene2d_import_and_duplicate_use_exact_uuid_paths(
+def test_scene2d_import_and_duplicate_use_exact_uuid_paths(
     tmp_path: Path,
 ) -> None:
     project = _project(tmp_path)
@@ -124,7 +109,7 @@ def test_layout2_scene2d_import_and_duplicate_use_exact_uuid_paths(
     assert not (project.project_root / "Images" / "Scene2D" / scene["id"]).exists()
 
 
-def test_layout2_scene2d_move_is_metadata_only_and_preserves_paths(
+def test_scene2d_move_is_metadata_only_and_preserves_paths(
     tmp_path: Path,
 ) -> None:
     project = _project(tmp_path)
@@ -161,7 +146,7 @@ def test_layout2_scene2d_move_is_metadata_only_and_preserves_paths(
     assert moved_reference["path"] == original_preview_rel
 
 
-def test_layout2_scene2d_move_failure_restores_metadata_without_touching_assets(
+def test_scene2d_move_failure_restores_metadata_without_touching_assets(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -201,12 +186,9 @@ def test_layout2_scene2d_move_failure_restores_metadata_without_touching_assets(
     assert asset.read_bytes() == before_asset
     assert {path: path.read_bytes() for path in paths} == before_metadata
     assert perspective["source_file_path"].startswith("PSD/Scene2D/")
-    assert not (
-        project.metadata_root / "scenes2d" / scene2d.PERSPECTIVE_MOVE_ROOT
-    ).exists()
 
 
-def test_layout2_scene2d_valid_stored_paths_are_not_rebound(
+def test_scene2d_valid_stored_paths_are_not_rebound(
     tmp_path: Path,
 ) -> None:
     project = _project(tmp_path)
@@ -234,7 +216,7 @@ def test_layout2_scene2d_valid_stored_paths_are_not_rebound(
     assert not custom_path.exists()
 
 
-def test_layout2_scene3d_paths_and_blend_creation_are_lazy(
+def test_scene3d_paths_and_blend_creation_are_lazy(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -269,13 +251,13 @@ def test_layout2_scene3d_paths_and_blend_creation_are_lazy(
     )
 
 
-def test_layout2_blender_references_use_portable_double_slash_paths(
+def test_blender_references_use_portable_double_slash_paths(
     tmp_path: Path,
 ) -> None:
     project = _project(tmp_path)
     scene = scene3d.create_scene(project, title="Stage")["scene"]
     blend = project.project_root / "Blender" / f"{scene['id']}.blend"
-    blend.parent.mkdir(parents=True)
+    blend.parent.mkdir(parents=True, exist_ok=True)
     blend.write_bytes(b"blend")
     reference = reference_segments.import_project_reference_stream(
         project, io.BytesIO(b"glb-reference"), "prop.glb"
@@ -294,16 +276,14 @@ def _brokered_session(
     *,
     title: str = "Brokered",
 ):
-    monkeypatch.setattr(project_layout, "LAYOUT_2_ENABLED", True)
     project = _project(tmp_path)
     project.settings["backup_on_save"] = False
     scene = scene3d.create_scene(project, title=title)["scene"]
     canonical = project.project_root / "Blender" / f"{scene['id']}.blend"
-    canonical.parent.mkdir(parents=True)
+    canonical.parent.mkdir(parents=True, exist_ok=True)
     canonical.write_bytes(b"canonical-v1")
     scene = scene3d.configure_blend_preview(project, scene["id"], canonical)
-    project_manager.save_project(project, flush_document=False)
-    project_document.commit_layout2_document(project.project_root)
+    project_manager.save_project(project)
     bridge_path = tmp_path / "bridge.json"
     heartbeat_path = tmp_path / "heartbeat.json"
     monkeypatch.setattr(blender_bridge, "bridge_file_path", lambda: bridge_path)
@@ -333,7 +313,7 @@ def _blender_saved(heartbeat_path: Path, session: dict, working: Path, content: 
     )
 
 
-def test_layout2_external_blender_edits_a_hidden_session_copy(
+def test_external_blender_edits_a_hidden_session_copy(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -353,7 +333,7 @@ def test_layout2_external_blender_edits_a_hidden_session_copy(
     assert context["manifest_path"].endswith(blender_bridge.MANIFEST_FILENAME)
 
 
-def test_layout2_session_copy_survives_until_blender_reports_in(
+def test_session_copy_survives_until_blender_reports_in(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -366,7 +346,7 @@ def test_layout2_session_copy_survives_until_blender_reports_in(
     assert working.is_file()
 
 
-def test_layout2_unrelated_project_edits_keep_blender_saves_flowing(
+def test_unrelated_project_edits_keep_blender_saves_flowing(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -390,7 +370,7 @@ def test_layout2_unrelated_project_edits_keep_blender_saves_flowing(
     assert status["sync_error"] == ""
 
 
-def test_layout2_unsaved_or_unannounced_blender_writes_are_not_ingested(
+def test_unsaved_or_unannounced_blender_writes_are_not_ingested(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -411,7 +391,7 @@ def test_layout2_unsaved_or_unannounced_blender_writes_are_not_ingested(
     assert canonical.read_bytes() == b"canonical-v1"
 
 
-def test_layout2_conflicting_canonical_change_is_reported_not_overwritten(
+def test_conflicting_canonical_change_is_reported_not_overwritten(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -434,7 +414,7 @@ def test_layout2_conflicting_canonical_change_is_reported_not_overwritten(
     assert resolved["state"] == "connected"
 
 
-def test_layout2_blender_closed_releases_after_final_sync_and_removes_copy(
+def test_blender_closed_releases_after_final_sync_and_removes_copy(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -455,7 +435,7 @@ def test_layout2_blender_closed_releases_after_final_sync_and_removes_copy(
     assert json.loads(bridge_path.read_text(encoding="utf-8"))["session_id"] == ""
 
 
-def test_layout2_restarted_storyboarder_adopts_and_recovers_session_saves(
+def test_restarted_storyboarder_adopts_and_recovers_session_saves(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -475,7 +455,7 @@ def test_layout2_restarted_storyboarder_adopts_and_recovers_session_saves(
     assert status["state"] == "connected"
 
 
-def test_layout2_real_blender_save_reaches_project_with_preview_and_manifest(
+def test_real_blender_save_reaches_project_with_preview_and_manifest(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -487,16 +467,14 @@ def test_layout2_real_blender_save_reaches_project_with_preview_and_manifest(
     if not template.is_file():
         pytest.skip("Storyboarder Blender template is unavailable.")
 
-    monkeypatch.setattr(project_layout, "LAYOUT_2_ENABLED", True)
     project = _project(tmp_path)
     project.settings["backup_on_save"] = False
     scene = scene3d.create_scene(project, title="Real Blender")["scene"]
     canonical = project.project_root / "Blender" / f"{scene['id']}.blend"
-    canonical.parent.mkdir(parents=True)
+    canonical.parent.mkdir(parents=True, exist_ok=True)
     file_transactions.atomic_copy_file(template, canonical)
     scene = scene3d.configure_blend_preview(project, scene["id"], canonical)
-    project_manager.save_project(project, flush_document=False)
-    project_document.commit_layout2_document(project.project_root)
+    project_manager.save_project(project)
 
     bridge_path = tmp_path / "real-blender-bridge.json"
     heartbeat_path = tmp_path / "real-blender-heartbeat.json"
@@ -576,11 +554,10 @@ def _tree_bytes(root: Path) -> dict[str, bytes]:
     }
 
 
-def test_layout2_scene_mutation_advances_once_and_keeps_blender_session_writable(
+def test_scene_mutation_advances_once_and_keeps_blender_session_writable(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(project_layout, "LAYOUT_2_ENABLED", True)
     project = _project(tmp_path)
     project.settings["backup_on_save"] = False
     scene = scene3d.create_scene(project, title="Leased")["scene"]
@@ -589,8 +566,7 @@ def test_layout2_scene_mutation_advances_once_and_keeps_blender_session_writable
     blend.write_bytes(b"blend")
     scene["blend_file_path"] = "Blender/preserved-name.blend"
     scene3d._save(project, scene["id"], [scene])
-    project_manager.save_project(project, flush_document=False)
-    project_document.commit_layout2_document(project.project_root)
+    project_manager.save_project(project)
 
     bridge_path = tmp_path / "bridge.json"
     heartbeat_path = tmp_path / "heartbeat.json"
@@ -611,21 +587,8 @@ def test_layout2_scene_mutation_advances_once_and_keeps_blender_session_writable
         json.loads(project.json_path.read_text(encoding="utf-8"))
     )
     assert manifest.storage_revision == before + 1
-    state = json.loads(
-        (project.project_root / ".storyboarder" / "state.json").read_text(
-            encoding="utf-8"
-        )
-    )
-    assert state["global_revision"] == before + 1
-    assert state["committed_revision"] == before
-    assert project_document.validate_layout2_document(project.document_path).revision == before
     context = json.loads(bridge_path.read_text(encoding="utf-8"))
     assert context["write_enabled"] is True
-
-    project_manager.sync_document(project)
-
-    assert project_document.validate_layout2_document(project.document_path).revision == before + 1
-    assert not (project.metadata_root / "shots.csv").exists()
     blender_bridge.cancel_session(app)
     cancelled = json.loads(bridge_path.read_text(encoding="utf-8"))
     assert cancelled["write_enabled"] is False
@@ -633,50 +596,46 @@ def test_layout2_scene_mutation_advances_once_and_keeps_blender_session_writable
     assert cancelled["lease_expires_at"] == 0.0
 
 
-@pytest.mark.parametrize("fault_file", ["project.json", "state.json"])
+@pytest.mark.parametrize("fault_file", ["project.json", "settings.json"])
 @pytest.mark.parametrize("fault_timing", ["before", "after"])
-def test_layout2_scene_mutation_rolls_back_split_revision_faults(
+def test_scene_mutation_rolls_back_split_revision_faults(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     fault_file: str,
     fault_timing: str,
 ) -> None:
-    monkeypatch.setattr(project_layout, "LAYOUT_2_ENABLED", True)
     project = _project(tmp_path)
     project.settings["backup_on_save"] = False
     scene = scene3d.create_scene(project, title="Before fault")["scene"]
-    project_manager.save_project(project, flush_document=False)
-    project_document.commit_layout2_document(project.project_root)
+    project_manager.save_project(project)
     app_root = tmp_path / f"fault-app-{fault_file}-{fault_timing}"
     app_root.mkdir()
     app = create_app(app_root)
     app.state.project = project
     app.state.project_disk_mtime = project_manager.project_disk_mtime(project)
-    app.state.dirty = False
     service = StoryboardBackendService(app)
     before_tree = _tree_bytes(project.project_root)
     before_revision = project.storage_revision
     before_disk_mtime = app.state.project_disk_mtime
-    real_write = project_document._atomic_write_json
+    owner, attribute = (
+        (project_manager, "_atomic_write_json")
+        if fault_file == "project.json"
+        else (project_storage, "atomic_write_json")
+    )
+    real_write = getattr(owner, attribute)
 
-    def fail_revision_write(path, payload):
+    def fail_revision_write(path, payload, *args, **kwargs):
         target = Path(path)
         is_target = (
-            target.name == fault_file
-            and (
-                fault_file == "state.json"
-                or target.parent == project.metadata_root
-            )
+            target.name == fault_file and target.parent == project.metadata_root
         )
         if not is_target:
-            return real_write(path, payload)
+            return real_write(path, payload, *args, **kwargs)
         if fault_timing == "after":
-            real_write(path, payload)
+            real_write(path, payload, *args, **kwargs)
         raise OSError(f"injected {fault_file} {fault_timing} write fault")
 
-    monkeypatch.setattr(
-        project_document, "_atomic_write_json", fail_revision_write
-    )
+    monkeypatch.setattr(owner, attribute, fail_revision_write)
 
     with pytest.raises(OSError, match="injected"):
         service.method_update_scene3d(
@@ -684,7 +643,6 @@ def test_layout2_scene_mutation_rolls_back_split_revision_faults(
         )
 
     assert project.storage_revision == before_revision
-    assert app.state.dirty is False
     assert app.state.project_disk_mtime == before_disk_mtime
     assert _tree_bytes(project.project_root) == before_tree
     restored = next(
@@ -699,11 +657,10 @@ def test_layout2_scene_mutation_rolls_back_split_revision_faults(
     )
 
 
-def test_layout2_backend_delete_restores_assets_after_post_persist_fault(
+def test_backend_delete_restores_assets_after_post_persist_fault(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(project_layout, "LAYOUT_2_ENABLED", True)
     project = _project(tmp_path)
     project.settings["backup_on_save"] = False
     scene, _scenes = scene2d.create_scene(project, "Delete atomically")
@@ -711,14 +668,12 @@ def test_layout2_backend_delete_restores_assets_after_post_persist_fault(
     preview = project.project_root / perspective["preview_image_path"]
     preview.parent.mkdir(parents=True, exist_ok=True)
     preview.write_bytes(b"preview-before")
-    project_manager.save_project(project, flush_document=False)
-    project_document.commit_layout2_document(project.project_root)
+    project_manager.save_project(project)
     app_root = tmp_path / "delete-post-persist-app"
     app_root.mkdir()
     app = create_app(app_root)
     app.state.project = project
     app.state.project_disk_mtime = project_manager.project_disk_mtime(project)
-    app.state.dirty = False
     service = StoryboardBackendService(app)
     before_tree = _tree_bytes(project.project_root)
     before_revision = project.storage_revision
@@ -738,11 +693,10 @@ def test_layout2_backend_delete_restores_assets_after_post_persist_fault(
     assert preview.read_bytes() == b"preview-before"
 
 
-def test_layout2_backend_scene3d_import_restores_binary_after_persist_fault(
+def test_backend_scene3d_import_restores_binary_after_persist_fault(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(project_layout, "LAYOUT_2_ENABLED", True)
     project = _project(tmp_path)
     project.settings["backup_on_save"] = False
     scene = scene3d.create_scene(project, title="Import atomically")["scene"]
@@ -752,14 +706,12 @@ def test_layout2_backend_scene3d_import_restores_binary_after_persist_fault(
         "original.glb",
         b"original-binary",
     )["scene"]
-    project_manager.save_project(project, flush_document=False)
-    project_document.commit_layout2_document(project.project_root)
+    project_manager.save_project(project)
     app_root = tmp_path / "import-post-persist-app"
     app_root.mkdir()
     app = create_app(app_root)
     app.state.project = project
     app.state.project_disk_mtime = project_manager.project_disk_mtime(project)
-    app.state.dirty = False
     service = StoryboardBackendService(app)
     before_tree = _tree_bytes(project.project_root)
     before_revision = project.storage_revision
@@ -779,7 +731,7 @@ def test_layout2_backend_scene3d_import_restores_binary_after_persist_fault(
     assert (project.project_root / original["file_path"]).read_bytes() == b"original-binary"
 
 
-def test_layout2_scene2d_open_uses_persisted_psd_path(
+def test_scene2d_open_uses_persisted_psd_path(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -816,17 +768,15 @@ def test_layout2_scene2d_open_uses_persisted_psd_path(
     assert not custom.exists()
 
 
-def test_layout2_scene2d_plugin_ingests_preview_and_validates_psd(
+def test_scene2d_plugin_ingests_preview_and_validates_psd(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(project_layout, "LAYOUT_2_ENABLED", True)
     project = _project(tmp_path)
     project.settings["backup_on_save"] = False
     scene, _scenes = scene2d.create_scene(project, "Plugin")
     perspective = scene["perspectives"][0]
-    project_manager.save_project(project, flush_document=False)
-    project_document.commit_layout2_document(project.project_root)
+    project_manager.save_project(project)
 
     app_root = tmp_path / "plugin-app"
     app_root.mkdir()
@@ -917,7 +867,7 @@ def test_layout2_scene2d_plugin_ingests_preview_and_validates_psd(
 
 
 @pytest.mark.parametrize("fault_stage", ["metadata", "settings", "rename"])
-def test_layout2_scene2d_delete_rolls_back_every_fault(
+def test_scene2d_delete_rolls_back_every_fault(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     fault_stage: str,
@@ -975,7 +925,7 @@ def test_layout2_scene2d_delete_rolls_back_every_fault(
 
 
 @pytest.mark.parametrize("fault_stage", ["metadata", "settings", "rename"])
-def test_layout2_whole_scene2d_delete_rolls_back_every_fault(
+def test_whole_scene2d_delete_rolls_back_every_fault(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     fault_stage: str,
@@ -1036,7 +986,7 @@ def test_layout2_whole_scene2d_delete_rolls_back_every_fault(
 
 
 @pytest.mark.parametrize("fault_stage", ["metadata", "settings", "rename"])
-def test_layout2_scene3d_delete_rolls_back_every_fault(
+def test_scene3d_delete_rolls_back_every_fault(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     fault_stage: str,
@@ -1101,7 +1051,7 @@ def test_layout2_scene3d_delete_rolls_back_every_fault(
     assert restored_scene["linked_scene3d_id"] == target["id"]
 
 
-def test_layout2_scene3d_index_corruption_never_uses_settings_mirror(
+def test_scene3d_index_corruption_never_uses_settings_mirror(
     tmp_path: Path,
 ) -> None:
     project = _project(tmp_path)
@@ -1133,7 +1083,7 @@ def test_layout2_scene3d_index_corruption_never_uses_settings_mirror(
         scene3d.list_scenes(project)
 
 
-def test_layout2_scene2d_index_is_canonical_strict_and_posix_only(
+def test_scene2d_index_is_canonical_strict_and_posix_only(
     tmp_path: Path,
 ) -> None:
     project = _project(tmp_path)
@@ -1186,7 +1136,7 @@ def test_layout2_scene2d_index_is_canonical_strict_and_posix_only(
         scene2d.list_scenes(project)
 
 
-def test_layout2_scene2d_rejects_cross_scene_perspective_id_collision(
+def test_scene2d_rejects_cross_scene_perspective_id_collision(
     tmp_path: Path,
 ) -> None:
     project = _project(tmp_path)
@@ -1213,7 +1163,7 @@ def test_layout2_scene2d_rejects_cross_scene_perspective_id_collision(
         scene2d.list_scenes(project)
 
 
-def test_layout2_scene2d_rejects_primary_without_perspectives(
+def test_scene2d_rejects_primary_without_perspectives(
     tmp_path: Path,
 ) -> None:
     project = _project(tmp_path)
@@ -1237,7 +1187,7 @@ def test_layout2_scene2d_rejects_primary_without_perspectives(
 
 
 @pytest.mark.parametrize("suffix", [".blend", ".glb"])
-def test_layout2_scene3d_import_preserves_stored_path_and_rolls_back(
+def test_scene3d_import_preserves_stored_path_and_rolls_back(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     suffix: str,
@@ -1294,7 +1244,7 @@ def test_layout2_scene3d_import_preserves_stored_path_and_rolls_back(
     assert custom.read_bytes() == b"replacement-binary"
 
 
-def test_layout2_transactional_deletes_commit_assets_and_metadata(
+def test_transactional_deletes_commit_assets_and_metadata(
     tmp_path: Path,
 ) -> None:
     project = _project(tmp_path)

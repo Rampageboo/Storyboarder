@@ -26,21 +26,29 @@ class Scene3DLibraryTests(unittest.TestCase):
         self.root = Path(self._tmp.name)
         self.app = api_module.create_app(self.root)
         self.client = TestClient(self.app, raise_server_exceptions=False)
-        created = _quiet(lambda: self.client.post("/api/project/new", json={"path": self._tmp.name}))
+        created = _quiet(lambda: self.client.post("/api/project/new", json={"path": str(self.root / "Demo.sbd")}))
         self.assertEqual(created.status_code, 200, created.text)
-        self.project_root = Path(created.json()["project_path"])
+        self.project_root = Path(created.json()["project_path"]).parent
+        self.metadata_root = self.project_root / ".storyboarder" / "data"
 
     def tearDown(self) -> None:
         self._tmp.cleanup()
 
-    def test_singleton_settings_scene3d_normalizes_to_active_collection_scene(self) -> None:
+    def test_new_project_has_empty_scene3d_index_in_metadata(self) -> None:
         response = _quiet(lambda: self.client.get("/api/project/scenes3d"))
 
         self.assertEqual(response.status_code, 200, response.text)
         payload = response.json()
-        self.assertEqual(payload["active_scene3d_id"], "scene3d_001")
-        self.assertEqual(payload["scenes"][0]["id"], "scene3d_001")
-        self.assertTrue((self.project_root / "scenes3d" / "scenes3d.json").is_file())
+        self.assertEqual(payload["active_scene3d_id"], "")
+        self.assertEqual(payload["scenes"], [])
+        self.assertTrue((self.metadata_root / "scenes3d" / "scenes3d.json").is_file())
+        self.assertFalse((self.project_root / "scenes3d").exists())
+
+    def test_first_scene3d_becomes_active_and_mirrors_into_settings(self) -> None:
+        created = _quiet(lambda: self.client.post("/api/project/scenes3d", json={"title": "First"}))
+        self.assertEqual(created.status_code, 200, created.text)
+        self.assertEqual(created.json()["scene"]["id"], "scene3d_001")
+        self.assertEqual(created.json()["active_scene3d_id"], "scene3d_001")
 
         project = _quiet(lambda: self.client.get("/api/project")).json()
         self.assertEqual(project["settings"]["active_scene3d_id"], "scene3d_001")
@@ -50,7 +58,7 @@ class Scene3DLibraryTests(unittest.TestCase):
         created = _quiet(lambda: self.client.post("/api/project/scenes3d", json={"title": "Warehouse"}))
         self.assertEqual(created.status_code, 200, created.text)
         scene = created.json()["scene"]
-        self.assertEqual(scene["id"], "scene3d_002")
+        self.assertEqual(scene["id"], "scene3d_001")
 
         imported = _quiet(
             lambda: self.client.post(
@@ -61,7 +69,7 @@ class Scene3DLibraryTests(unittest.TestCase):
         self.assertEqual(imported.status_code, 200, imported.text)
         imported_scene = imported.json()["scene"]
         self.assertEqual(imported_scene["file_name"], "warehouse.glb")
-        self.assertTrue(imported_scene["file_path"].startswith(f"scenes3d/{scene['id']}/"))
+        self.assertEqual(imported_scene["file_path"], f"Blender/{scene['id']}.glb")
 
         active = _quiet(lambda: self.client.post(f"/api/project/scenes3d/{scene['id']}/set-active"))
         self.assertEqual(active.status_code, 200, active.text)
@@ -115,7 +123,7 @@ class Scene3DLibraryTests(unittest.TestCase):
         )
         self.assertEqual(attached.status_code, 200, attached.text)
         scene = attached.json()["scene"]
-        self.assertTrue(scene["blend_file_path"].endswith("/school.blend"))
+        self.assertEqual(scene["blend_file_path"], f"Blender/{scene_id}.blend")
         self.assertEqual(scene["keywords"], ["school", "classroom"])
         self.assertEqual((self.project_root / scene["blend_file_path"]).read_bytes(), b"blend bytes")
 
@@ -133,7 +141,7 @@ class Scene3DLibraryTests(unittest.TestCase):
     def test_configure_blend_preview_makes_blend_authoritative_and_preview_disposable(self) -> None:
         project = self.app.state.project
         record = scene3d.ensure_active_scene(project)
-        blend_path = project.root_path / "scenes3d" / record["id"] / "scene.blend"
+        blend_path = project.root_path / "Blender" / f"{record['id']}.blend"
         blend_path.parent.mkdir(parents=True, exist_ok=True)
         blend_path.write_bytes(b"blend")
 
@@ -144,10 +152,10 @@ class Scene3DLibraryTests(unittest.TestCase):
         )
 
         self.assertEqual(configured["source_type"], "blender")
-        self.assertEqual(configured["blend_file_path"], f"scenes3d/{record['id']}/scene.blend")
+        self.assertEqual(configured["blend_file_path"], f"Blender/{record['id']}.blend")
         self.assertEqual(
             configured["file_path"],
-            f"scenes3d/{record['id']}/.preview/storyboarder_preview.glb",
+            f".storyboarder/cache/scene3d/{record['id']}/storyboarder_preview.glb",
         )
 
     def test_scene2d_linked_scene3d_id_persists(self) -> None:

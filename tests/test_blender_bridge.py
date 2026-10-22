@@ -7,8 +7,10 @@ from pathlib import Path
 
 from fastapi.testclient import TestClient
 
-from storyboard_tool import blender_bridge, project_manager, scene3d
+from conftest import make_project
+from storyboard_tool import blender_bridge, scene3d
 from storyboard_tool.api import create_app
+from storyboard_tool.project_layout import resolve_scene3d_asset
 
 
 class _Process:
@@ -27,12 +29,14 @@ def _isolated_bridge(monkeypatch, tmp_path: Path) -> tuple[Path, Path]:
     return bridge, heartbeat
 
 
-def _layout1(tmp_path: Path):
-    project = project_manager.create_project(tmp_path / "project")
-    blend_path = project.root_path / "scene3d" / "scene.blend"
+def _project(tmp_path: Path, name: str = "Demo"):
+    project = make_project(tmp_path, name)
+    scene = scene3d.ensure_active_scene(project)
+    blend_path = resolve_scene3d_asset(project, scene["id"], ".blend")
     blend_path.parent.mkdir(parents=True, exist_ok=True)
     blend_path.write_bytes(b"blend")
-    app = create_app(tmp_path)
+    scene3d.configure_blend_preview(project, scene["id"], blend_path)
+    app = create_app(tmp_path / "app")
     app.state.project = project
     return project, blend_path, app
 
@@ -58,10 +62,16 @@ def _heartbeat(path: Path, session: dict, blend: Path, **extra) -> None:
     )
 
 
+def _blender_save(session_copy: Path, data: bytes) -> None:
+    previous = session_copy.stat().st_mtime_ns
+    session_copy.write_bytes(data)
+    os.utime(session_copy, ns=(previous + 5_000_000, previous + 5_000_000))
+
+
 def test_external_blender_session_id_is_cli_argument_safe(tmp_path: Path, monkeypatch) -> None:
     _isolated_bridge(monkeypatch, tmp_path)
     monkeypatch.setattr(blender_bridge.secrets, "token_urlsafe", lambda _length: "-option-like")
-    project, blend_path, app = _layout1(tmp_path)
+    project, blend_path, app = _project(tmp_path)
 
     session, _process = _begin(app, project, blend_path)
 
@@ -69,13 +79,16 @@ def test_external_blender_session_id_is_cli_argument_safe(tmp_path: Path, monkey
     assert not session["session_id"].startswith("-")
 
 
-def test_layout1_session_edits_the_project_file_in_place(tmp_path: Path, monkeypatch) -> None:
+def test_session_launches_a_copy_of_the_project_file(tmp_path: Path, monkeypatch) -> None:
     bridge, _heartbeat_path = _isolated_bridge(monkeypatch, tmp_path)
-    project, blend_path, app = _layout1(tmp_path)
+    project, blend_path, app = _project(tmp_path)
 
     session, _process = _begin(app, project, blend_path)
 
-    assert Path(session["launch_path"]) == blend_path.resolve()
+    launch_path = Path(session["launch_path"])
+    assert launch_path != blend_path.resolve()
+    assert launch_path.read_bytes() == blend_path.read_bytes()
+    assert Path(session["canonical_path"]) == blend_path.resolve()
     context = json.loads(bridge.read_text(encoding="utf-8"))
     assert context["write_enabled"] is True
     assert context["project_identity"] == blender_bridge.project_identity(project)
@@ -83,21 +96,22 @@ def test_layout1_session_edits_the_project_file_in_place(tmp_path: Path, monkeyp
 
 def test_external_blender_owns_until_process_and_heartbeat_end(tmp_path: Path, monkeypatch) -> None:
     _bridge, heartbeat_path = _isolated_bridge(monkeypatch, tmp_path)
-    project, blend_path, app = _layout1(tmp_path)
+    project, blend_path, app = _project(tmp_path)
     session, process = _begin(app, project, blend_path)
+    scene_id = scene3d.ensure_active_scene(project)["id"]
 
     pending = blender_bridge.status(app)
     assert pending["external_blender_owned"] is True
     assert pending["external_blender_pending"] is True
     assert pending["state"] == "launching"
-    preview_path = scene3d.preview_file_path(project, "scene3d_001")
+    preview_path = scene3d.preview_file_path(project, scene_id)
     preview_path.parent.mkdir(parents=True, exist_ok=True)
     preview_path.write_bytes(b"preview")
     preview_status = blender_bridge.status(app)
     assert preview_status["preview_path"] == str(preview_path)
     assert preview_status["preview_revision"] == preview_path.stat().st_mtime_ns
 
-    _heartbeat(heartbeat_path, session, blend_path, active_camera="SB_PathCamera", dirty=True)
+    _heartbeat(heartbeat_path, session, Path(session["launch_path"]), active_camera="SB_PathCamera", dirty=True)
     blender_bridge.tick(app)
     connected = blender_bridge.status(app)
     assert connected["external_blender_connected"] is True
@@ -112,45 +126,45 @@ def test_external_blender_owns_until_process_and_heartbeat_end(tmp_path: Path, m
     assert released["state"] == "offline"
 
 
-def test_layout1_blender_save_marks_project_dirty(tmp_path: Path, monkeypatch) -> None:
+def test_blender_save_is_synced_into_the_project(tmp_path: Path, monkeypatch) -> None:
     _bridge, heartbeat_path = _isolated_bridge(monkeypatch, tmp_path)
-    project, blend_path, app = _layout1(tmp_path)
+    project, blend_path, app = _project(tmp_path)
     session, _process = _begin(app, project, blend_path)
-    app.state.dirty = False
+    session_copy = Path(session["launch_path"])
+    revision_before = project.storage_revision
 
-    previous = blend_path.stat().st_mtime_ns
-    blend_path.write_bytes(b"blender saved")
-    os.utime(blend_path, ns=(previous + 5_000_000, previous + 5_000_000))
-    _heartbeat(heartbeat_path, session, blend_path)
+    _blender_save(session_copy, b"blender saved")
+    _heartbeat(heartbeat_path, session, session_copy)
     blender_bridge.tick(app)
 
-    assert app.state.dirty is True
+    assert blend_path.read_bytes() == b"blender saved"
+    assert project.storage_revision > revision_before
     assert blender_bridge.status(app)["last_synced_at"] > 0
 
 
 def test_status_has_no_side_effects(tmp_path: Path, monkeypatch) -> None:
     _bridge, heartbeat_path = _isolated_bridge(monkeypatch, tmp_path)
-    project, blend_path, app = _layout1(tmp_path)
+    project, blend_path, app = _project(tmp_path)
     session, _process = _begin(app, project, blend_path)
-    app.state.dirty = False
-    previous = blend_path.stat().st_mtime_ns
-    blend_path.write_bytes(b"unsynced save")
-    os.utime(blend_path, ns=(previous + 5_000_000, previous + 5_000_000))
-    _heartbeat(heartbeat_path, session, blend_path)
+    session_copy = Path(session["launch_path"])
+    revision_before = project.storage_revision
+    _blender_save(session_copy, b"unsynced save")
+    _heartbeat(heartbeat_path, session, session_copy)
 
     for _ in range(3):
         blender_bridge.status(app)
 
-    assert app.state.dirty is False
+    assert blend_path.read_bytes() == b"blend"
+    assert project.storage_revision == revision_before
 
 
 def test_fresh_heartbeat_is_adopted_after_storyboarder_restart(tmp_path: Path, monkeypatch) -> None:
     _bridge, heartbeat_path = _isolated_bridge(monkeypatch, tmp_path)
-    project, blend_path, first_app = _layout1(tmp_path)
+    project, blend_path, first_app = _project(tmp_path)
     session, _process = _begin(first_app, project, blend_path)
-    _heartbeat(heartbeat_path, session, blend_path, active_camera="Camera")
+    _heartbeat(heartbeat_path, session, Path(session["launch_path"]), active_camera="Camera")
 
-    restarted_app = create_app(tmp_path)
+    restarted_app = create_app(tmp_path / "restarted")
     restarted_app.state.project = project
     adopted = blender_bridge.tick(restarted_app)
 
@@ -161,12 +175,12 @@ def test_fresh_heartbeat_is_adopted_after_storyboarder_restart(tmp_path: Path, m
 
 def test_session_for_another_project_is_not_adopted(tmp_path: Path, monkeypatch) -> None:
     _bridge, heartbeat_path = _isolated_bridge(monkeypatch, tmp_path)
-    project, blend_path, first_app = _layout1(tmp_path)
+    project, blend_path, first_app = _project(tmp_path)
     session, _process = _begin(first_app, project, blend_path)
-    _heartbeat(heartbeat_path, session, blend_path)
+    _heartbeat(heartbeat_path, session, Path(session["launch_path"]))
 
-    other = project_manager.create_project(tmp_path / "other")
-    restarted_app = create_app(tmp_path)
+    other = make_project(tmp_path, "Other")
+    restarted_app = create_app(tmp_path / "restarted")
     restarted_app.state.project = other
 
     assert blender_bridge.tick(restarted_app)["state"] == "offline"
@@ -175,7 +189,7 @@ def test_session_for_another_project_is_not_adopted(tmp_path: Path, monkeypatch)
 
 def test_session_api_routes(tmp_path: Path, monkeypatch) -> None:
     _bridge, _heartbeat_path = _isolated_bridge(monkeypatch, tmp_path)
-    project, _blend_path, app = _layout1(tmp_path)
+    project, _blend_path, app = _project(tmp_path)
     scene = scene3d.ensure_active_scene(project)
     manifest_path = blender_bridge.manifest_file_path(project, scene["id"])
     manifest_path.parent.mkdir(parents=True, exist_ok=True)
@@ -200,7 +214,7 @@ def test_session_api_routes(tmp_path: Path, monkeypatch) -> None:
 def test_session_survives_until_blender_first_reports(tmp_path: Path, monkeypatch) -> None:
     """Regression: the sync loop must not end a session Blender is still starting."""
     _bridge, _heartbeat_path = _isolated_bridge(monkeypatch, tmp_path)
-    project, blend_path, app = _layout1(tmp_path)
+    project, blend_path, app = _project(tmp_path)
     scene = scene3d.ensure_active_scene(project)
     blender_bridge.begin_session(app, project, scene, blend_path)  # no process attached yet
 

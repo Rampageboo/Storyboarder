@@ -4,20 +4,18 @@ Model
 -----
 A session pairs one running (or recently running) Blender with one Scene 3D:
 
-* ``session_path`` is the file Blender edits. For Layout 2 it is a hidden sibling
-  copy of the canonical asset; for Layout 1 it is the canonical file itself.
+* ``session_path`` is the file Blender edits: a hidden sibling copy of the
+  canonical asset.
 * ``canonical_path`` is the project's own ``.blend``.
 
 Blender may save whenever the user wants. A background ``tick`` (one per second,
 independent of request handlers and of the project lock except for the short copy)
 notices new saves and brings them into the project:
 
-* Layout 2 / relocated sessions: copy ``session_path`` -> ``canonical_path``, but
-  only when the canonical file still matches the last state this session wrote or
-  saw (``baseline``). Someone else changing the canonical file is a conflict: the
-  save is kept in the session file and reported, never overwritten.
-* Layout 1 in place: the save already is the canonical file; mark the project
-  dirty so the next document save includes it.
+copy ``session_path`` -> ``canonical_path``, but only when the canonical file
+still matches the last state this session wrote or saw (``baseline``). Someone
+else changing the canonical file is a conflict: the save is kept in the session
+file and reported, never overwritten.
 
 The session record lives in the bridge context file, so a restarted Storyboarder
 adopts a still-open Blender (or recovers saves made while it was closed) by
@@ -43,7 +41,6 @@ from fastapi import FastAPI
 from . import live_bridge, project_document, project_manager, runtime_state, scene3d
 from .file_transactions import atomic_copy_file, rollback_paths
 from .models import Project
-from .project_layout import LAYOUT_2
 
 logger = logging.getLogger(__name__)
 
@@ -221,7 +218,6 @@ def publish_context(app: FastAPI, project: Project) -> dict[str, Any]:
         "project_name": project.name,
         "project_root": str(project.project_root.resolve()),
         "project_json_path": str(project.json_path.resolve()),
-        "layout": project.layout,
         "scene3d_id": scene_id,
         "scene3d_title": title,
         "blend_path": session["session_path"],
@@ -259,20 +255,18 @@ def begin_session(app: FastAPI, project: Project, scene: dict[str, Any], blend_p
     session_id = f"sb_{secrets.token_urlsafe(24)}"
     canonical = blend_path.resolve()
     scene_id = str(scene.get("id") or "")
-    session_path = canonical
-    if project.layout == LAYOUT_2:
-        stored = str(scene.get("blend_file_path") or "")
-        if not stored:
-            raise ValueError("Layout 2 Scene 3D metadata has no Blender path.")
-        stored_path = scene3d._safe_rel_path(project, stored).resolve()
-        if stored_path.suffix.lower() != ".blend":
-            raise ValueError("Layout 2 Scene 3D Blender path must be a .blend file.")
-        if not stored_path.is_file():
-            raise FileNotFoundError(f"Layout 2 Blender scene not found: {stored}.")
-        if canonical != stored_path:
-            raise ValueError("External Blender must use the persisted Scene 3D path.")
-        session_path = canonical.with_name(f".{canonical.stem}{SESSION_MARK}{secrets.token_hex(12)}.blend")
-        atomic_copy_file(canonical, session_path)
+    stored = str(scene.get("blend_file_path") or "")
+    if not stored:
+        raise ValueError("Scene 3D metadata has no Blender path.")
+    stored_path = scene3d._safe_rel_path(project, stored).resolve()
+    if stored_path.suffix.lower() != ".blend":
+        raise ValueError("Scene 3D Blender path must be a .blend file.")
+    if not stored_path.is_file():
+        raise FileNotFoundError(f"Blender scene not found: {stored}.")
+    if canonical != stored_path:
+        raise ValueError("External Blender must use the persisted Scene 3D path.")
+    session_path = canonical.with_name(f".{canonical.stem}{SESSION_MARK}{secrets.token_hex(12)}.blend")
+    atomic_copy_file(canonical, session_path)
     with _LOCK:
         _set_session(
             app,
@@ -393,13 +387,6 @@ def _sync(app: FastAPI, project: Project, heartbeat: dict[str, Any], *, blender_
         return False
     if blender_alive and (heartbeat.get("dirty") is True or int(heartbeat.get("saved_mtime_ns") or 0) != observed):
         return False  # Blender is still writing, or the save is not announced yet
-    if session_path.resolve() == canonical.resolve():
-        # Layout 1 in place: the save is already the project's file.
-        session["synced_session_mtime_ns"] = observed
-        session["baseline_mtime_ns"] = observed
-        session["last_synced_at"] = time.time()
-        app.state.dirty = True
-        return True
     if _mtime_ns(canonical) != session["baseline_mtime_ns"]:
         session["conflict"] = True
         session["sync_error"] = (
@@ -410,24 +397,18 @@ def _sync(app: FastAPI, project: Project, heartbeat: dict[str, Any], *, blender_
     if not project_manager.PROJECT_LOCK.acquire(timeout=0.25):
         return False  # a long project operation is running; retry next tick
     try:
-        if project.layout == LAYOUT_2:
-            from . import app_state
+        from . import app_state
 
-            revision_before = int(project.storage_revision)
-            dirty_before = bool(getattr(app.state, "dirty", False))
-            try:
-                with project_document.layout2_mutation_transaction(project.project_root):
-                    project_document.enlist_layout2_mutation_paths(project.project_root, (canonical,))
-                    with rollback_paths((canonical,)):
-                        atomic_copy_file(session_path, canonical)
-                        app_state.persist_project_mutation(app)
-            except BaseException:
-                project.storage_revision = revision_before
-                app.state.dirty = dirty_before
-                raise
-        else:
-            atomic_copy_file(session_path, canonical)
-            app.state.dirty = True
+        revision_before = int(project.storage_revision)
+        try:
+            with project_document.mutation_transaction(project.project_root):
+                project_document.enlist_mutation_paths(project.project_root, (canonical,))
+                with rollback_paths((canonical,)):
+                    atomic_copy_file(session_path, canonical)
+                    app_state.persist_project_mutation(app)
+        except BaseException:
+            project.storage_revision = revision_before
+            raise
     finally:
         project_manager.PROJECT_LOCK.release()
     session["synced_session_mtime_ns"] = observed

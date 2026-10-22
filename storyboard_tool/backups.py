@@ -5,7 +5,7 @@ from datetime import datetime
 from .file_transactions import atomic_copy_file
 from .models import Project
 from .project_layout import resolve_root_child
-from .shot_store import shots_csv_path, shots_json_path
+from .shot_store import shots_json_path
 
 # Keep the most recent N timestamped backup sets.
 MAX_BACKUP_SETS = 50
@@ -22,12 +22,10 @@ def _backup_stamps(backups_dir) -> list[str]:
 
 
 def _backup_filenames(stamp: str) -> tuple[str, ...]:
-    # Each backup set: project manifest, canonical shots.json, readable shots.csv
-    # snapshot (kept for compatibility), and settings.
+    # Each backup set: project manifest, canonical shots.json, and settings.
     return (
         f"project_{stamp}.json",
         f"shots_{stamp}.json",
-        f"shots_{stamp}.csv",
         f"settings_{stamp}.json",
     )
 
@@ -44,7 +42,7 @@ def _prune_old_backups(project: Project, *, keep: int = MAX_BACKUP_SETS) -> None
 
 
 def _write_backup(project: Project) -> None:
-    project.backups_dir.mkdir(exist_ok=True)
+    project.backups_dir.mkdir(parents=True, exist_ok=True)
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
     if project.json_path.is_file():
         atomic_copy_file(
@@ -57,13 +55,6 @@ def _write_backup(project: Project) -> None:
         atomic_copy_file(
             json_path,
             resolve_root_child(project.backups_dir, f"shots_{stamp}.json"),
-        )
-    # Readable compatibility snapshot (kept alongside the canonical JSON).
-    csv_path = shots_csv_path(project.metadata_root)
-    if csv_path.is_file():
-        atomic_copy_file(
-            csv_path,
-            resolve_root_child(project.backups_dir, f"shots_{stamp}.csv"),
         )
     if project.settings_path.is_file():
         atomic_copy_file(

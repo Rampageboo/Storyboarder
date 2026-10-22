@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
 from .image_utils import (
@@ -152,51 +151,9 @@ def _sync_shot_canvas_color_assets(project: Project, shot: Shot, color: str) -> 
 
 def write_canvas_color_files(project: Project, color: str, shot: Shot | None = None) -> None:
     normalized = normalize_hex_color(color)
-    canvas_width, canvas_height = get_shot_canvas_size(project, shot) if shot is not None else get_canvas_size(project)
-    payload = {
-        "canvas_background_color": normalized,
-        "canvas_width": canvas_width,
-        "canvas_height": canvas_height,
-        "shot_id": shot.shot_id if shot else "",
-        "source_file_path": shot.source_file_path if shot else "",
-    }
-    payload_text = json.dumps(payload, indent=2)
-    color_text = f"{normalized}\n"
-
-    if project.layout == _pm().LAYOUT_2:
-        color_path = _pm().resolve_project_child(project, ".storyboarder", "canvas_color.txt")
-        color_path.parent.mkdir(parents=True, exist_ok=True)
-        _pm()._atomic_write_text(color_path, color_text)
-        return
-
-    targets = [
-        (
-            _pm().resolve_project_child(project, "canvas_color.txt"),
-            _pm().resolve_project_child(project, "storyboard_bridge.json"),
-        )
-    ]
-    if shot is not None:
-        targets.append(
-            (
-                _pm().resolve_project_child(
-                    project,
-                    "shots",
-                    shot.shot_id,
-                    "canvas_color.txt",
-                ),
-                _pm().resolve_project_child(
-                    project,
-                    "shots",
-                    shot.shot_id,
-                    "storyboard_bridge.json",
-                ),
-            )
-        )
-
-    for color_path, bridge_path in targets:
-        color_path.parent.mkdir(parents=True, exist_ok=True)
-        color_path.write_text(color_text, encoding="utf-8")
-        bridge_path.write_text(payload_text, encoding="utf-8")
+    color_path = _pm().resolve_project_child(project, ".storyboarder", "canvas_color.txt")
+    color_path.parent.mkdir(parents=True, exist_ok=True)
+    _pm()._atomic_write_text(color_path, f"{normalized}\n")
 
 
 def create_canvas_for_shot(

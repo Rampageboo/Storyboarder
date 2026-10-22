@@ -8,16 +8,18 @@ from pathlib import Path
 
 import pytest
 
-from storyboard_tool import project_manager, reference_segments
+from storyboard_tool import project_manager, reference_segments, scene3d as scene3d_module
 from storyboard_tool.external_tools import (
     SCENE3D_EXTENSIONS,
     get_scene3d_file_path,
     import_scene3d_stream,
 )
 
+from conftest import make_project
+
 
 def _make_project(tmp_path: Path):
-    return project_manager.create_project(tmp_path)
+    return make_project(tmp_path)
 
 
 def _make_png() -> bytes:
@@ -61,7 +63,9 @@ class TestImportScene3dStream:
         import_scene3d_stream(project, io.BytesIO(b"GLB_PLACEHOLDER"), "scene.glb")
         scene3d = project.settings.get("scene3d") or {}
         assert scene3d.get("source") == "blender"
-        assert str(scene3d.get("file_path", "")).endswith("scene3d/scene.glb")
+        active = scene3d_module.ensure_active_scene(project)
+        assert scene3d.get("file_path") == f"Blender/{active['id']}.glb"
+        assert (project.project_root / scene3d["file_path"]).read_bytes() == b"GLB_PLACEHOLDER"
 
     def test_valid_gltf_updates_settings(self):
         project = _make_project(self._tmp)
@@ -102,25 +106,24 @@ class TestImportScene3dStream:
 
     def test_failed_import_does_not_destroy_existing_scene_file(self, monkeypatch):
         project = _make_project(self._tmp)
-        scene_dir = project.root_path / "scene3d"
-        scene_dir.mkdir(parents=True, exist_ok=True)
-        destination = scene_dir / "scene.glb"
-        destination.write_bytes(b"existing model bytes")
-        project.settings["scene3d"] = {"file_path": "scene3d/scene.glb", "source": "blender"}
+        import_scene3d_stream(project, io.BytesIO(b"existing model bytes"), "scene.glb")
+        relative = project.settings["scene3d"]["file_path"]
+        destination = project.project_root / relative
+        scene_dir = destination.parent
         before_settings = dict(project.settings["scene3d"])
 
         def fail_after_partial_write(source, target):
             target.write(b"partial replacement")
             raise OSError("simulated write failure")
 
-        monkeypatch.setattr("storyboard_tool.external_tools.shutil.copyfileobj", fail_after_partial_write)
+        monkeypatch.setattr("storyboard_tool.file_transactions.shutil.copyfileobj", fail_after_partial_write)
 
         with pytest.raises(OSError, match="simulated write failure"):
             import_scene3d_stream(project, io.BytesIO(b"new model bytes"), "scene.glb")
 
         assert destination.read_bytes() == b"existing model bytes"
         assert project.settings["scene3d"] == before_settings
-        assert list(scene_dir.glob("scene.glb.*.tmp")) == []
+        assert list(scene_dir.glob(f"{destination.name}*.tmp")) == []
 
 
 # ---------------------------------------------------------------------------
@@ -148,7 +151,7 @@ class TestGetScene3dFilePath:
         project = _make_project(self._tmp)
         import_scene3d_stream(project, io.BytesIO(b"x"), "scene.glb")
         # Delete the file on disk — project root is project.root_path, not self._tmp directly
-        (project.root_path / "scene3d" / "scene.glb").unlink()
+        (project.root_path / project.settings["scene3d"]["file_path"]).unlink()
         with pytest.raises(FileNotFoundError):
             get_scene3d_file_path(project)
 

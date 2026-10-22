@@ -295,9 +295,7 @@ def create_app(base_dir: Path, bridge_port: int = 8000) -> FastAPI:
         refresh_thread.start()
         generation_thread.start()
         blender_thread.start()
-        # Exposed so shutdown can halt these loops *before* the work tree is
-        # removed. The bridge loop writes into the project root, so deleting the
-        # tree while it runs leaves a directory Windows can never reclaim.
+        # Exposed so shutdown can halt these loops before the final cleanup.
         app.state.background_stop = stop_event
         app.state.background_threads = (refresh_thread, generation_thread, blender_thread)
         try:
@@ -309,14 +307,11 @@ def create_app(base_dir: Path, bridge_port: int = 8000) -> FastAPI:
                 blender_bridge.sync_now(app)
             except Exception:
                 logger.exception("Final Blender session sync failed")
-            if not blender_bridge.owns_scene(app):
-                project_manager.cleanup_document_working_root(app.state.project)
 
     app = FastAPI(title="Storyboard Tool", lifespan=lifespan)
     app.state.base_dir = base_dir
     app.state.project = None
     app.state.project_disk_mtime = 0.0
-    app.state.dirty = False
     app.state.main_window = None
     app.state.api_token = _read_launch_token()
     runtime_state.init_bridge_state(app, bridge_port)
@@ -644,9 +639,6 @@ def create_app(base_dir: Path, bridge_port: int = 8000) -> FastAPI:
     def save_project_as(request: SaveProjectAsRequest) -> dict[str, Any]:
         return _svc().method_save_project_as(request.path)
 
-    @app.post("/api/project/convert")
-    def convert_project(request: SaveProjectAsRequest) -> dict[str, Any]:
-        return _svc().method_convert_project(request.path)
 
     @app.get("/api/system/blender-candidates")
     def blender_candidates() -> dict[str, Any]:
@@ -1254,10 +1246,6 @@ def create_app(base_dir: Path, bridge_port: int = 8000) -> FastAPI:
 
 def _shutdown_reference_cleanup(app: FastAPI) -> None:
     try:
-        project_manager.shutdown_reference_cleanup(
-            app.state.project,
-            save_if_dirty=bool(getattr(app.state, "dirty", False)),
-            dirty=bool(getattr(app.state, "dirty", False)),
-        )
+        project_manager.shutdown_reference_cleanup(app.state.project)
     except Exception as exc:
         print(f"Reference cleanup failed: {exc}", file=sys.stderr)

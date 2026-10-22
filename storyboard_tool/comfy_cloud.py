@@ -32,7 +32,6 @@ import httpx
 from . import project_manager
 from .models import Project, Shot
 from .project_layout import (
-    LAYOUT_1,
     generation_metadata_path,
     generation_video_relative,
     resolve_project_path,
@@ -420,7 +419,7 @@ def _run(app: Any, project: Project, take_id: str) -> None:
                 return
             record.update(status="downloading")
             _write(project, record)
-            _save_video(app, project, record, outputs[0])
+            _save_video(project, record, outputs[0])
     except Exception as exc:  # report every failure on the take itself
         logger.exception("Comfy Cloud video take %s failed", take_id)
         try:
@@ -434,7 +433,7 @@ def _run(app: Any, project: Project, take_id: str) -> None:
             _running.discard(take_id)
 
 
-def _save_video(app: Any, project: Project, record: dict[str, Any], output: Any) -> None:
+def _save_video(project: Project, record: dict[str, Any], output: Any) -> None:
     relative = generation_video_relative(project, record["take_id"])
     target = resolve_project_path(project, relative)
     target.parent.mkdir(parents=True, exist_ok=True)
@@ -448,8 +447,5 @@ def _save_video(app: Any, project: Project, record: dict[str, Any], output: Any)
             os.replace(temporary, target)
             record.update(status="succeeded", video_path=relative, error="", bytes=target.stat().st_size)
             _write(project, record)
-            # Layout 1 documents pack the work tree on save; the new file must be included.
-            if project.layout == LAYOUT_1 and getattr(app.state, "project", None) is project:
-                app.state.dirty = True
     finally:
         Path(temporary).unlink(missing_ok=True)

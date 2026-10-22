@@ -1,5 +1,6 @@
 # Storyboarder — Current Architecture
 
+> Storage update: 2026-10-22 (one project format: folder + handle `.sbd`; see [plans/2026-10-22-single-project-format.md](plans/2026-10-22-single-project-format.md)).
 > Boundary update: 2026-10-03 (project editing ownership, scene service adapters, operation-local policies and reference metadata isolation).
 > Reflects the codebase after the desktop-only refactor, architecture cleanup,
 > Photoshop plugin API, shot-service extraction, and project-transaction safety
@@ -163,7 +164,7 @@ The `base: '/react/'` setting means all Vite-generated asset paths are prefixed 
 | Component | Purpose |
 |---|---|
 | `App.tsx` | App shell: top bar, error banner, and one workspace at a time (Home when no project is open) |
-| `Topbar.tsx` | Project menu (Home/New/Open/Save/Save as/Convert/Settings), save state, Story/Comic/Scenes/3D switch, Photoshop status and preheat, References, Export |
+| `Topbar.tsx` | Project menu (Home/New/Open/Save/Save as/Settings), Story/Comic/Scenes/3D switch, Photoshop status and preheat, References, Export |
 | `HomePage.tsx` | New storyboard / new comic / open, and the recent-projects grid |
 | `StoryWorkspace.tsx` | Story workspace: route + outline navigator, stage (Board/Play/Map/All views), inspector column and route timeline dock |
 | `CanvasBoard.tsx` | Board stage: toolbar (Draw, Photoshop menu, Layers, Generate, More), preview composite, drawing editor host |
@@ -190,8 +191,9 @@ The `base: '/react/'` setting means all Vite-generated asset paths are prefixed 
 | `state/projectLifecycle.ts` | Framework-independent action exclusion, domain write serialization, registered draft draining and document response lifetimes |
 | `state/useProjectLifecycle.ts` | React adapter for canonical project state, guarded updates, drawing state and action busy/error state |
 | `state/projectResponses.ts` | Payload identity/revision checks, Comic response side effects and failed-draft reload recovery |
-| `state/useProjectActions.ts` | New/Open/Close/Save/Save As/Convert workflows, including settling drafts after native file dialogs |
+| `state/useProjectActions.ts` | New/Open/Close/Save/Save As workflows, including settling drafts after native file dialogs. Save (Ctrl+S) only flushes drafts; the backend has already written every accepted mutation |
 | `state/useShotDrafts.ts` | Per-shot draft buffers and canonical Shot update handling |
+| `hooks/useAutosave.ts` | Flushes board text drafts about 1.5 s after typing stops |
 | `state/projectHistory.ts`, `state/useProjectHistory.ts` | Shared bounded board/reference history; React subscription and lifecycle-gated undo/redo |
 | `state/boardCommands.ts`, `state/useBoardCommands.ts` | Board mutation sequences and inverse construction, with project/selection reads after draft draining |
 | `state/referenceCommands.ts`, `state/useReferenceSegments.ts` | Reference snapshot/token inverses and reference range/inspect UI state |
@@ -206,7 +208,7 @@ Frontend state ownership is intentionally narrow:
 
 - `ProjectContext` remains the public interface. The lifecycle adapter owns canonical project replacement and document lifetimes; Shot and Comic hooks own their drafts, with immediate draft updates independent of React rendering.
 - Save and transition operations share an exclusive action gate. Registered drafts drain before an action continues, including edits arriving during a save. A failed save retains the draft and prevents navigation. Native dialogs settle drafts again after the user chooses a path; drawing retains its explicit Save drawing / close requirement.
-- Domain writes share one queue. Server replies are applied to their owned fields and documented side effects, rather than replacing unrelated domain state. A new document lifetime, including reopening the same path, invalidates old callbacks. Payload identity/revision checks and read tickets prevent background replies from overwriting a newer accepted project state, including legacy documents whose storage revision remains zero.
+- Domain writes share one queue. Server replies are applied to their owned fields and documented side effects, rather than replacing unrelated domain state. A new document lifetime, including reopening the same path, invalidates old callbacks. Payload identity/revision checks and read tickets prevent background replies from overwriting a newer accepted project state. There is no project-level dirty or "Unsaved changes" state.
 - Comic saves propagate server-side generation freshness changes while keeping unrelated Shot fields. **Discard draft and reload** waits for any in-flight save but does not retry an invalid/conflicting draft; a failed GET retains the draft so recovery remains possible.
 - Board and reference commands own their inverses and share one 50-entry history. Public commands enter the lifecycle gate once, then capture current source state after drafts drain. Failed undo/redo leaves the stack unchanged; clearing or replacing history invalidates an in-flight replay. A successful server mutation whose history became invalid triggers a fresh guarded read for the same document, without reviving that history or committing its old reference token. Board restore retains canonical graph membership/layout and uses the current graph revision; reference replay owns rotating snapshot tokens.
 - Scene 2D fields reset on selected identity or changed editable scalar metadata, not newly allocated response objects. The workspace remounts for each project lifetime, while unchanged background data and perspective selection preserve pending scene metadata. Scrubber callbacks update their refs after React commits, so abandoned renders cannot change active drag handlers.
@@ -285,17 +287,19 @@ production method-name registries or import-time loops wrapping service methods.
 | Policy | Execution boundary |
 |---|---|
 | `SERIALIZED` | Whole operation under `PROJECT_LOCK`; operation-specific rollback stays in the operation. |
-| `GRAPH_IF_PRESENT` | Layout 1 metadata rollback when a stored graph exists; recoverable transaction for Layout 2. |
-| `METADATA` | Layout 1 metadata rollback even before a stored graph exists; recoverable transaction for Layout 2. |
-| `LAYOUT2` | Recoverable Layout 2 transaction; Layout 1 keeps its existing operation-specific behavior. |
-| `SAVE_AS` | Transition lock first; Layout 2 coordinator quiesces writers before taking the project lock. |
-| `CONVERT` | Transition lock first; the conversion coordinator owns writer quiescence and project locking. |
+| `TRANSACTION` | `PROJECT_LOCK` plus `project_document.mutation_transaction` (snapshot of `.storyboarder/data` and any enlisted asset paths, recoverable after a crash) around `project_transaction.mutate_project`. On failure, `storage_revision` and the tracked disk mtime are restored too. |
+| `SAVE_AS` | Transition lock first; the Save As coordinator quiesces writers before taking the project lock. |
+
+A successful mutation ends with `app_state.persist_project_mutation(app)`, which
+bumps `storage_revision`, writes metadata in place and republishes the Blender
+context. The write is durable when the request returns; there is no deferred
+save.
 
 `tests/fixtures/backend_mutation_policies.json` is a test-only review inventory of
 service operations, including those outside this generic boundary. Changes to
 the operation surface must update that inventory intentionally. Behavioral tests
-verify lock order, conditional Layout 1 coverage, and Layout 2 disk/memory/app-state
-restoration; the inventory is not used to execute operations.
+verify lock order and disk/memory/app-state restoration; the inventory is not
+used to execute operations.
 
 ---
 
@@ -312,11 +316,11 @@ These functions were extracted from `api.py` so the service layer can use them w
 | `_require_project(app)` | Raises 400 if no project is open |
 | `_find_shot(project, shot_id)` | Looks up a shot or raises 404 |
 | `_track_project(app, project)` | Stores project in `app.state` and records its disk mtime |
-| `_refresh_project_from_disk(app)` | Reloads `shots.json` if changed on disk (skipped when dirty) |
-| `_autosave(app)` | Saves project and clears the dirty flag |
+| `_refresh_project_from_disk(app)` | Reloads metadata if it changed on disk (for example, written by another process) |
+| `persist_project_mutation(app)` | Bumps `storage_revision`, saves in place, republishes the Blender context |
 | `_touch_live_bridge(app, ...)` | Writes `storyboard_live_bridge.json` with current project + selection |
 | `_bridge_status_payload(app)` | Builds the full `/api/bridge/status` response dict |
-| `_project_payload(project, dirty)` | Serialises the project + all shots for the frontend |
+| `_project_payload(project)` | Serialises the project + all shots for the frontend |
 | `_shot_payload(project, shot)` | Serialises one shot with disk mtimes and artwork flags |
 | `_plugin_link_state(app)` | Returns `(linked, age, open_shot_ids)` from heartbeat file + HTTP |
 
@@ -349,41 +353,47 @@ All shot business logic lives here. **No FastAPI or HTTP imports** — errors ar
 
 **Responsibilities**
 
-- Project lifecycle: default portable-folder `create_layout2_document()`, legacy folder `create_project()`, legacy single-file `create_document()`, `open_project()`, `save_project()`
+- Project lifecycle: `create_project()`, `open_project()`, `save_project()`, `reload_project_if_changed()`
 - Shot list CRUD: `add_shot()`, `duplicate_shot()`, `delete_shot()`, `restore_shot()`, `reorder_shots()`
-- Canonical file paths: `get_shot_dir()`, `resolve_shot_preview_path()`, `resolve_shot_thumbnail_path()`
-- Canvas management: `get_canvas_color()`, `create_canvas_for_shot()`
-- Change detection: `project_disk_mtime()` (combines mtime of `project.json`, `settings.json`, `shots.json`)
+- Canvas management and per-shot asset paths (via `project_layout` and `shot_files`)
+- Change detection: `project_disk_mtime()` over the metadata files
 - Atomic JSON writes: `_atomic_write_json()` — writes to a temp file in the same directory, then calls `os.replace()` to overwrite atomically (crash-safe)
 
-**Atomic save**
+**One project format**
 
-`save_project()` and `save_settings()` use `_atomic_write_json()` so a crash or write error during save never leaves a partial or empty JSON file. New Layout 2 projects are portable folders whose canonical `<name>.sbd` is a metadata-only ZIP. Editable assets stay visible under `Images/`, `PSD/`, `Blender/`, and `Exports/`; JSON work state is under `.storyboarder/work`. `create_layout2_document()` builds and validates the complete project in a same-volume staging directory, then publishes it with one refusing rename. `project_document.commit_layout2_document()` writes a sibling temporary archive and uses `os.replace()` so the document is never partially overwritten.
-
-Layout 1 single-file and folder projects remain readable. `create_document()` is retained for compatibility and tests, while the user-facing `.sbd` new-project path now calls `create_layout2_document()`. The **Convert to Layout 2** UI is capability-gated to an existing Layout 1 `.sbd` and invokes `/api/project/convert`, which publishes a source-preserving sibling folder and switches only after validation. A legacy folder project must first use **Save Project As...** to become a Layout 1 `.sbd`; the conversion endpoint rejects folder projects before writer quiesce or staging.
-
-**Layout 2 project structure**
-
-`<name>/<name>.sbd`, `Images/`, `PSD/`, `Blender/`, `Exports/`, and `.storyboarder/{work,state.json}`. The `.sbd` contains allowlisted JSON metadata (and optional `cover.png`) only. Blender files are created lazily when a Scene 3D workflow needs them.
-
-**Legacy Layout 1 expanded structure (inside a single-file `.sbd`, or visible for a folder project)**
+There is one format. A project is a folder with a small `.sbd` handle; the
+module docstring of `project_document.py` is the reference.
 
 ```
-Storyboard_Project/
-  project.json          — manifest: name, created date
-  settings.json         — canvas size, canvas color, Photoshop/Blender paths, ref segments
-  shots.json            — canonical shot store
-  backups/
-    ref_undo/           — per-apply snapshots for reference segment undo
-  shots/
-    shot_001/
-      shot_001_preview.png
-      shot_001_thumb.png
-      shot_001_annotations.json
-      references/       — per-shot reference images
-  references/           — project-level reference files (images, video, GLB)
-  exports/              — PDF, contact sheets, timing JSON
+Demo/                      project.root_path == project.project_root
+  Demo.sbd                 handle: {"format":"storyboarder-project","version":1,"project_id":...}
+  Images/  PSD/  Blender/  Exports/  Videos/
+  .storyboarder/
+    data/                  project.metadata_root — the only copy of metadata:
+                           project.json, shots.json, settings.json, scenes2d/, scenes3d/,
+                           generation/, annotations/, notes/, drawings/
+    backups/  cache/  media/  transactions/
 ```
+
+- **Create.** `create_project(parent / "Demo.sbd", ...)` builds `parent/Demo/` in a
+  same-volume staging directory and publishes it with one rename. The destination
+  folder must not exist.
+- **Open.** `open_project()` accepts the `.sbd` or its folder. `read_handle()`
+  rejects anything that is not a JSON handle; `recover_incomplete_mutation()`
+  restores a mutation snapshot left by a crash before the project loads.
+  `project.json` is exactly `{"version": 5, "project_id", "storage_revision"}`.
+- **Save.** `save_project()` writes `project.json`, `shots.json` and `settings.json`
+  in place (plus a rolling backup in `.storyboarder/backups/`). Nothing is packed,
+  extracted to `%TEMP%`, or flushed later.
+- **Save As.** `project_save_as.materialize_save_as()` copies the folder into a
+  staging directory, gives the copy a new `project_id`, validates it and publishes
+  it with one rename. The result is an independent project.
+- **Old formats are not supported.** Layout 1 `.sbd` zips, Layout 1 folders and
+  Layout 2 zip handles fail to open with "This project was saved by an older
+  Storyboarder in a format that is no longer supported. Create a new project."
+  There is no converter.
+
+Blender files are created lazily when a Scene 3D workflow needs them.
 
 ---
 
@@ -397,13 +407,13 @@ Provides a context manager, `mutate_project(project)`, that:
 2. Restores the snapshot if the block raises any exception.
 3. Does nothing extra on success.
 
-`metadata_transaction(app)` additionally snapshots Layout 1 canonical metadata
-files and app dirty/mtime flags. It now lives in this transaction module;
-`story_graph.metadata_transaction` remains a compatibility import. This is
-metadata-only protection: asset workflows still own their image/PSD rollback.
-For Layout 2, `mutation_executor` composes the existing recoverable work-tree
-transaction with the in-memory snapshot and restores revision/app-state flags
-on failure.
+On-disk rollback is `project_document.mutation_transaction(project_root)`: it
+snapshots `.storyboarder/data` into `.storyboarder/transactions/`, plus any asset
+paths the mutation enlists with `enlist_mutation_paths()`, and restores the
+snapshot when the block raises or, after a crash, on the next open.
+`mutation_executor` composes it with `mutate_project` for `TRANSACTION`
+operations (§7). Assets a mutation does not enlist remain the operation's own
+rollback responsibility.
 
 ```python
 with project_transaction.mutate_project(project):
@@ -424,7 +434,7 @@ with project_transaction.mutate_project(project):
 - `method_create_shot_canvas`
 - `method_save_shot_drawing`
 
-This is an in-memory guard only. It does not protect against failures that occur *during the subsequent `_autosave()`* — those are protected by the atomic file write.
+`mutate_project` itself is an in-memory guard only. Failures during the subsequent save are covered by the atomic file writes and, for `TRANSACTION` operations, by the on-disk snapshot.
 
 ---
 
@@ -445,14 +455,14 @@ Owns all reference domain business logic. `project_manager.py` re-exports every 
 
 | Mode | Input | Process |
 |---|---|---|
-| Image | PNG / JPG uploaded to `references/` | Scale / tile image over board range |
-| Video | MP4 / MOV in `references/` | Extract frame at timestamp; scale to board |
-| 3D capture | GLB in `references/` | Render camera view from Scene3DEditor; bake PNG |
+| Image | PNG / JPG uploaded to `Images/References/` | Scale / tile image over board range |
+| Video | MP4 / MOV in `.storyboarder/media/references/` | Extract frame at timestamp; scale to board |
+| 3D capture | GLB in `Blender/References/` | Render camera view from Scene3DEditor; bake PNG |
 | Model captures | Pre-rendered PNGs from 3D panel | Apply existing capture set to shot range |
 
 **Undo mechanism**
 
-Before any apply, `snapshot_boards_for_undo()` copies the affected preview PNGs to `backups/ref_undo/<token>/`. `restore_boards_from_undo(token)` copies them back and deletes the snapshot.
+Before any apply, `snapshot_boards_for_undo()` copies the affected preview PNGs to `.storyboarder/backups/ref_undo/<token>/`. `restore_boards_from_undo(token)` copies them back and deletes the snapshot.
 
 **Provenance stamping**
 
@@ -481,7 +491,7 @@ Each applied shot's `camera_data` field receives:
 |---|---|
 | `normalize_reference_links(value)` | Parse and deduplicate `reference_links` list |
 | `ensure_reference_library(settings)` | Promote legacy path fields into `reference_links` |
-| `import_project_reference_stream(project, stream, name)` | Write file to `references/`, append to library |
+| `import_project_reference_stream(project, stream, name)` | Write file to its reference folder (see §19.1), append to library |
 | `remove_project_reference(project, ref_id)` | Delete file + clear segment references that pointed to it |
 
 **Segment helpers**
@@ -497,7 +507,7 @@ Each applied shot's `camera_data` field receives:
 
 **What this module does NOT own**
 
-- Generic project persistence (`project_manager.save_project`, `save_shots`) — called as side effects only
+- Generic project persistence (`project_manager.save_project`) — called as side effects only
 - HTTP route parsing (no FastAPI imports)
 - Photoshop plugin bridge logic
 - Frontend display calculation (see `frontend/src/utils/refSegmentDisplay.ts`)
@@ -541,10 +551,10 @@ The Photoshop bridge has two related surfaces:
 | `POST /api/bridge/plugin-heartbeat` | `method_plugin_heartbeat()` | Older UXP fallback | `PluginHeartbeatRequest` | `{ "ok": "true" }` | Updates transient plugin heartbeat state |
 | `POST /api/plugin/heartbeat` | `method_plugin_heartbeat()` | Current UXP plugin | `PluginHeartbeatRequest` | `{ "ok": "true" }` | Updates transient plugin heartbeat state |
 | `GET /api/plugin/context` | `method_plugin_context()` | UXP plugin | none | `PluginContextResponse` shape | Refreshes project from disk when safe; embeds bridge status |
-| `POST /api/plugin/shots/{shot_id}/export-preview` | `method_plugin_export_preview()` | UXP plugin | `PluginShotEventRequest` (`preview_image_path`, optional `source_file_path`) | `{ shot, context }` | Validates project-relative paths; relinks preview; autosaves; increments `plugin_project_revision`; records `plugin_last_exported_preview[shot_id]` |
-| `POST /api/plugin/shots/{shot_id}/psd-saved` | `method_plugin_psd_saved()` | UXP plugin | `PluginShotEventRequest` (`source_file_path`) | `{ shot, context }` | Validates PSD path; updates `source_file_path` metadata; autosaves; increments `plugin_project_revision` |
+| `POST /api/plugin/shots/{shot_id}/export-preview` | `method_plugin_export_preview()` | UXP plugin | `PluginShotEventRequest` (`preview_image_path`, optional `source_file_path`) | `{ shot, context }` | Validates project-relative paths; relinks preview; persists; increments `plugin_project_revision`; records `plugin_last_exported_preview[shot_id]` |
+| `POST /api/plugin/shots/{shot_id}/psd-saved` | `method_plugin_psd_saved()` | UXP plugin | `PluginShotEventRequest` (`source_file_path`) | `{ shot, context }` | Validates PSD path; updates `source_file_path` metadata; persists; increments `plugin_project_revision` |
 | `POST /api/plugin/shots/{shot_id}/focus` | `method_plugin_focus_shot()` | UXP plugin | none | Plugin context payload | Validates shot; updates plugin/app selected shot; persists app session; refreshes live bridge file |
-| `POST /api/plugin/shots/next` | `method_plugin_next_shot()` | UXP plugin | `PluginNextShotRequest` (`current_shot_id`, `auto_add`) | `{ shot, created, context }` | Selects next shot; optionally creates/autosaves a shot; increments revision only when a shot is created |
+| `POST /api/plugin/shots/next` | `method_plugin_next_shot()` | UXP plugin | `PluginNextShotRequest` (`current_shot_id`, `auto_add`) | `{ shot, created, context }` | Selects next shot; optionally creates and persists a shot; increments revision only when a shot is created |
 
 ### Bridge ownership
 
@@ -568,16 +578,17 @@ The Photoshop bridge has two related surfaces:
 | `plugin_project_revision` | Backend plugin mutation methods | Monotonic in-memory counter telling `LiveBridgeContext.tsx` to ask `ProjectContext` for a project refresh. |
 | `focus_request` in live bridge payload | `method_open_source()` / `_request_plugin_focus()` | One-shot request for the plugin to focus an already-open tab; includes a monotonic token so polling does not repeatedly switch tabs. |
 
-### UXP linked mode and local fallback
+### UXP linked mode
 
-When the plugin can reach the backend, it is in backend-linked mode:
+The plugin must speak protocol v2 (repo plugin 0.7.0). Older plugins, such as
+0.6.7, get HTTP 426. When the plugin can reach the backend, it is in backend-linked mode:
 
-- it reads `/api/plugin/context` for project, canvas, selected shot, paths, and bridge status;
+- it reads `/api/plugin/context` for project, canvas, selected shot and bridge status (the payload never exposes filesystem paths: `project_root` and `project_json_path` are empty);
 - it sends `/api/plugin/heartbeat` with selected/open shot ids;
 - it reports preview and PSD metadata through plugin endpoints;
 - `panel_storage_adapter.js` avoids writing canonical project metadata files directly and refreshes from the backend instead.
 
-When no backend is reachable, the plugin falls back to local project files (`project.json`, `shots.json`, `shots.csv`, `storyboard_bridge.json`) for compatibility. Do not casually change the linked-mode endpoints, field names, heartbeat file names, or local fallback behavior; older plugin sessions and saved projects depend on them.
+The plugin's offline file mode no longer works: the backend always reports `offline_write_allowed: false`, and project metadata lives only under `.storyboarder/data`. Do not casually change the linked-mode endpoints, field names or heartbeat file names.
 
 **Plugin link detection**
 
@@ -606,7 +617,7 @@ active camera, dirty flag, preview revision, export status, and process identity
 
 After the initial launch and every successful Blender save, the session plugin
 exports the active scene atomically to
-`scenes3d/<scene-id>/.preview/storyboarder_preview.glb`. This file is a disposable
+`.storyboarder/cache/scene3d/<scene-id>/storyboarder_preview.glb`. This file is a disposable
 rendering cache, not a user-managed asset or source of truth. Storyboarder polls
 the preview revision and hot-reloads it while preserving preview time, selected
 camera, and display settings. A failed export leaves the last valid preview in
@@ -615,9 +626,9 @@ place.
 ### Blender session (`blender_bridge.py`)
 
 A session pairs one Blender process with one Scene 3D. `session_path` is the file
-Blender edits (Layout 2: a hidden `.<name>.storyboarder-session-<hex>.blend` copy
-next to the asset; Layout 1: the asset itself) and `canonical_path` is the
-project's `.blend`.
+Blender edits (always a hidden `.<name>.storyboarder-session-<hex>.blend` copy
+next to the scene's `.blend`) and `canonical_path` is the project's `.blend`
+(`Blender/<scene-id>.blend`).
 
 - **Blender never refuses to save.** The add-on writes the preview GLB and
   `storyboarder_manifest.json` (cameras with lens/sensor/transform, frame range,
@@ -634,10 +645,9 @@ project's `.blend`.
   Otherwise the state becomes `conflict`, nothing is overwritten, and
   `POST /api/project/scene3d/session/resolve` (`use_blender` | `discard`) settles it.
   Unrelated project edits never affect Blender.
-- **Restarts are safe.** The session record (project identity = the `.sbd` path or
-  project folder, scene id, both paths, baseline) lives in the bridge context file.
-  A restarted Storyboarder adopts it and copies saves made while it was closed;
-  document projects re-baseline on their freshly extracted working root.
+- **Restarts are safe.** The session record (project identity = the `.sbd` path,
+  scene id, both paths, baseline) lives in the bridge context file. A restarted
+  Storyboarder adopts it and copies saves made while it was closed.
 - **Lifetime.** Until the first heartbeat (up to 90 s) the session counts as
   launching. After Blender stops reporting and its last save is synced, the
   session closes, the context is revoked and the hidden copy is removed.
@@ -647,8 +657,8 @@ project's `.blend`.
   returns the camera manifest.
 
 While a session owns the scene, Storyboarder blocks project switching, Save As,
-Scene 3D switching/deletion/replacement and working-root cleanup; project save and
-shutdown run a final sync first.
+Scene 3D switching/deletion/replacement; project save and shutdown run a final
+sync first.
 
 ### Preview pipeline
 
@@ -750,8 +760,8 @@ The canonical implementation of the 3D workspace lives in `frontend/src/scene3d/
 
 | Endpoint | Handler | What it does |
 |---|---|---|
-| `POST /api/project/scene3d/import` | `method_import_scene3d` | Write GLB to `scene3d/`, update `settings.scene3d`; wrapped in `mutate_project` |
-| `POST /api/project/scene3d/open-blender` | `method_open_blender_scene` | Launch Blender with `scene3d/scene.blend`; copies template if missing |
+| `POST /api/project/scene3d/import` | `method_import_scene3d` | Write GLB to `Blender/`, update `settings.scene3d`; wrapped in `mutate_project` |
+| `POST /api/project/scene3d/open-blender` | `method_open_blender_scene` | Launch Blender with `Blender/<scene-id>.blend`; copies template if missing |
 | `GET /api/project/scene3d/file` | `method_get_scene3d_file` | Serve the linked GLB file for the workspace renderer |
 | `POST /api/project/ref-segment/apply-model-captures` | `method_apply_ref_segment_model_captures` | Accept pre-rendered PNG data URLs; stamp provenance, composite board images |
 
@@ -762,10 +772,14 @@ The backend module that owns 3D-specific file paths and Blender launch logic is 
 ### On-disk Scene3D structure
 
 ```
-Storyboard_Project/
-  scene3d/
-    scene.glb     (or scene.gltf) — linked GLB imported by the user
-    scene.blend   — Blender project file (copied from assets/scene_template.blend on first open)
+<project>/
+  Blender/
+    <scene-id>.blend      — Blender scene file (copied from assets/scene_template.blend on first open)
+    <scene-id>.glb        (or .gltf) — linked GLB imported by the user
+    .<scene-id>.storyboarder-session-<hex>.blend — hidden session copy while Blender is open
+    References/           — 3D reference assets
+  .storyboarder/data/scenes3d/       — Scene 3D metadata
+  .storyboarder/cache/scene3d/<id>/  — disposable preview GLB + camera manifest
 ```
 
 ### Build
@@ -864,6 +878,11 @@ The following were removed in the desktop-only and architecture-cleanup refactor
 
 - `--browser` / `--host` startup flags — the internal server no longer has a browsable mode
 
+**Deleted storage formats (2026-10-22)**
+
+- Layout 1 (`.sbd` zip extracted to `%TEMP%`, or a `Storyboard_Project` folder with `shots/<id>/` asset folders and `shots.csv`) and Layout 2 (portable folder plus a zip-of-JSON `.sbd`, `.storyboarder/work` and `state.json` commits)
+- `project_convert` and `/api/project/convert`, pack/extract, working roots, dirty state and deferred flush, the autosave interval setting, `metadata_transaction`, and the `GRAPH_IF_PRESENT` / `METADATA` / `LAYOUT2` / `CONVERT` mutation policies
+
 ---
 
 ## 18. Non-Goals
@@ -887,28 +906,36 @@ This section maps each asset type to its on-disk location, the module that owns 
 ### 19.1 On-disk directory layout
 
 ```
-<root>/                        ← project.root_path
-  project.json                 ← lightweight version manifest
-  settings.json                ← all project settings (atomic write via temp + replace)
-  shots.json                   ← canonical shot list
-  shots.csv                    ← read-only compatibility snapshot (written on save, never read back)
-  shots/
-    <shot_id>/
-      <shot_id>_preview.png    ← artist artwork export (from Photoshop, drawing tool, or image import)
-      <shot_id>_background.png ← reference / background plate (owned by reference apply flows)
-      <shot_id>_codex.png      ← accepted generated image (never artist artwork)
-      <shot_id>_thumb.png      ← thumbnail for filmstrip / timeline display
-      <shot_id>.psd            ← Photoshop canvas (optional)
-      <shot_id>_annotations.json
-      _history/                ← PSD recovery backups
-  references/
-    ref_<uuid>.<ext>           ← imported video/image/model references
-  scene3d/
-    <filename>.glb / .gltf     ← imported 3D scene files
-  exports/                     ← PDF, CSV, contact-sheet output (never input)
-  backups/                     ← rolling project.json + shots.json copies on save
-  backups/ref_undo/<token>/    ← pre-apply board snapshot (preview + bg + thumb copies)
-  scripts/                     ← Blender .blend template
+<project>/                         ← project.root_path (== project.project_root)
+  <project>.sbd                    ← JSON handle: format, version, project_id
+  Images/
+    Shots/<id>_preview.png         ← artist artwork export (Photoshop, drawing tool, image import)
+    Shots/<id>_background.png      ← reference / background plate (owned by reference apply flows)
+    Shots/<id>_codex.png           ← accepted generated image (never artist artwork)
+    References/<uuid>.<ext>        ← imported image references
+    Scene2D/                       ← Scene 2D perspective images
+    Generated/                     ← generation candidate images
+  PSD/
+    Shots/<id>.psd                 ← Photoshop canvas (optional)
+    Scene2D/<perspective>.psd      ← Scene 2D perspective canvases
+  Blender/
+    <scene-id>.blend / .glb        ← Scene 3D files
+    References/<uuid>.<ext>        ← 3D references
+  Videos/Generated/<take>.mp4      ← Comfy Cloud video takes
+  Exports/                         ← PDF, CSV, contact-sheet output (never input)
+  .storyboarder/
+    data/                          ← project.metadata_root, the only copy of metadata
+      project.json                 ← manifest {version: 5, project_id, storage_revision}
+      settings.json  shots.json    ← atomic writes via temp + replace
+      scenes2d/  scenes3d/  generation/
+      annotations/<id>.json  notes/<id>.json  drawings/<id>.json
+    cache/thumbnails/<id>.png      ← thumbnail for filmstrip / timeline display
+    cache/scene3d/<id>/            ← disposable preview GLB + camera manifest
+    media/references/<uuid>.<ext>  ← video references
+    backups/                       ← rolling project/shots/settings JSON copies on save
+    backups/ref_undo/<token>/      ← pre-apply board snapshot (preview + bg + thumb copies)
+    backups/psd_recovery/          ← unreadable-PSD backups
+    transactions/                  ← in-flight mutation snapshots
 ```
 
 ### 19.2 Board asset model
@@ -920,7 +947,7 @@ Four per-shot files serve distinct roles and must not be conflated:
 | `<id>_preview.png` | Artist / Photoshop | PSD export, drawing save, image import | Reference apply (video / image / model) |
 | `<id>_background.png` | Reference system | `_apply_reference_frame_to_shot`, `_apply_model_capture_to_shot`, `import_image_for_shot` | Never by Photoshop sync |
 | `<id>_codex.png` | Generation review | Explicit candidate acceptance | Never by Photoshop sync or drawing save |
-| `<id>_thumb.png` | Display system | `_refresh_thumbnail_for_shot` (called by apply / import flows) | Never written as a primary operation |
+| thumbnail (`.storyboarder/cache/thumbnails/<id>.png`) | Display system | `_refresh_thumbnail_for_shot` (called by apply / import flows) | Never written as a primary operation |
 
 **Display composite rule**: the fixed order is `_background.png` (bottom) + `_codex.png` + `_preview.png` (top, on transparency). The UI can temporarily hide individual layers; thumbnails and exports render the complete fixed-order composite. Neither composite generation nor thumbnail refresh may destroy the originals.
 
@@ -930,29 +957,28 @@ Four per-shot files serve distinct roles and must not be conflated:
 
 | Flow | Files touched | Module | Transaction-safe? |
 |---|---|---|---|
-| `create_layout2_document` | staged portable folder + metadata-only `.sbd`, then one directory rename | `project_manager` / `project_document` | yes; failed staging is removed before publication |
-| `create_document` | private work tree + one visible `.sbd` archive | `project_manager` / `project_document` | atomic JSON plus atomic archive replacement |
-| `create_project` | legacy root dirs, project.json, settings.json | `project_manager` | atomic JSON writes only |
-| `add_shot` | `shots/<id>/` dir, optional blank canvas PSD | `project_manager` | no rollback needed — shot ID is new |
+| `create_project` | staged project folder + JSON handle `.sbd`, then one directory rename | `project_manager` / `project_document` | yes; failed staging is removed before publication |
+| `materialize_save_as` | staged copy of the folder with a new `project_id`, then one directory rename | `project_save_as` | yes; the source is never modified |
+| `add_shot` | optional blank canvas PSD | `project_manager` | no rollback needed — shot ID is new |
 | `delete_shot` | removes Shot from `project.shots`; files are NOT deleted | `shot_service` → `project_manager` | `mutate_project` in `backend_service` |
-| `import_image_for_shot` | writes `<id>_preview.png` + `<id>_background.png`, sets shot fields | `project_manager` | file write before metadata; `_autosave` commits |
+| `import_image_for_shot` | writes `<id>_preview.png` + `<id>_background.png`, sets shot fields | `project_manager` | `TRANSACTION`; file write before metadata, `persist_project_mutation` commits |
 | `remove_image_for_shot` | deletes `<id>_background.png`, clears shot preview fields | `project_manager` | no settings involved; shot-level only |
-| `import_project_reference_stream` | writes `references/ref_<uuid>.<ext>`, appends to `reference_links` | `reference_segments` | `mutate_project` in `backend_service` |
+| `import_project_reference_stream` | writes the reference asset (§19.1), appends to `reference_links` | `reference_segments` | `mutate_project` in `backend_service` |
 | `remove_project_reference` | deletes reference file (if inside root), clears `reference_links` + any segments | `reference_segments` | `mutate_project` in `backend_service` |
-| `import_scene3d_stream` | writes `scene3d/<name>.glb`, updates `settings["scene3d"]` | `external_tools` | `mutate_project` in `backend_service` |
+| `import_scene3d_stream` | writes `Blender/<scene-id>.glb`, updates `settings["scene3d"]` | `external_tools` | `mutate_project` in `backend_service` |
 | `apply_ref_segment_to_boards` | writes **only** `<id>_background.png` + `<id>_thumb.png`; stamps provenance metadata; does NOT touch `<id>_preview.png` or `source_file_path` | `reference_segments` | `mutate_project` in `backend_service`; undo snapshot taken first |
 | `apply_model_captures_to_boards` | writes **only** `<id>_background.png` + `<id>_thumb.png`; stamps provenance metadata; does NOT touch `<id>_preview.png` or `source_file_path` | `reference_segments` | `mutate_project` in `backend_service`; undo snapshot taken first |
 | Accept generation candidate | writes `<id>_codex.png` + `<id>_thumb.png`; updates approval state; does NOT touch preview/background/PSD | `generation_service` → `shot_assets` | `mutate_project` in `backend_service` |
 | `delete_ref_segment` | deletes `<id>_background.png` + `<id>_thumb.png`; for legacy-baked shots (no PSD, has provenance) also deletes `<id>_preview.png`; clears shot metadata; removes segment from settings | `reference_segments` | `mutate_project` in `backend_service` |
-| `snapshot_boards_for_undo` | copies preview/bg/thumb to `backups/ref_undo/<token>/` | `reference_segments` | snapshot is write-only; original files untouched |
+| `snapshot_boards_for_undo` | copies preview/bg/thumb to `.storyboarder/backups/ref_undo/<token>/` | `reference_segments` | snapshot is write-only; original files untouched |
 | `restore_boards_from_undo` | copies snapshot PNGs back over current board files, restores shot metadata | `reference_segments` | `mutate_project` in `backend_service` |
-| Export (PDF/CSV/contact sheet) | writes files under `exports/` only | `export_service` | no project metadata mutation |
+| Export (PDF/CSV/contact sheet) | writes files under `Exports/` only | `export_service` | no project metadata mutation |
 
 **Atomic file safety**: `_apply_reference_frame_to_shot` and `_apply_model_capture_to_shot` write to a `.tmp.png` staging file, validate it can be opened, then `os.replace()` atomically into the final path. A compose failure unlinks the temp file and leaves the previous background intact.
 
 ### 19.4 Deletion behaviour
 
-- **Shot files are never deleted on `delete_shot`.** Only the `Shot` object is removed from `project.shots`. The `shots/<id>/` directory and all its contents remain on disk. This is intentional: undo (via `restore_shot`) can re-insert the shot record, and the files remain available.
+- **Shot files are never deleted on `delete_shot`.** Only the `Shot` object is removed from `project.shots`. The shot's image, PSD and per-shot JSON files remain on disk. This is intentional: undo (via `restore_shot`) can re-insert the shot record, and the files remain available.
 - **Reference files are deleted on `remove_project_reference`,** but only when the resolved path is inside `project.root_path`. External paths (e.g. a path accidentally set to an absolute path outside the project) are silently skipped without deletion.
 - **On `delete_ref_segment`**: `<id>_background.png`, `<id>_thumb.png`, and `<id>_ref_raw.png` are always removed. `<id>_preview.png` is removed **only** for legacy-baked shots (no PSD, has provenance). Shots with a PSD or `source_file_path` keep their preview (PSD-backed shots get a fresh PSD composite regenerated). This is not reversible via the undo mechanism — undo is only for `apply_*` operations.
 - **Export files are never deleted by the application.** Exports overwrite existing output files at the same path.
@@ -985,12 +1011,13 @@ Four per-shot files serve distinct roles and must not be conflated:
 `storyboard_tool/generation_service.py` owns generation request snapshots, queue listing, Codex result deposits, and explicit result reconciliation. A request captures authored shot details, the backend-compiled prompt, continuity context, reference paths, canvas dimensions, and an input revision hash. Request JSON is immutable after creation; mutable request status is stored separately.
 
 ```
-<project>/generation/
+<project>/.storyboarder/data/generation/
   requests/<gen_id>.json              — immutable request snapshot
   state/<gen_id>.json                 — Storyboarder-owned mutable status
   results/<gen_id>/<out_id>.json      — result manifest deposited by MCP
-  candidates/<gen_id>/<out_id>/*      — copied candidate image files
 ```
+
+Candidate image files are copied to `Images/Generated/<gen_id>_<out_id>.<ext>`.
 
 The desktop API exposes:
 
@@ -1028,6 +1055,6 @@ Changing linked Scene facts marks generated shots in that scene stale. A second 
 - **Template:** `storyboard_tool/assets/comfy_workflows/wan22_i2v_api.json`, Wan 2.2 image-to-video 14B fp8 with the lightx2v 4-step LoRA (API format). Storyboarder fills the prompts (nodes 8/9), board frame (11), size and length (12, longest edge 832, 16 fps, 4n+1 frames, 1–5 s) and seed (13/14); node 17 saves the video.
 - **First + last frame:** a take may name an `end_shot_id`. The same template then swaps node 12 to `WanFirstLastFrameToVideo` and adds node 18 (`LoadImage`) for the end board's image; models, LoRA and sampling are unchanged (matching Comfy's official Wan 2.2 FLF template). The end board must be another board with an image. Test connection validates both variants.
 - **Prompt:** a motion prompt compiled from story, action, subject/camera movement, shot size, lens, lighting, characters and dialogue — not the image prompt — editable before submission.
-- **Takes:** each request is a record `generation/video/vid_<hex>.json` in generation metadata; the MP4 is stored at `generation/video/<take>.mp4` (Layout 1) or `Videos/Generated/<take>.mp4` (Layout 2). A daemon thread uploads, submits, polls and downloads, writing the record at each step; a take that was running when the app stopped resumes from its job id the next time the board's takes are listed. Takes never change the board itself.
+- **Takes:** each request is a record `generation/video/vid_<hex>.json` in generation metadata; the MP4 is stored at `Videos/Generated/<take>.mp4`. A daemon thread uploads, submits, polls and downloads, writing the record at each step; a take that was running when the app stopped resumes from its job id the next time the board's takes are listed. Takes never change the board itself.
 - **Routes:** `GET /api/comfy-cloud`, `PUT|DELETE /api/comfy-cloud/key`, `POST /api/comfy-cloud/check`, `GET /api/shots/{id}/video-prompt`, `GET|POST /api/shots/{id}/video-takes`, `DELETE /api/video-takes/{take}`, `GET /api/video-takes/{take}/video`.
 - **UI:** inspector → *Video* tab (prompt, end frame — none by default, any board on the route, next board marked — length, generate, play, delete).

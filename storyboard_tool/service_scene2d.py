@@ -23,7 +23,7 @@ class Scene2DServiceMixin:
         project = app_state._require_project(self.app)
         return {"scenes": scene2d.list_scenes(project)}
 
-    @project_mutation(MutationPolicy.LAYOUT2)
+    @project_mutation(MutationPolicy.TRANSACTION)
     def method_create_scene2d(self, data: dict[str, Any]) -> dict[str, Any]:
         project = app_state._require_project(self.app)
         try:
@@ -43,7 +43,7 @@ class Scene2DServiceMixin:
         app_state._touch_live_bridge(self.app)
         return {"scene": scene, "scenes": scenes}
 
-    @project_mutation(MutationPolicy.LAYOUT2)
+    @project_mutation(MutationPolicy.TRANSACTION)
     def method_update_scene2d(self, scene_id: str, data: dict[str, Any]) -> dict[str, Any]:
         project = app_state._require_project(self.app)
         try:
@@ -72,7 +72,7 @@ class Scene2DServiceMixin:
         app_state._touch_live_bridge(self.app)
         return {"scene": scene, "scenes": scenes}
 
-    @project_mutation(MutationPolicy.LAYOUT2)
+    @project_mutation(MutationPolicy.TRANSACTION)
     def method_delete_scene2d(self, scene_id: str) -> dict[str, Any]:
         project = app_state._require_project(self.app)
         try:
@@ -97,7 +97,7 @@ class Scene2DServiceMixin:
         app_state._touch_live_bridge(self.app)
         return {"scenes": scenes}
 
-    @project_mutation(MutationPolicy.LAYOUT2)
+    @project_mutation(MutationPolicy.TRANSACTION)
     def method_open_scene2d(self, scene_id: str) -> dict[str, Any]:
         project = app_state._require_project(self.app)
         try:
@@ -110,7 +110,7 @@ class Scene2DServiceMixin:
         app_state._touch_live_bridge(self.app)
         return {"path": opened, "relative_path": relative_path, "scene": scene}
 
-    @project_mutation(MutationPolicy.LAYOUT2)
+    @project_mutation(MutationPolicy.TRANSACTION)
     def method_refresh_scene2d_preview(self, scene_id: str) -> dict[str, Any]:
         project = app_state._require_project(self.app)
         try:
@@ -122,7 +122,7 @@ class Scene2DServiceMixin:
         app_state.persist_project_mutation(self.app)
         return {"scene": scene, "preview_exists": preview_exists, "message": message}
 
-    @project_mutation(MutationPolicy.LAYOUT2)
+    @project_mutation(MutationPolicy.TRANSACTION)
     def method_add_scene2d_to_references(self, scene_id: str) -> dict[str, Any]:
         project = app_state._require_project(self.app)
         try:
@@ -133,7 +133,7 @@ class Scene2DServiceMixin:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         app_state.persist_project_mutation(self.app)
         app_state._touch_live_bridge(self.app)
-        return {"reference": reference, "scene": scene, "project": app_state._project_payload(project, self.app.state.dirty)}
+        return {"reference": reference, "scene": scene, "project": app_state._project_payload(project)}
 
     def method_get_scene2d_preview(self, scene_id: str) -> dict[str, str]:
         project = app_state._require_project(self.app)
@@ -154,7 +154,7 @@ class Scene2DServiceMixin:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return {"scene": scene, "perspectives": perspectives}
 
-    @project_mutation(MutationPolicy.LAYOUT2)
+    @project_mutation(MutationPolicy.TRANSACTION)
     def method_create_scene2d_perspective(self, scene_id: str, data: dict[str, Any]) -> dict[str, Any]:
         project = app_state._require_project(self.app)
         try:
@@ -173,7 +173,7 @@ class Scene2DServiceMixin:
         app_state.persist_project_mutation(self.app)
         return {"scene": scene, "perspective": perspective, "scenes": scenes}
 
-    @project_mutation(MutationPolicy.LAYOUT2)
+    @project_mutation(MutationPolicy.TRANSACTION)
     def method_duplicate_scene2d_perspective(self, scene_id: str, perspective_id: str) -> dict[str, Any]:
         project = app_state._require_project(self.app)
         try:
@@ -185,7 +185,7 @@ class Scene2DServiceMixin:
         app_state.persist_project_mutation(self.app)
         return {"scene": scene, "perspective": perspective, "scenes": scenes}
 
-    @project_mutation(MutationPolicy.LAYOUT2)
+    @project_mutation(MutationPolicy.TRANSACTION)
     def method_reorder_scene2d_perspectives(self, scene_id: str, perspective_ids: list[str]) -> dict[str, Any]:
         project = app_state._require_project(self.app)
         try:
@@ -197,7 +197,7 @@ class Scene2DServiceMixin:
         app_state.persist_project_mutation(self.app)
         return {"scene": scene, "scenes": scenes}
 
-    @project_mutation(MutationPolicy.LAYOUT2)
+    @project_mutation(MutationPolicy.TRANSACTION)
     def method_import_scene2d_perspective(
         self,
         scene_id: str,
@@ -223,7 +223,7 @@ class Scene2DServiceMixin:
         app_state.persist_project_mutation(self.app)
         return {"scene": scene, "perspective": perspective, "scenes": scenes}
 
-    @project_mutation(MutationPolicy.LAYOUT2)
+    @project_mutation(MutationPolicy.TRANSACTION)
     def method_update_scene2d_perspective(self, scene_id: str, perspective_id: str, data: dict[str, Any]) -> dict[str, Any]:
         project = app_state._require_project(self.app)
         try:
@@ -235,7 +235,7 @@ class Scene2DServiceMixin:
         app_state.persist_project_mutation(self.app)
         return {"scene": scene, "perspective": perspective, "scenes": scenes}
 
-    @project_mutation(MutationPolicy.LAYOUT2)
+    @project_mutation(MutationPolicy.TRANSACTION)
     def method_delete_scene2d_perspective(self, scene_id: str, perspective_id: str) -> dict[str, Any]:
         project = app_state._require_project(self.app)
         try:
@@ -247,7 +247,7 @@ class Scene2DServiceMixin:
         app_state.persist_project_mutation(self.app)
         return {"scene": scene, "scenes": scenes}
 
-    @project_mutation(MutationPolicy.LAYOUT2)
+    @project_mutation(MutationPolicy.TRANSACTION)
     def method_open_scene2d_perspective(self, scene_id: str, perspective_id: str) -> dict[str, Any]:
         from . import runtime_state
         project = app_state._require_project(self.app)
@@ -322,7 +322,7 @@ class Scene2DServiceMixin:
             "work_context": runtime_state.active_work_context(self.app),
         }
 
-    @project_mutation(MutationPolicy.LAYOUT2)
+    @project_mutation(MutationPolicy.TRANSACTION)
     def method_plugin_scene2d_export_preview(
         self,
         scene_id: str,
@@ -335,7 +335,7 @@ class Scene2DServiceMixin:
             protocol,
         )
 
-    @project_mutation(MutationPolicy.LAYOUT2)
+    @project_mutation(MutationPolicy.TRANSACTION)
     def method_plugin_scene2d_psd_saved(
         self,
         scene_id: str,
@@ -348,7 +348,7 @@ class Scene2DServiceMixin:
             protocol,
         )
 
-    @project_mutation(MutationPolicy.LAYOUT2)
+    @project_mutation(MutationPolicy.TRANSACTION)
     def method_plugin_scene2d_next_perspective(
         self,
         scene_id: str,
@@ -361,7 +361,7 @@ class Scene2DServiceMixin:
             protocol,
         )
 
-    @project_mutation(MutationPolicy.LAYOUT2)
+    @project_mutation(MutationPolicy.TRANSACTION)
     def method_refresh_scene2d_perspective_preview(self, scene_id: str, perspective_id: str) -> dict[str, Any]:
         project = app_state._require_project(self.app)
         try:
@@ -384,7 +384,7 @@ class Scene2DServiceMixin:
             "message": "Scene 2D preview refreshed." if preview_exists else "No Scene 2D preview exists yet.",
         }
 
-    @project_mutation(MutationPolicy.LAYOUT2)
+    @project_mutation(MutationPolicy.TRANSACTION)
     def method_set_primary_scene2d_perspective(self, scene_id: str, perspective_id: str) -> dict[str, Any]:
         project = app_state._require_project(self.app)
         try:
@@ -396,7 +396,7 @@ class Scene2DServiceMixin:
         app_state.persist_project_mutation(self.app)
         return {"scene": scene, "scenes": scenes}
 
-    @project_mutation(MutationPolicy.LAYOUT2)
+    @project_mutation(MutationPolicy.TRANSACTION)
     def method_move_scene2d_perspective(self, scene_id: str, perspective_id: str, target_scene_id: str) -> dict[str, Any]:
         project = app_state._require_project(self.app)
         try:
@@ -419,7 +419,7 @@ class Scene2DServiceMixin:
             "scenes": scenes,
         }
 
-    @project_mutation(MutationPolicy.LAYOUT2)
+    @project_mutation(MutationPolicy.TRANSACTION)
     def method_add_scene2d_perspective_to_references(self, scene_id: str, perspective_id: str) -> dict[str, Any]:
         project = app_state._require_project(self.app)
         try:
@@ -429,7 +429,7 @@ class Scene2DServiceMixin:
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         app_state.persist_project_mutation(self.app)
-        return {"reference": reference, "scene": scene, "project": app_state._project_payload(project, self.app.state.dirty)}
+        return {"reference": reference, "scene": scene, "project": app_state._project_payload(project)}
 
     def method_get_scene2d_perspective_preview(self, scene_id: str, perspective_id: str) -> dict[str, str]:
         project = app_state._require_project(self.app)

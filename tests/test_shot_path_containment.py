@@ -10,10 +10,10 @@ from __future__ import annotations
 import tempfile
 from pathlib import Path
 
+from conftest import make_project
 from fastapi.testclient import TestClient
 
 from storyboard_tool import api as api_module
-from storyboard_tool import project_manager
 from storyboard_tool.models import Shot
 from storyboard_tool.shot_assets import resolve_shot_preview_path, resolve_shot_thumbnail_path
 
@@ -21,7 +21,8 @@ from storyboard_tool.shot_assets import resolve_shot_preview_path, resolve_shot_
 def _client(tmp: str) -> TestClient:
     app = api_module.create_app(Path(tmp))
     client = TestClient(app, raise_server_exceptions=False)
-    client.post("/api/project/new", json={"path": tmp})
+    created = client.post("/api/project/new", json={"path": str(Path(tmp) / "Demo.sbd")})
+    assert created.status_code == 200, created.text
     return client
 
 
@@ -63,7 +64,7 @@ def test_restore_shot_with_traversal_thumbnail_path_is_not_served() -> None:
 
 
 def test_resolve_helpers_reject_out_of_project_paths(tmp_path) -> None:
-    project = project_manager.create_project(tmp_path)
+    project = make_project(tmp_path)
     shot = Shot(shot_id="s1", preview_image_path="C:/Windows/win.ini", thumbnail_path="/etc/hosts")
     # No canonical on-disk asset exists yet, and the metadata paths escape the root,
     # so both resolvers must decline rather than point outside the project.

@@ -5,15 +5,14 @@ from pathlib import Path
 
 import pytest
 
-from storyboard_tool import project_layout, project_manager
+from conftest import make_project
+from storyboard_tool import project_manager
 from storyboard_tool.models import Project
 from storyboard_tool.project_layout import (
-    LAYOUT_1,
-    LAYOUT_2,
     MAX_STORAGE_REVISION,
     PROJECT_JSON_VERSION,
-    LayoutDisabledError,
     ProjectIntegrityError,
+    ProjectManifest,
     ProjectPathError,
     ProjectSchemaError,
     ensure_no_casefold_collisions,
@@ -23,57 +22,43 @@ from storyboard_tool.project_layout import (
 )
 
 
-def test_layout1_roots_preserve_root_path_behavior(tmp_path: Path) -> None:
-    project = Project(root_path=tmp_path)
-
-    assert project.layout == LAYOUT_1
-    assert project.project_root == tmp_path
-    assert project.metadata_root == tmp_path
-    assert project.json_path == tmp_path / "project.json"
-    assert project.shots_dir == tmp_path / "shots"
-
-
-def test_layout2_model_distinguishes_project_and_metadata_roots(tmp_path: Path) -> None:
-    project_root = tmp_path / "Portable"
-    metadata_root = project_root / ".storyboarder" / "work"
+def test_model_distinguishes_project_and_metadata_roots(tmp_path: Path) -> None:
     project = Project(
-        root_path=metadata_root,
-        project_root_path=project_root,
-        layout=LAYOUT_2,
+        root_path=tmp_path,
         project_id="stable-project-id",
         storage_revision=7,
     )
 
-    assert project.project_root == project_root
-    assert project.metadata_root == metadata_root
-    assert project.json_path == metadata_root / "project.json"
+    assert project.project_root == tmp_path
+    assert project.metadata_root == tmp_path / ".storyboarder" / "data"
+    assert project.json_path == tmp_path / ".storyboarder" / "data" / "project.json"
+    assert not hasattr(project, "layout")
+    assert not hasattr(project, "shots_dir")
 
 
-@pytest.mark.parametrize("version", [1, 2, 3, PROJECT_JSON_VERSION])
-def test_supported_layout1_versions_default_missing_layout(version: int) -> None:
-    spec = parse_project_manifest({"version": version})
+def test_current_manifest_parses_to_id_and_revision() -> None:
+    manifest = parse_project_manifest(
+        {"version": PROJECT_JSON_VERSION, "project_id": "stable-id", "storage_revision": 3}
+    )
 
-    assert spec.schema_version == version
-    assert spec.layout == LAYOUT_1
-    assert spec.project_id == ""
-    assert spec.storage_revision == 0
+    assert manifest == ProjectManifest(project_id="stable-id", storage_revision=3)
 
 
 @pytest.mark.parametrize(
     "payload",
     [
+        None,
+        [],
         {},
         {"version": None},
         {"version": True},
         {"version": 0},
-        {"version": 5},
-        {"version": "4"},
-        {"version": 4, "layout": 0},
-        {"version": 4, "layout": 3},
-        {"version": 4, "layout": "2"},
+        {"version": 4, "layout": 2, "project_id": "id", "storage_revision": 0},
+        {"version": PROJECT_JSON_VERSION + 1, "project_id": "id", "storage_revision": 0},
+        {"version": str(PROJECT_JSON_VERSION), "project_id": "id", "storage_revision": 0},
     ],
 )
-def test_unknown_or_malformed_schema_values_fail_closed(payload: dict) -> None:
+def test_unknown_or_malformed_schema_values_fail_closed(payload) -> None:
     with pytest.raises(ProjectSchemaError):
         parse_project_manifest(payload)
 
@@ -84,73 +69,58 @@ def test_unknown_or_malformed_schema_values_fail_closed(payload: dict) -> None:
         {},
         {"project_id": ""},
         {"project_id": " id "},
+        {"project_id": "id"},
         {"project_id": "id", "storage_revision": None},
         {"project_id": "id", "storage_revision": True},
         {"project_id": "id", "storage_revision": -1},
         {"project_id": "id", "storage_revision": MAX_STORAGE_REVISION + 1},
     ],
 )
-def test_layout2_requires_stable_id_and_bounded_revision(fields: dict) -> None:
+def test_manifest_requires_stable_id_and_bounded_revision(fields: dict) -> None:
     with pytest.raises(ProjectSchemaError):
-        parse_project_manifest({"version": 4, "layout": 2, **fields})
+        parse_project_manifest({"version": PROJECT_JSON_VERSION, **fields})
 
 
-def test_layout2_schema_can_be_validated_but_open_is_disabled(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr(project_layout, "LAYOUT_2_ENABLED", False)
-    root = tmp_path / "project"
-    root.mkdir()
-    manifest = {
-        "version": 4,
-        "layout": 2,
-        "project_id": "stable-project-id",
-        "storage_revision": 0,
-    }
-    (root / "project.json").write_text(json.dumps(manifest), encoding="utf-8")
+def test_open_rejects_an_unsupported_manifest_without_rewriting_it(tmp_path: Path) -> None:
+    project = make_project(tmp_path)
+    old_manifest = {"version": 4, "layout": 2, "project_id": project.project_id, "storage_revision": 1}
+    project.json_path.write_text(json.dumps(old_manifest), encoding="utf-8")
+    before = project.json_path.read_bytes()
 
-    assert parse_project_manifest(manifest).layout == LAYOUT_2
-    with pytest.raises(LayoutDisabledError, match="not enabled"):
-        project_manager.open_project(root / "project.json")
-    assert sorted(path.name for path in root.iterdir()) == ["project.json"]
+    with pytest.raises(ProjectSchemaError):
+        project_manager.open_project(project.document_path)
+    assert project.json_path.read_bytes() == before
 
 
-def test_layout2_save_is_disabled_before_writing(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr(project_layout, "LAYOUT_2_ENABLED", False)
-    metadata_root = tmp_path / ".storyboarder" / "work"
-    project = Project(
-        root_path=metadata_root,
-        project_root_path=tmp_path,
-        layout=LAYOUT_2,
-        project_id="stable-project-id",
-        storage_revision=0,
-    )
-
-    with pytest.raises(LayoutDisabledError, match="not enabled"):
-        project_manager.save_project(project)
-    assert not metadata_root.exists()
-
-
-def test_new_layout1_manifest_uses_schema_v4_without_layout_fields(tmp_path: Path) -> None:
-    project = project_manager.create_project(tmp_path)
+def test_new_manifest_is_exactly_version_id_and_revision(tmp_path: Path) -> None:
+    project = make_project(tmp_path)
     manifest = json.loads(project.json_path.read_text(encoding="utf-8"))
 
-    assert manifest == {"version": PROJECT_JSON_VERSION}
-    assert project.layout == LAYOUT_1
+    assert manifest == {
+        "version": PROJECT_JSON_VERSION,
+        "project_id": project.project_id,
+        "storage_revision": project.storage_revision,
+    }
+    assert PROJECT_JSON_VERSION == 5
 
 
-def test_uxp_offline_manifest_writers_mirror_schema_v4() -> None:
+@pytest.mark.xfail(
+    reason=(
+        "SOURCE BUG: the Photoshop plugin's offline manifest writers still write "
+        "project.json version 4 (photoshop_uxp_plugin/panel_storage_adapter.js:9, "
+        "backend_client.js:240, panel.js:877/901) while the backend only accepts "
+        "version 5 under .storyboarder/data; the plan leaves offline mode undecided."
+    ),
+    strict=True,
+)
+def test_uxp_offline_manifest_writers_mirror_current_schema() -> None:
     plugin_root = Path(__file__).resolve().parents[1] / "photoshop_uxp_plugin"
 
-    assert "version: 4" in (plugin_root / "backend_client.js").read_text(encoding="utf-8")
+    assert f"version: {PROJECT_JSON_VERSION}" in (plugin_root / "backend_client.js").read_text(encoding="utf-8")
     panel = (plugin_root / "panel.js").read_text(encoding="utf-8")
-    assert panel.count("version || 4") == 2
+    assert panel.count(f"version || {PROJECT_JSON_VERSION}") == 2
     adapter = (plugin_root / "panel_storage_adapter.js").read_text(encoding="utf-8")
-    assert "const PROJECT_JSON_VERSION = 4;" in adapter
+    assert f"const PROJECT_JSON_VERSION = {PROJECT_JSON_VERSION};" in adapter
 
 
 @pytest.mark.parametrize(

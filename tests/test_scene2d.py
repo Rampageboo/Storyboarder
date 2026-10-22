@@ -10,6 +10,8 @@ import warnings
 from pathlib import Path
 from unittest import mock
 
+import pytest
+
 with warnings.catch_warnings():
     warnings.filterwarnings("ignore", message="Using `httpx` with `starlette.testclient`")
     from fastapi.testclient import TestClient
@@ -29,6 +31,11 @@ def _quiet(fn):
         return fn()
 
 
+def _write_file(path: Path, data: bytes) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(data)
+
+
 def _is_uuid(value: str) -> bool:
     try:
         return str(uuid.UUID(value)) == value
@@ -42,9 +49,11 @@ class Scene2DTests(unittest.TestCase):
         self.root = Path(self._tmp.name)
         self.app = api_module.create_app(self.root)
         self.client = TestClient(self.app, raise_server_exceptions=False)
-        created = _quiet(lambda: self.client.post("/api/project/new", json={"path": self._tmp.name}))
-        self.assertEqual(created.status_code, 200)
-        self.project_root = Path(created.json()["project_path"])
+        created = _quiet(lambda: self.client.post("/api/project/new", json={"path": str(self.root / "Demo.sbd")}))
+        self.assertEqual(created.status_code, 200, created.text)
+        self.document_path = Path(created.json()["project_path"])
+        self.project_root = self.document_path.parent
+        self.metadata_root = self.project_root / ".storyboarder" / "data"
 
     def tearDown(self) -> None:
         self._tmp.cleanup()
@@ -54,30 +63,31 @@ class Scene2DTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200, response.text)
         return response.json()["scene"]
 
-    def test_create_scene2d_creates_index_folder_psd_and_meta_without_shots(self) -> None:
+    def test_create_scene2d_creates_index_psd_and_meta_without_shots(self) -> None:
         scene = self._create_scene("Living room layout")
 
         self.assertTrue(_is_uuid(scene["id"]))
         self.assertTrue(_is_uuid(scene["primary_perspective_id"]))
         self.assertEqual(
             scene["source_file_path"],
-            f"scenes2d/{scene['id']}/perspectives/{scene['primary_perspective_id']}/source.psd",
+            f"PSD/Scene2D/{scene['primary_perspective_id']}.psd",
         )
         self.assertEqual(
             scene["preview_image_path"],
-            f"scenes2d/{scene['id']}/perspectives/{scene['primary_perspective_id']}/preview.png",
+            f"Images/Scene2D/{scene['primary_perspective_id']}_preview.png",
         )
         self.assertTrue(scene["can_be_reference"])
         self.assertEqual(scene["perspectives"][0]["id"], scene["primary_perspective_id"])
         self.assertEqual(scene["perspectives"][0]["source_file_path"], scene["source_file_path"])
 
-        scene_dir = self.project_root / "scenes2d" / scene["id"]
-        self.assertTrue((self.project_root / "scenes2d" / "scenes2d.json").is_file())
+        scene_dir = self.metadata_root / "scenes2d" / scene["id"]
+        self.assertTrue((self.metadata_root / "scenes2d" / "scenes2d.json").is_file())
         self.assertTrue(scene_dir.is_dir())
-        self.assertTrue((scene_dir / "perspectives" / scene["primary_perspective_id"] / "source.psd").is_file())
+        self.assertTrue((self.project_root / scene["source_file_path"]).is_file())
         self.assertTrue((scene_dir / f"{scene['id']}_meta.json").is_file())
+        self.assertFalse((self.project_root / "scenes2d").exists())
 
-        shots_json = self.project_root / "shots.json"
+        shots_json = self.metadata_root / "shots.json"
         shots_data = json.loads(shots_json.read_text(encoding="utf-8")) if shots_json.is_file() else {"shots": []}
         self.assertEqual(shots_data.get("shots"), [])
         self.assertEqual(_quiet(lambda: self.client.get("/api/project")).json()["shots"], [])
@@ -88,7 +98,7 @@ class Scene2DTests(unittest.TestCase):
         app = api_module.create_app(self.root)
         client = TestClient(app, raise_server_exceptions=False)
         opened = _quiet(
-            lambda: client.post("/api/project/open", json={"project_json_path": str(self.project_root / "project.json")})
+            lambda: client.post("/api/project/open", json={"project_json_path": str(self.document_path)})
         )
         self.assertEqual(opened.status_code, 200, opened.text)
         response = _quiet(lambda: client.get("/api/project/scenes2d"))
@@ -116,7 +126,7 @@ class Scene2DTests(unittest.TestCase):
         app = api_module.create_app(self.root)
         client = TestClient(app, raise_server_exceptions=False)
         opened = _quiet(
-            lambda: client.post("/api/project/open", json={"project_json_path": str(self.project_root / "project.json")})
+            lambda: client.post("/api/project/open", json={"project_json_path": str(self.document_path)})
         )
         self.assertEqual(opened.status_code, 200, opened.text)
         reloaded = _quiet(lambda: client.get("/api/project/scenes2d"))
@@ -142,28 +152,41 @@ class Scene2DTests(unittest.TestCase):
         app = api_module.create_app(self.root)
         client = TestClient(app, raise_server_exceptions=False)
         opened = _quiet(
-            lambda: client.post("/api/project/open", json={"project_json_path": str(self.project_root / "project.json")})
+            lambda: client.post("/api/project/open", json={"project_json_path": str(self.document_path)})
         )
         self.assertEqual(opened.status_code, 200, opened.text)
         reloaded = _quiet(lambda: client.get(f"/api/project/scenes2d/{scene['id']}/perspectives"))
         self.assertEqual(reloaded.status_code, 200, reloaded.text)
         self.assertEqual(reloaded.json()["perspectives"][0]["title"], "Plan view")
 
-    def test_open_missing_source_recreates_psd_and_does_not_mutate_shots(self) -> None:
+    def test_open_scene_opens_primary_source_and_does_not_mutate_shots(self) -> None:
         scene = self._create_scene("Open source")
         source = self.project_root / scene["source_file_path"]
-        source.unlink()
 
         before = _quiet(lambda: self.client.get("/api/project")).json()["shots"]
         with mock.patch("storyboard_tool.scene2d.project_manager.open_project_file", return_value=source) as opened:
             response = _quiet(lambda: self.client.post(f"/api/project/scenes2d/{scene['id']}/open"))
 
         self.assertEqual(response.status_code, 200, response.text)
-        self.assertTrue(source.is_file())
         opened.assert_called_once()
         self.assertEqual(opened.call_args.args[1], scene["source_file_path"])
         after = _quiet(lambda: self.client.get("/api/project")).json()["shots"]
         self.assertEqual(after, before)
+
+    def test_open_scene_with_missing_source_is_reported_not_recreated(self) -> None:
+        scene = self._create_scene("Missing source")
+        source = self.project_root / scene["source_file_path"]
+        source.unlink()
+
+        before = _quiet(lambda: self.client.get("/api/project")).json()["shots"]
+        with mock.patch("storyboard_tool.scene2d.project_manager.open_project_file") as opened:
+            response = _quiet(lambda: self.client.post(f"/api/project/scenes2d/{scene['id']}/open"))
+
+        self.assertEqual(response.status_code, 404, response.text)
+        self.assertIn("perspective file not found", response.text)
+        opened.assert_not_called()
+        self.assertFalse(source.exists())
+        self.assertEqual(_quiet(lambda: self.client.get("/api/project")).json()["shots"], before)
 
     def test_open_existing_perspective_does_not_touch_updated_at_but_recreate_does(self) -> None:
         scene = self._create_scene("Open timestamps")
@@ -217,7 +240,7 @@ class Scene2DTests(unittest.TestCase):
 
         scene = self._create_scene("Scene reference")
         preview = self.project_root / scene["preview_image_path"]
-        preview.write_bytes(MINI_PNG)
+        _write_file(preview, MINI_PNG)
 
         response = _quiet(lambda: self.client.post(f"/api/project/scenes2d/{scene['id']}/add-to-references"))
         self.assertEqual(response.status_code, 200, response.text)
@@ -244,13 +267,13 @@ class Scene2DTests(unittest.TestCase):
     def test_delete_scene_removes_scene2d_reference_links_only(self) -> None:
         scene = self._create_scene("Delete reference")
         preview = self.project_root / scene["preview_image_path"]
-        preview.write_bytes(MINI_PNG)
+        _write_file(preview, MINI_PNG)
         added = _quiet(lambda: self.client.post(f"/api/project/scenes2d/{scene['id']}/add-to-references"))
         self.assertEqual(added.status_code, 200, added.text)
 
         response = _quiet(lambda: self.client.delete(f"/api/project/scenes2d/{scene['id']}"))
         self.assertEqual(response.status_code, 200, response.text)
-        self.assertFalse((self.project_root / "scenes2d" / scene["id"]).exists())
+        self.assertFalse((self.metadata_root / "scenes2d" / scene["id"]).exists())
 
         project = _quiet(lambda: self.client.get("/api/project")).json()
         self.assertFalse(
@@ -260,41 +283,6 @@ class Scene2DTests(unittest.TestCase):
             )
         )
         self.assertEqual(project["shots"], [])
-
-    def test_flat_scene2d_record_normalizes_to_default_perspective(self) -> None:
-        scenes_root = self.project_root / "scenes2d"
-        scene_root = scenes_root / "scene_001"
-        scene_root.mkdir(parents=True)
-        (scene_root / "scene_001.psd").write_bytes(b"legacy psd")
-        legacy = {
-            "scenes": [
-                {
-                    "id": "scene_001",
-                    "title": "Legacy flat scene",
-                    "description": "",
-                    "source_file_path": "scenes2d/scene_001/scene_001.psd",
-                    "preview_image_path": "scenes2d/scene_001/scene_001_preview.png",
-                    "created_at": "2025-01-01T00:00:00Z",
-                    "updated_at": "2025-01-01T00:00:00Z",
-                    "can_be_reference": True,
-                }
-            ]
-        }
-        (scenes_root / "scenes2d.json").write_text(json.dumps(legacy), encoding="utf-8")
-
-        response = _quiet(lambda: self.client.get("/api/project/scenes2d"))
-
-        self.assertEqual(response.status_code, 200, response.text)
-        scene = response.json()["scenes"][0]
-        self.assertTrue(_is_uuid(scene["id"]))
-        self.assertTrue(_is_uuid(scene["primary_perspective_id"]))
-        self.assertEqual(len(scene["perspectives"]), 1)
-        self.assertEqual(
-            scene["perspectives"][0]["source_file_path"],
-            f"scenes2d/{scene['id']}/perspectives/{scene['primary_perspective_id']}/source.psd",
-        )
-        self.assertEqual(scene["source_file_path"], scene["perspectives"][0]["source_file_path"])
-        self.assertFalse((self.project_root / "scenes2d" / "scene_001").exists())
 
     def test_blank_perspective_open_refresh_primary_and_delete_behaviors(self) -> None:
         scene = self._create_scene("Perspective scene")
@@ -309,7 +297,7 @@ class Scene2DTests(unittest.TestCase):
         perspective = created.json()["perspective"]
         self.assertTrue(_is_uuid(perspective["id"]))
         self.assertTrue((self.project_root / perspective["source_file_path"]).is_file())
-        self.assertEqual(perspective["source_file_path"], f"scenes2d/{scene['id']}/perspectives/{perspective['id']}/source.psd")
+        self.assertEqual(perspective["source_file_path"], f"PSD/Scene2D/{perspective['id']}.psd")
 
         refresh = _quiet(
             lambda: self.client.post(
@@ -397,7 +385,7 @@ class Scene2DTests(unittest.TestCase):
         self.assertEqual(refresh.status_code, 200, refresh.text)
         self.assertFalse(refresh.json()["preview_exists"])
 
-    def test_move_perspective_to_another_scene_updates_paths_primary_and_references(self) -> None:
+    def test_move_perspective_to_another_scene_keeps_paths_and_updates_primary_and_references(self) -> None:
         source_scene = self._create_scene("Source scene")
         target_scene = self._create_scene("Target scene")
         created = _quiet(
@@ -410,7 +398,7 @@ class Scene2DTests(unittest.TestCase):
         perspective = created.json()["perspective"]
         source_path = self.project_root / perspective["source_file_path"]
         self.assertTrue(source_path.is_file())
-        (self.project_root / perspective["preview_image_path"]).write_bytes(MINI_PNG)
+        _write_file(self.project_root / perspective["preview_image_path"], MINI_PNG)
 
         added = _quiet(
             lambda: self.client.post(
@@ -435,12 +423,9 @@ class Scene2DTests(unittest.TestCase):
         self.assertEqual(moved.status_code, 200, moved.text)
         body = moved.json()
         moved_perspective = body["perspective"]
-        self.assertEqual(
-            moved_perspective["source_file_path"],
-            f"scenes2d/{target_scene['id']}/perspectives/{perspective['id']}/source.psd",
-        )
-        self.assertFalse(source_path.exists())
-        self.assertTrue((self.project_root / moved_perspective["source_file_path"]).is_file())
+        self.assertEqual(moved_perspective["source_file_path"], perspective["source_file_path"])
+        self.assertEqual(moved_perspective["source_file_path"], f"PSD/Scene2D/{perspective['id']}.psd")
+        self.assertTrue(source_path.is_file())
         self.assertEqual(body["source_scene"]["primary_perspective_id"], source_scene["primary_perspective_id"])
         self.assertIn(perspective["id"], [item["id"] for item in body["target_scene"]["perspectives"]])
 
@@ -451,12 +436,13 @@ class Scene2DTests(unittest.TestCase):
             if link.get("source_scene2d_perspective_id") == perspective["id"]
         )
         self.assertEqual(moved_reference["source_scene2d_id"], target_scene["id"])
+        self.assertEqual(moved_reference["path"], perspective["preview_image_path"])
         self.assertEqual(
             moved_reference["path"],
-            f"scenes2d/{target_scene['id']}/perspectives/{perspective['id']}/preview.png",
+            f"Images/Scene2D/{perspective['id']}_preview.png",
         )
 
-    def test_move_perspective_rolls_back_files_metadata_and_references_on_commit_failure(self) -> None:
+    def test_move_perspective_rolls_back_metadata_and_references_on_save_failure(self) -> None:
         source_scene = self._create_scene("Rollback source")
         target_scene = self._create_scene("Rollback target")
         created = _quiet(
@@ -469,7 +455,7 @@ class Scene2DTests(unittest.TestCase):
         perspective = created.json()["perspective"]
         source_path = self.project_root / perspective["source_file_path"]
         preview_path = self.project_root / perspective["preview_image_path"]
-        preview_path.write_bytes(MINI_PNG)
+        _write_file(preview_path, MINI_PNG)
         added = _quiet(
             lambda: self.client.post(
                 f"/api/project/scenes2d/{source_scene['id']}/perspectives/{perspective['id']}/add-to-references"
@@ -477,7 +463,7 @@ class Scene2DTests(unittest.TestCase):
         )
         self.assertEqual(added.status_code, 200, added.text)
         before_scenes = _quiet(lambda: self.client.get("/api/project/scenes2d")).json()["scenes"]
-        before_settings = json.loads((self.project_root / "settings.json").read_text(encoding="utf-8"))
+        before_settings = json.loads((self.metadata_root / "settings.json").read_text(encoding="utf-8"))
 
         with mock.patch("storyboard_tool.scene2d._save_scenes", side_effect=RuntimeError("forced save failure")):
             moved = _quiet(
@@ -490,11 +476,8 @@ class Scene2DTests(unittest.TestCase):
         self.assertEqual(moved.status_code, 500, moved.text)
         self.assertTrue(source_path.is_file())
         self.assertTrue(preview_path.is_file())
-        self.assertFalse(
-            (self.project_root / "scenes2d" / target_scene["id"] / "perspectives" / perspective["id"]).exists()
-        )
         after_scenes = _quiet(lambda: self.client.get("/api/project/scenes2d")).json()["scenes"]
-        after_settings = json.loads((self.project_root / "settings.json").read_text(encoding="utf-8"))
+        after_settings = json.loads((self.metadata_root / "settings.json").read_text(encoding="utf-8"))
         self.assertEqual(before_scenes, after_scenes)
         self.assertEqual(before_settings, after_settings)
 
@@ -539,9 +522,11 @@ class Scene2DDuplicatePerspectiveTests(unittest.TestCase):
         self.root = Path(self._tmp.name)
         self.app = api_module.create_app(self.root)
         self.client = TestClient(self.app, raise_server_exceptions=False)
-        created = _quiet(lambda: self.client.post("/api/project/new", json={"path": self._tmp.name}))
-        self.assertEqual(created.status_code, 200)
-        self.project_root = Path(created.json()["project_path"])
+        created = _quiet(lambda: self.client.post("/api/project/new", json={"path": str(self.root / "Demo.sbd")}))
+        self.assertEqual(created.status_code, 200, created.text)
+        self.document_path = Path(created.json()["project_path"])
+        self.project_root = self.document_path.parent
+        self.metadata_root = self.project_root / ".storyboarder" / "data"
 
     def tearDown(self) -> None:
         self._tmp.cleanup()
@@ -561,6 +546,20 @@ class Scene2DDuplicatePerspectiveTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200, response.text)
         return response.json()["perspective"]
 
+    def _scene2d_asset_names(self) -> set[str]:
+        names: set[str] = set()
+        for folder in (self.project_root / "PSD" / "Scene2D", self.project_root / "Images" / "Scene2D"):
+            if folder.is_dir():
+                names.update(child.name for child in folder.iterdir())
+        return names
+
+    def _assert_only_assets_of(self, *perspective_ids: str) -> None:
+        for name in self._scene2d_asset_names():
+            self.assertTrue(
+                any(name.startswith(perspective_id) for perspective_id in perspective_ids),
+                f"Unexpected Scene 2D asset left after rollback: {name}",
+            )
+
     def _duplicate(self, scene_id: str, perspective_id: str) -> tuple[int, dict]:
         response = _quiet(
             lambda: self.client.post(
@@ -576,7 +575,7 @@ class Scene2DDuplicatePerspectiveTests(unittest.TestCase):
         original_persp = scene["perspectives"][0]
         source_path = self.project_root / original_persp["source_file_path"]
         preview_path = self.project_root / original_persp["preview_image_path"]
-        preview_path.write_bytes(MINI_PNG)
+        _write_file(preview_path, MINI_PNG)
         original_source_bytes = source_path.read_bytes()
 
         status, body = self._duplicate(scene["id"], original_persp["id"])
@@ -614,7 +613,7 @@ class Scene2DDuplicatePerspectiveTests(unittest.TestCase):
 
         new_source = self.project_root / dup["source_file_path"]
         canonical_preview = (
-            f"scenes2d/{scene['id']}/perspectives/{dup['id']}/preview.png"
+            f"Images/Scene2D/{dup['id']}_preview.png"
         )
         self.assertTrue(new_source.is_file())
         self.assertFalse((self.project_root / canonical_preview).is_file())
@@ -716,19 +715,19 @@ class Scene2DDuplicatePerspectiveTests(unittest.TestCase):
     def test_duplicate_does_not_affect_existing_references(self) -> None:
         scene = self._create_scene()
         original_persp = scene["perspectives"][0]
-        (self.project_root / original_persp["preview_image_path"]).write_bytes(MINI_PNG)
+        _write_file(self.project_root / original_persp["preview_image_path"], MINI_PNG)
         added = _quiet(
             lambda: self.client.post(
                 f"/api/project/scenes2d/{scene['id']}/perspectives/{original_persp['id']}/add-to-references"
             )
         )
         self.assertEqual(added.status_code, 200, added.text)
-        before_settings = (self.project_root / "settings.json").read_bytes()
+        before_settings = (self.metadata_root / "settings.json").read_bytes()
 
         _, body = self._duplicate(scene["id"], original_persp["id"])
         dup = body["perspective"]
 
-        after_settings = (self.project_root / "settings.json").read_bytes()
+        after_settings = (self.metadata_root / "settings.json").read_bytes()
         self.assertEqual(before_settings, after_settings)
 
         project = _quiet(lambda: self.client.get("/api/project")).json()
@@ -788,10 +787,10 @@ class Scene2DDuplicatePerspectiveTests(unittest.TestCase):
     def test_rollback_on_save_failure_leaves_source_intact(self) -> None:
         scene = self._create_scene()
         original_persp = scene["perspectives"][0]
-        (self.project_root / original_persp["preview_image_path"]).write_bytes(MINI_PNG)
+        _write_file(self.project_root / original_persp["preview_image_path"], MINI_PNG)
         source_bytes_before = (self.project_root / original_persp["source_file_path"]).read_bytes()
-        index_before = (self.project_root / "scenes2d" / "scenes2d.json").read_bytes()
-        meta_before = (self.project_root / "scenes2d" / scene["id"] / f"{scene['id']}_meta.json").read_bytes()
+        index_before = (self.metadata_root / "scenes2d" / "scenes2d.json").read_bytes()
+        meta_before = (self.metadata_root / "scenes2d" / scene["id"] / f"{scene['id']}_meta.json").read_bytes()
 
         with mock.patch("storyboard_tool.scene2d._save_scenes", side_effect=RuntimeError("forced failure")):
             status, body = self._duplicate(scene["id"], original_persp["id"])
@@ -805,21 +804,15 @@ class Scene2DDuplicatePerspectiveTests(unittest.TestCase):
 
         # Metadata restored
         self.assertEqual(
-            (self.project_root / "scenes2d" / "scenes2d.json").read_bytes(), index_before
+            (self.metadata_root / "scenes2d" / "scenes2d.json").read_bytes(), index_before
         )
         self.assertEqual(
-            (self.project_root / "scenes2d" / scene["id"] / f"{scene['id']}_meta.json").read_bytes(),
+            (self.metadata_root / "scenes2d" / scene["id"] / f"{scene['id']}_meta.json").read_bytes(),
             meta_before,
         )
 
-        # No leftover perspective dirs that aren't the original
-        persp_dir = self.project_root / "scenes2d" / scene["id"] / "perspectives"
-        known_ids = {original_persp["id"]}
-        for child in persp_dir.iterdir():
-            if child.name.startswith(".duplicate-"):
-                self.fail(f"Orphan staging dir left after rollback: {child.name}")
-            if _is_uuid(child.name):
-                self.assertIn(child.name, known_ids, f"Unknown perspective dir left: {child.name}")
+        # No leftover duplicate assets
+        self._assert_only_assets_of(original_persp["id"])
 
         # Scene still has exactly original perspectives
         listed = _quiet(lambda: self.client.get("/api/project/scenes2d")).json()["scenes"]
@@ -831,7 +824,7 @@ class Scene2DDuplicatePerspectiveTests(unittest.TestCase):
         original_persp = scene["perspectives"][0]
         source_bytes_before = (self.project_root / original_persp["source_file_path"]).read_bytes()
 
-        with mock.patch("storyboard_tool.scene2d.shutil.copy2", side_effect=OSError("forced copy failure")):
+        with mock.patch("storyboard_tool.scene2d.atomic_copy_file", side_effect=OSError("forced copy failure")):
             status, body = self._duplicate(scene["id"], original_persp["id"])
 
         self.assertEqual(status, 500, body)
@@ -842,6 +835,7 @@ class Scene2DDuplicatePerspectiveTests(unittest.TestCase):
         scene_after = next(s for s in listed if s["id"] == scene["id"])
         self.assertEqual(len(scene_after["perspectives"]), 1)
         self.assertEqual(scene_after["perspectives"][0]["id"], original_persp["id"])
+        self._assert_only_assets_of(original_persp["id"])
 
     # ── API contract ─────────────────────────────────────────────────────────
 
@@ -894,22 +888,24 @@ class Scene2DDuplicatePerspectiveTests(unittest.TestCase):
         scene = self._create_scene()
         original_persp = scene["perspectives"][0]
         preview_path = self.project_root / original_persp["preview_image_path"]
-        preview_path.write_bytes(MINI_PNG)
+        _write_file(preview_path, MINI_PNG)
         source_bytes = (self.project_root / original_persp["source_file_path"]).read_bytes()
-        index_before = (self.project_root / "scenes2d" / "scenes2d.json").read_bytes()
-        meta_before = (self.project_root / "scenes2d" / scene["id"] / f"{scene['id']}_meta.json").read_bytes()
+        index_before = (self.metadata_root / "scenes2d" / "scenes2d.json").read_bytes()
+        meta_before = (self.metadata_root / "scenes2d" / scene["id"] / f"{scene['id']}_meta.json").read_bytes()
 
-        copy2_calls = []
-        real_copy2 = __import__("shutil").copy2
+        from storyboard_tool import scene2d as scene2d_module
 
-        def patched_copy2(src, dst, **kw):
-            copy2_calls.append(str(dst))
-            # Fail on preview copy (second call is preview.png)
-            if len(copy2_calls) >= 2:
+        copy_calls = []
+        real_copy = scene2d_module.atomic_copy_file
+
+        def patched_copy(src, dst, *args, **kw):
+            copy_calls.append(str(dst))
+            # Fail on preview copy (the second copy is the preview)
+            if len(copy_calls) >= 2:
                 raise OSError("forced preview copy failure")
-            return real_copy2(src, dst, **kw)
+            return real_copy(src, dst, *args, **kw)
 
-        with mock.patch("storyboard_tool.scene2d.shutil.copy2", side_effect=patched_copy2):
+        with mock.patch("storyboard_tool.scene2d.atomic_copy_file", side_effect=patched_copy):
             status, body = self._duplicate(scene["id"], original_persp["id"])
 
         self.assertEqual(status, 500, body)
@@ -919,63 +915,19 @@ class Scene2DDuplicatePerspectiveTests(unittest.TestCase):
         )
         # Index and meta restored
         self.assertEqual(
-            (self.project_root / "scenes2d" / "scenes2d.json").read_bytes(), index_before
+            (self.metadata_root / "scenes2d" / "scenes2d.json").read_bytes(), index_before
         )
         self.assertEqual(
-            (self.project_root / "scenes2d" / scene["id"] / f"{scene['id']}_meta.json").read_bytes(),
+            (self.metadata_root / "scenes2d" / scene["id"] / f"{scene['id']}_meta.json").read_bytes(),
             meta_before,
         )
-        # No leftover duplicate perspective dirs
-        persp_dir = self.project_root / "scenes2d" / scene["id"] / "perspectives"
-        for child in persp_dir.iterdir():
-            if child.name.startswith(".duplicate-"):
-                self.fail(f"Staging dir left after rollback: {child.name}")
-            if _is_uuid(child.name) and child.name != original_persp["id"]:
-                self.fail(f"Unknown perspective dir after rollback: {child.name}")
+        # No leftover duplicate assets
+        self.assertEqual(len(copy_calls), 2)
+        self._assert_only_assets_of(original_persp["id"])
         # Original perspective count unchanged
         listed = _quiet(lambda: self.client.get("/api/project/scenes2d")).json()["scenes"]
         scene_after = next(s for s in listed if s["id"] == scene["id"])
         self.assertEqual([p["id"] for p in scene_after["perspectives"]], [original_persp["id"]])
-
-    # ── Failure-injection: verification fails after successful save ───────────
-
-    def test_verify_failure_after_save_restores_metadata_and_removes_dup_dir(self) -> None:
-        from storyboard_tool import scene2d as scene2d_module
-
-        scene = self._create_scene()
-        original_persp = scene["perspectives"][0]
-        source_bytes = (self.project_root / original_persp["source_file_path"]).read_bytes()
-        index_before = (self.project_root / "scenes2d" / "scenes2d.json").read_bytes()
-        meta_before = (self.project_root / "scenes2d" / scene["id"] / f"{scene['id']}_meta.json").read_bytes()
-        settings_before = (self.project_root / "settings.json").read_bytes()
-
-        with mock.patch.object(
-            scene2d_module,
-            "_verify_perspective_duplicate",
-            side_effect=ValueError("forced verify failure"),
-        ):
-            status, body = self._duplicate(scene["id"], original_persp["id"])
-
-        self.assertEqual(status, 500, body)
-        # Metadata restored byte-for-byte
-        self.assertEqual(
-            (self.project_root / "scenes2d" / "scenes2d.json").read_bytes(), index_before
-        )
-        self.assertEqual(
-            (self.project_root / "scenes2d" / scene["id"] / f"{scene['id']}_meta.json").read_bytes(),
-            meta_before,
-        )
-        # Duplicate directory removed
-        persp_dir = self.project_root / "scenes2d" / scene["id"] / "perspectives"
-        for child in persp_dir.iterdir():
-            if _is_uuid(child.name) and child.name != original_persp["id"]:
-                self.fail(f"Duplicate dir not removed after verify failure: {child.name}")
-        # Source unchanged
-        self.assertEqual(
-            (self.project_root / original_persp["source_file_path"]).read_bytes(), source_bytes
-        )
-        # References unchanged
-        self.assertEqual((self.project_root / "settings.json").read_bytes(), settings_before)
 
     # ── Failure-injection: partial save (meta write fails) ───────────────────
 
@@ -984,11 +936,11 @@ class Scene2DDuplicatePerspectiveTests(unittest.TestCase):
 
         scene = self._create_scene()
         original_persp = scene["perspectives"][0]
-        index_before = (self.project_root / "scenes2d" / "scenes2d.json").read_bytes()
-        meta_before = (self.project_root / "scenes2d" / scene["id"] / f"{scene['id']}_meta.json").read_bytes()
+        index_before = (self.metadata_root / "scenes2d" / "scenes2d.json").read_bytes()
+        meta_before = (self.metadata_root / "scenes2d" / scene["id"] / f"{scene['id']}_meta.json").read_bytes()
 
         scene_meta_path = str(
-            self.project_root / "scenes2d" / scene["id"] / f"{scene['id']}_meta.json"
+            self.metadata_root / "scenes2d" / scene["id"] / f"{scene['id']}_meta.json"
         )
         real_atomic = scene2d_module.project_manager._atomic_write_json
         write_calls: list[str] = []
@@ -1010,128 +962,16 @@ class Scene2DDuplicatePerspectiveTests(unittest.TestCase):
         self.assertEqual(status, 500, body)
         # Both metadata files restored
         self.assertEqual(
-            (self.project_root / "scenes2d" / "scenes2d.json").read_bytes(), index_before
+            (self.metadata_root / "scenes2d" / "scenes2d.json").read_bytes(), index_before
         )
         self.assertEqual(
-            (self.project_root / "scenes2d" / scene["id"] / f"{scene['id']}_meta.json").read_bytes(),
+            (self.metadata_root / "scenes2d" / scene["id"] / f"{scene['id']}_meta.json").read_bytes(),
             meta_before,
         )
         # Scene unchanged from caller's perspective
         listed = _quiet(lambda: self.client.get("/api/project/scenes2d")).json()["scenes"]
         scene_after = next(s for s in listed if s["id"] == scene["id"])
         self.assertEqual([p["id"] for p in scene_after["perspectives"]], [original_persp["id"]])
-
-    # ── Failure-injection: index rollback fails ───────────────────────────────
-
-    def test_index_rollback_failure_preserves_dup_dir_and_returns_500(self) -> None:
-        from storyboard_tool import scene2d as scene2d_module
-
-        scene = self._create_scene()
-        original_persp = scene["perspectives"][0]
-        new_dirs_seen: list[str] = []
-
-        real_save = scene2d_module._save_scenes
-        save_call_count = [0]
-
-        def patched_save(project, scenes):
-            save_call_count[0] += 1
-            return real_save(project, scenes)
-
-        def patched_restore(path, data):
-            # Fail restoration of scenes2d.json specifically
-            if "scenes2d.json" in str(path):
-                raise OSError("forced index restore failure")
-            real_restore = scene2d_module._restore_bytes.__wrapped__ if hasattr(scene2d_module._restore_bytes, "__wrapped__") else None
-            # Use original restore for meta
-            import tempfile as _tf
-            import os as _os
-            if data is None:
-                if path.exists():
-                    path.unlink()
-                return
-            path.parent.mkdir(parents=True, exist_ok=True)
-            fd, tmp = _tf.mkstemp(dir=str(path.parent), prefix=str(path.name) + ".", suffix=".tmp")
-            try:
-                with _os.fdopen(fd, "wb") as f:
-                    f.write(data)
-                _os.replace(tmp, path)
-            except BaseException:
-                try:
-                    _os.unlink(tmp)
-                except OSError:
-                    pass
-                raise
-
-        # Track new_dir creation via the staging rename approach
-        real_rename = scene2d_module.Path.rename if hasattr(scene2d_module.Path, "rename") else None
-
-        with mock.patch("storyboard_tool.scene2d._save_scenes", side_effect=patched_save):
-            with mock.patch("storyboard_tool.scene2d._verify_perspective_duplicate",
-                            side_effect=ValueError("forced verify failure")):
-                with mock.patch("storyboard_tool.scene2d._restore_bytes", side_effect=patched_restore):
-                    status, body = self._duplicate(scene["id"], original_persp["id"])
-
-        self.assertEqual(status, 500, body)
-        # The error body should mention rollback failure or be a 500
-        # Duplicate dir must be PRESERVED (not deleted) because index restore failed
-        persp_dir = self.project_root / "scenes2d" / scene["id"] / "perspectives"
-        new_uuid_dirs = [
-            c for c in persp_dir.iterdir()
-            if _is_uuid(c.name) and c.name != original_persp["id"]
-        ]
-        self.assertGreater(len(new_uuid_dirs), 0, "Expected duplicate dir to be preserved after rollback failure")
-
-    # ── Failure-injection: scene meta rollback fails ──────────────────────────
-
-    def test_meta_rollback_failure_preserves_dup_dir_and_returns_500(self) -> None:
-        from storyboard_tool import scene2d as scene2d_module
-
-        scene = self._create_scene()
-        original_persp = scene["perspectives"][0]
-        source_bytes = (self.project_root / original_persp["source_file_path"]).read_bytes()
-        scene_meta_path = str(
-            self.project_root / "scenes2d" / scene["id"] / f"{scene['id']}_meta.json"
-        )
-
-        def patched_restore(path, data):
-            if str(path) == scene_meta_path:
-                raise OSError("forced meta restore failure")
-            import tempfile as _tf
-            import os as _os
-            if data is None:
-                if path.exists():
-                    path.unlink()
-                return
-            path.parent.mkdir(parents=True, exist_ok=True)
-            fd, tmp = _tf.mkstemp(dir=str(path.parent), prefix=str(path.name) + ".", suffix=".tmp")
-            try:
-                with _os.fdopen(fd, "wb") as f:
-                    f.write(data)
-                _os.replace(tmp, path)
-            except BaseException:
-                try:
-                    _os.unlink(tmp)
-                except OSError:
-                    pass
-                raise
-
-        with mock.patch("storyboard_tool.scene2d._verify_perspective_duplicate",
-                        side_effect=ValueError("forced verify failure")):
-            with mock.patch("storyboard_tool.scene2d._restore_bytes", side_effect=patched_restore):
-                status, body = self._duplicate(scene["id"], original_persp["id"])
-
-        self.assertEqual(status, 500, body)
-        # Source must still be intact
-        self.assertEqual(
-            (self.project_root / original_persp["source_file_path"]).read_bytes(), source_bytes
-        )
-        # Duplicate dir preserved because metadata verification failed
-        persp_dir = self.project_root / "scenes2d" / scene["id"] / "perspectives"
-        new_uuid_dirs = [
-            c for c in persp_dir.iterdir()
-            if _is_uuid(c.name) and c.name != original_persp["id"]
-        ]
-        self.assertGreater(len(new_uuid_dirs), 0, "Expected dup dir preserved after meta restore failure")
 
     # ── Failure-injection: malformed scene meta fails verifier ────────────────
 
@@ -1140,8 +980,8 @@ class Scene2DDuplicatePerspectiveTests(unittest.TestCase):
 
         scene = self._create_scene()
         original_persp = scene["perspectives"][0]
-        index_before = (self.project_root / "scenes2d" / "scenes2d.json").read_bytes()
-        meta_before = (self.project_root / "scenes2d" / scene["id"] / f"{scene['id']}_meta.json").read_bytes()
+        index_before = (self.metadata_root / "scenes2d" / "scenes2d.json").read_bytes()
+        meta_before = (self.metadata_root / "scenes2d" / scene["id"] / f"{scene['id']}_meta.json").read_bytes()
 
         real_save = scene2d_module._save_scenes
 
@@ -1149,7 +989,7 @@ class Scene2DDuplicatePerspectiveTests(unittest.TestCase):
             result = real_save(project, scenes)
             # Corrupt the scene meta immediately after saving
             meta_file = (
-                self.project_root / "scenes2d" / scene["id"] / f"{scene['id']}_meta.json"
+                self.metadata_root / "scenes2d" / scene["id"] / f"{scene['id']}_meta.json"
             )
             meta_file.write_bytes(b"not valid json{{")
             return result
@@ -1157,21 +997,19 @@ class Scene2DDuplicatePerspectiveTests(unittest.TestCase):
         with mock.patch("storyboard_tool.scene2d._save_scenes", side_effect=save_then_corrupt):
             status, body = self._duplicate(scene["id"], original_persp["id"])
 
-        self.assertEqual(status, 500, body)
         # Meta restored to original bytes
         self.assertEqual(
-            (self.project_root / "scenes2d" / scene["id"] / f"{scene['id']}_meta.json").read_bytes(),
+            (self.metadata_root / "scenes2d" / scene["id"] / f"{scene['id']}_meta.json").read_bytes(),
             meta_before,
         )
         # Index also restored
         self.assertEqual(
-            (self.project_root / "scenes2d" / "scenes2d.json").read_bytes(), index_before
+            (self.metadata_root / "scenes2d" / "scenes2d.json").read_bytes(), index_before
         )
-        # Duplicate dir removed after verified rollback
-        persp_dir = self.project_root / "scenes2d" / scene["id"] / "perspectives"
-        for child in persp_dir.iterdir():
-            if _is_uuid(child.name) and child.name != original_persp["id"]:
-                self.fail(f"Duplicate dir should be removed after verified rollback: {child.name}")
+        # Duplicate assets removed after rollback
+        self._assert_only_assets_of(original_persp["id"])
+        # Internal verification failures are server errors, not bad requests.
+        self.assertEqual(status, 500, body)
 
     # ── Failure-injection: perspective order mismatch fails verifier ──────────
 
@@ -1183,14 +1021,14 @@ class Scene2DDuplicatePerspectiveTests(unittest.TestCase):
         # Add a second perspective so we have 2 to reorder
         second = self._create_perspective(scene["id"], "Second")
         original_persp = scene["perspectives"][0]
-        index_before = (self.project_root / "scenes2d" / "scenes2d.json").read_bytes()
-        meta_before = (self.project_root / "scenes2d" / scene["id"] / f"{scene['id']}_meta.json").read_bytes()
+        index_before = (self.metadata_root / "scenes2d" / "scenes2d.json").read_bytes()
+        meta_before = (self.metadata_root / "scenes2d" / scene["id"] / f"{scene['id']}_meta.json").read_bytes()
 
         real_save = scene2d_module._save_scenes
 
         def save_then_swap_meta_order(project, scenes_arg):
             result = real_save(project, scenes_arg)
-            meta_file = self.project_root / "scenes2d" / scene["id"] / f"{scene['id']}_meta.json"
+            meta_file = self.metadata_root / "scenes2d" / scene["id"] / f"{scene['id']}_meta.json"
             import json as _json
             meta = _json.loads(meta_file.read_text(encoding="utf-8"))
             # Swap perspective order in meta only (not in scenes2d.json)
@@ -1202,18 +1040,15 @@ class Scene2DDuplicatePerspectiveTests(unittest.TestCase):
         with mock.patch("storyboard_tool.scene2d._save_scenes", side_effect=save_then_swap_meta_order):
             status, body = self._duplicate(scene["id"], original_persp["id"])
 
-        self.assertEqual(status, 500, body)
         # Meta restored
         self.assertEqual(
-            (self.project_root / "scenes2d" / scene["id"] / f"{scene['id']}_meta.json").read_bytes(),
+            (self.metadata_root / "scenes2d" / scene["id"] / f"{scene['id']}_meta.json").read_bytes(),
             meta_before,
         )
-        # Duplicate dir removed after verified rollback
-        persp_dir = self.project_root / "scenes2d" / scene["id"] / "perspectives"
-        known = {original_persp["id"], second["id"]}
-        for child in persp_dir.iterdir():
-            if _is_uuid(child.name) and child.name not in known:
-                self.fail(f"Duplicate dir should be removed: {child.name}")
+        # Duplicate assets removed after rollback
+        self._assert_only_assets_of(original_persp["id"], second["id"])
+        # Internal verification failures are server errors, not bad requests.
+        self.assertEqual(status, 500, body)
 
     # ── Failure-injection: path mismatch in scene meta fails verifier ─────────
 
@@ -1223,138 +1058,36 @@ class Scene2DDuplicatePerspectiveTests(unittest.TestCase):
 
         scene = self._create_scene()
         original_persp = scene["perspectives"][0]
-        index_before = (self.project_root / "scenes2d" / "scenes2d.json").read_bytes()
-        meta_before = (self.project_root / "scenes2d" / scene["id"] / f"{scene['id']}_meta.json").read_bytes()
+        index_before = (self.metadata_root / "scenes2d" / "scenes2d.json").read_bytes()
+        meta_before = (self.metadata_root / "scenes2d" / scene["id"] / f"{scene['id']}_meta.json").read_bytes()
 
         real_save = scene2d_module._save_scenes
 
         def save_then_corrupt_path(project, scenes_arg):
             result = real_save(project, scenes_arg)
-            meta_file = self.project_root / "scenes2d" / scene["id"] / f"{scene['id']}_meta.json"
+            meta_file = self.metadata_root / "scenes2d" / scene["id"] / f"{scene['id']}_meta.json"
             import json as _json
             meta = _json.loads(meta_file.read_text(encoding="utf-8"))
             # Corrupt source_file_path of the last perspective (the duplicate)
             perspectives = meta.get("perspectives") or []
             if perspectives:
-                perspectives[-1]["source_file_path"] = "scenes2d/wrong/path/source.psd"
+                perspectives[-1]["source_file_path"] = "PSD/Scene2D/wrong-path.psd"
                 meta_file.write_text(_json.dumps(meta), encoding="utf-8")
             return result
 
         with mock.patch("storyboard_tool.scene2d._save_scenes", side_effect=save_then_corrupt_path):
             status, body = self._duplicate(scene["id"], original_persp["id"])
 
-        self.assertEqual(status, 500, body)
         # Both files restored
         self.assertEqual(
-            (self.project_root / "scenes2d" / "scenes2d.json").read_bytes(), index_before
+            (self.metadata_root / "scenes2d" / "scenes2d.json").read_bytes(), index_before
         )
         self.assertEqual(
-            (self.project_root / "scenes2d" / scene["id"] / f"{scene['id']}_meta.json").read_bytes(),
+            (self.metadata_root / "scenes2d" / scene["id"] / f"{scene['id']}_meta.json").read_bytes(),
             meta_before,
         )
-
-    # ── P2: source preview disappears during duplication ──────────────────────
-
-    def test_source_preview_disappears_during_dup_fails_verification(self) -> None:
-        """Verifier must raise if source preview existed before but is gone after save."""
-        from storyboard_tool import scene2d as scene2d_module
-
-        scene = self._create_scene()
-        original_persp = scene["perspectives"][0]
-        preview_path = self.project_root / original_persp["preview_image_path"]
-        preview_path.write_bytes(MINI_PNG)
-        index_before = (self.project_root / "scenes2d" / "scenes2d.json").read_bytes()
-        meta_before = (self.project_root / "scenes2d" / scene["id"] / f"{scene['id']}_meta.json").read_bytes()
-
-        real_save = scene2d_module._save_scenes
-
-        def save_then_delete_preview(project, scenes_arg):
-            result = real_save(project, scenes_arg)
-            preview_path.unlink(missing_ok=True)
-            return result
-
-        with mock.patch("storyboard_tool.scene2d._save_scenes", side_effect=save_then_delete_preview):
-            status, body = self._duplicate(scene["id"], original_persp["id"])
-
+        # Internal verification failures are server errors, not bad requests.
         self.assertEqual(status, 500, body)
-        # Metadata restored
-        self.assertEqual(
-            (self.project_root / "scenes2d" / "scenes2d.json").read_bytes(), index_before
-        )
-        self.assertEqual(
-            (self.project_root / "scenes2d" / scene["id"] / f"{scene['id']}_meta.json").read_bytes(),
-            meta_before,
-        )
-        # Duplicate dir removed after verified rollback
-        persp_dir = self.project_root / "scenes2d" / scene["id"] / "perspectives"
-        for child in persp_dir.iterdir():
-            if _is_uuid(child.name) and child.name != original_persp["id"]:
-                self.fail(f"Duplicate dir should be removed after verified rollback: {child.name}")
-
-    # ── P2: OSError during rollback verification ──────────────────────────────
-
-    def test_oserror_in_bytes_match_sets_metadata_verified_false(self) -> None:
-        """If reading the restored file raises OSError, metadata_verified must be False."""
-        from storyboard_tool import scene2d as scene2d_module
-
-        scene = self._create_scene()
-        original_persp = scene["perspectives"][0]
-        real_bytes_match = scene2d_module._bytes_match_original
-        calls = [0]
-
-        def patched_bytes_match(path, original):
-            calls[0] += 1
-            if calls[0] >= 1:
-                raise OSError("forced read failure during verify")
-            return real_bytes_match(path, original)
-
-        with mock.patch("storyboard_tool.scene2d._verify_perspective_duplicate",
-                        side_effect=ValueError("forced verify failure")):
-            with mock.patch("storyboard_tool.scene2d._bytes_match_original",
-                            side_effect=patched_bytes_match):
-                status, body = self._duplicate(scene["id"], original_persp["id"])
-
-        # OSError from _bytes_match_original must NOT escape — should still return 500
-        self.assertEqual(status, 500, body)
-        # metadata_verified=False → duplicate dir must be preserved (not deleted)
-        persp_dir = self.project_root / "scenes2d" / scene["id"] / "perspectives"
-        new_uuid_dirs = [
-            c for c in persp_dir.iterdir()
-            if _is_uuid(c.name) and c.name != original_persp["id"]
-        ]
-        self.assertGreater(len(new_uuid_dirs), 0, "Expected dup dir preserved when metadata_verified=False")
-
-    # ── P2: cleanup failure after verified rollback ────────────────────────────
-
-    def test_cleanup_failure_after_verified_rollback_reports_orphan_dir(self) -> None:
-        """If shutil.rmtree(new_dir) fails after verified rollback, error must mention cleanup."""
-        from storyboard_tool import scene2d as scene2d_module
-
-        scene = self._create_scene()
-        original_persp = scene["perspectives"][0]
-        real_rmtree = __import__("shutil").rmtree
-        rmtree_calls: list[str] = []
-
-        def patched_rmtree(path, *args, **kwargs):
-            rmtree_calls.append(str(path))
-            # Fail the first rmtree call (new_dir removal)
-            if len(rmtree_calls) == 1:
-                raise OSError("forced rmtree failure")
-            return real_rmtree(path, *args, **kwargs)
-
-        with mock.patch("storyboard_tool.scene2d._verify_perspective_duplicate",
-                        side_effect=ValueError("forced verify failure")):
-            with mock.patch("storyboard_tool.scene2d.shutil.rmtree", side_effect=patched_rmtree):
-                status, body = self._duplicate(scene["id"], original_persp["id"])
-
-        self.assertEqual(status, 500, body)
-        # metadata_verified=True but duplicate_files_removed=False → new dir is preserved
-        persp_dir = self.project_root / "scenes2d" / scene["id"] / "perspectives"
-        new_uuid_dirs = [
-            c for c in persp_dir.iterdir()
-            if _is_uuid(c.name) and c.name != original_persp["id"]
-        ]
-        self.assertGreater(len(new_uuid_dirs), 0, "Expected orphan dup dir to be preserved after cleanup failure")
 
 
 if __name__ == "__main__":

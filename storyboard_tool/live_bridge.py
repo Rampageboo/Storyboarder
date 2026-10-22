@@ -8,9 +8,8 @@ from pathlib import Path
 from typing import Any
 
 from .canvas_settings import get_canvas_size
-from .models import Project, Shot
-from .project_layout import LAYOUT_2, resolve_project_child
-from .project_manager import get_canvas_color, get_shot_dir
+from .models import Project
+from .project_manager import get_canvas_color
 
 LIVE_BRIDGE_VERSION = 1
 LIVE_BRIDGE_FILENAME = "storyboard_live_bridge.json"
@@ -94,18 +93,6 @@ def build_payload(
     focus_work_context: dict[str, Any] | None = None,
     plugin_change: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    shot: Shot | None = None
-    if project and selected_shot_id:
-        shot = next((item for item in project.shots if item.shot_id == selected_shot_id), None)
-
-    legacy_paths_allowed = bool(project is not None and project.layout != LAYOUT_2)
-    project_root = str(project.project_root) if legacy_paths_allowed else ""
-    shot_folder = ""
-    source_file_path = ""
-    if project and shot is not None and legacy_paths_allowed:
-        shot_folder = str(get_shot_dir(project, shot))
-        source_file_path = shot.source_file_path or ""
-
     bridge_url = f"http://127.0.0.1:{port}/api/bridge/live"
     shared_path = str(shared_bridge_file_path())
     canvas_width, canvas_height = get_canvas_size(project) if project else (1920, 1080)
@@ -114,17 +101,17 @@ def build_payload(
     # bootstrap cycle. (The bridge file is local-only; a web attacker cannot read it.)
     api_token = os.environ.get("STORYBOARDER_LAUNCH_TOKEN", "").strip()
 
-    # Generic focus request: carries kind/key/source_file_path + legacy shot_id
+    # Generic focus request: carries kind/key + legacy shot_id. Filesystem paths
+    # are never published; protocol-v2 plugins ask the backend for them.
     fwc = focus_work_context or {}
     active_context = dict(work_context or {})
-    if not legacy_paths_allowed:
-        active_context.pop("source_file_path", None)
-        active_context.pop("source_native_path", None)
+    active_context.pop("source_file_path", None)
+    active_context.pop("source_native_path", None)
     focus_request: dict[str, Any] = {
         "kind": str(fwc.get("kind") or "shot"),
         "key": str(fwc.get("key") or ""),
-        "source_file_path": str(fwc.get("source_file_path") or "") if legacy_paths_allowed else "",
-        "source_native_path": str(fwc.get("source_native_path") or "") if legacy_paths_allowed else "",
+        "source_file_path": "",
+        "source_native_path": "",
         "scene_id": str(fwc.get("scene_id") or ""),
         "perspective_id": str(fwc.get("perspective_id") or ""),
         # Legacy field: non-empty only for shot focus so old plugins keep working
@@ -143,17 +130,16 @@ def build_payload(
         "global_bridge_path": str(global_bridge_file_path()),
         "shared_bridge_path": shared_path,
         "plugin_heartbeat_path": str(plugin_heartbeat_file_path()),
-        "project_root": project_root,
-        "project_json_path": str(project.json_path) if legacy_paths_allowed else "",
+        "project_root": "",
+        "project_json_path": "",
         "project_name": project.name if project else "",
         "canvas_background_color": get_canvas_color(project) if project else "#E8E8E8",
         "canvas_width": canvas_width,
         "canvas_height": canvas_height,
         "selected_shot_id": selected_shot_id if project else "",
-        "shot_folder": shot_folder,
-        "source_file_path": source_file_path,
-        "layout": project.layout if project else 0,
-        "plugin_protocol_required": 2 if project and project.layout == LAYOUT_2 else 1,
+        "shot_folder": "",
+        "source_file_path": "",
+        "plugin_protocol_required": 2,
         "shot_count": len(project.shots) if project else 0,
         # Active work context (shot or scene2d)
         "work_context": active_context,
@@ -170,9 +156,6 @@ def write_payload_files(base_dir: Path, project: Project | None, payload: dict[s
     _try_write_bridge_file(base_dir / "Sessions" / LIVE_BRIDGE_FILENAME, text)
     _try_write_bridge_file(global_bridge_file_path(), text)
     _try_write_bridge_file(shared_bridge_file_path(), text)
-
-    if project is not None and project.layout != LAYOUT_2:
-        _try_write_bridge_file(resolve_project_child(project, LIVE_BRIDGE_FILENAME), text)
 
 
 def _try_write_bridge_file(path: Path, text: str) -> bool:

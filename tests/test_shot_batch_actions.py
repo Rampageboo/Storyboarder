@@ -13,7 +13,7 @@ def _client_with_shots(tmp_path: Path, count: int = 3) -> tuple[TestClient, list
     project_parent = tmp_path / "project"
     project_parent.mkdir()
     client = TestClient(api_module.create_app(app_dir), raise_server_exceptions=False)
-    created = client.post("/api/project/new", json={"path": str(project_parent)})
+    created = client.post("/api/project/new", json={"path": str(project_parent / "Demo.sbd")})
     assert created.status_code == 200, created.text
     shot_ids: list[str] = []
     for _index in range(count):

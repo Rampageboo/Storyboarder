@@ -3,15 +3,18 @@
 These tests verify that the backend enforces ownership of project metadata:
 - preview_image_path / image_path must never point to a background plate
 - source_file_path must be a .psd file
-- Path traversal in plugin-supplied paths is rejected
-- Preview relink always goes through the backend API validation path
+- client-supplied paths (including traversal) are never authority
+- Preview relink always goes through the backend write-intent path
 
-The plugin is a client, not a metadata writer.  All path assignment must be
-validated and committed by the backend.  These tests prevent regression of
-bugs where the plugin could corrupt metadata by sending invalid paths.
+The plugin is a client, not a metadata writer.  All path assignment is
+decided by the backend (canonical role paths) and committed through a
+single-use write intent.  These tests prevent regression of bugs where the
+plugin could corrupt metadata by sending invalid paths.
 """
 from __future__ import annotations
 
+import contextlib
+import io
 import tempfile
 import unittest
 import warnings
@@ -22,12 +25,22 @@ with warnings.catch_warnings():
     from fastapi.testclient import TestClient
 
 from storyboard_tool import api as api_module
+from storyboard_tool.plugin_service import (
+    EXPLICIT_ASSET_PATHS_CAPABILITY,
+    PLUGIN_PROTOCOL_VERSION,
+)
 
 MINI_PNG = bytes.fromhex(
     "89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c489"
     "0000000a49444154789c6300010000050001"
     "0d0a2db40000000049454e44ae426082"
 )
+MINI_PSD = b"8BPS" + b"\0" * 32
+
+
+def _quiet(fn):
+    with contextlib.redirect_stderr(io.StringIO()):
+        return fn()
 
 
 class PluginMetadataBoundaryTests(unittest.TestCase):
@@ -41,178 +54,185 @@ class PluginMetadataBoundaryTests(unittest.TestCase):
         self._tmp.cleanup()
 
     def _open_project_with_shot(self) -> tuple[Path, str]:
-        import contextlib
-        import io
-
-        def quiet(fn):
-            with contextlib.redirect_stderr(io.StringIO()):
-                return fn()
-
-        created = quiet(lambda: self.client.post("/api/project/new", json={"path": self._tmp.name}))
-        self.assertEqual(created.status_code, 200)
-        project_root = Path(created.json()["project_path"])
-        added = quiet(lambda: self.client.post("/api/shots", json={}))
+        created = _quiet(
+            lambda: self.client.post(
+                "/api/project/new", json={"path": str(self.root / "Demo.sbd")}
+            )
+        )
+        self.assertEqual(created.status_code, 200, created.text)
+        project_root = Path(created.json()["project_path"]).parent
+        added = _quiet(lambda: self.client.post("/api/shots", json={}))
         self.assertEqual(added.status_code, 200)
         return project_root, added.json()["shot"]["shot_id"]
+
+    def _headers(self, *, work_key: str = "", asset_role: str = "", token: str = "") -> dict[str, str]:
+        headers = {
+            "x-storyboarder-protocol": str(PLUGIN_PROTOCOL_VERSION),
+            "x-storyboarder-capabilities": EXPLICIT_ASSET_PATHS_CAPABILITY,
+            "x-storyboarder-project-session": str(self.app.state.project_session_id),
+            "x-storyboarder-context-revision": str(self.app.state.project.storage_revision),
+        }
+        if work_key:
+            headers["x-storyboarder-work-key"] = work_key
+        if asset_role:
+            headers["x-storyboarder-asset-role"] = asset_role
+        if token:
+            headers["x-storyboarder-write-intent"] = token
+        return headers
+
+    def _intent(self, shot_id: str, role: str):
+        return self.client.post(
+            "/api/plugin/write-intents",
+            headers=self._headers(),
+            json={"work_key": f"shot:{shot_id}", "asset_role": role},
+        )
+
+    def _commit(self, shot_id: str, role: str, token: str, body: dict):
+        endpoint = "export-preview" if role == "preview" else "psd-saved"
+        return _quiet(lambda: self.client.post(
+            f"/api/plugin/shots/{shot_id}/{endpoint}",
+            headers=self._headers(work_key=f"shot:{shot_id}", asset_role=role, token=token),
+            json=body,
+        ))
+
+    def _context_shot(self, shot_id: str) -> dict:
+        context = _quiet(lambda: self.client.get("/api/plugin/context", headers=self._headers()))
+        self.assertEqual(context.status_code, 200, context.text)
+        shot = next((s for s in context.json().get("shots", []) if s["shot_id"] == shot_id), None)
+        self.assertIsNotNone(shot)
+        return shot
 
     # ------------------------------------------------------------------
     # Background plate must never become preview metadata
     # ------------------------------------------------------------------
 
-    def test_export_preview_rejects_background_path_as_preview(self) -> None:
-        """plugin export-preview with _background.png as preview must return 400."""
+    def test_export_preview_without_write_intent_rejects_background_path(self) -> None:
+        """A client-supplied background path without a write intent is rejected."""
         project_root, shot_id = self._open_project_with_shot()
-        shot_dir = project_root / "shots" / shot_id
-        shot_dir.mkdir(parents=True, exist_ok=True)
-
-        background_rel = f"shots/{shot_id}/{shot_id}_background.png"
-        (shot_dir / f"{shot_id}_background.png").write_bytes(MINI_PNG)
+        background = project_root / "Images" / "Shots" / f"{shot_id}_background.png"
+        background.parent.mkdir(parents=True, exist_ok=True)
+        background.write_bytes(MINI_PNG)
 
         response = self.client.post(
             f"/api/plugin/shots/{shot_id}/export-preview",
-            json={"preview_image_path": background_rel},
+            headers=self._headers(work_key=f"shot:{shot_id}", asset_role="preview"),
+            json={"preview_image_path": f"Images/Shots/{shot_id}_background.png"},
         )
-        self.assertEqual(response.status_code, 400, response.text)
-        self.assertIn("background", response.json().get("detail", "").lower())
+        self.assertEqual(response.status_code, 403, response.text)
+        self.assertEqual(response.json()["code"], "PLUGIN_WRITE_INTENT_REJECTED")
 
     def test_background_not_written_into_preview_metadata_after_rejection(self) -> None:
         """After a rejected export-preview, shot metadata is unchanged."""
-        import contextlib
-        import io
-
         project_root, shot_id = self._open_project_with_shot()
-        shot_dir = project_root / "shots" / shot_id
-        shot_dir.mkdir(parents=True, exist_ok=True)
+        background = project_root / "Images" / "Shots" / f"{shot_id}_background.png"
+        background.parent.mkdir(parents=True, exist_ok=True)
+        background.write_bytes(MINI_PNG)
 
-        background_rel = f"shots/{shot_id}/{shot_id}_background.png"
-        (shot_dir / f"{shot_id}_background.png").write_bytes(MINI_PNG)
-
-        # Attempt to set background as preview (must fail).
         response = self.client.post(
             f"/api/plugin/shots/{shot_id}/export-preview",
-            json={"preview_image_path": background_rel},
+            headers=self._headers(work_key=f"shot:{shot_id}", asset_role="preview"),
+            json={"preview_image_path": f"Images/Shots/{shot_id}_background.png"},
         )
-        self.assertEqual(response.status_code, 400)
+        self.assertNotEqual(response.status_code, 200)
 
-        # Check that shot metadata was NOT mutated.
-        with contextlib.redirect_stderr(io.StringIO()):
-            context = self.client.get("/api/plugin/context")
-        self.assertEqual(context.status_code, 200)
-        shots = context.json().get("shots", [])
-        shot = next((s for s in shots if s["shot_id"] == shot_id), None)
-        self.assertIsNotNone(shot)
-        # preview_image_path must not point to the background file.
+        shot = self._context_shot(shot_id)
         self.assertNotIn("_background", shot.get("preview_image_path", ""))
         self.assertNotIn("_background", shot.get("image_path", ""))
 
-    # ------------------------------------------------------------------
-    # Path traversal rejection
-    # ------------------------------------------------------------------
-
-    def test_export_preview_rejects_path_traversal_in_preview_path(self) -> None:
-        """plugin export-preview with path-traversal preview_image_path must return 400."""
+    def test_board_background_role_is_not_writable(self) -> None:
+        """The plugin cannot obtain a write intent for the board background plate."""
         _project_root, shot_id = self._open_project_with_shot()
-
-        response = self.client.post(
-            f"/api/plugin/shots/{shot_id}/export-preview",
-            json={"preview_image_path": "../../../etc/passwd"},
-        )
+        response = self._intent(shot_id, "board_background")
         self.assertEqual(response.status_code, 400, response.text)
+        self.assertEqual(response.json()["code"], "PLUGIN_WRITE_INTENT_REJECTED")
 
-    def test_export_preview_rejects_path_traversal_in_source_path(self) -> None:
-        """plugin export-preview with path-traversal source_file_path must return 400."""
+    # ------------------------------------------------------------------
+    # Client-supplied paths (including traversal) are never authority
+    # ------------------------------------------------------------------
+
+    def test_export_preview_ignores_path_traversal_in_preview_path(self) -> None:
+        """A traversal preview_image_path is ignored; the canonical preview is committed."""
+        project_root, shot_id = self._open_project_with_shot()
+        issued = self._intent(shot_id, "preview").json()
+        Path(issued["write_path"]).write_bytes(MINI_PNG)
+
+        response = self._commit(
+            shot_id, "preview", issued["token"], {"preview_image_path": "../../../etc/passwd"}
+        )
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(
+            response.json()["shot"]["preview_image_path"],
+            f"Images/Shots/{shot_id}_preview.png",
+        )
+        self.assertEqual(
+            (project_root / "Images" / "Shots" / f"{shot_id}_preview.png").read_bytes(),
+            MINI_PNG,
+        )
+
+    def test_psd_saved_ignores_path_traversal_in_source_path(self) -> None:
+        """A traversal source_file_path is ignored; the canonical PSD is recorded."""
+        project_root, shot_id = self._open_project_with_shot()
+        issued = self._intent(shot_id, "source_psd").json()
+        Path(issued["canonical_path"]).write_bytes(MINI_PSD)
+
+        response = self._commit(
+            shot_id, "source_psd", issued["token"], {"source_file_path": "../../outside_project.psd"}
+        )
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.json()["shot"]["source_file_path"], f"PSD/Shots/{shot_id}.psd")
+        self.assertFalse((project_root.parent / "outside_project.psd").exists())
+
+    # ------------------------------------------------------------------
+    # source_file_path must be a .psd file; previews must be PNGs
+    # ------------------------------------------------------------------
+
+    def test_export_preview_rejects_non_png_inbox_file(self) -> None:
+        """export-preview must reject an inbox file that is not a PNG."""
         _project_root, shot_id = self._open_project_with_shot()
+        issued = self._intent(shot_id, "preview").json()
+        Path(issued["write_path"]).write_bytes(MINI_PSD)
 
-        response = self.client.post(
-            f"/api/plugin/shots/{shot_id}/export-preview",
-            json={"source_file_path": "../../outside_project.psd"},
-        )
+        response = self._commit(shot_id, "preview", issued["token"], {})
         self.assertEqual(response.status_code, 400, response.text)
+        self.assertEqual(self._context_shot(shot_id).get("preview_image_path", ""), "")
 
-    # ------------------------------------------------------------------
-    # source_file_path must be a .psd file
-    # ------------------------------------------------------------------
+    def test_psd_saved_rejects_non_psd_source_file(self) -> None:
+        """psd-saved must reject a canonical source file that is not a PSD."""
+        _project_root, shot_id = self._open_project_with_shot()
+        issued = self._intent(shot_id, "source_psd").json()
+        Path(issued["canonical_path"]).write_bytes(MINI_PNG)
 
-    def test_export_preview_rejects_non_psd_source_path(self) -> None:
-        """plugin export-preview must reject a source_file_path that is not a .psd."""
-        project_root, shot_id = self._open_project_with_shot()
-        shot_dir = project_root / "shots" / shot_id
-        shot_dir.mkdir(parents=True, exist_ok=True)
-        (shot_dir / f"{shot_id}_preview.png").write_bytes(MINI_PNG)
-        # Source is a .png, not a .psd — must be rejected.
-        (shot_dir / f"{shot_id}_source.png").write_bytes(MINI_PNG)
-
-        response = self.client.post(
-            f"/api/plugin/shots/{shot_id}/export-preview",
-            json={
-                "preview_image_path": f"shots/{shot_id}/{shot_id}_preview.png",
-                "source_file_path": f"shots/{shot_id}/{shot_id}_source.png",
-            },
-        )
+        response = self._commit(shot_id, "source_psd", issued["token"], {})
         self.assertEqual(response.status_code, 400, response.text)
-
-    def test_psd_saved_rejects_non_psd_source_path(self) -> None:
-        """plugin psd-saved must reject a source_file_path that is not a .psd."""
-        project_root, shot_id = self._open_project_with_shot()
-        shot_dir = project_root / "shots" / shot_id
-        shot_dir.mkdir(parents=True, exist_ok=True)
-        (shot_dir / f"{shot_id}_preview.png").write_bytes(MINI_PNG)
-
-        response = self.client.post(
-            f"/api/plugin/shots/{shot_id}/psd-saved",
-            json={"source_file_path": f"shots/{shot_id}/{shot_id}_preview.png"},
-        )
-        self.assertEqual(response.status_code, 400, response.text)
+        self.assertEqual(self._context_shot(shot_id).get("source_file_path", ""), "")
 
     # ------------------------------------------------------------------
     # Preview relink goes through backend validation
     # ------------------------------------------------------------------
 
-    def test_preview_relink_in_linked_mode_goes_through_backend(self) -> None:
-        """Valid export-preview sets preview_image_path via backend validation."""
-        project_root, shot_id = self._open_project_with_shot()
-        shot_dir = project_root / "shots" / shot_id
-        shot_dir.mkdir(parents=True, exist_ok=True)
-        preview_rel = f"shots/{shot_id}/{shot_id}_preview.png"
-        source_rel = f"shots/{shot_id}/{shot_id}.psd"
-        (shot_dir / f"{shot_id}_preview.png").write_bytes(MINI_PNG)
-        (shot_dir / f"{shot_id}.psd").write_bytes(b"8BPS" + b"\0" * 32)
+    def test_preview_relink_goes_through_backend(self) -> None:
+        """Valid export-preview sets preview_image_path via the backend's canonical path."""
+        _project_root, shot_id = self._open_project_with_shot()
+        issued = self._intent(shot_id, "preview").json()
+        Path(issued["write_path"]).write_bytes(MINI_PNG)
 
-        response = self.client.post(
-            f"/api/plugin/shots/{shot_id}/export-preview",
-            json={"preview_image_path": preview_rel, "source_file_path": source_rel},
+        response = self._commit(
+            shot_id, "preview", issued["token"], {"preview_image_path": "elsewhere/x.png"}
         )
         self.assertEqual(response.status_code, 200, response.text)
         body = response.json()
-        # Backend assigned the preview path — plugin did not write it locally.
-        self.assertEqual(body["shot"]["preview_image_path"], preview_rel)
-        self.assertEqual(body["shot"]["source_file_path"], source_rel)
+        self.assertEqual(body["shot"]["preview_image_path"], f"Images/Shots/{shot_id}_preview.png")
+        self.assertEqual(body["shot"]["image_path"], f"Images/Shots/{shot_id}_preview.png")
 
-    def test_source_file_path_is_psd_only_after_valid_export(self) -> None:
+    def test_source_file_path_is_psd_only_after_valid_save(self) -> None:
         """source_file_path in metadata must always point to the .psd, never a PNG."""
-        project_root, shot_id = self._open_project_with_shot()
-        shot_dir = project_root / "shots" / shot_id
-        shot_dir.mkdir(parents=True, exist_ok=True)
-        (shot_dir / f"{shot_id}_preview.png").write_bytes(MINI_PNG)
-        (shot_dir / f"{shot_id}.psd").write_bytes(b"8BPS" + b"\0" * 32)
+        _project_root, shot_id = self._open_project_with_shot()
+        issued = self._intent(shot_id, "source_psd").json()
+        Path(issued["canonical_path"]).write_bytes(MINI_PSD)
+        response = self._commit(shot_id, "source_psd", issued["token"], {})
+        self.assertEqual(response.status_code, 200, response.text)
 
-        self.client.post(
-            f"/api/plugin/shots/{shot_id}/export-preview",
-            json={
-                "preview_image_path": f"shots/{shot_id}/{shot_id}_preview.png",
-                "source_file_path": f"shots/{shot_id}/{shot_id}.psd",
-            },
-        )
-        import contextlib
-        import io
-
-        with contextlib.redirect_stderr(io.StringIO()):
-            context = self.client.get("/api/plugin/context")
-        shot = next(
-            (s for s in context.json().get("shots", []) if s["shot_id"] == shot_id), None
-        )
-        self.assertIsNotNone(shot)
-        src = shot.get("source_file_path", "")
+        src = self._context_shot(shot_id).get("source_file_path", "")
         self.assertTrue(src.endswith(".psd"), f"source_file_path must end with .psd, got: {src}")
 
     # ------------------------------------------------------------------

@@ -11,7 +11,8 @@ import pytest
 from fastapi.testclient import TestClient
 from PIL import Image
 
-from storyboard_tool import comic, generation_service, project_layout, project_manager, reference_segments, scene2d, shot_assets, story_graph
+from conftest import make_project
+from storyboard_tool import comic, generation_service, project_manager, reference_segments, scene2d, shot_assets, story_graph
 from storyboard_tool.project_layout import project_relative_posix
 from storyboard_tool.api import create_app
 
@@ -25,23 +26,15 @@ def _lettering(**changes):
 
 
 @pytest.fixture
-def comic_client(tmp_path, monkeypatch):
-    monkeypatch.setattr(project_layout, "LAYOUT_2_ENABLED", True)
+def comic_client(tmp_path):
     clients = []
-    projects = []
 
-    def create(kind="folder", count=3):
+    def create(count=3):
         index = len(clients)
         app_dir = tmp_path / f"app-{index}"
         app_dir.mkdir()
-        if kind == "layout2":
-            project = project_manager.create_layout2_document(tmp_path / f"Comic-{index}.sbd", canvas_width=256, canvas_height=144)
-        elif kind == "document":
-            project = project_manager.create_document(tmp_path / f"Legacy-{index}.sbd", canvas_width=256, canvas_height=144)
-        else:
-            project = project_manager.create_project(tmp_path / f"Folder-{index}", canvas_width=256, canvas_height=144)
+        project = make_project(tmp_path, f"Comic-{index}", canvas_width=256, canvas_height=144)
         project.settings["backup_on_save"] = False
-        projects.append(project)
         app = create_app(app_dir)
         app.state.project = project
         app.state.project_disk_mtime = project_manager.project_disk_mtime(project)
@@ -54,10 +47,7 @@ def comic_client(tmp_path, monkeypatch):
 
     yield create
     for client in clients:
-        projects.append(client.app.state.project)
         client.close()
-    for project in projects:
-        project_manager.cleanup_document_working_root(project)
 
 
 def _document(client):
@@ -94,24 +84,22 @@ def _compose(client):
 
 def _disk(project):
     return {name: (project.metadata_root / name).read_bytes() for name in
-            ("project.json", "settings.json", "shots.json", "shots.csv") if (project.metadata_root / name).is_file()}
+            ("project.json", "settings.json", "shots.json") if (project.metadata_root / name).is_file()}
 
 
-@pytest.mark.parametrize("kind", ["folder", "document", "layout2"])
-def test_legacy_empty_comic_read_does_not_mutate(comic_client, kind):
-    client = comic_client(kind)
+def test_empty_comic_read_does_not_mutate(comic_client):
+    client = comic_client()
     project = client.app.state.project
-    before, dirty = _disk(project), client.app.state.dirty
+    before, revision = _disk(project), project.storage_revision
     assert _document(client) == comic.ComicDocument().model_dump()
     assert "comic_document" not in project.settings
     assert "comic_document" not in json.loads(project.settings_path.read_text(encoding="utf-8"))
     assert _disk(project) == before
-    assert client.app.state.dirty == dirty
+    assert project.storage_revision == revision
 
 
-@pytest.mark.parametrize("kind", ["folder", "document", "layout2"])
-def test_geometry_save_reopen_and_storyboard_preserved(comic_client, kind):
-    client = comic_client(kind)
+def test_geometry_save_reopen_and_storyboard_preserved(comic_client):
+    client = comic_client()
     project = client.app.state.project
     project.settings["custom_setting"] = {"keep": [1, 2]}
     shots = [shot.to_dict() for shot in project.shots]
@@ -119,23 +107,19 @@ def test_geometry_save_reopen_and_storyboard_preserved(comic_client, kind):
     accepted = _compose(client)
     assert client.post("/api/project/save").status_code == 200
     reopened = project_manager.open_project(project.reopen_path)
-    try:
-        assert comic.get_document(reopened) == accepted
-        assert reopened.settings["custom_setting"] == {"keep": [1, 2]}
-        assert [shot.to_dict() for shot in reopened.shots] == shots
-        assert story_graph.get_graph(reopened) == graph
-        for page, expected in zip(accepted["pages"], [(240, 360), (480, 360), (240, 1200)]):
-            response = client.get(f"/api/project/comic/pages/{page['id']}/image")
-            assert response.status_code == 200, response.text
-            assert response.headers["content-type"] == "image/png"
-            image = Image.open(io.BytesIO(response.content))
-            assert image.size == expected
-            panel = page["panels"][0]
-            assert image.getpixel((panel["x"], panel["y"])) == (0, 0, 0)
-            assert image.getpixel((0, 0)) == (255, 255, 255)
-    finally:
-        if reopened.metadata_root != project.metadata_root:
-            project_manager.cleanup_document_working_root(reopened)
+    assert comic.get_document(reopened) == accepted
+    assert reopened.settings["custom_setting"] == {"keep": [1, 2]}
+    assert [shot.to_dict() for shot in reopened.shots] == shots
+    assert story_graph.get_graph(reopened) == graph
+    for page, expected in zip(accepted["pages"], [(240, 360), (480, 360), (240, 1200)]):
+        response = client.get(f"/api/project/comic/pages/{page['id']}/image")
+        assert response.status_code == 200, response.text
+        assert response.headers["content-type"] == "image/png"
+        image = Image.open(io.BytesIO(response.content))
+        assert image.size == expected
+        panel = page["panels"][0]
+        assert image.getpixel((panel["x"], panel["y"])) == (0, 0, 0)
+        assert image.getpixel((0, 0)) == (255, 255, 255)
 
 
 @pytest.mark.parametrize("damage", ["missing-shot", "missing-chapter", "duplicate-panel", "duplicate-placement", "out-of-page", "negative-position", "pixel-cap", "bad-fit", "bad-mode"])
@@ -235,16 +219,15 @@ def test_unplaced_storyboard_generation_keeps_existing_contract(comic_client):
     assert "COMIC PANEL" not in request["prompt"]["compiled_prompt"]
 
 
-@pytest.mark.parametrize("kind", ["folder", "document", "layout2"])
-def test_autosave_failure_rolls_back_comic_and_generated_shot_state(comic_client, monkeypatch, kind):
-    client = comic_client(kind)
+def test_save_failure_rolls_back_comic_and_generated_shot_state(comic_client, monkeypatch):
+    client = comic_client()
     original = _compose(client)
     project = client.app.state.project
     shot_id = original["pages"][0]["panels"][0]["shot_id"]
     assert client.post(f"/api/shots/{shot_id}/generation-requests", json={"destination": "queue"}).status_code == 200
     shots_before = [shot.to_dict() for shot in project.shots]
     before, revision = _disk(project), project.storage_revision
-    dirty, mtime = client.app.state.dirty, client.app.state.project_disk_mtime
+    mtime = client.app.state.project_disk_mtime
     real_save_settings = project_manager.save_settings
 
     def fail_after_write(current):
@@ -261,7 +244,6 @@ def test_autosave_failure_rolls_back_comic_and_generated_shot_state(comic_client
     assert [shot.to_dict() for shot in project.shots] == shots_before
     assert _disk(project) == before
     assert project.storage_revision == revision
-    assert client.app.state.dirty == dirty
     assert client.app.state.project_disk_mtime == mtime
 
 
@@ -362,9 +344,8 @@ def test_result_from_before_comic_edit_remains_stale(comic_client, tmp_path):
     assert shot.generation_state["freshness_status"] == "stale"
 
 
-@pytest.mark.parametrize("kind", ["folder", "document", "layout2"])
-def test_desktop_png_and_chapter_zip_export_have_real_pixels_and_ordered_manifest(comic_client, kind):
-    client = comic_client(kind)
+def test_desktop_png_and_chapter_zip_export_have_real_pixels_and_ordered_manifest(comic_client):
+    client = comic_client()
     doc = _compose(client)
     doc["pages"] = list(reversed(doc["pages"]))
     assert _put(client, doc).status_code == 200
@@ -445,9 +426,8 @@ def test_export_and_open_check_project_identity_and_open_does_not_regenerate(com
     assert target.read_bytes() == previous
 
 
-@pytest.mark.parametrize("kind", ["folder", "document", "layout2"])
-def test_prompt_preview_is_read_only_and_contains_manual_negative_and_geometry(comic_client, kind):
-    client = comic_client(kind)
+def test_prompt_preview_is_read_only_and_contains_manual_negative_and_geometry(comic_client):
+    client = comic_client()
     _compose(client)
     project = client.app.state.project
     shot = project.shots[0]
@@ -458,7 +438,7 @@ def test_prompt_preview_is_read_only_and_contains_manual_negative_and_geometry(c
     before = _disk(project)
     files = {path for path in project.metadata_root.rglob("*") if path.is_file()}
     state = [shot.to_dict() for shot in project.shots]
-    dirty = client.app.state.dirty
+    revision = project.storage_revision
     for _ in range(2):
         response = client.get(f"/api/project/comic/prompts/{shot.shot_id}")
         assert response.status_code == 200, response.text
@@ -471,12 +451,11 @@ def test_prompt_preview_is_read_only_and_contains_manual_negative_and_geometry(c
     assert _disk(project) == before
     assert {path for path in project.metadata_root.rglob("*") if path.is_file()} == files
     assert [shot.to_dict() for shot in project.shots] == state
-    assert client.app.state.dirty == dirty
+    assert project.storage_revision == revision
 
 
-@pytest.mark.parametrize("kind", ["folder", "document", "layout2"])
-def test_prompt_preview_with_linked_scene_includes_context_without_changing_files(comic_client, kind):
-    client = comic_client(kind)
+def test_prompt_preview_with_linked_scene_includes_context_without_changing_files(comic_client):
+    client = comic_client()
     _compose(client)
     project = client.app.state.project
     scene, _ = scene2d.create_scene(project, title="Station", environment_prompt="Wet brick platform", consistency_anchors=["Clock above doorway"])
@@ -494,9 +473,8 @@ def test_prompt_preview_with_linked_scene_includes_context_without_changing_file
     assert generation_service.list_requests(project) == []
 
 
-@pytest.mark.parametrize("kind", ["folder", "document", "layout2"])
-def test_panel_psd_and_reference_background_use_panel_canvas(comic_client, tmp_path, kind):
-    client = comic_client(kind)
+def test_panel_psd_and_reference_background_use_panel_canvas(comic_client, tmp_path):
+    client = comic_client()
     _compose(client)
     project = client.app.state.project
     shot = project.shots[0]
@@ -561,9 +539,8 @@ def test_chapter_zip_contains_only_the_selected_chapter_and_boards(comic_client)
         assert {board["shot_id"] for board in manifest["boards"]} == {shot.shot_id for shot in project.shots[:3]}
 
 
-@pytest.mark.parametrize("kind", ["folder", "document", "layout2"])
-def test_manual_shape_crop_lock_lettering_roundtrip(comic_client, kind):
-    client = comic_client(kind)
+def test_manual_shape_crop_lock_lettering_roundtrip(comic_client):
+    client = comic_client()
     doc = _compose(client)
     doc["pages"][0].update(background="#abcdef", safe_margin=17, lettering=[_lettering(text="中文\nABC", vertical=True)])
     doc["pages"][0]["panels"][0].update(points=[[0, 0], [1, 0], [.6, 1], [0, 1]],
@@ -573,11 +550,7 @@ def test_manual_shape_crop_lock_lettering_roundtrip(comic_client, kind):
     assert client.post("/api/project/save").status_code == 200
     project = client.app.state.project
     reopened = project_manager.open_project(project.reopen_path)
-    try:
-        assert json.loads(json.dumps(comic.get_document(reopened))) == accepted.json()["comic_document"]
-    finally:
-        if reopened.metadata_root != project.metadata_root:
-            project_manager.cleanup_document_working_root(reopened)
+    assert json.loads(json.dumps(comic.get_document(reopened))) == accepted.json()["comic_document"]
 
 
 @pytest.mark.parametrize("damage", ["outside-point", "concave", "crossing", "tiny-area", "too-many-points",
@@ -602,12 +575,12 @@ def test_manual_invalid_geometry_never_writes(comic_client, damage):
     elif damage == "duplicate-lettering": page["lettering"].append(copy.deepcopy(page["lettering"][0]))
     elif damage == "bad-tail": page["lettering"][0]["tail"] = -1
     elif damage == "safe-margin": page["safe_margin"] = 513
-    before, dirty = _disk(client.app.state.project), client.app.state.dirty
+    before, revision = _disk(client.app.state.project), client.app.state.project.storage_revision
     response = _put(client, changed)
     assert response.status_code == 400, response.text
     assert _document(client) == original
     assert _disk(client.app.state.project) == before
-    assert client.app.state.dirty == dirty
+    assert client.app.state.project.storage_revision == revision
 
 
 def test_polygon_mask_crop_and_lettering_stack_actual_pixels(comic_client, monkeypatch, tmp_path):

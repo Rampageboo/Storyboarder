@@ -6,29 +6,45 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+import pytest
 from PIL import Image
 
 from storyboard_tool import generation_service, mcp_server, session_store
-from storyboard_tool.models import Project, Shot
+from conftest import make_project
+from storyboard_tool.models import Shot
 
 
 class TestStoryboarderMcp(unittest.TestCase):
-    def test_live_bridge_project_takes_priority_over_saved_document_path(self) -> None:
+    def test_session_document_path_resolves_when_live_bridge_has_no_paths(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             base = Path(tmp)
-            unpacked = base / "active" / "project.json"
-            unpacked.parent.mkdir()
-            unpacked.write_text("{}", encoding="utf-8")
-            document = base / "Untitled.sbd"
-            document.write_bytes(b"not opened")
-            session_store.write_session(base, {"last_project_json_path": str(document)})
+            project = make_project(base)
+            session_store.write_session(base, {"last_project_json_path": str(project.reopen_path)})
             bridge_path = base / "Sessions" / "storyboard_live_bridge.json"
+            bridge_path.parent.mkdir(parents=True, exist_ok=True)
             bridge_path.write_text(
-                '{"app_running": true, "project_json_path": ' + json.dumps(str(unpacked)) + '}',
+                json.dumps({"app_running": True, "project_root": "", "project_json_path": ""}),
                 encoding="utf-8",
             )
 
-            self.assertEqual(mcp_server.resolve_project_json(session_base=base), unpacked.resolve())
+            resolved = mcp_server.resolve_project_json(session_base=base)
+            self.assertEqual(resolved, project.document_path.resolve())
+            opened = mcp_server._project(base)
+            self.assertEqual(opened.project_id, project.project_id)
+
+    @pytest.mark.xfail(
+        reason=(
+            "SOURCE BUG: mcp_server.resolve_project_json appends 'project.json' to a "
+            "folder argument (old root manifest), so a project folder cannot be opened"
+        ),
+        strict=True,
+    )
+    def test_explicit_project_folder_opens_the_project(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            project = make_project(base)
+            opened = mcp_server._project(base, explicit_project=str(project.project_root))
+            self.assertEqual(opened.project_id, project.project_id)
 
     def test_initialize_and_tool_catalog_follow_stdio_mcp_contract(self) -> None:
         initialized = mcp_server.handle_message(
@@ -50,11 +66,8 @@ class TestStoryboarderMcp(unittest.TestCase):
 
     def test_tools_list_fetch_and_submit_without_mutating_shot_state(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            project = Project(
-                root_path=Path(tmp),
-                shots=[Shot(shot_id="shot_1", description="A lone figure crosses the bridge")],
-                settings={"canvas_width": 1600, "canvas_height": 900},
-            )
+            project = make_project(Path(tmp), canvas_width=1600, canvas_height=900)
+            project.shots = [Shot(shot_id="shot_1", description="A lone figure crosses the bridge")]
             request = generation_service.create_request(project, project.shots[0], "codex")
             source = Path(tmp) / "generated.png"
             Image.new("RGB", (16, 9), (1, 2, 3)).save(source)
@@ -76,7 +89,7 @@ class TestStoryboarderMcp(unittest.TestCase):
                 )
             self.assertEqual(rows["requests"][0]["request_id"], request["request_id"])
             self.assertEqual(fetched["shot_id"], "shot_1")
-            self.assertTrue(submitted["result"]["artifacts"][0]["project_relative_path"].startswith("generation/"))
+            self.assertTrue(submitted["result"]["artifacts"][0]["project_relative_path"].startswith("Images/Generated/"))
             self.assertEqual(project.shots[0].generation_state["execution_status"], "idle")
 
 

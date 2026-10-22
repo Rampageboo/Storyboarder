@@ -3,7 +3,6 @@ from __future__ import annotations
 import hashlib
 import json
 import time
-import uuid
 from pathlib import Path
 from unittest import mock
 
@@ -13,6 +12,7 @@ from fastapi.testclient import TestClient
 from storyboard_tool import api as api_module
 from storyboard_tool import live_bridge, project_manager
 from storyboard_tool.models import Project, Shot
+from conftest import make_project
 from storyboard_tool.plugin_service import (
     EXPLICIT_ASSET_PATHS_CAPABILITY,
     PLUGIN_PROTOCOL_VERSION,
@@ -24,25 +24,15 @@ MINI_PNG = bytes.fromhex(
 )
 
 
-def _layout2_client(tmp_path: Path) -> tuple[TestClient, object, Project, str]:
-    project_root = tmp_path / "Portable"
-    work_root = project_root / ".storyboarder" / "work"
-    work_root.mkdir(parents=True)
+def _project_client(tmp_path: Path) -> tuple[TestClient, object, Project, str]:
+    project = make_project(tmp_path, "Portable")
     shot_id = "shot-protocol"
-    project = Project(
-        root_path=work_root,
-        project_root_path=project_root,
-        document_path=project_root / "Portable.sbd",
-        layout=2,
-        project_id=str(uuid.uuid4()),
-        storage_revision=7,
-        shots=[Shot(shot_id=shot_id, title="Protocol shot")],
-        settings=dict(project_manager.DEFAULT_SETTINGS),
-    )
+    project.shots = [Shot(shot_id=shot_id, title="Protocol shot")]
+    project.storage_revision = 7
+    project_manager.save_project(project)
     app = api_module.create_app(tmp_path / "app")
     app.state.project = project
     app.state.project_disk_mtime = 0.0
-    app.state.dirty = True
     bridge_dir = tmp_path / "bridge"
     bridge_dir.mkdir()
     patchers = [
@@ -77,7 +67,9 @@ def _v2_headers(
         "x-storyboarder-project-session": (
             str(app.state.project_session_id) if session is None else session
         ),
-        "x-storyboarder-context-revision": str(7 if revision is None else revision),
+        "x-storyboarder-context-revision": str(
+            app.state.project.storage_revision if revision is None else revision
+        ),
     }
     if work_key:
         headers["x-storyboarder-work-key"] = work_key
@@ -115,13 +107,13 @@ def _v2_headers(
         ),
     ],
 )
-def test_layout2_old_protocol_is_426_before_any_path_disclosure(
+def test_old_protocol_is_426_before_any_path_disclosure(
     tmp_path: Path,
     method: str,
     path: str,
     body: dict | None,
 ) -> None:
-    client, _app, project, _shot_id = _layout2_client(tmp_path)
+    client, _app, project, _shot_id = _project_client(tmp_path)
     try:
         response = getattr(client, method)(path, json=body) if body is not None else getattr(client, method)(path)
     finally:
@@ -141,8 +133,8 @@ def test_layout2_old_protocol_is_426_before_any_path_disclosure(
         assert forbidden not in response.json()
 
 
-def test_layout2_v2_context_exposes_only_explicit_role_paths(tmp_path: Path) -> None:
-    client, app, project, shot_id = _layout2_client(tmp_path)
+def test_v2_context_exposes_only_explicit_role_paths(tmp_path: Path) -> None:
+    client, app, project, shot_id = _project_client(tmp_path)
     app.state.active_work_context = {
         "kind": "shot",
         "key": f"shot:{shot_id}",
@@ -194,12 +186,12 @@ def test_layout2_v2_context_exposes_only_explicit_role_paths(tmp_path: Path) -> 
         ({"revision": 6}, "revision is stale"),
     ],
 )
-def test_layout2_write_intent_rejects_stale_context(
+def test_write_intent_rejects_stale_context(
     tmp_path: Path,
     headers: dict[str, object],
     message: str,
 ) -> None:
-    client, app, project, shot_id = _layout2_client(tmp_path)
+    client, app, project, shot_id = _project_client(tmp_path)
     try:
         response = client.post(
             "/api/plugin/write-intents",
@@ -215,8 +207,8 @@ def test_layout2_write_intent_rejects_stale_context(
     assert not (project.project_root / ".storyboarder" / "transactions").exists()
 
 
-def test_layout2_write_intent_returns_scoped_inbox_not_client_path(tmp_path: Path) -> None:
-    client, app, project, shot_id = _layout2_client(tmp_path)
+def test_write_intent_returns_scoped_inbox_not_client_path(tmp_path: Path) -> None:
+    client, app, project, shot_id = _project_client(tmp_path)
     key = f"shot:{shot_id}"
     try:
         response = client.post(
@@ -245,11 +237,11 @@ def test_layout2_write_intent_returns_scoped_inbox_not_client_path(tmp_path: Pat
 
 
 @pytest.mark.parametrize("token_state", ["unknown", "expired", "used"])
-def test_layout2_preview_write_rejects_invalid_or_stale_intent(
+def test_preview_write_rejects_invalid_or_stale_intent(
     tmp_path: Path,
     token_state: str,
 ) -> None:
-    client, app, project, shot_id = _layout2_client(tmp_path)
+    client, app, project, shot_id = _project_client(tmp_path)
     key = f"shot:{shot_id}"
     try:
         issued = client.post(
@@ -280,10 +272,10 @@ def test_layout2_preview_write_rejects_invalid_or_stale_intent(
     assert not (project.project_root / "C:" / "must-not-be-used.png").exists()
 
 
-def test_layout2_preview_write_rejects_wrong_role_without_consuming_token(
+def test_preview_write_rejects_wrong_role_without_consuming_token(
     tmp_path: Path,
 ) -> None:
-    client, app, _project, shot_id = _layout2_client(tmp_path)
+    client, app, _project, shot_id = _project_client(tmp_path)
     key = f"shot:{shot_id}"
     try:
         issued = client.post(
@@ -310,16 +302,11 @@ def test_layout2_preview_write_rejects_wrong_role_without_consuming_token(
     assert used is False
 
 
-def test_layout2_preview_commit_uses_inbox_and_ignores_client_path(
+def test_preview_commit_uses_inbox_and_ignores_client_path(
     tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    client, app, project, shot_id = _layout2_client(tmp_path)
+    client, app, project, shot_id = _project_client(tmp_path)
     key = f"shot:{shot_id}"
-    monkeypatch.setattr(
-        "storyboard_tool.plugin_service.app_state._autosave",
-        lambda _app: None,
-    )
     try:
         issued = client.post(
             "/api/plugin/write-intents",
@@ -355,23 +342,18 @@ def test_layout2_preview_commit_uses_inbox_and_ignores_client_path(
     canonical = project.project_root / "Images" / "Shots" / f"{shot_id}_preview.png"
     assert response.status_code == 200, response.text
     assert canonical.read_bytes() == MINI_PNG
-    assert project.shots[0].preview_image_path == f"Images/Shots/{shot_id}_preview.png"
+    assert app.state.project.shots[0].preview_image_path == f"Images/Shots/{shot_id}_preview.png"
     assert not malicious.exists()
     assert not inbox.parent.parent.exists()
     assert replay.status_code == 409
     assert replay.json()["code"] == "PLUGIN_WRITE_INTENT_REJECTED"
 
 
-def test_layout2_native_psd_reconnect_validates_canonical_role_and_hash(
+def test_native_psd_reconnect_validates_canonical_role_and_hash(
     tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    client, app, project, shot_id = _layout2_client(tmp_path)
+    client, app, project, shot_id = _project_client(tmp_path)
     key = f"shot:{shot_id}"
-    monkeypatch.setattr(
-        "storyboard_tool.plugin_service.app_state._autosave",
-        lambda _app: None,
-    )
     try:
         issued = client.post(
             "/api/plugin/write-intents",
@@ -397,12 +379,12 @@ def test_layout2_native_psd_reconnect_validates_canonical_role_and_hash(
 
     assert response.status_code == 200, response.text
     assert response.json()["source_sha256"] == hashlib.sha256(raw).hexdigest()
-    assert project.shots[0].source_file_path == f"PSD/Shots/{shot_id}.psd"
+    assert app.state.project.shots[0].source_file_path == f"PSD/Shots/{shot_id}.psd"
     assert not (tmp_path / "attacker.psd").exists()
 
 
-def test_layout2_live_bridge_scrubs_legacy_and_focus_paths(tmp_path: Path) -> None:
-    client, app, project, shot_id = _layout2_client(tmp_path)
+def test_live_bridge_scrubs_legacy_and_focus_paths(tmp_path: Path) -> None:
+    client, app, project, shot_id = _project_client(tmp_path)
     app.state.active_work_context = {
         "kind": "shot",
         "key": f"shot:{shot_id}",

@@ -42,7 +42,7 @@ class _ProjectFixture(unittest.TestCase):
         self._tmp = tempfile.mkdtemp()
         self._app = api_module.create_app(Path(self._tmp))
         self._client = TestClient(self._app, raise_server_exceptions=False)
-        resp = _quiet(lambda: self._client.post("/api/project/new", json={"path": self._tmp}))
+        resp = _quiet(lambda: self._client.post("/api/project/new", json={"path": str(Path(self._tmp) / "Demo.sbd")}))
         self.assertEqual(resp.status_code, 200, f"Project creation failed: {resp.text}")
         self._project_data = resp.json()
         # Seed with two shots so lifecycle tests have a realistic starting point.
@@ -145,32 +145,32 @@ class TestProjectRoundtrip(unittest.TestCase):
 
     def test_save_and_reload_preserves_shots(self) -> None:
         root = Path(self._tmp) / "MyProject"
-        project = project_manager.create_project(root)
+        project = project_manager.create_project(root.with_suffix(".sbd"))
         with contextlib.suppress(Exception):
             # add_shot might fail if Photoshop is not configured; we test the data layer
             project_manager.add_shot(project)
             project_manager.add_shot(project)
         project_manager.save_project(project)
 
-        reloaded = project_manager.open_project(project.json_path)
+        reloaded = project_manager.open_project(project.document_path)
         self.assertEqual(len(reloaded.shots), len(project.shots))
         for orig, relo in zip(project.shots, reloaded.shots):
             self.assertEqual(orig.shot_id, relo.shot_id)
 
     def test_save_and_reload_preserves_settings(self) -> None:
         root = Path(self._tmp) / "SettingsProject"
-        project = project_manager.create_project(root)
+        project = project_manager.create_project(root.with_suffix(".sbd"))
         project.settings["pdf_layout"] = "one_per_page"
         project.settings["canvas_background_color"] = "#123456"
         project_manager.save_settings(project)
 
-        reloaded = project_manager.open_project(project.json_path)
+        reloaded = project_manager.open_project(project.document_path)
         self.assertEqual(reloaded.settings.get("pdf_layout"), "one_per_page")
         self.assertEqual(reloaded.settings.get("canvas_background_color"), "#123456")
 
     def test_project_json_is_valid_after_save(self) -> None:
         root = Path(self._tmp) / "JsonProject"
-        project = project_manager.create_project(root)
+        project = project_manager.create_project(root.with_suffix(".sbd"))
         project_manager.save_project(project)
 
         content = project.json_path.read_text(encoding="utf-8")
@@ -271,21 +271,21 @@ class TestMissingMediaOnOpen(unittest.TestCase):
 
     def test_project_opens_with_shots_that_have_missing_preview(self) -> None:
         root = Path(self._tmp) / "MissingProject"
-        project = project_manager.create_project(root)
+        project = project_manager.create_project(root.with_suffix(".sbd"))
         shot = project.shots[0] if project.shots else Shot(shot_id="shot_missing")
-        shot.preview_image_path = "shots/shot_missing/shot_missing_preview.png"
+        shot.preview_image_path = "Images/Shots/shot_missing_preview.png"
         if shot not in project.shots:
             project.shots.append(shot)
         project_manager.save_project(project)
 
         # Must not raise; loads even when preview file is absent
-        reloaded = project_manager.open_project(project.json_path)
+        reloaded = project_manager.open_project(project.document_path)
         self.assertIsNotNone(reloaded)
 
     def test_missing_files_endpoint_reports_missing_preview(self) -> None:
         app = api_module.create_app(Path(self._tmp))
         client = TestClient(app, raise_server_exceptions=False)
-        resp = _quiet(lambda: client.post("/api/project/new", json={"path": self._tmp}))
+        resp = _quiet(lambda: client.post("/api/project/new", json={"path": str(Path(self._tmp) / "Demo.sbd")}))
         self.assertEqual(resp.status_code, 200)
 
         # Add a shot first (new projects start with 0 shots)
@@ -295,7 +295,7 @@ class TestMissingMediaOnOpen(unittest.TestCase):
         project = app.state.project
         self.assertGreater(len(project.shots), 0, "Expected at least one shot after add")
         shot = project.shots[0]
-        shot.preview_image_path = "shots/ghost/ghost_preview.png"
+        shot.preview_image_path = "Images/Shots/ghost_preview.png"
 
         resp = _quiet(lambda: client.get("/api/project/missing-files"))
         self.assertEqual(resp.status_code, 200)

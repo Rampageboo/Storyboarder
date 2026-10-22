@@ -88,7 +88,7 @@ def cloud(monkeypatch):
 
 def _project_client(tmp_path: Path):
     client = TestClient(create_app(tmp_path), raise_server_exceptions=False)
-    assert client.post("/api/project/new", json={"path": str(tmp_path)}).status_code == 200
+    assert client.post("/api/project/new", json={"path": str(tmp_path / "Demo.sbd")}).status_code == 200
     shot = client.post("/api/shots", json={}).json()["shot"]
     return client, shot
 
@@ -195,7 +195,8 @@ def test_video_take_runs_to_a_playable_project_file(tmp_path: Path, cloud) -> No
     assert graph["12"]["inputs"]["length"] == 33
     assert graph["11"]["inputs"]["image"]["asset_for"].endswith(".png")
     assert graph["13"]["inputs"]["noise_seed"] == graph["14"]["inputs"]["noise_seed"] == take["seed"]
-    assert take["video_path"] == f"generation/video/{take['take_id']}.mp4"
+    assert take["video_path"] == f"Videos/Generated/{take['take_id']}.mp4"
+    assert (tmp_path / "Demo" / take["video_path"]).is_file()
     video = client.get(f"/api/video-takes/{take['take_id']}/video")
     assert video.status_code == 200
     assert video.headers["content-type"] == "video/mp4"

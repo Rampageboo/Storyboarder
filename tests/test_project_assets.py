@@ -2,14 +2,14 @@ from __future__ import annotations
 
 import io
 import re
-import uuid
 from pathlib import Path
 
 import pytest
 from fastapi import FastAPI
 from PIL import Image
 
-from storyboard_tool import export_service, generation_service, project_manager, scene2d, scene3d
+from conftest import make_project
+from storyboard_tool import export_service, generation_service, project_manager
 from storyboard_tool.file_transactions import (
     atomic_copy_stream,
     atomic_output_directory,
@@ -17,7 +17,6 @@ from storyboard_tool.file_transactions import (
 from storyboard_tool.models import Project, Shot
 from storyboard_tool.plugin_service import PluginBridgeService
 from storyboard_tool.project_layout import (
-    ProjectPathError,
     generation_metadata_path,
     project_relative_posix,
     resolve_shot_asset,
@@ -31,22 +30,10 @@ from storyboard_tool.reference_segments import (
 
 
 def _project(tmp_path: Path) -> tuple[Project, Shot]:
-    root = tmp_path / "Portable"
-    work = root / ".storyboarder" / "work"
-    work.mkdir(parents=True)
+    project = make_project(tmp_path, "Portable")
     shot = Shot(shot_id="shot-alpha")
-    project = Project(
-        root_path=work,
-        project_root_path=root,
-        document_path=root / "Portable.sbd",
-        layout=2,
-        project_id=str(uuid.uuid4()),
-        storage_revision=4,
-        shots=[shot],
-        settings=dict(project_manager.DEFAULT_SETTINGS),
-    )
-    scene3d.initialize_layout2_metadata(project)
-    scene2d.initialize_layout2_metadata(project)
+    project.shots.append(shot)
+    project_manager.save_project(project)
     return project, shot
 
 
@@ -61,7 +48,7 @@ def _png(path: Path, color: str = "red") -> Path:
     return path
 
 
-def test_layout2_exact_asset_roles_have_no_per_shot_directory(tmp_path: Path) -> None:
+def test_exact_asset_roles_have_no_per_shot_directory(tmp_path: Path) -> None:
     project, shot = _project(tmp_path)
 
     assert shot_asset_relative(project, shot.shot_id, "source_psd") == "PSD/Shots/shot-alpha.psd"
@@ -76,8 +63,7 @@ def test_layout2_exact_asset_roles_have_no_per_shot_directory(tmp_path: Path) ->
     assert project.references_dir == project.project_root / "Images" / "References"
     assert project.exports_dir == project.project_root / "Exports"
     assert project.backups_dir == project.project_root / ".storyboarder" / "backups"
-    with pytest.raises(ProjectPathError, match="no Layout 2 directory alias"):
-        _ = project.shots_dir
+    assert not hasattr(project, "shots_dir")
 
     project_manager._ensure_shot_files(project, shot)
 
@@ -87,13 +73,13 @@ def test_layout2_exact_asset_roles_have_no_per_shot_directory(tmp_path: Path) ->
     assert (project.metadata_root / "notes" / "shot-alpha.json").is_file()
 
 
-def test_layout2_plugin_health_finds_canonical_psd_without_stored_path(
+def test_plugin_health_finds_canonical_psd_without_stored_path(
     tmp_path: Path,
 ) -> None:
     project, shot = _project(tmp_path)
     source = resolve_shot_asset(project, shot.shot_id, "source_psd")
     source.parent.mkdir(parents=True)
-    source.write_bytes(b"8BPS-layout2")
+    source.write_bytes(b"8BPS-canonical")
 
     resolved = PluginBridgeService(FastAPI()).shot_psd_path(project, shot)
 
@@ -101,7 +87,7 @@ def test_layout2_plugin_health_finds_canonical_psd_without_stored_path(
     assert resolved == source
 
 
-def test_layout2_reference_and_export_paths_are_exact(tmp_path: Path) -> None:
+def test_reference_and_export_paths_are_exact(tmp_path: Path) -> None:
     project, shot = _project(tmp_path)
 
     shot_reference = project_manager.add_reference_image_stream(
@@ -122,11 +108,13 @@ def test_layout2_reference_and_export_paths_are_exact(tmp_path: Path) -> None:
     assert export_service.resolve_output_path(project, "pdf") == (
         project.project_root / "Exports" / "storyboard.pdf"
     )
-    assert not (project.project_root / "references").exists()
-    assert not (project.project_root / "exports").exists()
+    # Windows paths are case-insensitive, so compare the real folder names.
+    top_level = {path.name for path in project.project_root.iterdir()}
+    assert "references" not in top_level
+    assert "exports" not in top_level
 
 
-def test_layout2_reference_undo_backup_is_flat(tmp_path: Path) -> None:
+def test_reference_undo_backup_is_flat(tmp_path: Path) -> None:
     project, shot = _project(tmp_path)
     background = resolve_shot_asset(project, shot.shot_id, "board_background")
     background.parent.mkdir(parents=True)
@@ -143,7 +131,7 @@ def test_layout2_reference_undo_backup_is_flat(tmp_path: Path) -> None:
         assert restored.getpixel((0, 0)) == (255, 0, 0)
 
 
-def test_layout2_generation_metadata_and_artifacts_use_separate_roots(tmp_path: Path) -> None:
+def test_generation_metadata_and_artifacts_use_separate_roots(tmp_path: Path) -> None:
     project, shot = _project(tmp_path)
     request = generation_service.create_request(project, shot, "codex")
     first = _png(tmp_path / "first.png")
@@ -209,7 +197,7 @@ def test_background_failure_preserves_previous_asset_and_cleans_temp(
     assert not target.with_suffix(".tmp.png").exists()
 
 
-def test_generation_copy_failure_removes_partial_layout2_artifacts(
+def test_generation_copy_failure_removes_partial_artifacts(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     project, shot = _project(tmp_path)
@@ -245,7 +233,7 @@ def test_export_file_failure_preserves_previous_output(
 
     project, _shot = _project(tmp_path)
     target = export_service.resolve_output_path(project, "pdf")
-    target.parent.mkdir(parents=True)
+    target.parent.mkdir(parents=True, exist_ok=True)
     target.write_bytes(b"previous pdf")
 
     def fail_export(_project: Project, staged: Path, *, layout: str) -> None:

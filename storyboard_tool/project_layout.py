@@ -1,8 +1,8 @@
-"""Project layout schema and portable path authority.
+"""Project manifest schema and portable path authority.
 
 All persisted filesystem paths are project-root-relative POSIX strings.  This
-module owns their validation and resolution so layout-specific storage never
-leaks into domain consumers.
+module owns their validation and resolution so storage paths never leak into
+domain consumers.
 """
 from __future__ import annotations
 
@@ -14,28 +14,12 @@ from pathlib import Path, PurePosixPath
 from typing import Any, Iterable, Protocol
 
 
-PROJECT_JSON_VERSION = 4
-SUPPORTED_PROJECT_JSON_VERSIONS = frozenset({1, 2, 3, PROJECT_JSON_VERSION})
-
-LAYOUT_1 = 1
-LAYOUT_2 = 2
-SUPPORTED_LAYOUTS = frozenset({LAYOUT_1, LAYOUT_2})
-LAYOUT_2_ENABLED = True
+PROJECT_JSON_VERSION = 5
 
 MAX_STORAGE_REVISION = (1 << 63) - 1
 _DRIVE_PATH_RE = re.compile(r"^[A-Za-z]:")
 
-_LAYOUT_1_PROJECT_PATHS = {
-    "images_dir": "images",
-    "shots_dir": "shots",
-    "references_dir": "references",
-    "scenes2d_dir": "scenes2d",
-    "scenes3d_dir": "scenes3d",
-    "exports_dir": "exports",
-    "scripts_dir": "scripts",
-    "backups_dir": "backups",
-}
-_LAYOUT_2_PROJECT_PATHS = {
+_PROJECT_PATHS = {
     "images_dir": "Images",
     "references_dir": "Images/References",
     "exports_dir": "Exports",
@@ -48,7 +32,7 @@ _METADATA_PATHS = {
 
 
 class ProjectLayoutError(ValueError):
-    """Base error for an invalid project layout contract."""
+    """Base error for an invalid project format contract."""
 
 
 class ProjectSchemaError(ProjectLayoutError):
@@ -63,10 +47,6 @@ class ProjectIntegrityError(ProjectLayoutError):
     """Persisted project data points at a missing or ambiguous target."""
 
 
-class LayoutDisabledError(ProjectLayoutError):
-    """A valid layout is not enabled for application use yet."""
-
-
 class ProjectPathContext(Protocol):
     @property
     def project_root(self) -> Path: ...
@@ -74,73 +54,25 @@ class ProjectPathContext(Protocol):
     @property
     def metadata_root(self) -> Path: ...
 
-    layout: int
-
 
 @dataclass(frozen=True)
-class ProjectLayoutSpec:
-    """Validated layout-bearing fields from ``project.json``."""
+class ProjectManifest:
+    """Validated fields from ``.storyboarder/data/project.json``."""
 
-    schema_version: int
-    layout: int
-    project_id: str = ""
-    storage_revision: int = 0
+    project_id: str
+    storage_revision: int
 
 
-def validate_conversion_provenance(value: Any) -> dict[str, Any]:
-    """Validate optional Layout 2 conversion provenance without treating it as a path."""
-    if value is None:
-        return {}
-    if not isinstance(value, dict):
-        raise ProjectSchemaError("converted_from must be an object.")
-    required_strings = ("source_path", "timestamp", "source_hash")
-    if not value:
-        return {}
-    for field in required_strings:
-        item = value.get(field)
-        if not isinstance(item, str) or not item or item != item.strip():
-            raise ProjectSchemaError(
-                f"converted_from {field} must be a non-empty string."
-            )
-    source_version = value.get("source_version")
-    if (
-        isinstance(source_version, bool)
-        or not isinstance(source_version, int)
-        or source_version not in SUPPORTED_PROJECT_JSON_VERSIONS
-    ):
-        raise ProjectSchemaError("converted_from source_version is unsupported.")
-    source_hash = value["source_hash"]
-    if not re.fullmatch(r"[0-9a-fA-F]{64}", source_hash):
-        raise ProjectSchemaError("converted_from source_hash must be a SHA-256 digest.")
-    return dict(value)
-
-def parse_project_manifest(payload: Any) -> ProjectLayoutSpec:
-    """Validate the schema/layout fields in a project manifest.
-
-    Versions 1-3 remain readable for Layout 1 compatibility. A missing
-    ``layout`` is explicitly Layout 1; every other missing or unknown schema
-    discriminator fails closed.
-    """
+def parse_project_manifest(payload: Any) -> ProjectManifest:
+    """Validate a project manifest; anything but the current schema fails closed."""
     if not isinstance(payload, dict):
         raise ProjectSchemaError("project.json must contain a JSON object.")
-
     version = payload.get("version")
-    if isinstance(version, bool) or not isinstance(version, int):
-        raise ProjectSchemaError("project.json requires an integer version.")
-    if version not in SUPPORTED_PROJECT_JSON_VERSIONS:
+    if isinstance(version, bool) or version != PROJECT_JSON_VERSION:
         raise ProjectSchemaError(f"Unsupported project.json version: {version!r}.")
-
-    layout = payload.get("layout", LAYOUT_1)
-    if isinstance(layout, bool) or not isinstance(layout, int) or layout not in SUPPORTED_LAYOUTS:
-        raise ProjectSchemaError(f"Unsupported project layout: {layout!r}.")
-
-    if layout == LAYOUT_1:
-        return ProjectLayoutSpec(schema_version=version, layout=LAYOUT_1)
-
     project_id = payload.get("project_id")
     if not isinstance(project_id, str) or not project_id or project_id != project_id.strip():
-        raise ProjectSchemaError("Layout 2 requires a non-empty stable project_id.")
-
+        raise ProjectSchemaError("project.json requires a non-empty project_id.")
     storage_revision = payload.get("storage_revision")
     if (
         isinstance(storage_revision, bool)
@@ -149,51 +81,25 @@ def parse_project_manifest(payload: Any) -> ProjectLayoutSpec:
         or storage_revision > MAX_STORAGE_REVISION
     ):
         raise ProjectSchemaError(
-            f"Layout 2 storage_revision must be an integer from 0 to {MAX_STORAGE_REVISION}."
+            f"storage_revision must be an integer from 0 to {MAX_STORAGE_REVISION}."
         )
-
-    validate_conversion_provenance(payload.get("converted_from"))
-    return ProjectLayoutSpec(
-        schema_version=version,
-        layout=LAYOUT_2,
-        project_id=project_id,
-        storage_revision=storage_revision,
-    )
-
-
-def ensure_layout_enabled(layout: int) -> None:
-    """Reject valid-but-disabled layouts before any project mutation."""
-    if isinstance(layout, bool) or not isinstance(layout, int) or layout not in SUPPORTED_LAYOUTS:
-        raise ProjectSchemaError(f"Unsupported project layout: {layout!r}.")
-    if layout == LAYOUT_2 and not LAYOUT_2_ENABLED:
-        raise LayoutDisabledError("Layout 2 projects are not enabled in this build.")
+    return ProjectManifest(project_id=project_id, storage_revision=storage_revision)
 
 
 def project_manifest(project: Any) -> dict[str, Any]:
     """Build the canonical manifest for a project model."""
-    layout = getattr(project, "layout", LAYOUT_1)
-    if isinstance(layout, bool) or not isinstance(layout, int) or layout not in SUPPORTED_LAYOUTS:
-        raise ProjectSchemaError(f"Unsupported project layout: {layout!r}.")
-    if layout == LAYOUT_1:
-        return {"version": PROJECT_JSON_VERSION}
     spec = parse_project_manifest(
         {
             "version": PROJECT_JSON_VERSION,
-            "layout": layout,
             "project_id": getattr(project, "project_id", ""),
             "storage_revision": getattr(project, "storage_revision", None),
         }
     )
-    manifest = {
-        "version": spec.schema_version,
-        "layout": spec.layout,
+    return {
+        "version": PROJECT_JSON_VERSION,
         "project_id": spec.project_id,
         "storage_revision": spec.storage_revision,
     }
-    converted_from = validate_conversion_provenance(getattr(project, "converted_from", None))
-    if converted_from:
-        manifest["converted_from"] = converted_from
-    return manifest
 
 
 def validate_project_relative_posix(
@@ -387,7 +293,7 @@ def resolve_project_path(
 
     A non-empty stored path always wins. If it no longer exists and the caller
     requires an existing target, the project is corrupt rather than silently
-    rebound to a layout default.
+    rebound to a default.
     """
     stored = "" if persisted_path is None else persisted_path
     if not isinstance(stored, str):
@@ -463,16 +369,10 @@ def resolve_metadata_path(
 
 
 def project_path_for(project: ProjectPathContext, role: str) -> Path:
-    """Return a canonical layout-owned project path for a static role."""
-    layout = getattr(project, "layout", LAYOUT_1)
-    if layout not in SUPPORTED_LAYOUTS:
-        raise ProjectSchemaError(f"Unsupported project layout: {layout!r}.")
-    paths = _LAYOUT_1_PROJECT_PATHS if layout == LAYOUT_1 else _LAYOUT_2_PROJECT_PATHS
+    """Return a canonical project path for a static role."""
     try:
-        relative = paths[role]
+        relative = _PROJECT_PATHS[role]
     except KeyError as exc:
-        if layout == LAYOUT_2 and role in _LAYOUT_1_PROJECT_PATHS:
-            raise ProjectPathError(f"Path role {role!r} has no Layout 2 directory alias.")
         raise ProjectSchemaError(f"Unknown project path role: {role!r}.") from exc
     return _resolve_generated_child(
         project.project_root,
@@ -488,36 +388,26 @@ def _validated_component(value: str, field_name: str) -> str:
     return component
 
 
+_SHOT_ASSET_PATHS = {
+    "source_psd": "PSD/Shots/{id}.psd",
+    "preview": "Images/Shots/{id}_preview.png",
+    "board_background": "Images/Shots/{id}_background.png",
+    "codex": "Images/Shots/{id}_codex.png",
+    "thumbnail": ".storyboarder/cache/thumbnails/{id}.png",
+}
+
+
 def shot_asset_relative(project: ProjectPathContext, shot_id: str, role: str) -> str:
     """Return the exact project-relative path for one persisted shot asset."""
     shot_id = _validated_component(shot_id, "shot id")
-    layout = getattr(project, "layout", LAYOUT_1)
-    if layout == LAYOUT_1:
-        paths = {
-            "source_psd": f"shots/{shot_id}/{shot_id}.psd",
-            "preview": f"shots/{shot_id}/{shot_id}_preview.png",
-            "board_background": f"shots/{shot_id}/{shot_id}_background.png",
-            "codex": f"shots/{shot_id}/{shot_id}_codex.png",
-            "thumbnail": f"shots/{shot_id}/{shot_id}_thumb.png",
-        }
-    elif layout == LAYOUT_2:
-        paths = {
-            "source_psd": f"PSD/Shots/{shot_id}.psd",
-            "preview": f"Images/Shots/{shot_id}_preview.png",
-            "board_background": f"Images/Shots/{shot_id}_background.png",
-            "codex": f"Images/Shots/{shot_id}_codex.png",
-            "thumbnail": f".storyboarder/cache/thumbnails/{shot_id}.png",
-        }
-    else:
-        raise ProjectSchemaError(f"Unsupported project layout: {layout!r}.")
     try:
-        return paths[role]
+        return _SHOT_ASSET_PATHS[role].format(id=shot_id)
     except KeyError as exc:
         raise ProjectSchemaError(f"Unknown shot asset role: {role!r}.") from exc
 
 
 def resolve_shot_asset(project: ProjectPathContext, shot_id: str, role: str) -> Path:
-    """Resolve an exact layout-owned shot asset role."""
+    """Resolve an exact shot asset role."""
     return resolve_project_path(project, shot_asset_relative(project, shot_id, role))
 
 
@@ -525,27 +415,15 @@ def shot_metadata_relative(project: ProjectPathContext, shot_id: str, role: str)
     """Return the metadata-root-relative path for per-shot JSON."""
     shot_id = _validated_component(shot_id, "shot id")
     try:
-        directory, filename = {
-            "annotations": ("annotations", f"{shot_id}.json"),
-            "drawing": ("drawings", f"{shot_id}.json"),
-            "notes": ("notes", f"{shot_id}.json"),
-        }[role]
+        directory = {"annotations": "annotations", "drawing": "drawings", "notes": "notes"}[role]
     except KeyError as exc:
         raise ProjectSchemaError(f"Unknown shot metadata role: {role!r}.") from exc
-    layout = getattr(project, "layout", LAYOUT_1)
-    if layout == LAYOUT_1:
-        return f"shots/{shot_id}/{shot_id}_{role}.json"
-    if layout == LAYOUT_2:
-        return f"{directory}/{filename}"
-    raise ProjectSchemaError(f"Unsupported project layout: {layout!r}.")
+    return f"{directory}/{shot_id}.json"
 
 
 def resolve_shot_metadata(project: ProjectPathContext, shot_id: str, role: str) -> Path:
-    """Resolve per-shot JSON below the layout's metadata root."""
-    relative = shot_metadata_relative(project, shot_id, role)
-    if getattr(project, "layout", LAYOUT_1) == LAYOUT_1:
-        return resolve_project_path(project, relative)
-    return resolve_metadata_path(project, relative)
+    """Resolve per-shot JSON below the metadata root."""
+    return resolve_metadata_path(project, shot_metadata_relative(project, shot_id, role))
 
 
 def reference_asset_relative(project: ProjectPathContext, asset_id: str, suffix: str) -> str:
@@ -554,16 +432,11 @@ def reference_asset_relative(project: ProjectPathContext, asset_id: str, suffix:
     extension = str(suffix or "").lower()
     if not extension.startswith(".") or "/" in extension or "\\" in extension:
         raise ProjectPathError("reference asset extension is invalid.")
-    layout = getattr(project, "layout", LAYOUT_1)
-    if layout == LAYOUT_2:
-        if extension in {".blend", ".glb", ".gltf"}:
-            return f"Blender/References/{asset_id}{extension}"
-        if extension in {".mp4", ".mov", ".webm", ".mkv", ".avi", ".m4v"}:
-            return f".storyboarder/media/references/{asset_id}{extension}"
-        return f"Images/References/{asset_id}{extension}"
-    if layout == LAYOUT_1:
-        return f"references/ref_{asset_id}{extension}"
-    raise ProjectSchemaError(f"Unsupported project layout: {layout!r}.")
+    if extension in {".blend", ".glb", ".gltf"}:
+        return f"Blender/References/{asset_id}{extension}"
+    if extension in {".mp4", ".mov", ".webm", ".mkv", ".avi", ".m4v"}:
+        return f".storyboarder/media/references/{asset_id}{extension}"
+    return f"Images/References/{asset_id}{extension}"
 
 
 def resolve_reference_asset(project: ProjectPathContext, asset_id: str, suffix: str) -> Path:
@@ -584,11 +457,8 @@ def _validated_extension(suffix: str, field_name: str) -> str:
 
 
 def scene2d_metadata_path(project: ProjectPathContext, *parts: str) -> Path:
-    """Resolve Scene 2D JSON below metadata in Layout 2."""
-    relative = "/".join(("scenes2d", *parts))
-    if getattr(project, "layout", LAYOUT_1) == LAYOUT_2:
-        return resolve_metadata_path(project, relative)
-    return resolve_project_child(project, relative)
+    """Resolve Scene 2D JSON below the metadata root."""
+    return resolve_metadata_path(project, "/".join(("scenes2d", *parts)))
 
 
 def scene2d_asset_relative(
@@ -599,22 +469,15 @@ def scene2d_asset_relative(
     suffix: str = "",
 ) -> str:
     """Return the canonical path for a Scene 2D perspective asset."""
-    scene_id = _validated_component(scene_id, "Scene 2D id")
+    _validated_component(scene_id, "Scene 2D id")
     perspective_id = _validated_component(perspective_id, "Scene 2D perspective id")
-    layout = getattr(project, "layout", LAYOUT_1)
     if role == "source_psd":
-        if layout == LAYOUT_2:
-            return f"PSD/Scene2D/{perspective_id}.psd"
-        return f"scenes2d/{scene_id}/perspectives/{perspective_id}/source.psd"
+        return f"PSD/Scene2D/{perspective_id}.psd"
     if role == "source_image":
         extension = _validated_extension(suffix, "Scene 2D image extension")
-        if layout == LAYOUT_2:
-            return f"Images/Scene2D/{perspective_id}{extension}"
-        return f"scenes2d/{scene_id}/perspectives/{perspective_id}/source{extension}"
+        return f"Images/Scene2D/{perspective_id}{extension}"
     if role == "preview":
-        if layout == LAYOUT_2:
-            return f"Images/Scene2D/{perspective_id}_preview.png"
-        return f"scenes2d/{scene_id}/perspectives/{perspective_id}/preview.png"
+        return f"Images/Scene2D/{perspective_id}_preview.png"
     raise ProjectSchemaError(f"Unknown Scene 2D asset role: {role!r}.")
 
 
@@ -632,11 +495,8 @@ def resolve_scene2d_asset(
 
 
 def scene3d_metadata_path(project: ProjectPathContext, *parts: str) -> Path:
-    """Resolve Scene 3D JSON below metadata in Layout 2."""
-    relative = "/".join(("scenes3d", *parts))
-    if getattr(project, "layout", LAYOUT_1) == LAYOUT_2:
-        return resolve_metadata_path(project, relative)
-    return resolve_project_child(project, relative)
+    """Resolve Scene 3D JSON below the metadata root."""
+    return resolve_metadata_path(project, "/".join(("scenes3d", *parts)))
 
 
 def scene3d_asset_relative(
@@ -649,9 +509,7 @@ def scene3d_asset_relative(
     extension = _validated_extension(suffix, "Scene 3D asset extension")
     if extension not in {".blend", ".glb", ".gltf"}:
         raise ProjectPathError("Scene 3D assets must be .blend, .glb, or .gltf files.")
-    if getattr(project, "layout", LAYOUT_1) == LAYOUT_2:
-        return f"Blender/{scene_id}{extension}"
-    return f"scenes3d/{scene_id}/{scene_id}{extension}"
+    return f"Blender/{scene_id}{extension}"
 
 
 def resolve_scene3d_asset(
@@ -665,22 +523,14 @@ def resolve_scene3d_asset(
 def scene3d_preview_path(project: ProjectPathContext, scene_id: str) -> Path:
     """Resolve the disposable GLB preview for a Scene 3D record."""
     scene_id = _validated_component(scene_id, "Scene 3D id")
-    if getattr(project, "layout", LAYOUT_1) == LAYOUT_2:
-        relative = f".storyboarder/cache/scene3d/{scene_id}/storyboarder_preview.glb"
-    else:
-        relative = f"scenes3d/{scene_id}/.preview/storyboarder_preview.glb"
-    return resolve_project_path(project, relative)
+    return resolve_project_path(
+        project, f".storyboarder/cache/scene3d/{scene_id}/storyboarder_preview.glb"
+    )
 
 
 def generation_metadata_path(project: ProjectPathContext, *parts: str) -> Path:
-    """Resolve generation JSON/state under metadata for Layout 2."""
-    relative = "/".join(("generation", *parts))
-    layout = getattr(project, "layout", LAYOUT_1)
-    if layout == LAYOUT_2:
-        return resolve_metadata_path(project, relative)
-    if layout == LAYOUT_1:
-        return resolve_project_child(project, relative)
-    raise ProjectSchemaError(f"Unsupported project layout: {layout!r}.")
+    """Resolve generation JSON/state below the metadata root."""
+    return resolve_metadata_path(project, "/".join(("generation", *parts)))
 
 
 def generation_asset_relative(
@@ -697,13 +547,8 @@ def generation_asset_relative(
     extension = str(suffix or "").lower()
     if not extension.startswith(".") or "/" in extension or "\\" in extension:
         raise ProjectPathError("generation artifact extension is invalid.")
-    layout = getattr(project, "layout", LAYOUT_1)
-    if layout == LAYOUT_2:
-        ordinal = "" if index == 1 else f"_{index:03d}"
-        return f"Images/Generated/{request_id}_{output_id}{ordinal}{extension}"
-    if layout == LAYOUT_1:
-        return f"generation/candidates/{request_id}/{output_id}/candidate_{index:03d}{extension}"
-    raise ProjectSchemaError(f"Unsupported project layout: {layout!r}.")
+    ordinal = "" if index == 1 else f"_{index:03d}"
+    return f"Images/Generated/{request_id}_{output_id}{ordinal}{extension}"
 
 
 def resolve_generation_asset(
@@ -724,16 +569,11 @@ def resolve_generation_asset(
 def generation_video_relative(project: ProjectPathContext, take_id: str) -> str:
     """Return the canonical path for a generated video take."""
     take_id = _validated_component(take_id, "video take id")
-    layout = getattr(project, "layout", LAYOUT_1)
-    if layout == LAYOUT_2:
-        return f"Videos/Generated/{take_id}.mp4"
-    if layout == LAYOUT_1:
-        return f"generation/video/{take_id}.mp4"
-    raise ProjectSchemaError(f"Unsupported project layout: {layout!r}.")
+    return f"Videos/Generated/{take_id}.mp4"
 
 
 def metadata_path_for(project: ProjectPathContext, role: str) -> Path:
-    """Return a canonical layout-owned metadata path for a static role."""
+    """Return a canonical metadata path for a static role."""
     try:
         relative = _METADATA_PATHS[role]
     except KeyError as exc:
@@ -743,12 +583,6 @@ def metadata_path_for(project: ProjectPathContext, role: str) -> Path:
         relative,
         field_name=f"{role} metadata path",
     )
-
-
-def layout1_project_root(parent_or_project_dir: Path) -> Path:
-    """Apply the legacy Layout 1 ``Storyboard_Project`` folder convention."""
-    candidate = Path(parent_or_project_dir)
-    return candidate if candidate.name == "Storyboard_Project" else candidate / "Storyboard_Project"
 
 
 def project_relative_posix(project: ProjectPathContext, path: Path) -> str:

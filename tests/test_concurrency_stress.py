@@ -2,7 +2,7 @@
 
 Drives the service layer from many threads (the production model: FastAPI runs sync
 endpoints on a threadpool and the plugin is a second client). Asserts no corruption:
-no unexpected exceptions, no duplicate shot IDs, shots.json and shots.csv agree, and
+no unexpected exceptions, no duplicate shot IDs, shots.json matches memory, and
 the persisted state matches memory after a reload.
 """
 from __future__ import annotations
@@ -17,19 +17,14 @@ from fastapi import HTTPException
 from storyboard_tool import project_manager
 from storyboard_tool.api import create_app
 from storyboard_tool.backend_service import StoryboardBackendService
-from storyboard_tool.shot_store import (
-    load_shots_csv,
-    load_shots_json,
-    shots_csv_path,
-    shots_json_path,
-)
+from storyboard_tool.shot_store import load_shots_json, shots_json_path
 
 
 def test_concurrent_mutations_keep_project_consistent():
     tmp = tempfile.mkdtemp()
     app = create_app(Path(tmp))
     svc = StoryboardBackendService(app)
-    svc.method_new_project(path=tmp)
+    svc.method_new_project(path=str(Path(tmp) / "Stress.sbd"))
     for _ in range(5):
         svc.method_add_shot()
 
@@ -67,10 +62,8 @@ def test_concurrent_mutations_keep_project_consistent():
     mem_ids = [s.shot_id for s in project.shots]
     assert len(mem_ids) == len(set(mem_ids)), "duplicate shot IDs in memory"
 
-    root = project.root_path
-    json_ids = [s.shot_id for s in (load_shots_json(shots_json_path(root)) or [])]
-    csv_ids = [s.shot_id for s in load_shots_csv(shots_csv_path(root))]
-    assert json_ids == csv_ids, "shots.json and shots.csv disagree"
+    json_ids = [s.shot_id for s in (load_shots_json(shots_json_path(project.metadata_root)) or [])]
+    assert json_ids == mem_ids, "shots.json disagrees with memory"
 
-    reloaded = project_manager.open_project(project.json_path)
+    reloaded = project_manager.open_project(project.document_path)
     assert [s.shot_id for s in reloaded.shots] == mem_ids, "disk state != memory after reload"

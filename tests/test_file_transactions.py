@@ -21,6 +21,8 @@ import unittest
 import unittest.mock
 from pathlib import Path
 
+from conftest import make_project
+
 from storyboard_tool import project_manager
 from storyboard_tool.file_transactions import atomic_copy_file
 from storyboard_tool.image_utils import board_background_filename
@@ -28,7 +30,7 @@ from storyboard_tool.shot_assets import _save_board_background_copy, _set_shot_p
 
 
 def _make_project(tmp: str):
-    return project_manager.create_project(Path(tmp))
+    return make_project(Path(tmp))
 
 
 def _make_png_bytes(width: int = 4, height: int = 4) -> bytes:
@@ -235,7 +237,7 @@ class TestSourceImportMetadata(unittest.TestCase):
     def test_failed_stream_no_temp_file_left(self):
         project = _make_project(self._tmp)
         shot = project_manager.add_shot(project)
-        shot_dir = project_manager.get_shot_dir(project, shot)
+        source_dir = project_manager.resolve_shot_asset(project, shot.shot_id, "source_psd").parent
 
         class BrokenStream(io.RawIOBase):
             def read(self, n=-1):
@@ -248,7 +250,7 @@ class TestSourceImportMetadata(unittest.TestCase):
                 project, shot, BrokenStream(), "canvas.psd"
             )
 
-        tmp_files = list(shot_dir.glob("*.tmp*"))
+        tmp_files = list(source_dir.glob("*.tmp*"))
         self.assertEqual(tmp_files, [], "No stale .tmp files after failed import_source_file_stream")
 
 
@@ -292,7 +294,7 @@ class TestThumbnailFailureRobustness(unittest.TestCase):
         shot_dir = project_manager.get_shot_dir(project, shot)
 
         # Give the shot a prior thumbnail_path so we can confirm it is unchanged.
-        prior_thumb = "shots/prior_thumb.png"
+        prior_thumb = ".storyboarder/cache/thumbnails/prior_thumb.png"
         shot.thumbnail_path = prior_thumb
 
         preview = shot_dir / f"{shot.shot_id}_preview.png"
@@ -369,7 +371,7 @@ class TestBackgroundNeverBecomesPreviewMetadata(unittest.TestCase):
         project_manager.save_project(project)
 
         # Reload canonical shots.json and check metadata paths
-        reloaded_shots = load_shots_json(shots_json_path(project.root_path))
+        reloaded_shots = load_shots_json(shots_json_path(project.metadata_root))
         for s in reloaded_shots:
             self.assertNotIn("_background", s.image_path,
                              f"image_path must not reference _background: {s.image_path}")

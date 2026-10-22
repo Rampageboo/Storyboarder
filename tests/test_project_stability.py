@@ -17,6 +17,7 @@ import unittest
 from pathlib import Path
 
 from storyboard_tool import project_manager
+from storyboard_tool.project_layout import resolve_shot_asset
 from storyboard_tool.image_utils import board_background_filename
 from storyboard_tool.models import Project
 
@@ -36,11 +37,11 @@ MINI_PNG = _make_png()
 
 
 def _make_project(tmp: str) -> Project:
-    return project_manager.create_project(Path(tmp))
+    return project_manager.create_project(Path(tmp) / "Demo.sbd")
 
 
 def _reload(project: Project) -> Project:
-    return project_manager.open_project(project.json_path)
+    return project_manager.open_project(project.document_path)
 
 
 # ---------------------------------------------------------------------------
@@ -78,7 +79,7 @@ class TestValidateProjectIntegrity(unittest.TestCase):
         project = _make_project(self._tmp)
         shot = project_manager.add_shot(project)
         bg = board_background_filename(shot.shot_id)
-        shot.image_path = f"shots/{shot.shot_id}/{bg}"
+        shot.image_path = f"Images/Shots/{bg}"
         kinds = {i["kind"] for i in project_manager.validate_project_integrity(project)}
         self.assertIn("metadata_points_to_background", kinds)
 
@@ -86,7 +87,7 @@ class TestValidateProjectIntegrity(unittest.TestCase):
         project = _make_project(self._tmp)
         shot = project_manager.add_shot(project)
         bg = board_background_filename(shot.shot_id)
-        shot.preview_image_path = f"shots/{shot.shot_id}/{bg}"
+        shot.preview_image_path = f"Images/Shots/{bg}"
         kinds = {i["kind"] for i in project_manager.validate_project_integrity(project)}
         self.assertIn("metadata_points_to_background", kinds)
 
@@ -107,14 +108,14 @@ class TestValidateProjectIntegrity(unittest.TestCase):
     def test_missing_source_file_reported(self):
         project = _make_project(self._tmp)
         shot = project_manager.add_shot(project)
-        shot.source_file_path = "shots/nonexistent/nonexistent.psd"
+        shot.source_file_path = "PSD/Shots/nonexistent.psd"
         kinds = {i["kind"] for i in project_manager.validate_project_integrity(project)}
         self.assertIn("missing_source_file", kinds)
 
     def test_never_raises(self):
         project = _make_project(self._tmp)
         shot = project_manager.add_shot(project)
-        shot.source_file_path = "shots/nonexistent/nonexistent.psd"
+        shot.source_file_path = "PSD/Shots/nonexistent.psd"
         shot.image_path = "../../outside"
         try:
             project_manager.validate_project_integrity(project)
@@ -124,8 +125,8 @@ class TestValidateProjectIntegrity(unittest.TestCase):
     def test_existing_source_file_not_flagged(self):
         project = _make_project(self._tmp)
         shot = project_manager.add_shot(project)
-        shot_dir = project_manager.get_shot_dir(project, shot)
-        psd = shot_dir / f"{shot.shot_id}.psd"
+        psd = resolve_shot_asset(project, shot.shot_id, "source_psd")
+        psd.parent.mkdir(parents=True, exist_ok=True)
         psd.write_bytes(b"PSD")
         shot.source_file_path = psd.relative_to(project.root_path).as_posix()
         issues = project_manager.validate_project_integrity(project)
@@ -154,11 +155,6 @@ class TestShotLifecycle(unittest.TestCase):
         shot = project_manager.add_shot(project)
         self.assertTrue(shot.annotation_path)
         self.assertTrue((project.root_path / shot.annotation_path).is_file())
-
-    def test_add_shot_creates_references_dir(self):
-        project = _make_project(self._tmp)
-        shot = project_manager.add_shot(project)
-        self.assertTrue((project_manager.get_shot_dir(project, shot) / "references").is_dir())
 
     def test_add_shot_appends_to_list(self):
         project = _make_project(self._tmp)
@@ -189,21 +185,22 @@ class TestShotLifecycle(unittest.TestCase):
     def test_duplicate_shot_clears_artwork_paths(self):
         project = _make_project(self._tmp)
         shot = project_manager.add_shot(project)
-        shot.image_path = "shots/fake/fake_preview.png"
-        shot.preview_image_path = "shots/fake/fake_preview.png"
+        shot.image_path = "Images/Shots/fake_preview.png"
+        shot.preview_image_path = "Images/Shots/fake_preview.png"
         dup = project_manager.duplicate_shot(project, 0)
         self.assertEqual(dup.image_path, "")
         self.assertEqual(dup.preview_image_path, "")
 
     def test_duplicate_shot_does_not_inherit_original_source_file_path(self):
-        """Duplicate must not share the original shot's PSD path.
-        (add_shot always creates a fresh blank canvas, so source_file_path
-        is expected to be set — but to a NEW path, not the original's.)"""
+        """Duplicate must not share the original shot's PSD path."""
         project = _make_project(self._tmp)
         orig = project_manager.add_shot(project)
-        orig_source = orig.source_file_path  # blank canvas created by add_shot
+        project_manager.create_canvas_for_shot(project, orig)
+        orig_source = orig.source_file_path
+        self.assertTrue(orig_source)
         dup = project_manager.duplicate_shot(project, 0)
         # The duplicate gets its own blank canvas; it must not share the original's path.
+        self.assertTrue(dup.source_file_path)
         self.assertNotEqual(dup.source_file_path, orig_source)
 
     def test_duplicate_shot_inserted_after_source(self):
@@ -342,7 +339,8 @@ class TestSaveReloadPersistence(unittest.TestCase):
     def test_source_file_path_persists(self):
         project = _make_project(self._tmp)
         shot = project_manager.add_shot(project)
-        psd = project_manager.get_shot_dir(project, shot) / f"{shot.shot_id}.psd"
+        psd = resolve_shot_asset(project, shot.shot_id, "source_psd")
+        psd.parent.mkdir(parents=True, exist_ok=True)
         psd.write_bytes(b"PSD")
         shot.source_file_path = psd.relative_to(project.root_path).as_posix()
         project_manager.save_project(project)
@@ -398,10 +396,10 @@ class TestAtomicSourceImport(unittest.TestCase):
         left intact (no truncation) and no .tmp file must linger."""
         project = _make_project(self._tmp)
         shot = project_manager.add_shot(project)
-        shot_dir = project_manager.get_shot_dir(project, shot)
-        # add_shot creates a blank canvas; capture its content before the failed import.
-        destination = shot_dir / f"{shot.shot_id}.psd"
-        original_bytes = destination.read_bytes() if destination.is_file() else None
+        project_manager.create_canvas_for_shot(project, shot)
+        # Capture the canvas content before the failed import.
+        destination = resolve_shot_asset(project, shot.shot_id, "source_psd")
+        original_bytes = destination.read_bytes()
 
         class ErrorStream:
             def read(self, n=-1):
@@ -413,17 +411,31 @@ class TestAtomicSourceImport(unittest.TestCase):
         # No .tmp file must remain.
         tmp = destination.with_suffix(".psd.tmp")
         self.assertFalse(tmp.is_file(), "temp file must be cleaned up on failure")
-        # If a file existed before, it must be intact (not truncated).
-        if original_bytes is not None:
-            self.assertEqual(destination.read_bytes(), original_bytes,
-                             "pre-existing file must not be truncated by a failed import")
+        # The pre-existing file must be intact (not truncated).
+        self.assertEqual(destination.read_bytes(), original_bytes,
+                         "pre-existing file must not be truncated by a failed import")
 
     def test_successful_import_creates_destination(self):
-        """A successful import writes the file; use a non-PSD suffix to skip PSD parsing."""
+        """A successful PSD import writes the canonical source and its preview."""
+        project = _make_project(self._tmp)
+        donor = project_manager.add_shot(project)
+        project_manager.create_canvas_for_shot(project, donor)
+        psd_bytes = resolve_shot_asset(project, donor.shot_id, "source_psd").read_bytes()
+        shot = project_manager.add_shot(project)
+        result = project_manager.import_source_file_stream(
+            project, shot, io.BytesIO(psd_bytes), "canvas.psd"
+        )
+        self.assertEqual(result, resolve_shot_asset(project, shot.shot_id, "source_psd"))
+        self.assertEqual(result.read_bytes(), psd_bytes)
+        self.assertEqual(shot.source_file_path, f"PSD/Shots/{shot.shot_id}.psd")
+        self.assertTrue(resolve_shot_asset(project, shot.shot_id, "preview").is_file())
+
+    def test_non_psd_source_is_rejected(self):
         project = _make_project(self._tmp)
         shot = project_manager.add_shot(project)
-        # Use .txt suffix so import_source_file_stream skips the PSD export step.
-        stream = io.BytesIO(b"fake source bytes")
-        result = project_manager.import_source_file_stream(project, shot, stream, "canvas.txt")
-        self.assertTrue(result.is_file())
-        self.assertEqual(shot.source_file_path, result.relative_to(project.root_path).as_posix())
+        with self.assertRaises(ValueError):
+            project_manager.import_source_file_stream(
+                project, shot, io.BytesIO(b"fake source bytes"), "canvas.txt"
+            )
+        self.assertFalse(resolve_shot_asset(project, shot.shot_id, "source_psd").exists())
+        self.assertEqual(shot.source_file_path, "")

@@ -11,8 +11,6 @@ import uuid
 from typing import Any
 
 from .models import Project, Shot
-# Preserve the historical import for callers; execution belongs to transactions.
-from .project_transaction import metadata_transaction as metadata_transaction
 
 
 class RevisionConflict(ValueError):

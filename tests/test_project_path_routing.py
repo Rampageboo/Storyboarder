@@ -37,19 +37,20 @@ ROUTED_MODULES = (
 )
 
 
-def test_layout1_static_roles_keep_existing_locations(tmp_path: Path) -> None:
+def test_static_roles_resolve_inside_the_project_folder(tmp_path: Path) -> None:
     project = Project(root_path=tmp_path)
+    data = tmp_path / ".storyboarder" / "data"
 
-    assert project.json_path == tmp_path / "project.json"
-    assert project.settings_path == tmp_path / "settings.json"
-    assert project.images_dir == tmp_path / "images"
-    assert project.shots_dir == tmp_path / "shots"
-    assert project.references_dir == tmp_path / "references"
-    assert project.scenes2d_dir == tmp_path / "scenes2d"
-    assert project.scenes3d_dir == tmp_path / "scenes3d"
-    assert project.exports_dir == tmp_path / "exports"
-    assert project.scripts_dir == tmp_path / "scripts"
-    assert project.backups_dir == tmp_path / "backups"
+    assert project.project_root == tmp_path
+    assert project.metadata_root == data
+    assert project.json_path == data / "project.json"
+    assert project.settings_path == data / "settings.json"
+    assert project.images_dir == tmp_path / "Images"
+    assert project.references_dir == tmp_path / "Images" / "References"
+    assert project.scenes2d_dir == data / "scenes2d"
+    assert project.scenes3d_dir == data / "scenes3d"
+    assert project.exports_dir == tmp_path / "Exports"
+    assert project.backups_dir == tmp_path / ".storyboarder" / "backups"
 
 
 def test_persistent_path_consumers_do_not_bypass_project_layout() -> None:
@@ -60,8 +61,6 @@ def test_persistent_path_consumers_do_not_bypass_project_layout() -> None:
 
     for filename in ROUTED_MODULES:
         source = (ROOT / "storyboard_tool" / filename).read_text(encoding="utf-8")
-        if "project.root_path" in source:
-            failures.append(f"{filename}: uses legacy project.root_path directly")
         if re.search(r"relative_to\(project\.(?:root_path|project_root|metadata_root)", source):
             failures.append(f"{filename}: persists a path without project_relative_posix")
         if direct_alias_join.search(source):

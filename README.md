@@ -86,7 +86,7 @@ Optional UXP workflow:
 
 1. Keep Storyboard Tool running with the project open, then open Storyboard Bridge in Photoshop.
 2. Open or activate a linked shot PSD from Storyboard Tool or the plugin.
-3. Click `Export preview` or `Export + next`; Layout 2 paths come from the linked backend context.
+3. Click `Export preview` or `Export + next`; asset paths come from the linked backend context. The plugin must be 0.7.0 (protocol v2) and works only while Storyboard Tool is running.
 
 ## Project Structure
 
@@ -94,30 +94,32 @@ Optional UXP workflow:
 the `.sbd` location. The choice is saved with the project and selects its initial
 workspace; both workspaces remain available.
 
-New projects use the portable Layout 2 folder format:
+A project is a folder:
 
 ```text
 MyProject/
-  MyProject.sbd             # metadata-only portable document
+  MyProject.sbd             # small handle: open this file
   Images/                   # previews, references, generated images
   PSD/                      # editable board and Scene 2D sources
   Blender/                  # Blender scenes, created only when needed
+  Videos/                   # generated video takes
   Exports/
   .storyboarder/
-    work/                   # recoverable JSON metadata working state
-    state.json              # committed/global revision lineage
+    data/                   # the only copy of project metadata (JSON)
+    backups/ cache/ media/ transactions/
 ```
 
-Keep the folder and its `.sbd` file together when moving or sharing a project.
-The `.sbd` stores JSON metadata, while editable and generated assets remain visible
-in the sibling directories. Legacy single-file and folder projects remain readable;
-for a legacy single-file `.sbd`, use **More > Convert to Layout 2** to create a
-source-preserving Layout 2 copy. For a legacy folder project, first use
-**Save Project As...** to create a Layout 1 `.sbd`, then convert that document.
+Every edit is written to the folder when it is accepted; there is no separate
+save step or autosave interval. **Save** (Ctrl+S) only flushes text you are still
+typing. **Save Project As...** copies the folder to a new, independent project.
+Keep the folder and its `.sbd` together when moving or sharing a project.
+
+Projects from older Storyboarder versions (single-file `.sbd`, `Storyboard_Project`
+folders, Layout 2) are not supported and will not open.
 
 ## Canvas Color
 
-Open **Canvas** in the top bar to choose a grayscale canvas color with the black-to-white brightness slider and hex input (default `#E8E8E8`). The color is saved in `settings.json`, used for new PSD canvases, shown on the in-app drawing canvas, and shared with the Photoshop UXP plugin via `.storyboard_bridge.json`.
+Open **Canvas** in the top bar to choose a grayscale canvas color with the black-to-white brightness slider and hex input (default `#E8E8E8`). The color is saved in `settings.json`, used for new PSD canvases, shown on the in-app drawing canvas, and shared with the Photoshop UXP plugin through the backend context.
 
 ## Run
 
@@ -128,7 +130,7 @@ python main.py
 
 This opens a **desktop app window** via pywebview. The local FastAPI server is an internal implementation detail; do not open the app in a system browser.
 
-The app stores new projects as a portable folder containing a metadata-only `.sbd` plus editable asset directories. New/Open Project dialogs use native file pickers handled by the internal server.
+The app stores each project as a folder with a small `.sbd` handle (see Project Structure). New/Open Project dialogs use native file pickers handled by the internal server.
 
 ## Roadmap
 

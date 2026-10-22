@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { Dispatch, SetStateAction } from 'react'
-import { bootstrapApp, browseProjectJson, browseProjectSave, closeProject, convertProject,
+import { bootstrapApp, browseProjectJson, browseProjectSave, closeProject,
   createProject, openProject, saveProject, saveProjectAs } from '../api'
 import type { ProjectPathRequest, ProjectPayload } from '../types'
 import type { ProjectLifecycle } from './projectLifecycle'
@@ -14,12 +14,11 @@ interface Options {
   beginProject: (payload: ProjectPayload | null) => void
   commitProject: Dispatch<SetStateAction<ProjectPayload | null>>
   setSelectedShotId: (id: string | null) => void
-  selectedShotId: string | null
   setLastError: Dispatch<SetStateAction<string | null>>
 }
 
 export function useProjectActions({ lifecycle, runProjectTransition, flushDirtyShots, openPayload, resetEditState,
-  beginProject, commitProject, setSelectedShotId, selectedShotId, setLastError }: Options) {
+  beginProject, commitProject, setSelectedShotId, setLastError }: Options) {
   type ProjectType = NonNullable<ProjectPathRequest['project_type']>
   const [newProjectType, setNewProjectType] = useState<ProjectType | null>(null)
   const typeChoiceRef = useRef<((choice: ProjectType | null) => void) | null>(null)
@@ -121,13 +120,6 @@ export function useProjectActions({ lifecycle, runProjectTransition, flushDirtyS
     setLastError(null)
   }), [runProjectTransition, settleDocument, beginProject, setLastError])
 
-  const convertProjectAction = useCallback(async () => runProjectTransition(async () => {
-    const result = await browseProjectSave()
-    if (result.cancelled || !result.path) return
-    await settleDocument()
-    openPayload(await convertProject({ path: result.path }), selectedShotId)
-  }), [runProjectTransition, settleDocument, openPayload, selectedShotId])
-
   return { initialLoading, reloadProject, newProjectAction, newProjectType, finishNewProjectChoice, openProjectFromDialog, openProjectPath,
-    closeProjectToHome, saveProjectAction, saveProjectAsAction, convertProjectAction }
+    closeProjectToHome, saveProjectAction, saveProjectAsAction }
 }

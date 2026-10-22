@@ -10,11 +10,8 @@ export interface ProjectPayload {
   project_json_path: string
   document_path?: string
   name: string
-  layout: 1 | 2
   project_id: string
   storage_revision: number
-  can_convert_to_layout2: boolean
-  dirty: boolean
   settings: ProjectSettings
   statuses: ShotStatus[]
   shots: Shot[]

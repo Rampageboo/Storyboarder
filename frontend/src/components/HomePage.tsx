@@ -14,12 +14,6 @@ function formatModified(ms: number): string {
   return date.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' })
 }
 
-function formatSize(bytes: number): string {
-  if (!bytes) return ''
-  if (bytes < 1024 * 1024) return `${Math.max(1, Math.round(bytes / 1024))} KB`
-  return `${(bytes / (1024 * 1024)).toFixed(bytes < 100 * 1024 * 1024 ? 1 : 0)} MB`
-}
-
 function RecentCard({
   entry,
   disabled,
@@ -32,7 +26,7 @@ function RecentCard({
   onForget: () => void
 }) {
   const boards = entry.shot_count === 1 ? '1 board' : `${entry.shot_count} boards`
-  const meta = [boards, formatSize(entry.size_bytes), formatModified(entry.modified_ms)].filter(Boolean).join(' · ')
+  const meta = [boards, formatModified(entry.modified_ms)].filter(Boolean).join(' · ')
 
   if (!entry.exists) {
     return (
@@ -61,7 +55,6 @@ function RecentCard({
         <span className="home-card-body">
           <span className="home-card-title-row">
             <span className="home-card-name">{entry.name}</span>
-            <span className="home-card-kind">{entry.kind === 'folder' ? 'FOLDER' : 'SBD'}</span>
           </span>
           <span className="home-card-meta">{meta}</span>
           <span className="home-card-location">{entry.location}</span>
@@ -82,7 +75,7 @@ function RecentCard({
 }
 
 /**
- * Landing screen. Startup no longer reopens the last document, so this is where
+ * Landing screen. Startup no longer reopens the last project, so this is where
  * the app begins and where "Home" returns to after closing one.
  */
 export function HomePage() {
@@ -122,7 +115,7 @@ export function HomePage() {
       try {
         await openProjectPath(entry.open_path)
       } catch {
-        // The document may have moved since it was listed; refresh so the card
+        // The project may have moved since it was listed; refresh so the card
         // updates to "Not found" instead of silently failing again.
         void refresh()
       }
@@ -151,7 +144,7 @@ export function HomePage() {
       <aside className="home-sidebar">
         <div>
           <h1 className="home-title">Start a project</h1>
-          <p className="home-lede">A project is a portable folder: one .sbd document plus the PSDs, previews and references it links.</p>
+          <p className="home-lede">A project is a folder: open it through its .sbd file. Images, PSDs, Blender scenes and exports sit beside it.</p>
         </div>
         <div className="home-actions">
           <button type="button" className="home-action is-primary" onClick={() => void handleNew('video')} disabled={projectActionBusy}>
@@ -165,7 +158,7 @@ export function HomePage() {
           </button>
           <button type="button" className="home-action" onClick={() => void handleOpen()} disabled={projectActionBusy}>
             <FolderOpen size={20} />
-            <span><strong>Open project…</strong><small>.sbd file or project folder</small></span>
+            <span><strong>Open project…</strong><small>.sbd file</small></span>
             <span className="kbd">Ctrl O</span>
           </button>
         </div>

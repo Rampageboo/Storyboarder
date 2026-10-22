@@ -122,7 +122,7 @@ class StoryboardSmokeTests(unittest.TestCase):
             client = TestClient(app, raise_server_exceptions=False)
             try:
                 with contextlib.redirect_stderr(io.StringIO()):
-                    project = client.post("/api/project/new", json={"path": tmp})
+                    project = client.post("/api/project/new", json={"path": str(Path(tmp) / "Demo.sbd")})
                     self.assertEqual(project.status_code, 200)
 
                     response = client.post("/api/export/pdf", json={"layout": "two_per_page"})
@@ -145,7 +145,7 @@ class StoryboardSmokeTests(unittest.TestCase):
             app = api_module.create_app(Path(tmp))
             client = TestClient(app, raise_server_exceptions=False)
             with contextlib.redirect_stderr(io.StringIO()):
-                created = client.post("/api/project/new", json={"path": tmp})
+                created = client.post("/api/project/new", json={"path": str(Path(tmp) / "Demo.sbd")})
             self.assertEqual(created.status_code, 200)
 
             with contextlib.redirect_stderr(io.StringIO()):
@@ -154,26 +154,19 @@ class StoryboardSmokeTests(unittest.TestCase):
 
     def test_shutdown_reference_cleanup_removes_unreferenced_reference_files(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp) / "Storyboard_Project"
-            (root / "shots").mkdir(parents=True)
-            (root / "references").mkdir()
-            (root / "exports").mkdir()
-            (root / "scripts").mkdir()
-            (root / "backups").mkdir()
+            root = Path(tmp) / "Demo"
             project = Project(root_path=root, settings=project_manager.DEFAULT_SETTINGS.copy())
             shot = Shot(shot_id="shot_001")
             project.shots.append(shot)
-            shot_dir = project_manager.get_shot_dir(project, shot)
-            shot_dir.mkdir(parents=True)
-            ref_dir = shot_dir / "references"
-            ref_dir.mkdir()
+            ref_dir = project.references_dir
+            ref_dir.mkdir(parents=True)
             orphan = ref_dir / "orphan.png"
             orphan.write_bytes(b"orphan")
             kept = ref_dir / "kept.png"
             kept.write_bytes(b"kept")
             shot.reference_image_paths = [kept.relative_to(project.root_path).as_posix()]
 
-            deleted = project_manager.shutdown_reference_cleanup(project, save_if_dirty=False)
+            deleted = project_manager.shutdown_reference_cleanup(project)
 
             self.assertIn(orphan.relative_to(project.root_path).as_posix(), deleted)
             self.assertFalse(orphan.exists())
@@ -202,7 +195,7 @@ class StoryboardSmokeTests(unittest.TestCase):
             app = api_module.create_app(Path(tmp))
             client = TestClient(app, raise_server_exceptions=False)
             with contextlib.redirect_stderr(io.StringIO()):
-                client.post("/api/project/new", json={"path": tmp})
+                client.post("/api/project/new", json={"path": str(Path(tmp) / "Demo.sbd")})
             calls = [
                 ("/api/project/ref-segment/apply", {"anchor_shot_id": "shot_a", "end_shot_id": "shot_b"}),
                 ("/api/project/ref-segment/apply-image", {"anchor_shot_id": "shot_a", "end_shot_id": "shot_b"}),
@@ -337,7 +330,7 @@ class StoryboardSmokeTests(unittest.TestCase):
             with contextlib.redirect_stderr(io.StringIO()):
                 created = client.post(
                     "/api/project/new",
-                    json={"path": tmp, "canvas_width": 1600, "canvas_height": 900},
+                    json={"path": str(Path(tmp) / "Demo.sbd"), "canvas_width": 1600, "canvas_height": 900},
                 )
             self.assertEqual(created.status_code, 200)
             payload = created.json()
@@ -367,7 +360,7 @@ class StoryboardSmokeTests(unittest.TestCase):
             app = api_module.create_app(Path(tmp))
             client = TestClient(app, raise_server_exceptions=False)
             with contextlib.redirect_stderr(io.StringIO()):
-                created = client.post("/api/project/new", json={"path": tmp})
+                created = client.post("/api/project/new", json={"path": str(Path(tmp) / "Demo.sbd")})
             self.assertEqual(created.status_code, 200)
 
             original_open = project_manager.open_blender_scene
@@ -377,7 +370,7 @@ class StoryboardSmokeTests(unittest.TestCase):
             blender_bridge.heartbeat_file_path = lambda: Path(tmp) / "blender_heartbeat.json"
 
             def fake_open_blender_scene(project, relative_path="", **kwargs):
-                blend = project.root_path / "scene3d" / "scene.blend"
+                blend = project.root_path / "Blender" / "scene.blend"
                 blend.parent.mkdir(parents=True, exist_ok=True)
                 blend.write_text("fake", encoding="utf-8")
                 if kwargs.get("on_launch"):
@@ -398,19 +391,21 @@ class StoryboardSmokeTests(unittest.TestCase):
             self.assertIn("path", payload)
             self.assertIn("relative_path", payload)
             self.assertIn("shots", payload)
-            self.assertIsInstance(payload["dirty"], bool)
+            self.assertNotIn("dirty", payload)
             self.assertIsInstance(payload["settings"], dict)
             self.assertEqual(payload["settings"]["scene3d"]["source"], "blender")
-            self.assertTrue(payload["settings"]["scene3d"]["file_path"].endswith("/.preview/storyboarder_preview.glb"))
+            preview_path = payload["settings"]["scene3d"]["file_path"]
+            self.assertTrue(preview_path.startswith(".storyboarder/cache/scene3d/"), preview_path)
+            self.assertTrue(preview_path.endswith("/storyboarder_preview.glb"), preview_path)
 
     def test_update_settings_clears_reference_model_mode(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             app = api_module.create_app(Path(tmp))
             client = TestClient(app, raise_server_exceptions=False)
             with contextlib.redirect_stderr(io.StringIO()):
-                created = client.post("/api/project/new", json={"path": tmp})
+                created = client.post("/api/project/new", json={"path": str(Path(tmp) / "Demo.sbd")})
             self.assertEqual(created.status_code, 200)
-            settings_json = Path(tmp) / "Storyboard_Project" / "settings.json"
+            settings_json = app.state.project.settings_path
 
             def read_saved_mode() -> str:
                 return json.loads(settings_json.read_text(encoding="utf-8")).get("reference_segment_mode", "")
@@ -427,7 +422,7 @@ class StoryboardSmokeTests(unittest.TestCase):
             app = api_module.create_app(Path(tmp))
             client = TestClient(app, raise_server_exceptions=False)
             with contextlib.redirect_stderr(io.StringIO()):
-                created = client.post("/api/project/new", json={"path": tmp})
+                created = client.post("/api/project/new", json={"path": str(Path(tmp) / "Demo.sbd")})
             self.assertEqual(created.status_code, 200)
 
             scene3d = {"file_path": "scene3d/scene.glb", "camera_name": "Camera_A"}
@@ -446,7 +441,7 @@ class StoryboardSmokeTests(unittest.TestCase):
             self.assertTrue(settings["preheat_photoshop_on_open"])
             self.assertEqual(settings["scene3d"], scene3d)
 
-            settings_json = Path(tmp) / "Storyboard_Project" / "settings.json"
+            settings_json = app.state.project.settings_path
             saved = json.loads(settings_json.read_text(encoding="utf-8"))
             self.assertEqual(saved["canvas_background_color"], "#112233")
             self.assertTrue(saved["preheat_photoshop_on_open"])
@@ -456,22 +451,23 @@ class StoryboardSmokeTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             app = api_module.create_app(Path(tmp))
             client = TestClient(app, raise_server_exceptions=False)
-            project_root = Path(tmp) / "Storyboard_Project"
+            project_root = Path(tmp) / "Demo"
 
             with contextlib.redirect_stderr(io.StringIO()):
                 rest_created = client.post(
                     "/api/project/new",
-                    json={"path": tmp, "canvas_width": 1280, "canvas_height": 720},
+                    json={"path": str(Path(tmp) / "Demo.sbd"), "canvas_width": 1280, "canvas_height": 720},
                 )
             self.assertEqual(rest_created.status_code, 200)
             rest_payload = rest_created.json()
             self.assertEqual(rest_payload["settings"]["canvas_width"], 1280)
-            self.assertTrue(project_root.exists())
+            self.assertTrue((project_root / "Demo.sbd").is_file())
+            self.assertTrue((project_root / ".storyboarder" / "data" / "project.json").is_file())
 
             with contextlib.redirect_stderr(io.StringIO()):
                 rest_saved = client.post("/api/project/save")
             self.assertEqual(rest_saved.status_code, 200)
-            self.assertFalse(rest_saved.json()["dirty"])
+            self.assertNotIn("dirty", rest_saved.json())
 
             with contextlib.redirect_stderr(io.StringIO()):
                 second_created = client.post(
@@ -485,9 +481,16 @@ class StoryboardSmokeTests(unittest.TestCase):
             self.assertEqual(second_created.status_code, 200)
             self.assertEqual(second_created.json()["settings"]["canvas_width"], 1600)
 
-            project_json = Path(tmp) / "Second_Project" / "Storyboard_Project" / "project.json"
             with contextlib.redirect_stderr(io.StringIO()):
-                opened = client.post("/api/project/open", json={"project_json_path": str(project_json)})
+                reopened_first = client.post(
+                    "/api/project/open", json={"project_json_path": str(project_root / "Demo.sbd")}
+                )
+            self.assertEqual(reopened_first.status_code, 200, reopened_first.text)
+            self.assertEqual(reopened_first.json()["settings"]["canvas_width"], 1280)
+
+            second_document = Path(tmp) / "Second_Project" / "Second_Project.sbd"
+            with contextlib.redirect_stderr(io.StringIO()):
+                opened = client.post("/api/project/open", json={"project_json_path": str(second_document)})
             self.assertEqual(opened.status_code, 200)
             self.assertEqual(opened.json()["settings"]["canvas_width"], 1600)
 
@@ -496,7 +499,7 @@ class StoryboardSmokeTests(unittest.TestCase):
             app = api_module.create_app(Path(tmp))
             client = TestClient(app, raise_server_exceptions=False)
             with contextlib.redirect_stderr(io.StringIO()):
-                created = client.post("/api/project/new", json={"path": tmp})
+                created = client.post("/api/project/new", json={"path": str(Path(tmp) / "Demo.sbd")})
                 shot_created = client.post("/api/shots", json={})
             self.assertEqual(created.status_code, 200)
             shot = shot_created.json()["shot"]
@@ -504,7 +507,7 @@ class StoryboardSmokeTests(unittest.TestCase):
             with contextlib.redirect_stderr(io.StringIO()):
                 updated = client.patch(f"/api/shots/{shot['shot_id']}", json={"shot_design": design})
             self.assertEqual(updated.status_code, 200, updated.text)
-            dirty = app.state.dirty
+            revision = app.state.project.storage_revision
             with contextlib.redirect_stderr(io.StringIO()):
                 response = client.get(f"/api/shots/{shot['shot_id']}/prompt-preview")
                 missing = client.get("/api/shots/not-a-shot/prompt-preview")
@@ -513,7 +516,7 @@ class StoryboardSmokeTests(unittest.TestCase):
             self.assertEqual(snapshot["output_contract"]["kind"], "storyboard-image")
             self.assertIn("Extreme close-up", snapshot["prompt"]["compiled_prompt"])
             self.assertIn("A match flares", snapshot["prompt"]["compiled_prompt"])
-            self.assertEqual(app.state.dirty, dirty)
+            self.assertEqual(app.state.project.storage_revision, revision)
             with contextlib.redirect_stderr(io.StringIO()):
                 queued = client.get("/api/generation/requests")
             self.assertEqual(queued.status_code, 200)
@@ -525,7 +528,7 @@ class StoryboardSmokeTests(unittest.TestCase):
             app = api_module.create_app(Path(tmp))
             client = TestClient(app, raise_server_exceptions=False)
             with contextlib.redirect_stderr(io.StringIO()):
-                created = client.post("/api/project/new", json={"path": tmp})
+                created = client.post("/api/project/new", json={"path": str(Path(tmp) / "Demo.sbd")})
                 shot_created = client.post("/api/shots", json={})
             self.assertEqual(created.status_code, 200)
             self.assertEqual(shot_created.status_code, 200)
@@ -573,16 +576,15 @@ class StoryboardSmokeTests(unittest.TestCase):
 
     def test_backup_retention_prunes_oldest_sets(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp) / "Storyboard_Project"
-            root.mkdir(parents=True)
-            (root / "backups").mkdir()
+            root = Path(tmp) / "Demo"
             project = Project(root_path=root, settings=project_manager.DEFAULT_SETTINGS.copy())
-            project.json_path.write_text("{}", encoding="utf-8")
             backups_dir = project.backups_dir
+            backups_dir.mkdir(parents=True)
             for index in range(55):
                 stamp = f"20260101_{index:06d}"
                 (backups_dir / f"project_{stamp}.json").write_text("{}", encoding="utf-8")
-                (backups_dir / f"shots_{stamp}.csv").write_text("id\n", encoding="utf-8")
+                (backups_dir / f"shots_{stamp}.json").write_text("[]", encoding="utf-8")
+                (backups_dir / f"settings_{stamp}.json").write_text("{}", encoding="utf-8")
 
             backups_module._prune_old_backups(project, keep=50)
 
@@ -590,7 +592,9 @@ class StoryboardSmokeTests(unittest.TestCase):
             self.assertEqual(len(remaining), 50)
             self.assertEqual(remaining[0], "20260101_000054")
             self.assertEqual(remaining[-1], "20260101_000005")
-            self.assertFalse((backups_dir / "project_20260101_000004.json").exists())
+            for name in ("project", "shots", "settings"):
+                self.assertFalse((backups_dir / f"{name}_20260101_000004.json").exists())
+                self.assertTrue((backups_dir / f"{name}_20260101_000005.json").exists())
 
     @unittest.skipIf(find_spec("multipart") is None, "python-multipart is not installed")
     def test_upload_project_reference_rest(self) -> None:
@@ -598,7 +602,7 @@ class StoryboardSmokeTests(unittest.TestCase):
             app = api_module.create_app(Path(tmp))
             client = TestClient(app, raise_server_exceptions=False)
             with contextlib.redirect_stderr(io.StringIO()):
-                created = client.post("/api/project/new", json={"path": tmp})
+                created = client.post("/api/project/new", json={"path": str(Path(tmp) / "Demo.sbd")})
             self.assertEqual(created.status_code, 200)
 
             with contextlib.redirect_stderr(io.StringIO()):
@@ -626,7 +630,7 @@ class StoryboardSmokeTests(unittest.TestCase):
             app = api_module.create_app(Path(tmp))
             client = TestClient(app, raise_server_exceptions=False)
             with contextlib.redirect_stderr(io.StringIO()):
-                created = client.post("/api/project/new", json={"path": tmp})
+                created = client.post("/api/project/new", json={"path": str(Path(tmp) / "Demo.sbd")})
                 shot_created = client.post("/api/shots", json={})
             self.assertEqual(created.status_code, 200)
             self.assertEqual(shot_created.status_code, 200)
@@ -655,7 +659,7 @@ class StoryboardSmokeTests(unittest.TestCase):
             app = api_module.create_app(Path(tmp))
             client = TestClient(app, raise_server_exceptions=False)
             with contextlib.redirect_stderr(io.StringIO()):
-                created = client.post("/api/project/new", json={"path": tmp})
+                created = client.post("/api/project/new", json={"path": str(Path(tmp) / "Demo.sbd")})
             self.assertEqual(created.status_code, 200)
 
             with contextlib.redirect_stderr(io.StringIO()):
@@ -679,7 +683,7 @@ class StoryboardSmokeTests(unittest.TestCase):
             app = api_module.create_app(Path(tmp))
             client = TestClient(app, raise_server_exceptions=False)
             with contextlib.redirect_stderr(io.StringIO()):
-                created = client.post("/api/project/new", json={"path": tmp})
+                created = client.post("/api/project/new", json={"path": str(Path(tmp) / "Demo.sbd")})
             self.assertEqual(created.status_code, 200)
 
             with contextlib.redirect_stderr(io.StringIO()):
@@ -698,19 +702,19 @@ class StoryboardSmokeTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            shot_dir = root / "shots" / "shot_001"
-            shot_dir.mkdir(parents=True)
-            preview_path = shot_dir / "shot_001_preview.png"
-            psd_path = shot_dir / "shot_001.psd"
+            (root / "Images" / "Shots").mkdir(parents=True)
+            (root / "PSD" / "Shots").mkdir(parents=True)
+            preview_path = root / "Images" / "Shots" / "shot_001_preview.png"
+            psd_path = root / "PSD" / "Shots" / "shot_001.psd"
             Image.new("RGB", (20, 20), (255, 0, 0)).save(preview_path, "PNG")
             create_blank_psd(psd_path, 100, 100, background_color="#E8E8E8")
             psd_path.touch()
 
             shot = Shot(
                 shot_id="shot_001",
-                preview_image_path="shots/shot_001/shot_001_preview.png",
-                image_path="shots/shot_001/shot_001_preview.png",
-                source_file_path="shots/shot_001/shot_001.psd",
+                preview_image_path="Images/Shots/shot_001_preview.png",
+                image_path="Images/Shots/shot_001_preview.png",
+                source_file_path="PSD/Shots/shot_001.psd",
             )
             project = Project(root_path=root, shots=[shot])
 
@@ -751,16 +755,16 @@ class StoryboardSmokeTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            shot_dir = root / "shots" / "shot_001"
-            shot_dir.mkdir(parents=True)
-            preview_path = shot_dir / "shot_001_preview.png"
+            (root / "Images" / "Shots").mkdir(parents=True)
+            (root / "PSD" / "Shots").mkdir(parents=True)
+            preview_path = root / "Images" / "Shots" / "shot_001_preview.png"
             preview_path.write_bytes(MINI_PNG)
-            create_blank_psd(shot_dir / "shot_001.psd", 100, 100)
+            create_blank_psd(root / "PSD" / "Shots" / "shot_001.psd", 100, 100)
             shot = Shot(
                 shot_id="shot_001",
                 preview_image_path="",
                 image_path="",
-                source_file_path="shots/shot_001/shot_001.psd",
+                source_file_path="PSD/Shots/shot_001.psd",
             )
             project = Project(root_path=root, shots=[shot])
             changed = canvas_settings._sync_shot_canvas_color_assets(project, shot, "#AABBCC")
@@ -771,7 +775,7 @@ class StoryboardSmokeTests(unittest.TestCase):
     def test_resolve_shot_preview_path_falls_back_to_disk(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            shot_dir = root / "shots" / "shot_025"
+            shot_dir = root / "Images" / "Shots"
             shot_dir.mkdir(parents=True)
             preview_path = shot_dir / "shot_025_preview.png"
             preview_path.write_bytes(MINI_PNG)
@@ -780,63 +784,34 @@ class StoryboardSmokeTests(unittest.TestCase):
             resolved = project_manager.resolve_shot_preview_path(project, shot)
             self.assertEqual(resolved, preview_path)
 
-    def test_plugin_export_preview_validates_project_relative_paths(self) -> None:
+    def test_plugin_export_preview_rejects_legacy_protocol(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            app = api_module.create_app(root)
+            app = api_module.create_app(Path(tmp))
             client = TestClient(app, raise_server_exceptions=False)
 
             with contextlib.redirect_stderr(io.StringIO()):
-                created = client.post("/api/project/new", json={"path": tmp})
+                created = client.post("/api/project/new", json={"path": str(Path(tmp) / "Demo.sbd")})
             self.assertEqual(created.status_code, 200)
-            root = Path(created.json()["project_path"])
             with contextlib.redirect_stderr(io.StringIO()):
                 added = client.post("/api/shots", json={})
             self.assertEqual(added.status_code, 200)
             shot_id = added.json()["shot"]["shot_id"]
-            shot_dir = root / "shots" / shot_id
-            shot_dir.mkdir(parents=True, exist_ok=True)
-            preview_rel = f"shots/{shot_id}/{shot_id}_preview.png"
-            source_rel = f"shots/{shot_id}/{shot_id}.psd"
-            (shot_dir / f"{shot_id}_preview.png").write_bytes(MINI_PNG)
-            (shot_dir / f"{shot_id}.psd").write_bytes(b"8BPS" + b"\0" * 32)
+            root = app.state.project.project_root
+            preview = root / "Images" / "Shots" / f"{shot_id}_preview.png"
+            preview.parent.mkdir(parents=True, exist_ok=True)
+            preview.write_bytes(MINI_PNG)
+            before = app.state.project.shots[0].to_dict()
+            revision = app.state.project.storage_revision
 
+            # Pre-v2 plugins sent project-relative paths without protocol headers.
             with contextlib.redirect_stderr(io.StringIO()):
-                valid = client.post(
+                legacy = client.post(
                     f"/api/plugin/shots/{shot_id}/export-preview",
-                    json={"preview_image_path": preview_rel, "source_file_path": source_rel},
+                    json={"preview_image_path": f"Images/Shots/{shot_id}_preview.png"},
                 )
-            self.assertEqual(valid.status_code, 200)
-            payload = valid.json()
-            self.assertEqual(payload["shot"]["source_file_path"], source_rel)
-            self.assertEqual(payload["shot"]["preview_image_path"], preview_rel)
-            self.assertIn("context", payload)
-            status = client.get("/api/bridge/status")
-            self.assertEqual(status.status_code, 200)
-            self.assertGreaterEqual(status.json()["plugin_project_revision"], 1)
-
-            with contextlib.redirect_stderr(io.StringIO()):
-                bad_preview = client.post(
-                    f"/api/plugin/shots/{shot_id}/export-preview",
-                    json={"preview_image_path": "../../outside.png", "source_file_path": source_rel},
-                )
-            self.assertEqual(bad_preview.status_code, 400)
-
-            with contextlib.redirect_stderr(io.StringIO()):
-                bad_source = client.post(
-                    f"/api/plugin/shots/{shot_id}/export-preview",
-                    json={"preview_image_path": preview_rel, "source_file_path": "../../outside.psd"},
-                )
-            self.assertEqual(bad_source.status_code, 400)
-
-            text_source = shot_dir / "not-a-psd.txt"
-            text_source.write_text("not psd", encoding="utf-8")
-            with contextlib.redirect_stderr(io.StringIO()):
-                non_psd = client.post(
-                    f"/api/plugin/shots/{shot_id}/export-preview",
-                    json={"preview_image_path": preview_rel, "source_file_path": f"shots/{shot_id}/not-a-psd.txt"},
-                )
-            self.assertEqual(non_psd.status_code, 400)
+            self.assertEqual(legacy.status_code, 426, legacy.text)
+            self.assertEqual(app.state.project.shots[0].to_dict(), before)
+            self.assertEqual(app.state.project.storage_revision, revision)
 
     def test_delete_ref_segment_keeps_drawing_when_psd_exists_without_link(self) -> None:
         from storyboard_tool import reference_segments
@@ -844,9 +819,10 @@ class StoryboardSmokeTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            shot_dir = root / "shots" / "shot_001"
+            (root / "PSD" / "Shots").mkdir(parents=True)
+            shot_dir = root / "Images" / "Shots"
             shot_dir.mkdir(parents=True)
-            create_blank_psd(shot_dir / "shot_001.psd", 100, 100)
+            create_blank_psd(root / "PSD" / "Shots" / "shot_001.psd", 100, 100)
             preview_path = shot_dir / "shot_001_preview.png"
             preview_path.write_bytes(MINI_PNG)
             background_path = shot_dir / board_background_filename("shot_001")
@@ -854,9 +830,9 @@ class StoryboardSmokeTests(unittest.TestCase):
 
             shot = Shot(
                 shot_id="shot_001",
-                preview_image_path="shots/shot_001/shot_001_preview.png",
-                image_path="shots/shot_001/shot_001_preview.png",
-                ref_video_path="references/ref.mp4",
+                preview_image_path="Images/Shots/shot_001_preview.png",
+                image_path="Images/Shots/shot_001_preview.png",
+                ref_video_path=".storyboarder/media/references/ref.mp4",
             )
             project = Project(
                 root_path=root,

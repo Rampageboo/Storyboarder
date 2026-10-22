@@ -20,6 +20,10 @@ with warnings.catch_warnings():
 
 from storyboard_tool import api as api_module
 from storyboard_tool import live_bridge
+from storyboard_tool.plugin_service import (
+    EXPLICIT_ASSET_PATHS_CAPABILITY,
+    PLUGIN_PROTOCOL_VERSION,
+)
 
 
 def _quiet(fn):
@@ -44,9 +48,22 @@ class ShotWorkItemsTests(unittest.TestCase):
         self._tmp.cleanup()
 
     def _new_project(self) -> Path:
-        r = _quiet(lambda: self.client.post("/api/project/new", json={"path": self._tmp.name}))
-        self.assertEqual(r.status_code, 200)
+        r = _quiet(
+            lambda: self.client.post(
+                "/api/project/new", json={"path": str(self.root / "Demo.sbd")}
+            )
+        )
+        self.assertEqual(r.status_code, 200, r.text)
         return Path(r.json()["project_path"])
+
+    def _v2_headers(self) -> dict[str, str]:
+        project = self.app.state.project
+        return {
+            "x-storyboarder-protocol": str(PLUGIN_PROTOCOL_VERSION),
+            "x-storyboarder-capabilities": EXPLICIT_ASSET_PATHS_CAPABILITY,
+            "x-storyboarder-project-session": str(self.app.state.project_session_id),
+            "x-storyboarder-context-revision": str(project.storage_revision),
+        }
 
     def _add_shot(self, title: str = "") -> str:
         r = _quiet(lambda: self.client.post("/api/shots", json={}))
@@ -58,7 +75,7 @@ class ShotWorkItemsTests(unittest.TestCase):
         return shot_id
 
     def _work_items(self) -> list[dict]:
-        r = self.client.get("/api/plugin/context")
+        r = self.client.get("/api/plugin/context", headers=self._v2_headers())
         self.assertEqual(r.status_code, 200, r.text)
         return r.json().get("work_items", [])
 
@@ -207,6 +224,7 @@ class ShotWorkItemsTests(unittest.TestCase):
         response = _quiet(
             lambda: self.client.post(
                 "/api/plugin/shots/next",
+                headers=self._v2_headers(),
                 json={"current_shot_id": shot_id, "auto_add": True},
             )
         )

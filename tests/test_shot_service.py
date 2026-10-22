@@ -6,7 +6,9 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from storyboard_tool import project_manager, shot_service
+from conftest import make_project
+
+from storyboard_tool import shot_service
 from storyboard_tool.models import Project, Shot
 
 
@@ -76,21 +78,21 @@ class TestFindShot(unittest.TestCase):
 class TestCreateShot(unittest.TestCase):
     def test_create_shot_appends_to_empty_project(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            project = project_manager.create_project(Path(tmp))
+            project = make_project(Path(tmp))
             shot = shot_service.create_shot(project)
             self.assertEqual(len(project.shots), 1)
             self.assertEqual(project.shots[0].shot_id, shot.shot_id)
 
     def test_create_shot_appends_when_no_after_given(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            project = project_manager.create_project(Path(tmp))
+            project = make_project(Path(tmp))
             first = shot_service.create_shot(project)
             second = shot_service.create_shot(project)
             self.assertEqual(project.shots[-1].shot_id, second.shot_id)
 
     def test_create_shot_inherits_scene_from_previous_shot_only_at_creation(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            project = project_manager.create_project(Path(tmp))
+            project = make_project(Path(tmp))
             first = shot_service.create_shot(project)
             first.scene = "Kitchen"
             first.scene_id = "scene_kitchen"
@@ -106,7 +108,7 @@ class TestCreateShot(unittest.TestCase):
 
     def test_create_shot_after_specific_shot(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            project = project_manager.create_project(Path(tmp))
+            project = make_project(Path(tmp))
             a = shot_service.create_shot(project)
             a.scene = "Kitchen"
             a.scene_id = "scene_kitchen"
@@ -121,13 +123,13 @@ class TestCreateShot(unittest.TestCase):
 
     def test_create_shot_raises_when_after_shot_not_found(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            project = project_manager.create_project(Path(tmp))
+            project = make_project(Path(tmp))
             with self.assertRaises(ValueError):
                 shot_service.create_shot(project, after_shot_id="nonexistent")
 
     def test_create_shot_returns_shot_with_unique_id(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            project = project_manager.create_project(Path(tmp))
+            project = make_project(Path(tmp))
             a = shot_service.create_shot(project)
             b = shot_service.create_shot(project)
             self.assertNotEqual(a.shot_id, b.shot_id)
@@ -136,7 +138,7 @@ class TestCreateShot(unittest.TestCase):
 class TestDuplicateShot(unittest.TestCase):
     def test_duplicate_shot_inserts_after_source(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            project = project_manager.create_project(Path(tmp))
+            project = make_project(Path(tmp))
             original = shot_service.create_shot(project)
             duplicate = shot_service.duplicate_shot(project, original.shot_id)
             ids = [s.shot_id for s in project.shots]
@@ -144,14 +146,14 @@ class TestDuplicateShot(unittest.TestCase):
 
     def test_duplicate_shot_gets_new_id(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            project = project_manager.create_project(Path(tmp))
+            project = make_project(Path(tmp))
             original = shot_service.create_shot(project)
             duplicate = shot_service.duplicate_shot(project, original.shot_id)
             self.assertNotEqual(duplicate.shot_id, original.shot_id)
 
     def test_duplicate_shot_preserves_metadata(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            project = project_manager.create_project(Path(tmp))
+            project = make_project(Path(tmp))
             original = shot_service.create_shot(project)
             original.scene = "INT. LAB"
             original.duration_seconds = 5.0
@@ -161,7 +163,7 @@ class TestDuplicateShot(unittest.TestCase):
 
     def test_duplicate_shot_preserves_authored_generation_inputs_but_resets_output_state(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            project = project_manager.create_project(Path(tmp))
+            project = make_project(Path(tmp))
             original = shot_service.create_shot(project)
             original.shot_design["story_beat"] = "Hero spots the key"
             original.prompt_config["prompt_extra"] = "Keep the doorway visible"
@@ -188,7 +190,7 @@ class TestDuplicateShot(unittest.TestCase):
 
     def test_duplicate_shot_does_not_inherit_original_media_paths(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            project = project_manager.create_project(Path(tmp))
+            project = make_project(Path(tmp))
             original = shot_service.create_shot(project)
             original.ref_video_path = "references/clip.mp4"
             original.ref_video_time = 12.5
@@ -201,7 +203,7 @@ class TestDuplicateShot(unittest.TestCase):
 
     def test_duplicate_shot_raises_when_not_found(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            project = project_manager.create_project(Path(tmp))
+            project = make_project(Path(tmp))
             with self.assertRaises(ValueError):
                 shot_service.duplicate_shot(project, "missing")
 
@@ -209,21 +211,21 @@ class TestDuplicateShot(unittest.TestCase):
 class TestDeleteShot(unittest.TestCase):
     def test_delete_shot_removes_from_project(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            project = project_manager.create_project(Path(tmp))
+            project = make_project(Path(tmp))
             shot = shot_service.create_shot(project)
             shot_service.delete_shot(project, shot.shot_id)
             self.assertEqual(len(project.shots), 0)
 
     def test_delete_shot_returns_removed_shot(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            project = project_manager.create_project(Path(tmp))
+            project = make_project(Path(tmp))
             shot = shot_service.create_shot(project)
             removed = shot_service.delete_shot(project, shot.shot_id)
             self.assertEqual(removed.shot_id, shot.shot_id)
 
     def test_delete_shot_leaves_other_shots(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            project = project_manager.create_project(Path(tmp))
+            project = make_project(Path(tmp))
             a = shot_service.create_shot(project)
             b = shot_service.create_shot(project)
             c = shot_service.create_shot(project)
@@ -233,7 +235,7 @@ class TestDeleteShot(unittest.TestCase):
 
     def test_delete_shot_raises_when_not_found(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            project = project_manager.create_project(Path(tmp))
+            project = make_project(Path(tmp))
             with self.assertRaises(ValueError):
                 shot_service.delete_shot(project, "nonexistent")
 
@@ -241,7 +243,7 @@ class TestDeleteShot(unittest.TestCase):
 class TestReorderShots(unittest.TestCase):
     def test_reorder_shots_changes_order(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            project = project_manager.create_project(Path(tmp))
+            project = make_project(Path(tmp))
             a = shot_service.create_shot(project)
             b = shot_service.create_shot(project)
             c = shot_service.create_shot(project)
@@ -253,7 +255,7 @@ class TestReorderShots(unittest.TestCase):
 
     def test_reorder_shots_same_order_is_noop(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            project = project_manager.create_project(Path(tmp))
+            project = make_project(Path(tmp))
             a = shot_service.create_shot(project)
             b = shot_service.create_shot(project)
             shot_service.reorder_shots(project, [a.shot_id, b.shot_id])
@@ -261,7 +263,7 @@ class TestReorderShots(unittest.TestCase):
 
     def test_reorder_shots_raises_on_missing_shot(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            project = project_manager.create_project(Path(tmp))
+            project = make_project(Path(tmp))
             a = shot_service.create_shot(project)
             b = shot_service.create_shot(project)
             with self.assertRaises(ValueError):
@@ -269,7 +271,7 @@ class TestReorderShots(unittest.TestCase):
 
     def test_reorder_shots_raises_on_unknown_id(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            project = project_manager.create_project(Path(tmp))
+            project = make_project(Path(tmp))
             a = shot_service.create_shot(project)
             with self.assertRaises(ValueError):
                 shot_service.reorder_shots(project, [a.shot_id, "unknown"])

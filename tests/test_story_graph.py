@@ -9,30 +9,24 @@ import pytest
 from fastapi.testclient import TestClient
 from PIL import Image
 
-from storyboard_tool import project_document, project_layout, project_manager, story_graph
+from conftest import make_project
+from storyboard_tool import app_state, project_manager, story_graph
 from storyboard_tool.api import create_app
 from storyboard_tool.backend_service import StoryboardBackendService
+from storyboard_tool.plugin_service import EXPLICIT_ASSET_PATHS_CAPABILITY, PLUGIN_PROTOCOL_VERSION
 from storyboard_tool.models import Project, Shot
 
 
 @pytest.fixture
-def graph_client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+def graph_client(tmp_path: Path):
     clients = []
-    projects = []
-    monkeypatch.setattr(project_layout, "LAYOUT_2_ENABLED", True)
 
-    def create(kind="folder", count=3):
+    def create(count=3):
         index = len(clients)
         app_dir = tmp_path / f"app-{index}"
         app_dir.mkdir()
-        if kind == "layout2":
-            project = project_manager.create_layout2_document(tmp_path / f"Story-{index}.sbd", canvas_width=256, canvas_height=144)
-        elif kind == "document":
-            project = project_manager.create_document(tmp_path / f"Legacy-{index}.sbd", canvas_width=256, canvas_height=144)
-        else:
-            project = project_manager.create_project(tmp_path / f"Folder-{index}", canvas_width=256, canvas_height=144)
+        project = make_project(tmp_path, f"Story-{index}", canvas_width=256, canvas_height=144)
         project.settings["backup_on_save"] = False
-        projects.append(project)
         app = create_app(app_dir)
         app.state.project = project
         app.state.project_disk_mtime = project_manager.project_disk_mtime(project)
@@ -45,10 +39,7 @@ def graph_client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
 
     yield create
     for client in clients:
-        projects.append(client.app.state.project)
         client.close()
-    for project in projects:
-        project_manager.cleanup_document_working_root(project)
 
 
 def _graph(client):
@@ -68,28 +59,26 @@ def _persist_routes(client):
 
 
 def _disk(project):
-    names = ["project.json", "settings.json", "shots.json", "shots.csv"]
+    names = ["project.json", "settings.json", "shots.json"]
     return {name: (project.metadata_root / name).read_bytes() for name in names if (project.metadata_root / name).is_file()}
 
 
-@pytest.mark.parametrize("kind", ["folder", "document", "layout2"])
-def test_legacy_graph_is_derived_without_persisting_or_changing_dirty(graph_client, kind):
-    client = graph_client(kind)
+def test_default_graph_is_derived_without_persisting_or_changing_revision(graph_client):
+    client = graph_client()
     project = client.app.state.project
     before = _disk(project)
-    dirty = client.app.state.dirty
+    revision = project.storage_revision
     graph = _graph(client)
     assert graph["revision"] == 0
     assert graph["routes"][0]["shot_ids"] == [shot.shot_id for shot in project.shots]
     assert "story_graph" not in project.settings
     assert "story_graph" not in json.loads(project.settings_path.read_text(encoding="utf-8"))
     assert _disk(project) == before
-    assert client.app.state.dirty == dirty
+    assert project.storage_revision == revision
 
 
-@pytest.mark.parametrize("kind", ["folder", "document", "layout2"])
-def test_graph_branch_save_and_reopen_preserve_routes_and_other_settings(graph_client, kind):
-    client = graph_client(kind)
+def test_graph_branch_save_and_reopen_preserve_routes_and_other_settings(graph_client):
+    client = graph_client()
     project = client.app.state.project
     project.settings["unrelated_custom_setting"] = {"keep": [1, 2]}
     graph = _persist_routes(client)
@@ -108,36 +97,18 @@ def test_graph_branch_save_and_reopen_preserve_routes_and_other_settings(graph_c
     assert accepted["revision"] == graph["revision"] + 1
     assert client.post("/api/project/save").status_code == 200
     reopened = project_manager.open_project(project.reopen_path)
-    try:
-        assert story_graph.get_graph(reopened) == accepted
-        assert reopened.settings["unrelated_custom_setting"] == {"keep": [1, 2]}
-    finally:
-        if reopened.metadata_root != project.metadata_root:
-            project_manager.cleanup_document_working_root(reopened)
+    assert story_graph.get_graph(reopened) == accepted
+    assert reopened.settings["unrelated_custom_setting"] == {"keep": [1, 2]}
 
 
-@pytest.mark.parametrize("kind", ["folder", "document", "layout2"])
-def test_graph_survives_save_as(graph_client, tmp_path, kind):
-    client = graph_client(kind)
+def test_graph_survives_save_as(graph_client, tmp_path):
+    client = graph_client()
     graph = _persist_routes(client)
     result = client.post("/api/project/save-as", json={"path": str(tmp_path / "Copied.sbd")})
     assert result.status_code == 200, result.text
     assert result.json()["story_graph"] == graph
     reopened = project_manager.open_project(client.app.state.project.reopen_path)
-    try:
-        assert story_graph.get_graph(reopened) == graph
-    finally:
-        if reopened.metadata_root != client.app.state.project.metadata_root:
-            project_manager.cleanup_document_working_root(reopened)
-
-
-def test_graph_survives_layout_conversion(graph_client, tmp_path):
-    # Conversion requires an existing Layout 1 document, not a folder project.
-    client = graph_client("document")
-    graph = _persist_routes(client)
-    response = client.post("/api/project/convert", json={"path": str(tmp_path / "Converted.sbd")})
-    assert response.status_code == 200, response.text
-    assert response.json()["story_graph"] == graph
+    assert story_graph.get_graph(reopened) == graph
 
 
 def test_custom_routes_survive_add_duplicate_delete_restore_and_global_reorder(graph_client):
@@ -239,17 +210,16 @@ def test_stale_graph_after_shot_delete_reports_revision_conflict(graph_client):
     assert _graph(client) == deleted.json()["story_graph"]
 
 
-@pytest.mark.parametrize("kind", ["folder", "document", "layout2"])
 @pytest.mark.parametrize("operation", ["put", "branch"])
-def test_disk_failure_rolls_back_graph_shots_and_app_state(graph_client, monkeypatch, kind, operation):
-    client = graph_client(kind)
+def test_disk_failure_rolls_back_graph_shots_and_app_state(graph_client, monkeypatch, operation):
+    client = graph_client()
     original = _persist_routes(client)
     project = client.app.state.project
     before = _disk(project)
     shots_before = [shot.to_dict() for shot in project.shots]
     metadata_before = {path.relative_to(project.metadata_root).as_posix() for path in project.metadata_root.rglob("*") if path.is_file()}
     revision = project.storage_revision
-    dirty, mtime = client.app.state.dirty, client.app.state.project_disk_mtime
+    mtime = client.app.state.project_disk_mtime
     real_save_settings = project_manager.save_settings
 
     def fail_after_settings_write(current):
@@ -271,7 +241,6 @@ def test_disk_failure_rolls_back_graph_shots_and_app_state(graph_client, monkeyp
     assert _disk(project) == before
     assert {path.relative_to(project.metadata_root).as_posix() for path in project.metadata_root.rglob("*") if path.is_file()} == metadata_before
     assert project.storage_revision == revision
-    assert client.app.state.dirty == dirty
     assert client.app.state.project_disk_mtime == mtime
 
 
@@ -325,10 +294,9 @@ def _delete_for_exact_undo(client, batch):
     return before, endpoint, {**body, "story_graph": snapshot}
 
 
-@pytest.mark.parametrize("kind", ["folder", "document", "layout2"])
 @pytest.mark.parametrize("batch", [False, True])
-def test_undo_restores_exact_shared_routes_and_positions_atomically(graph_client, kind, batch):
-    client = graph_client(kind)
+def test_undo_restores_exact_shared_routes_and_positions_atomically(graph_client, batch):
+    client = graph_client()
     original, endpoint, body = _delete_for_exact_undo(client, batch)
     response = client.post(endpoint, json=body)
     assert response.status_code == 200, response.text
@@ -337,11 +305,7 @@ def test_undo_restores_exact_shared_routes_and_positions_atomically(graph_client
     assert client.post("/api/project/save").status_code == 200
     project = client.app.state.project
     reopened = project_manager.open_project(project.reopen_path)
-    try:
-        assert story_graph.get_graph(reopened) == restored
-    finally:
-        if reopened.metadata_root != project.metadata_root:
-            project_manager.cleanup_document_working_root(reopened)
+    assert story_graph.get_graph(reopened) == restored
 
 
 @pytest.mark.parametrize("batch", [False, True])
@@ -375,6 +339,16 @@ def test_failed_exact_undo_preserves_deleted_state(graph_client, monkeypatch, ba
     assert _disk(project) == before_disk
 
 
+def _plugin_protocol(app, project):
+    app_state._ensure_transition_runtime(app)
+    return {
+        "version": PLUGIN_PROTOCOL_VERSION,
+        "capabilities": [EXPLICIT_ASSET_PATHS_CAPABILITY],
+        "project_session_id": app.state.project_session_id,
+        "context_revision": project.storage_revision,
+    }
+
+
 def test_plugin_auto_add_failure_keeps_graph_and_shots_consistent(graph_client, monkeypatch):
     client = graph_client()
     original = _persist_routes(client)
@@ -389,15 +363,17 @@ def test_plugin_auto_add_failure_keeps_graph_and_shots_consistent(graph_client, 
 
     monkeypatch.setattr(project_manager, "save_settings", fail)
     with pytest.raises(OSError, match="injected plugin add failure"):
-        StoryboardBackendService(client.app).method_plugin_next_shot(project.shots[-1].shot_id, True)
+        StoryboardBackendService(client.app).method_plugin_next_shot(
+            project.shots[-1].shot_id, True, _plugin_protocol(client.app, project),
+        )
     assert [shot.to_dict() for shot in project.shots] == shots_before
     assert story_graph.get_graph(project) == original
     assert _disk(project) == disk_before
 
 
 @pytest.mark.parametrize("custom_graph", [False, True])
-def test_layout2_disk_refresh_keeps_portable_root_and_imported_artwork(graph_client, custom_graph):
-    client = graph_client("layout2")
+def test_disk_refresh_keeps_project_root_and_imported_artwork(graph_client, custom_graph):
+    client = graph_client()
     if custom_graph:
         _persist_routes(client)
     project = client.app.state.project
@@ -416,7 +392,7 @@ def test_layout2_disk_refresh_keeps_portable_root_and_imported_artwork(graph_cli
     assert response.status_code == 200, response.text
     refreshed = client.app.state.project
     assert refreshed.project_root == root
-    assert refreshed.metadata_root == root / ".storyboarder" / "work"
+    assert refreshed.metadata_root == root / ".storyboarder" / "data"
     assert refreshed.document_path == project.document_path
     shot = next(item for item in response.json()["shots"] if item["shot_id"] == shot_id)
     assert shot["has_board_background"] is True

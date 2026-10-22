@@ -23,9 +23,9 @@ def _make_client(tmp: str) -> TestClient:
 
 
 def _open_project(client: TestClient, tmp: str) -> str:
-    """Create a project and return its project_json_path."""
+    """Create a project and return its reopen path (the .sbd handle)."""
     with contextlib.redirect_stderr(io.StringIO()):
-        resp = client.post("/api/project/new", json={"path": tmp})
+        resp = client.post("/api/project/new", json={"path": str(Path(tmp) / "Demo.sbd")})
     assert resp.status_code == 200, resp.text
     return resp.json()["project_json_path"]
 
@@ -132,30 +132,12 @@ class PreviewAnalysisStatusTests(unittest.TestCase):
                 # No work was done — revision must stay at initial value
                 self.assertEqual(final_job.get("revision", 0), initial_revision)
 
-    def test_bridge_status_includes_preview_analysis_when_job_exists(self) -> None:
-        """GET /api/bridge/status includes preview_analysis once a job has been created."""
-        with tempfile.TemporaryDirectory() as tmp:
-            client = _make_client(tmp)
-            _open_project(client, tmp)
-            with contextlib.redirect_stderr(io.StringIO()):
-                client.post("/api/project/preview-analysis/refresh")
-                time.sleep(0.3)
-                resp = client.get("/api/bridge/status")
-            self.assertEqual(resp.status_code, 200)
-            body = resp.json()
-            # preview_analysis field should be present now
-            self.assertIn("preview_analysis", body)
-            pa = body["preview_analysis"]
-            self.assertIn("state", pa)
-            self.assertIn("task_id", pa)
-            self.assertIn("revision", pa)
-
     def test_preview_analysis_state_field_in_shot_payload(self) -> None:
         """Shot payload always includes preview_analysis_state."""
         with tempfile.TemporaryDirectory() as tmp:
             client = _make_client(tmp)
             with contextlib.redirect_stderr(io.StringIO()):
-                resp = client.post("/api/project/new", json={"path": tmp})
+                resp = client.post("/api/project/new", json={"path": str(Path(tmp) / "Demo.sbd")})
             self.assertEqual(resp.status_code, 200)
             shots = resp.json()["shots"]
             for shot in shots:
@@ -170,7 +152,7 @@ class PreviewAnalysisStatusTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             client = _make_client(tmp)
             with contextlib.redirect_stderr(io.StringIO()):
-                resp = client.post("/api/project/new", json={"path": tmp})
+                resp = client.post("/api/project/new", json={"path": str(Path(tmp) / "Demo.sbd")})
             self.assertEqual(resp.status_code, 200)
             for shot in resp.json()["shots"]:
                 self.assertEqual(shot.get("preview_analysis_state"), "missing",

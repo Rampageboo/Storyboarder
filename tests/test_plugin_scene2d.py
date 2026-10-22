@@ -39,6 +39,10 @@ with warnings.catch_warnings():
 
 from storyboard_tool import api as api_module
 from storyboard_tool import live_bridge
+from storyboard_tool.plugin_service import (
+    EXPLICIT_ASSET_PATHS_CAPABILITY,
+    PLUGIN_PROTOCOL_VERSION,
+)
 
 
 MINI_PNG = bytes.fromhex(
@@ -51,6 +55,19 @@ MINI_PNG = bytes.fromhex(
 def _quiet(fn):
     with contextlib.redirect_stderr(io.StringIO()):
         return fn()
+
+
+def _plugin_headers(app, revision: int, *, work_key: str = "", asset_role: str = "", token: str = "") -> dict[str, str]:
+    """Protocol v2 headers the Photoshop plugin sends with every call."""
+    return {
+        "x-storyboarder-protocol": str(PLUGIN_PROTOCOL_VERSION),
+        "x-storyboarder-capabilities": EXPLICIT_ASSET_PATHS_CAPABILITY,
+        "x-storyboarder-project-session": str(app.state.project_session_id),
+        "x-storyboarder-context-revision": str(revision),
+        "x-storyboarder-work-key": work_key,
+        "x-storyboarder-asset-role": asset_role,
+        "x-storyboarder-write-intent": token,
+    }
 
 
 class PluginScene2DTests(unittest.TestCase):
@@ -74,12 +91,34 @@ class PluginScene2DTests(unittest.TestCase):
     def _project_root(self) -> Path:
         r = self.client.get("/api/project")
         self.assertEqual(r.status_code, 200)
-        return Path(r.json()["project_path"])
+        return Path(r.json()["project_path"]).parent
 
     def _new_project(self) -> Path:
-        r = _quiet(lambda: self.client.post("/api/project/new", json={"path": self._tmp.name}))
-        self.assertEqual(r.status_code, 200)
-        return Path(r.json()["project_path"])
+        r = _quiet(lambda: self.client.post("/api/project/new", json={"path": str(self.root / "Demo.sbd")}))
+        self.assertEqual(r.status_code, 200, r.text)
+        return Path(r.json()["project_path"]).parent
+
+    def _headers(self, **kwargs) -> dict[str, str]:
+        revision = self.client.get("/api/project").json()["storage_revision"]
+        return _plugin_headers(self.app, revision, **kwargs)
+
+    def _write_intent(self, work_key: str, asset_role: str) -> dict:
+        r = self.client.post(
+            "/api/plugin/write-intents",
+            json={"work_key": work_key, "asset_role": asset_role},
+            headers=self._headers(),
+        )
+        self.assertEqual(r.status_code, 200, r.text)
+        return r.json()
+
+    def _export_preview(self, scene_id: str, perspective_id: str):
+        work_key = f"scene2d:{scene_id}:{perspective_id}"
+        intent = self._write_intent(work_key, "preview")
+        Path(intent["write_path"]).write_bytes(MINI_PNG)
+        return self.client.post(
+            f"/api/plugin/scenes2d/{scene_id}/perspectives/{perspective_id}/export-preview",
+            headers=self._headers(work_key=work_key, asset_role="preview", token=str(intent["token"])),
+        )
 
     def _add_scene_with_psd_perspective(self) -> tuple[str, str]:
         r = _quiet(lambda: self.client.post("/api/project/scenes2d", json={"title": "Scene A"}))
@@ -91,40 +130,25 @@ class PluginScene2DTests(unittest.TestCase):
             json={"title": "Perspective 1", "type": "psd"},
         ))
         self.assertEqual(r2.status_code, 200)
-        perspective_id = r2.json()["perspective"]["id"]
-        # Create/verify the canonical source file in the project root (not self.root which is the parent).
-        project_root = Path(self.client.get("/api/project").json()["project_path"])
-        persp_dir = project_root / "scenes2d" / scene_id / "perspectives" / perspective_id
-        persp_dir.mkdir(parents=True, exist_ok=True)
-        (persp_dir / "source.psd").write_bytes(b"8BPS" + b"\0" * 32)
+        perspective = r2.json()["perspective"]
+        perspective_id = perspective["id"]
+        # Replace the canonical source with a small PSD stub.
+        self.assertEqual(perspective["source_file_path"], f"PSD/Scene2D/{perspective_id}.psd")
+        (self._project_root() / perspective["source_file_path"]).write_bytes(b"8BPS" + b"\0" * 32)
         return scene_id, perspective_id
 
     def _add_image_perspective(self, project_root: Path, scene_id: str) -> str:
-        """Inject an image perspective directly into scenes2d.json (creation API only supports PSD)."""
-        import uuid, json as _json
-        perspective_id = str(uuid.uuid4()).replace("-", "")
-        index = project_root / "scenes2d" / "scenes2d.json"
-        with open(index) as f:
-            data = _json.load(f)
-        for scene in data["scenes"]:
-            if scene["id"] == scene_id:
-                persp = {
-                    "id": perspective_id,
-                    "title": "Image ref",
-                    "type": "image",
-                    "source_file_path": f"scenes2d/{scene_id}/perspectives/{perspective_id}/ref.png",
-                    "preview_image_path": f"scenes2d/{scene_id}/perspectives/{perspective_id}/ref.png",
-                    "created_at": "2024-01-01T00:00:00",
-                    "updated_at": "2024-01-01T00:00:00",
-                }
-                scene.setdefault("perspectives", []).append(persp)
-        with open(index, "w") as f:
-            _json.dump(data, f)
-        # Write a stub PNG so the file exists
-        img_dir = project_root / "scenes2d" / scene_id / "perspectives" / perspective_id
-        img_dir.mkdir(parents=True, exist_ok=True)
-        (img_dir / "ref.png").write_bytes(MINI_PNG)
-        return perspective_id
+        """Import an image perspective (the create API only makes PSD perspectives)."""
+        r = _quiet(lambda: self.client.post(
+            f"/api/project/scenes2d/{scene_id}/perspectives/import",
+            files={"file": ("ref.png", MINI_PNG, "image/png")},
+            data={"title": "Image ref"},
+        ))
+        self.assertEqual(r.status_code, 200, r.text)
+        perspective = r.json()["perspective"]
+        self.assertEqual(perspective["type"], "image")
+        self.assertTrue((project_root / perspective["source_file_path"]).is_file())
+        return perspective["id"]
 
     def _heartbeat(self, **kwargs) -> None:
         payload = {"selected_shot_id": "", "open_shot_ids": [], **kwargs}
@@ -158,7 +182,7 @@ class PluginScene2DTests(unittest.TestCase):
     def test_3_plugin_context_includes_work_context_and_work_items(self) -> None:
         project_root = self._new_project()
         self._add_scene_with_psd_perspective()
-        r = self.client.get("/api/plugin/context")
+        r = self.client.get("/api/plugin/context", headers=self._headers())
         self.assertEqual(r.status_code, 200)
         body = r.json()
         self.assertIn("work_context", body)
@@ -167,13 +191,13 @@ class PluginScene2DTests(unittest.TestCase):
     def test_4_work_items_includes_psd_perspectives(self) -> None:
         project_root = self._new_project()
         scene_id, perspective_id = self._add_scene_with_psd_perspective()
-        r = self.client.get("/api/plugin/context")
+        r = self.client.get("/api/plugin/context", headers=self._headers())
         self.assertEqual(r.status_code, 200)
         work_items = r.json()["work_items"]
         scene2d_items = [it for it in work_items if it["kind"] == "scene2d"]
         self.assertTrue(any(it["perspective_id"] == perspective_id for it in scene2d_items))
         item = next(it for it in scene2d_items if it["perspective_id"] == perspective_id)
-        expected_rel = f"scenes2d/{scene_id}/perspectives/{perspective_id}/source.psd"
+        expected_rel = f"PSD/Scene2D/{perspective_id}.psd"
         self.assertEqual(item["source_file_path"], expected_rel)
         self.assertTrue(item["source_native_path"].replace("\\", "/").endswith(expected_rel))
         self.assertEqual(item["scene_title"], "Scene A")
@@ -236,15 +260,11 @@ class PluginScene2DTests(unittest.TestCase):
     def test_8_export_preview_returns_plugin_change_with_scene2d_kind(self) -> None:
         self._new_project()
         scene_id, perspective_id = self._add_scene_with_psd_perspective()
-        project_root = self._project_root()
-        persp_dir = project_root / "scenes2d" / scene_id / "perspectives" / perspective_id
-        persp_dir.mkdir(parents=True, exist_ok=True)
-        (persp_dir / "preview.png").write_bytes(MINI_PNG)
 
-        r = self.client.post(
-            f"/api/plugin/scenes2d/{scene_id}/perspectives/{perspective_id}/export-preview"
-        )
-        self.assertEqual(r.status_code, 200)
+        r = self._export_preview(scene_id, perspective_id)
+        self.assertEqual(r.status_code, 200, r.text)
+        preview = self._project_root() / f"Images/Scene2D/{perspective_id}_preview.png"
+        self.assertEqual(preview.read_bytes(), MINI_PNG)
         status = self.client.get("/api/bridge/status").json()
         plugin_change = status.get("plugin_change") or {}
         self.assertEqual(plugin_change.get("kind"), "scene2d")
@@ -254,34 +274,23 @@ class PluginScene2DTests(unittest.TestCase):
     def test_9_export_preview_increments_plugin_project_revision(self) -> None:
         self._new_project()
         scene_id, perspective_id = self._add_scene_with_psd_perspective()
-        project_root = self._project_root()
-        persp_dir = project_root / "scenes2d" / scene_id / "perspectives" / perspective_id
-        persp_dir.mkdir(parents=True, exist_ok=True)
-        (persp_dir / "preview.png").write_bytes(MINI_PNG)
 
         before = self.client.get("/api/bridge/status").json()["plugin_project_revision"]
-        r = self.client.post(
-            f"/api/plugin/scenes2d/{scene_id}/perspectives/{perspective_id}/export-preview"
-        )
-        self.assertEqual(r.status_code, 200)
+        r = self._export_preview(scene_id, perspective_id)
+        self.assertEqual(r.status_code, 200, r.text)
         after = self.client.get("/api/bridge/status").json()["plugin_project_revision"]
         self.assertGreater(after, before)
 
     def test_10_export_preview_updates_scene_updated_at(self) -> None:
         self._new_project()
         scene_id, perspective_id = self._add_scene_with_psd_perspective()
-        project_root = self._project_root()
-        persp_dir = project_root / "scenes2d" / scene_id / "perspectives" / perspective_id
-        persp_dir.mkdir(parents=True, exist_ok=True)
-        (persp_dir / "preview.png").write_bytes(MINI_PNG)
 
         before_scenes = self.client.get("/api/project/scenes2d").json().get("scenes", [])
         before_scene = next((s for s in before_scenes if s["id"] == scene_id), None)
         before_ts = (before_scene or {}).get("updated_at", "")
 
-        self.client.post(
-            f"/api/plugin/scenes2d/{scene_id}/perspectives/{perspective_id}/export-preview"
-        )
+        r = self._export_preview(scene_id, perspective_id)
+        self.assertEqual(r.status_code, 200, r.text)
 
         after_scenes = self.client.get("/api/project/scenes2d").json().get("scenes", [])
         after_scene = next((s for s in after_scenes if s["id"] == scene_id), None)
@@ -292,10 +301,13 @@ class PluginScene2DTests(unittest.TestCase):
     def test_11_psd_saved_accepts_scene2d_and_updates_mtime(self) -> None:
         project_root = self._new_project()
         scene_id, perspective_id = self._add_scene_with_psd_perspective()
+        work_key = f"scene2d:{scene_id}:{perspective_id}"
+        intent = self._write_intent(work_key, "source_psd")
         r = self.client.post(
-            f"/api/plugin/scenes2d/{scene_id}/perspectives/{perspective_id}/psd-saved"
+            f"/api/plugin/scenes2d/{scene_id}/perspectives/{perspective_id}/psd-saved",
+            headers=self._headers(work_key=work_key, asset_role="source_psd", token=str(intent["token"])),
         )
-        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r.status_code, 200, r.text)
         body = r.json()
         self.assertIn("scene", body)
         self.assertEqual(body["scene"]["id"], scene_id)
@@ -312,7 +324,8 @@ class PluginScene2DTests(unittest.TestCase):
         perspective_id_2 = r2.json()["perspective"]["id"]
 
         r = self.client.post(
-            f"/api/plugin/scenes2d/{scene_id}/perspectives/{perspective_id}/next-perspective"
+            f"/api/plugin/scenes2d/{scene_id}/perspectives/{perspective_id}/next-perspective",
+            headers=self._headers(),
         )
         self.assertEqual(r.status_code, 200)
         body = r.json()
@@ -325,7 +338,8 @@ class PluginScene2DTests(unittest.TestCase):
         scene_id, perspective_id = self._add_scene_with_psd_perspective()
         # Only one perspective in scene; should be at end
         r = self.client.post(
-            f"/api/plugin/scenes2d/{scene_id}/perspectives/{perspective_id}/next-perspective"
+            f"/api/plugin/scenes2d/{scene_id}/perspectives/{perspective_id}/next-perspective",
+            headers=self._headers(),
         )
         self.assertEqual(r.status_code, 200)
         body = r.json()
@@ -384,9 +398,9 @@ class HeartbeatFreshnessTests(unittest.TestCase):
         self._tmp.cleanup()
 
     def _new_project(self) -> Path:
-        r = _quiet(lambda: self.client.post("/api/project/new", json={"path": self._tmp.name}))
-        self.assertEqual(r.status_code, 200)
-        return Path(r.json()["project_path"])
+        r = _quiet(lambda: self.client.post("/api/project/new", json={"path": str(self.root / "Demo.sbd")}))
+        self.assertEqual(r.status_code, 200, r.text)
+        return Path(r.json()["project_path"]).parent
 
     def _add_psd_perspective(self) -> tuple[str, str]:
         r = _quiet(lambda: self.client.post("/api/project/scenes2d", json={"title": "Scene A"}))
@@ -397,11 +411,10 @@ class HeartbeatFreshnessTests(unittest.TestCase):
             json={"title": "P1", "type": "psd"},
         ))
         self.assertEqual(r2.status_code, 200)
-        perspective_id = r2.json()["perspective"]["id"]
-        proj_root = Path(self.client.get("/api/project").json()["project_path"])
-        persp_dir = proj_root / "scenes2d" / scene_id / "perspectives" / perspective_id
-        persp_dir.mkdir(parents=True, exist_ok=True)
-        (persp_dir / "source.psd").write_bytes(b"8BPS" + b"\0" * 32)
+        perspective = r2.json()["perspective"]
+        perspective_id = perspective["id"]
+        proj_root = Path(self.client.get("/api/project").json()["project_path"]).parent
+        (proj_root / perspective["source_file_path"]).write_bytes(b"8BPS" + b"\0" * 32)
         return scene_id, perspective_id
 
     def _open_perspective(self, scene_id: str, perspective_id: str, open_mock: mock.MagicMock) -> dict:

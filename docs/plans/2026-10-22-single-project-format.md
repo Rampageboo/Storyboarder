@@ -1,8 +1,21 @@
 # One project format: folder + handle `.sbd`
 
-Status: approved (Owner, 2026-10-22), in progress.
+Status: implemented (2026-10-22).
 
 **Owner decision (2026-10-22): no backward compatibility.** Every existing project (Layout 1 `.sbd`, Layout 1 folder, Layout 2 zip-handle) is a throwaway test. Drop the converter and all migration paths; opening an old project fails with a clear "unsupported old format" message. Decisions 4 and 5 and step 2 below are superseded by this.
+
+## What was built
+
+The format is as described under Outcome. Deviations from the plan below:
+
+- **No compatibility.** Decisions 4 and 5 and step 2 were dropped, along with the read-only Layout 1 loader, `project_convert`, the convert API and the conversion checks in Done/Verify. Old projects fail to open with "This project was saved by an older Storyboarder in a format that is no longer supported. Create a new project." Step 3's one-release `%TEMP%/storyboarder-*` sweep was not kept; old husks must be removed by hand.
+- **Metadata dir** is `.storyboarder/data` (not `work/`). Layout 1 dirs under it are gone; backups live only in `.storyboarder/backups`.
+- **Handle** is JSON: `{"format": "storyboarder-project", "version": 1, "project_id": ...}`. No cover.
+- **Recents** read `.storyboarder/data/shots.json` and the first board image next to the handle. Home cards no longer show SBD/FOLDER or size.
+- **`MutationPolicy`** collapsed to `SERIALIZED`, `TRANSACTION` and `SAVE_AS`. `TRANSACTION` snapshots `.storyboarder/data` plus enlisted asset paths and recovers on the next open after a crash. `metadata_transaction` is gone.
+- **Saving.** No dirty state, autosave interval or "Convert to Layout 2" menu item. Board text drafts flush about 1.5 s after typing stops (`frontend/src/hooks/useAutosave.ts`); Save (Ctrl+S) only flushes drafts. Save As copies the folder to a new `project_id`; Scene 2D PSD previews no longer need to exist for it.
+- **Photoshop plugin.** Protocol v2 is always required (0.7.0; 0.6.7 gets HTTP 426). The offline file mode no longer works: the backend always reports `offline_write_allowed: false`. Context payloads expose no filesystem paths.
+- **Blender session** is always a hidden copy next to the scene's `.blend`.
 
 ## Why
 

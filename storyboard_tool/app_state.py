@@ -23,8 +23,6 @@ from . import (
     blender_bridge,
     live_bridge,
     preview_analysis_cache,
-    project_convert,
-    project_document,
     project_manager,
     project_save_as,
     recents,
@@ -34,7 +32,7 @@ from . import (
 )
 from .errors import AppErrorCode, app_error
 from .models import Project, SHOT_STATUSES, Shot
-from .project_layout import LAYOUT_1, LAYOUT_2, ensure_layout_enabled
+from .project_layout import MAX_STORAGE_REVISION
 
 logger = logging.getLogger(__name__)
 
@@ -130,7 +128,6 @@ def quiesce_project_writers(
                 "plugin_http_mutations",
             ],
             "plugin_http": "frozen_by_project_lock",
-            "plugin_inbox": "excluded_uncommitted_layout1_no_inbox",
             "transaction_log": "drained_by_project_lock_no_persistent_log",
         }
 
@@ -179,7 +176,6 @@ def transition_active_project(
     }
     source: Project | None = app.state.project
     candidate: Project | None = None
-    source_dirty = bool(getattr(app.state, "dirty", False))
     source_disk_mtime = float(
         getattr(app.state, "project_disk_mtime", 0.0) or 0.0
     )
@@ -196,46 +192,18 @@ def transition_active_project(
 
             with project_manager.PROJECT_LOCK:
                 source = app.state.project
-                source_dirty = bool(getattr(app.state, "dirty", False))
                 source_disk_mtime = float(
                     getattr(app.state, "project_disk_mtime", 0.0) or 0.0
                 )
                 source_session_id = str(
                     getattr(app.state, "project_session_id", "") or ""
                 )
-                report["source_dirty_before"] = source_dirty
                 _transition_checkpoint(app, report, "mutations_frozen")
-
-                # Layout 1 has no backend-owned plugin inbox. HTTP plugin writes
-                # are drained/frozen by PROJECT_LOCK; unknown direct filesystem
-                # writes are explicitly excluded rather than silently ingested.
-                _transition_checkpoint(app, report, "plugin_inbox_resolved")
 
                 report["current_stage"] = "external_blender_release"
                 blender_bridge.sync_now(app)
                 blender_bridge.require_released(app, action)
                 _transition_checkpoint(app, report, "external_blender_released")
-
-                dirty_after_writer_checks = bool(
-                    getattr(app.state, "dirty", False)
-                )
-                report["source_dirty_after_writer_checks"] = (
-                    dirty_after_writer_checks
-                )
-                must_persist_source = source is not None and dirty_after_writer_checks
-                report["current_stage"] = "backend_serialize"
-                if must_persist_source:
-                    project_manager.save_project(source, flush_document=False)
-                _transition_checkpoint(app, report, "backend_serialized")
-
-                report["current_stage"] = "source_save"
-                if (
-                    must_persist_source
-                    and source is not None
-                    and source.document_path
-                ):
-                    project_manager.sync_document(source)
-                _transition_checkpoint(app, report, "source_durable")
 
                 if candidate_factory is not None:
                     report["current_stage"] = "candidate_open"
@@ -253,7 +221,6 @@ def transition_active_project(
                     app.state.project_disk_mtime = 0.0
                 else:
                     _track_project(app, candidate)
-                app.state.dirty = False
                 runtime_state.rotate_project_session(app)
                 blender_bridge.cancel_session(app)
                 report["status"] = "committed"
@@ -264,8 +231,6 @@ def transition_active_project(
             # These publications are recoverable and must not roll back the
             # already-atomic active-project swap.
             try:
-                if candidate is not None:
-                    _remember_recent(candidate)
                 _persist_app_session(app)
                 _touch_live_bridge(app)
             except Exception:
@@ -273,30 +238,12 @@ def transition_active_project(
                     "Project transition committed but publication failed",
                     exc_info=True,
                 )
-
-            if source is not None and source is not candidate:
-                try:
-                    project_manager.cleanup_document_working_root(source)
-                except Exception:
-                    logger.warning(
-                        "Could not clean the previous project work root",
-                        exc_info=True,
-                    )
             return candidate
         except Exception as exc:
             # No active-project assignment occurs before the commit point.
             app.state.project = source
-            app.state.dirty = source_dirty
             app.state.project_disk_mtime = source_disk_mtime
             app.state.project_session_id = source_session_id
-            if candidate is not None and candidate is not source:
-                try:
-                    project_manager.cleanup_document_working_root(candidate)
-                except Exception:
-                    logger.warning(
-                        "Could not clean rejected candidate work root",
-                        exc_info=True,
-                    )
             report["status"] = "failed"
             report["error"] = str(exc)
             app.state.last_project_transition = report
@@ -314,18 +261,17 @@ def transition_active_project(
                 resume_project_writers(app)
 
 
-def save_active_project_as_layout2(app: FastAPI, requested_document: Path) -> Project:
-    """Snapshot Layout 2 to a new folder without making the source durable."""
+def save_active_project_as(app: FastAPI, requested_document: Path) -> Project:
+    """Copy the active project to a new folder and switch to the copy."""
     _ensure_transition_runtime(app)
     source = _require_project(app)
-    source_dirty = bool(getattr(app.state, "dirty", False))
     source_disk_mtime = float(getattr(app.state, "project_disk_mtime", 0.0) or 0.0)
     source_session_id = str(getattr(app.state, "project_session_id", "") or "")
-    result: project_save_as.Layout2SaveAsResult | None = None
+    result: project_save_as.SaveAsResult | None = None
     candidate: Project | None = None
     writers_quiesced = False
     report: dict[str, Any] = {
-        "action": "saving this Layout 2 project as",
+        "action": "saving this project as",
         "status": "running",
         "current_stage": "",
         "stages": [],
@@ -342,9 +288,6 @@ def save_active_project_as_layout2(app: FastAPI, requested_document: Path) -> Pr
 
             with project_manager.PROJECT_LOCK:
                 source = _require_project(app)
-                if source.layout != LAYOUT_2:
-                    raise ValueError("Layout 2 snapshot coordinator requires Layout 2.")
-                source_dirty = bool(getattr(app.state, "dirty", False))
                 source_disk_mtime = float(
                     getattr(app.state, "project_disk_mtime", 0.0) or 0.0
                 )
@@ -372,9 +315,8 @@ def save_active_project_as_layout2(app: FastAPI, requested_document: Path) -> Pr
                 blender_bridge.require_released(app, "using Save As")
                 _transition_checkpoint(app, report, "external_blender_released")
 
-
                 report["current_stage"] = "snapshot"
-                result = project_save_as.materialize_layout2_save_as(
+                result = project_save_as.materialize_save_as(
                     source,
                     requested_document,
                 )
@@ -397,7 +339,6 @@ def save_active_project_as_layout2(app: FastAPI, requested_document: Path) -> Pr
                 _transition_checkpoint(app, report, "before_swap")
 
                 _track_project(app, candidate)
-                app.state.dirty = False
                 runtime_state.rotate_project_session(app)
                 blender_bridge.cancel_session(app)
                 report["status"] = "committed"
@@ -406,15 +347,13 @@ def save_active_project_as_layout2(app: FastAPI, requested_document: Path) -> Pr
                 app.state.last_project_transition = report
 
             try:
-                _remember_recent(candidate)
                 _persist_app_session(app)
                 _touch_live_bridge(app)
             except Exception:
-                logger.warning("Layout 2 Save As publication failed", exc_info=True)
+                logger.warning("Save As publication failed", exc_info=True)
             return candidate
         except Exception as exc:
             app.state.project = source
-            app.state.dirty = source_dirty
             app.state.project_disk_mtime = source_disk_mtime
             app.state.project_session_id = source_session_id
             report["status"] = "failed"
@@ -425,7 +364,7 @@ def save_active_project_as_layout2(app: FastAPI, requested_document: Path) -> Pr
             if isinstance(exc, ProjectTransitionError):
                 raise
             raise ProjectTransitionError(
-                "saving this Layout 2 project as",
+                "saving this project as",
                 str(report.get("current_stage") or "unknown"),
                 exc,
             ) from exc
@@ -436,123 +375,7 @@ def save_active_project_as_layout2(app: FastAPI, requested_document: Path) -> Pr
                 resume_project_writers(app)
 
 
-def convert_active_project_to_layout2(app: FastAPI, requested_document: Path) -> Project:
-    """Convert Layout 1 into a published Layout 2 sibling without saving the source."""
-    ensure_layout_enabled(LAYOUT_2)
-    _ensure_transition_runtime(app)
-    source = _require_project(app)
-    source_dirty = bool(getattr(app.state, "dirty", False))
-    source_disk_mtime = float(getattr(app.state, "project_disk_mtime", 0.0) or 0.0)
-    source_session_id = str(getattr(app.state, "project_session_id", "") or "")
-    result: project_convert.Layout2ConvertResult | None = None
-    candidate: Project | None = None
-    writers_quiesced = False
-    report: dict[str, Any] = {
-        "action": "converting this Layout 1 project to Layout 2",
-        "status": "running",
-        "current_stage": "",
-        "stages": [],
-        "writers": {},
-    }
-
-    with project_manager.PROJECT_TRANSITION_LOCK:
-        try:
-            _transition_checkpoint(app, report, "lock_acquired")
-            report["current_stage"] = "writer_quiesce"
-            report["writers"] = quiesce_project_writers(app)
-            writers_quiesced = True
-            _transition_checkpoint(app, report, "writers_quiesced")
-
-            with project_manager.PROJECT_LOCK:
-                source = _require_project(app)
-                if source.layout != LAYOUT_1:
-                    raise ValueError("Convert supports Layout 1 to Layout 2 only.")
-                source_dirty = bool(getattr(app.state, "dirty", False))
-                source_disk_mtime = float(
-                    getattr(app.state, "project_disk_mtime", 0.0) or 0.0
-                )
-                source_session_id = str(
-                    getattr(app.state, "project_session_id", "") or ""
-                )
-                _transition_checkpoint(app, report, "mutations_frozen")
-
-                report["current_stage"] = "external_blender_release"
-                blender_bridge.require_released(app, "converting to Layout 2")
-                _transition_checkpoint(app, report, "external_blender_released")
-
-
-                report["current_stage"] = "conversion"
-                result = project_convert.materialize_layout1_to_layout2(
-                    source,
-                    requested_document,
-                )
-                report.update(
-                    {
-                        "snapshot_hash": result.snapshot_hash,
-                        "source_hash": result.source_hash,
-                        "destination_root": str(result.destination_root),
-                        "destination_document": str(result.document_path),
-                        "excluded_paths": list(result.excluded_paths),
-                    }
-                )
-                _transition_checkpoint(app, report, "conversion_published")
-
-                report["current_stage"] = "candidate_open"
-                candidate = project_manager.open_project(result.document_path)
-                _transition_checkpoint(app, report, "candidate_opened")
-                report["current_stage"] = "candidate_validate"
-                project_manager.validate_transition_candidate(candidate)
-                _transition_checkpoint(app, report, "candidate_validated")
-                _transition_checkpoint(app, report, "before_swap")
-
-                _track_project(app, candidate)
-                app.state.dirty = False
-                runtime_state.rotate_project_session(app)
-                blender_bridge.cancel_session(app)
-                report["status"] = "committed"
-                report["current_stage"] = "committed"
-                report["project_session_id"] = app.state.project_session_id
-                app.state.last_project_transition = report
-
-            try:
-                _remember_recent(candidate)
-                _persist_app_session(app)
-                _touch_live_bridge(app)
-            except Exception:
-                logger.warning("Layout 2 conversion publication failed", exc_info=True)
-            try:
-                project_manager.cleanup_document_working_root(source)
-            except Exception:
-                logger.warning(
-                    "Could not clean the converted Layout 1 work root",
-                    exc_info=True,
-                )
-            return candidate
-        except Exception as exc:
-            app.state.project = source
-            app.state.dirty = source_dirty
-            app.state.project_disk_mtime = source_disk_mtime
-            app.state.project_session_id = source_session_id
-            report["status"] = "failed"
-            report["error"] = str(exc)
-            if result is not None:
-                report["completed_target"] = str(result.destination_root)
-            app.state.last_project_transition = report
-            if isinstance(exc, ProjectTransitionError):
-                raise
-            raise ProjectTransitionError(
-                "converting this Layout 1 project to Layout 2",
-                str(report.get("current_stage") or "unknown"),
-                exc,
-            ) from exc
-        finally:
-            if writers_quiesced or bool(
-                getattr(app.state, "project_writers_quiesced", False)
-            ):
-                resume_project_writers(app)
-
-
-def _project_payload(project: Project, dirty: bool) -> dict[str, Any]:
+def _project_payload(project: Project) -> dict[str, Any]:
     from .comic import get_document
     from .story_graph import get_graph
 
@@ -562,11 +385,8 @@ def _project_payload(project: Project, dirty: bool) -> dict[str, Any]:
         "project_json_path": str(project.reopen_path),
         "document_path": str(project.document_path) if project.document_path else "",
         "name": project.name,
-        "layout": project.layout,
         "project_id": project.project_id,
         "storage_revision": project.storage_revision,
-        "can_convert_to_layout2": project_manager.can_convert_to_layout2(project),
-        "dirty": dirty,
         "settings": project.settings,
         "story_graph": get_graph(project),
         "comic_document": get_document(project),
@@ -689,8 +509,6 @@ def _refresh_project_from_disk(app: FastAPI) -> Project:
     # thread is mid-save (which would tear the save) or observe a half-written manifest.
     with project_manager.PROJECT_LOCK:
         project = _require_project(app)
-        if app.state.dirty:
-            return project
         try:
             refreshed, disk_mtime, changed = project_manager.reload_project_if_changed(
                 project,
@@ -723,40 +541,23 @@ def stop_background_loops(app: FastAPI, timeout: float = 2.0) -> None:
             thread.join(timeout=timeout)
 
 
-def _autosave(app: FastAPI) -> None:
-    """Persist metadata after a mutation, but defer the expensive .sbd pack.
+def persist_project_mutation(app: FastAPI) -> None:
+    """Record one accepted mutation: advance the revision and write metadata.
 
-    Packing a single-file document re-zips the whole project, which is too slow to
-    run on every edit. The working tree is kept current here (cheap); the .sbd is
-    flushed by periodic autosave, manual save (Ctrl+S / Save), and save-on-close.
-    For a plain folder project there is nothing to pack, so the metadata write is
-    already the durable save and the project is not left dirty.
+    Every write lands in the project folder before the request returns, so
+    there is no separate save step. The revision lets the Photoshop plugin and
+    the Blender session detect that their context is stale.
     """
     project = _require_project(app)
-    revision = int(project.storage_revision)
-    project_manager.save_project(project, flush_document=False)
-    if project.layout == LAYOUT_2:
-        project.storage_revision = project_document.advance_layout2_work_revision(
-            project.project_root,
-            expected_revision=revision,
-        )
-        try:
-            blender_bridge.publish_context(app, project)
-        except (OSError, ValueError):
-            logger.warning(
-                "Could not invalidate the external Blender context after mutation."
-            )
+    if project.storage_revision >= MAX_STORAGE_REVISION:
+        raise RuntimeError("Project revision counter is exhausted.")
+    project.storage_revision += 1
+    project_manager.save_project(project)
+    try:
+        blender_bridge.publish_context(app, project)
+    except (OSError, ValueError):
+        logger.warning("Could not invalidate the external Blender context after mutation.")
     app.state.project_disk_mtime = project_manager.project_disk_mtime(project)
-    app.state.dirty = bool(project.document_path)
-
-
-def persist_project_mutation(app: FastAPI) -> None:
-    """Persist one accepted mutation at exactly one Layout 2 revision."""
-    project = _require_project(app)
-    _autosave(app)
-    if project.layout != LAYOUT_2:
-        project_manager.sync_document(project)
-        app.state.dirty = False
 
 
 def _dialog_initial_dir(app: FastAPI, kind: str) -> str:
@@ -778,20 +579,6 @@ def _dialog_initial_dir(app: FastAPI, kind: str) -> str:
     if candidate.is_dir():
         return str(candidate.resolve())
     return str(Path.home())
-
-
-def _remember_recent(project: Project) -> None:
-    """Update session-facing recents without rewriting the opened document."""
-    if project.layout == LAYOUT_2:
-        # _persist_app_session records this path in the application session.
-        # Canonical Layout 2 settings cannot change after publication without
-        # a metadata revision, and remembering a path is not a document edit.
-        return
-    recent = [str(project.visible_path)]
-    for item in project.settings.get("recent_projects", []):
-        if item not in recent:
-            recent.append(item)
-    project.settings["recent_projects"] = recent[:10]
 
 
 def _touch_live_bridge(app: FastAPI, *, selected_shot_id: str | None = None) -> dict[str, Any]:
@@ -954,7 +741,7 @@ def _bridge_status_payload(app: FastAPI) -> dict[str, Any]:
     live = _touch_live_bridge(app)
     project = app.state.project
     work_context = dict(runtime_state.active_work_context(app))
-    if project is not None and project.layout == LAYOUT_2:
+    if project is not None:
         work_context.pop("source_file_path", None)
         work_context.pop("source_native_path", None)
     http_seen = runtime_state.plugin_last_seen(app)
@@ -984,10 +771,6 @@ def _bridge_status_payload(app: FastAPI) -> dict[str, Any]:
         "server_port": int(app.state.bridge_port),
         "live": live,
     }
-    if project is not None and project.layout != LAYOUT_2:
-        pa = runtime_state.preview_analysis_status_for_project(app, str(project.project_root))
-        if pa is not None:
-            result["preview_analysis"] = pa
     return result
 
 
@@ -995,15 +778,11 @@ def _persist_app_session(app: FastAPI, *, selected_shot_id: str | None = None) -
     project = app.state.project
     if project is None:
         return
-    # Layout 2 recents belong to the session. Re-merging historical document
-    # entries would resurrect cards the user already forgot. Legacy documents
-    # retain their existing embedded-list compatibility behavior.
+    # Recents belong to the application session, never to a project.
     previous = session_store.read_session(app.state.base_dir).get("recent_projects", [])
-    document_recents = project.settings.get("recent_projects", []) if project.layout != LAYOUT_2 else []
     merged = recents.dedupe(
         [
             str(project.visible_path),
-            *[str(item) for item in document_recents],
             *[str(item) for item in previous if isinstance(item, (str, Path))],
         ]
     )

@@ -8,7 +8,7 @@ from storyboard_tool import export_service, project_manager, video_export
 
 
 def _project_with_boards(tmp: Path, count: int = 3) -> object:
-    project = project_manager.create_project(tmp, canvas_width=320, canvas_height=180)
+    project = project_manager.create_project(tmp / "Demo.sbd", canvas_width=320, canvas_height=180)
     for _ in range(count):
         shot = project_manager.add_shot(project)
         shot.duration_seconds = 0.3
@@ -27,7 +27,7 @@ def test_export_animatic_produces_nonempty_mp4(tmp_path: Path) -> None:
 
 
 def test_export_animatic_rejects_empty_project(tmp_path: Path) -> None:
-    project = project_manager.create_project(tmp_path, canvas_width=320, canvas_height=180)
+    project = project_manager.create_project(tmp_path / "Demo.sbd", canvas_width=320, canvas_height=180)
     with pytest.raises(ValueError):
         video_export.export_animatic(project, tmp_path / "empty.mp4")
 

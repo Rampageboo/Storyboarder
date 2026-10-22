@@ -29,12 +29,14 @@ class TestGenerationRequests(unittest.TestCase):
         self._tmp = tempfile.TemporaryDirectory()
         self.base = Path(self._tmp.name)
         self.client = TestClient(api_module.create_app(self.base), raise_server_exceptions=False)
-        created = _quiet(lambda: self.client.post("/api/project/new", json={"path": str(self.base)}))
+        created = _quiet(lambda: self.client.post("/api/project/new", json={"path": str(self.base / "Demo.sbd")}))
         self.assertEqual(created.status_code, 200, created.text)
         added = _quiet(lambda: self.client.post("/api/shots", json={}))
         self.assertEqual(added.status_code, 200, added.text)
         self.shot_id = added.json()["shot"]["shot_id"]
-        self.project_root = Path(added.json()["project_path"])
+        self.document_path = Path(added.json()["project_path"])
+        self.project_root = self.document_path.parent
+        self.data_root = self.project_root / ".storyboarder" / "data"
 
     def tearDown(self) -> None:
         self._tmp.cleanup()
@@ -69,7 +71,7 @@ class TestGenerationRequests(unittest.TestCase):
             request["prompt"]["compiled_prompt"],
         )
         self.assertNotIn("Action: A detective enters the archive", request["prompt"]["compiled_prompt"])
-        request_path = self.project_root / "generation" / "requests" / f"{request['request_id']}.json"
+        request_path = self.data_root / "generation" / "requests" / f"{request['request_id']}.json"
         self.assertTrue(request_path.is_file())
         shot = next(item for item in body["project"]["shots"] if item["shot_id"] == self.shot_id)
         self.assertEqual(shot["generation_state"]["execution_status"], "queued")
@@ -126,8 +128,8 @@ class TestGenerationRequests(unittest.TestCase):
             [item["request_id"] for item in deleted.json()["requests"]],
             [second["request_id"]],
         )
-        request_manifest = self.project_root / "generation" / "requests" / f"{first['request_id']}.json"
-        state_manifest = self.project_root / "generation" / "state" / f"{first['request_id']}.json"
+        request_manifest = self.data_root / "generation" / "requests" / f"{first['request_id']}.json"
+        state_manifest = self.data_root / "generation" / "state" / f"{first['request_id']}.json"
         self.assertFalse(request_manifest.exists())
         self.assertFalse(state_manifest.exists())
         listed_after_delete = self.client.get("/api/generation/requests")
@@ -259,7 +261,7 @@ class TestGenerationRequests(unittest.TestCase):
 
         source = self.base / "returned.png"
         Image.new("RGB", (32, 18), (10, 20, 30)).save(source)
-        project = project_manager.open_project(self.project_root / "project.json")
+        project = project_manager.open_project(self.document_path)
         generation_service.submit_result(project, request_id, [str(source)])
 
         after_result = self.client.get("/api/generation/requests").json()["requests"]
@@ -359,7 +361,7 @@ class TestGenerationRequests(unittest.TestCase):
         project_payload = self.client.get("/api/project").json()
         changed_shot = next(item for item in project_payload["shots"] if item["shot_id"] == self.shot_id)
         self.assertEqual(changed_shot["generation_state"]["freshness_status"], "stale")
-        project = project_manager.open_project(self.project_root / "project.json")
+        project = project_manager.open_project(self.document_path)
         fetched = generation_service.get_request(project, request["request_id"])
         self.assertEqual(fetched["keyword_assets"], request["keyword_assets"])
 
@@ -471,7 +473,11 @@ class TestGenerationRequests(unittest.TestCase):
         self.assertIsNone(request["scene_bible"])
         self.assertEqual(request["scene_context"]["location"], "Basement level B2")
         self.assertEqual(request["references"][0]["role"], "scene-environment")
-        self.assertTrue(request["references"][0]["project_relative_path"].endswith("/preview.png"))
+        perspective_id = scene["perspectives"][0]["id"]
+        self.assertEqual(
+            request["references"][0]["project_relative_path"],
+            f"Images/Scene2D/{perspective_id}_preview.png",
+        )
         compiled = request["prompt"]["compiled_prompt"]
         self.assertIn("Location: Basement level B2", compiled)
         self.assertIn("Time of day: Midnight", compiled)
@@ -536,17 +542,17 @@ class TestGenerationRequests(unittest.TestCase):
         ))
         self.assertEqual(response.status_code, 400)
         self.assertEqual(response.json()["code"], "GENERATION_REQUEST_FAILED")
-        request_dir = self.project_root / "generation" / "requests"
+        request_dir = self.data_root / "generation" / "requests"
         self.assertFalse(request_dir.exists() and any(request_dir.iterdir()))
 
     def test_generation_request_defaults_provider_to_codex(self) -> None:
-        project = project_manager.open_project(self.project_root / "project.json")
+        project = project_manager.open_project(self.document_path)
         shot = project.shots[0]
         snapshot = generation_service.build_request_snapshot(project, shot, "queue")
         self.assertEqual(snapshot["provider"], "codex")
 
     def test_generation_request_records_explicit_provider(self) -> None:
-        project = project_manager.open_project(self.project_root / "project.json")
+        project = project_manager.open_project(self.document_path)
         shot = project.shots[0]
         snapshot = generation_service.build_request_snapshot(
             project,
@@ -560,11 +566,11 @@ class TestGenerationRequests(unittest.TestCase):
         self.assertTrue(snapshot["execution_constraints"]["forbid_alternative_image_generators"])
 
     def test_invalid_provider_is_rejected_without_writing_request(self) -> None:
-        project = project_manager.open_project(self.project_root / "project.json")
+        project = project_manager.open_project(self.document_path)
         shot = project.shots[0]
         with self.assertRaises(ValueError):
             generation_service.create_request(project, shot, "codex", provider="midjourney")
-        request_dir = self.project_root / "generation" / "requests"
+        request_dir = self.data_root / "generation" / "requests"
         self.assertFalse(any(request_dir.glob("*.json")))
 
     def test_send_to_codex_with_stable_diffusion_provider_requests_sd_operation(self) -> None:
@@ -598,7 +604,7 @@ class TestGenerationRequests(unittest.TestCase):
         ))
         self.assertEqual(response.status_code, 400)
         self.assertEqual(response.json()["code"], "GENERATION_REQUEST_FAILED")
-        request_dir = self.project_root / "generation" / "requests"
+        request_dir = self.data_root / "generation" / "requests"
         self.assertFalse(request_dir.exists() and any(request_dir.iterdir()))
 
     def test_generation_mode_defaults_to_draft_for_draft_status(self) -> None:
@@ -641,7 +647,7 @@ class TestGenerationRequests(unittest.TestCase):
         ))
         self.assertEqual(response.status_code, 400)
         self.assertEqual(response.json()["code"], "GENERATION_REQUEST_FAILED")
-        request_dir = self.project_root / "generation" / "requests"
+        request_dir = self.data_root / "generation" / "requests"
         self.assertFalse(request_dir.exists() and any(request_dir.iterdir()))
 
     def test_stable_diffusion_handoff_prompt_names_the_mode(self) -> None:
@@ -662,7 +668,7 @@ class TestGenerationRequests(unittest.TestCase):
         ).json()["request"]
         source = self.base / "prior-frame.png"
         Image.new("RGB", (32, 18), (5, 10, 15)).save(source)
-        project = project_manager.open_project(self.project_root / "project.json")
+        project = project_manager.open_project(self.document_path)
         result = generation_service.submit_result(project, queued["request_id"], [str(source)])
         accepted = _quiet(lambda: self.client.post(
             f"/api/shots/{self.shot_id}/codex-layer/accept",
@@ -724,7 +730,7 @@ class TestGenerationRequests(unittest.TestCase):
 
         source = self.base / "modified.png"
         Image.new("RGB", (32, 18), (10, 20, 30)).save(source)
-        project = project_manager.open_project(self.project_root / "project.json")
+        project = project_manager.open_project(self.document_path)
         generation_service.submit_result(project, request_id, [str(source)])
 
         rows = self.client.get("/api/generation/requests").json()["requests"]
@@ -736,11 +742,11 @@ class TestGenerationRequests(unittest.TestCase):
             json={"destination": "codex"},
         )
         request_id = queued.json()["request"]["request_id"]
-        request_path = self.project_root / "generation" / "requests" / f"{request_id}.json"
+        request_path = self.data_root / "generation" / "requests" / f"{request_id}.json"
         original_snapshot = request_path.read_bytes()
         source = self.base / "candidate.png"
         Image.new("RGB", (32, 18), (10, 20, 30)).save(source)
-        project = project_manager.open_project(self.project_root / "project.json")
+        project = project_manager.open_project(self.document_path)
         result = generation_service.submit_result(project, request_id, [str(source)], summary="First pass")
 
         reconciled = _quiet(lambda: self.client.post("/api/generation/reconcile"))
@@ -763,7 +769,7 @@ class TestGenerationRequests(unittest.TestCase):
             json={"destination": "codex"},
         )
         request_id = queued.json()["request"]["request_id"]
-        project = project_manager.open_project(self.project_root / "project.json")
+        project = project_manager.open_project(self.document_path)
         self.assertEqual(generation_service.result_inbox_revision(project), 0)
 
         source = self.base / "signal-candidate.png"
@@ -778,21 +784,21 @@ class TestGenerationRequests(unittest.TestCase):
             json={"destination": "codex"},
         )
         request_id = queued.json()["request"]["request_id"]
-        codex_process_project = project_manager.open_project(self.project_root / "project.json")
+        codex_process_project = project_manager.open_project(self.document_path)
         source = self.base / "restart-candidate.png"
         Image.new("RGB", (32, 18), (40, 80, 120)).save(source)
         generation_service.submit_result(codex_process_project, request_id, [str(source)])
 
-        restarted_project = project_manager.open_project(self.project_root / "project.json")
+        restarted_project = project_manager.open_project(self.document_path)
         recovered = generation_service.pull_results(restarted_project)
 
         self.assertEqual(recovered["accepted_request_ids"], [request_id])
         self.assertTrue(
-            (self.project_root / "shots" / self.shot_id / f"{self.shot_id}_codex.png").is_file(),
+            (self.project_root / "Images" / "Shots" / f"{self.shot_id}_codex.png").is_file(),
         )
 
     def test_desktop_watcher_imports_the_codex_signal_without_a_ui_pull(self) -> None:
-        watcher_root = self.base / "watcher-project"
+        watcher_root = self.base / "watcher-project.sbd"
         with TestClient(api_module.create_app(self.base), raise_server_exceptions=False) as watcher_client:
             created = watcher_client.post("/api/project/new", json={"path": str(watcher_root)})
             self.assertEqual(created.status_code, 200, created.text)
@@ -830,7 +836,7 @@ class TestGenerationRequests(unittest.TestCase):
         request_id = queued.json()["request"]["request_id"]
         source = self.base / "automatic-candidate.png"
         Image.new("RGB", (32, 18), (10, 80, 180)).save(source)
-        project = project_manager.open_project(self.project_root / "project.json")
+        project = project_manager.open_project(self.document_path)
         result = generation_service.submit_result(project, request_id, [str(source)])
 
         pulled = _quiet(lambda: self.client.post("/api/generation/pull"))
@@ -863,7 +869,7 @@ class TestGenerationRequests(unittest.TestCase):
         request_id = queued.json()["request"]["request_id"]
         source = self.base / "codex-candidate.png"
         Image.new("RGB", (32, 18), (10, 80, 180)).save(source)
-        project = project_manager.open_project(self.project_root / "project.json")
+        project = project_manager.open_project(self.document_path)
         result = generation_service.submit_result(project, request_id, [str(source)])
         artifact_path = result["artifacts"][0]["project_relative_path"]
 
@@ -881,10 +887,10 @@ class TestGenerationRequests(unittest.TestCase):
         self.assertEqual(shot["generation_state"]["review_status"], "accepted")
         self.assertEqual(shot["generation_state"]["approved_output_id"], result["result_id"])
         self.assertEqual(preview.read_bytes(), original_preview)
-        codex_path = self.project_root / "shots" / self.shot_id / f"{self.shot_id}_codex.png"
+        codex_path = self.project_root / "Images" / "Shots" / f"{self.shot_id}_codex.png"
         self.assertTrue(codex_path.is_file())
         exported_dir = export_utils.export_image_sequence(
-            project_manager.open_project(self.project_root / "project.json"),
+            project_manager.open_project(self.document_path),
             self.project_root / "exports" / "layer-test",
         )
         with Image.open(exported_dir / "board_0001.png") as composite:

@@ -15,7 +15,7 @@ export function mergeComicResponse(current: ProjectPayload, incoming: ProjectPay
   const freshShots = new Map(incoming.shots.map(shot => [shot.shot_id, shot]))
   return { ...current, comic_document: incoming.comic_document,
     settings: { ...current.settings, comic_document: incoming.comic_document },
-    storage_revision: incoming.storage_revision, dirty: incoming.dirty,
+    storage_revision: incoming.storage_revision,
     shots: current.shots.map(shot => {
       const fresh = freshShots.get(shot.shot_id)
       return fresh ? { ...shot, generation_state: { ...shot.generation_state,

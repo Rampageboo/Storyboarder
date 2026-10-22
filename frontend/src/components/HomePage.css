@@ -251,15 +251,6 @@
   color: var(--text-2);
 }
 
-.home-card-kind {
-  flex-shrink: 0;
-  font: 500 10px var(--font-mono);
-  color: var(--text-3);
-  border: 1px solid var(--line-2);
-  border-radius: var(--radius-xs);
-  padding: 0 4px;
-}
-
 .home-card-meta {
   font-size: 12px;
   font-weight: 400;

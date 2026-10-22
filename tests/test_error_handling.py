@@ -90,7 +90,7 @@ class TestNoRawTracebackInResponse(unittest.TestCase):
         self.assertNotIn("  File ", detail)
 
     def test_export_failure_no_traceback_in_detail(self) -> None:
-        _quiet(lambda: self._client.post("/api/project/new", json={"path": self._tmp}))
+        _quiet(lambda: self._client.post("/api/project/new", json={"path": str(Path(self._tmp) / "Demo.sbd")}))
 
         def _raise(*args, **kwargs) -> None:
             raise RuntimeError("intentional export error for test")
@@ -107,7 +107,7 @@ class TestNoRawTracebackInResponse(unittest.TestCase):
         self.assertIn("intentional export error for test", detail)
 
     def test_unexpected_backend_error_returns_internal_error(self) -> None:
-        _quiet(lambda: self._client.post("/api/project/new", json={"path": self._tmp}))
+        _quiet(lambda: self._client.post("/api/project/new", json={"path": str(Path(self._tmp) / "Demo.sbd")}))
 
         with patch(
             "storyboard_tool.project_manager.open_blender_scene",
@@ -135,7 +135,7 @@ class TestSettingsUpdateEdgeCases(unittest.TestCase):
         shutil.rmtree(self._tmp, ignore_errors=True)
 
     def test_ref_segment_video_null_clears_without_500(self) -> None:
-        created = _quiet(lambda: self._client.post("/api/project/new", json={"path": self._tmp}))
+        created = _quiet(lambda: self._client.post("/api/project/new", json={"path": str(Path(self._tmp) / "Demo.sbd")}))
         self.assertEqual(created.status_code, 200)
 
         response = _quiet(
@@ -167,7 +167,7 @@ class TestBackendExceptionLogging(unittest.TestCase):
         return [r for r in self._handler.records if r.levelno >= logging.ERROR]
 
     def test_save_project_failure_is_logged(self) -> None:
-        _quiet(lambda: self._client.post("/api/project/new", json={"path": self._tmp}))
+        _quiet(lambda: self._client.post("/api/project/new", json={"path": str(Path(self._tmp) / "Demo.sbd")}))
         self._handler.records.clear()
 
         with patch("storyboard_tool.project_manager.save_project", side_effect=OSError("disk full")):
@@ -186,7 +186,7 @@ class TestBackendExceptionLogging(unittest.TestCase):
         self.assertTrue(self._error_records(), "Expected at least one ERROR log when project open fails")
 
     def test_blender_open_failure_is_logged(self) -> None:
-        _quiet(lambda: self._client.post("/api/project/new", json={"path": self._tmp}))
+        _quiet(lambda: self._client.post("/api/project/new", json={"path": str(Path(self._tmp) / "Demo.sbd")}))
         self._handler.records.clear()
 
         with patch(
@@ -198,7 +198,7 @@ class TestBackendExceptionLogging(unittest.TestCase):
         self.assertTrue(self._error_records(), "Expected at least one ERROR log for Blender failure")
 
     def test_export_failure_is_logged(self) -> None:
-        _quiet(lambda: self._client.post("/api/project/new", json={"path": self._tmp}))
+        _quiet(lambda: self._client.post("/api/project/new", json={"path": str(Path(self._tmp) / "Demo.sbd")}))
         self._handler.records.clear()
 
         with patch(

@@ -150,7 +150,7 @@ class CacheStartupIntegrationTests(unittest.TestCase):
             app = api_module.create_app(Path(tmp))
             client = TestClient(app, raise_server_exceptions=False)
             with contextlib.redirect_stderr(io.StringIO()):
-                resp = client.post("/api/project/new", json={"path": tmp})
+                resp = client.post("/api/project/new", json={"path": str(Path(tmp) / "Demo.sbd")})
             self.assertEqual(resp.status_code, 200)
             shots = resp.json()["shots"]
             # Initial shots have no preview — has_artwork_preview must be False

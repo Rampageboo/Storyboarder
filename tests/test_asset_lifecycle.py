@@ -6,6 +6,7 @@ import tempfile
 from pathlib import Path
 
 import pytest
+from conftest import make_project
 
 from storyboard_tool import project_manager, reference_segments, shot_service
 from storyboard_tool.export_utils import missing_files
@@ -13,7 +14,7 @@ from storyboard_tool.image_utils import board_background_filename
 
 
 def _make_project(tmp_path: Path):
-    return project_manager.create_project(tmp_path)
+    return make_project(tmp_path)
 
 
 def _make_png_bytes(width: int = 4, height: int = 4) -> bytes:
@@ -36,8 +37,16 @@ class TestCreateProject:
     def test_creates_expected_subdirectories(self):
         project = _make_project(self._tmp)
         root = project.root_path
-        for dirname in ("shots", "references", "exports", "backups", "scene3d", "scenes2d", "scenes3d"):
+        assert root == self._tmp / "Demo"
+        for dirname in ("Images", "PSD", "Blender", "Exports", "Videos", ".storyboarder/data"):
             assert (root / dirname).is_dir(), f"expected {dirname}/ directory"
+        assert project.scenes2d_dir.is_dir()
+        assert project.scenes3d_dir.is_dir()
+
+    def test_creates_project_handle(self):
+        project = _make_project(self._tmp)
+        assert project.document_path == self._tmp / "Demo" / "Demo.sbd"
+        assert project.document_path.is_file()
 
     def test_creates_project_json(self):
         project = _make_project(self._tmp)
@@ -75,9 +84,9 @@ class TestAddShot:
         project = _make_project(self._tmp)
         shot = project_manager.add_shot(project)
 
-        shot_dir = project_manager.get_shot_dir(project, shot)
         assert shot.source_file_path == ""
-        assert not (shot_dir / f"{shot.shot_id}.psd").exists()
+        assert not project_manager.resolve_shot_asset(project, shot.shot_id, "source_psd").exists()
+        assert not (project.root_path / "PSD" / "Shots" / f"{shot.shot_id}.psd").exists()
 
     def test_after_index_inserts_at_correct_position(self):
         project = _make_project(self._tmp)
@@ -179,7 +188,7 @@ class TestImportProjectReferenceStream:
         )
         dest = project.root_path / entry["path"]
         assert dest.is_file()
-        assert dest.is_relative_to(project.root_path / "references")
+        assert dest.is_relative_to(project.references_dir)
 
     def test_returns_entry_with_id_title_type_path(self):
         project = _make_project(self._tmp)
@@ -312,7 +321,7 @@ class TestMissingFiles:
         project = _make_project(self._tmp)
         shot = project_manager.add_shot(project)
         # Manually inject a stale source_file_path
-        shot.source_file_path = "shots/nonexistent/nonexistent.psd"
+        shot.source_file_path = "PSD/Shots/nonexistent.psd"
         found = missing_files(project)
         assert any(
             m["shot_id"] == shot.shot_id and m["field"] == "source_file_path" for m in found

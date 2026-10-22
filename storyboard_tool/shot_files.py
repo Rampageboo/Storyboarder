@@ -19,7 +19,7 @@ from .project_layout import resolve_project_path, resolve_shot_asset
 
 
 def get_shot_dir(project: Project, shot: Shot) -> Path:
-    """Return the canonical shot-assets parent (shared in Layout 2)."""
+    """Return the canonical shot-assets parent (shared by all shots)."""
     return resolve_shot_asset(project, shot.shot_id, "preview").parent
 
 

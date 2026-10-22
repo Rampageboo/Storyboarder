@@ -25,6 +25,8 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+from conftest import make_project
+
 from storyboard_tool import project_manager, reference_segments
 from storyboard_tool.image_utils import board_background_filename
 from storyboard_tool.models import Project, Shot
@@ -58,7 +60,7 @@ ART_PNG = _make_png_with_alpha()  # has alpha → not a solid fill → is artwor
 
 
 def _make_project(tmp_dir: str) -> Project:
-    return project_manager.create_project(Path(tmp_dir))
+    return make_project(Path(tmp_dir))
 
 
 def _write_artist_preview(project: Project, shot: Shot, data: bytes = ART_PNG) -> Path:
@@ -73,7 +75,7 @@ def _write_artist_preview(project: Project, shot: Shot, data: bytes = ART_PNG) -
 
 def _make_ref_image(project: Project, name: str = "ref.png") -> tuple[str, Path]:
     """Create a reference image in the project references dir; return (rel_path, abs_path)."""
-    ref_dir = project.root_path / "references"
+    ref_dir = project.references_dir
     ref_dir.mkdir(parents=True, exist_ok=True)
     ref_path = ref_dir / name
     ref_path.write_bytes(MINI_PNG)
@@ -160,7 +162,7 @@ class TestImageReferenceApply(unittest.TestCase):
     def test_source_file_path_not_changed(self) -> None:
         project = _make_project(self._tmp)
         shot = project_manager.add_shot(project)
-        shot.source_file_path = "shots/fake/fake.psd"
+        shot.source_file_path = "PSD/Shots/fake.psd"
         ref_rel, _ = _make_ref_image(project)
         _add_image_segment(project, shot, ref_rel)
 
@@ -168,7 +170,7 @@ class TestImageReferenceApply(unittest.TestCase):
 
         self.assertEqual(
             shot.source_file_path,
-            "shots/fake/fake.psd",
+            "PSD/Shots/fake.psd",
             "source_file_path must not be changed by reference apply",
         )
 
@@ -192,8 +194,7 @@ class TestImageReferenceApply(unittest.TestCase):
 
         reference_segments.apply_ref_segment_image_to_boards(project, 0, 0, segment_id="seg_test")
 
-        shot_dir = project_manager.get_shot_dir(project, shot)
-        thumb = shot_dir / f"{shot.shot_id}_thumb.png"
+        thumb = project_manager.resolve_shot_asset(project, shot.shot_id, "thumbnail")
         self.assertTrue(thumb.is_file(), "thumbnail must be created after apply")
 
     def test_display_paths_not_set_to_background_when_no_artwork(self) -> None:
@@ -267,7 +268,7 @@ class TestApplyReferenceFrameToShot(unittest.TestCase):
         shutil.rmtree(self._tmp, ignore_errors=True)
 
     def _apply(self, project: Project, shot: Shot, ref_bytes: bytes = MINI_PNG) -> Path:
-        ref_path = project.root_path / "references" / "frame.png"
+        ref_path = project.references_dir / "frame.png"
         ref_path.parent.mkdir(parents=True, exist_ok=True)
         ref_path.write_bytes(ref_bytes)
         return project_manager._apply_reference_frame_to_shot(project, shot, ref_path, "fit")
@@ -543,7 +544,8 @@ class TestDeleteRefSegment(unittest.TestCase):
         shot_dir = project_manager.get_shot_dir(project, shot)
         preview_path = _write_artist_preview(project, shot)
         original_bytes = preview_path.read_bytes()
-        fake_psd = shot_dir / f"{shot.shot_id}.psd"
+        fake_psd = project_manager.resolve_shot_asset(project, shot.shot_id, "source_psd")
+        fake_psd.parent.mkdir(parents=True, exist_ok=True)
         fake_psd.write_bytes(b"PSD")  # minimal marker, not a real PSD
         shot.source_file_path = fake_psd.relative_to(project.root_path).as_posix()
 
@@ -583,7 +585,7 @@ class TestDeleteRefSegment(unittest.TestCase):
 
         # Remove the auto-created PSD so this shot is truly PSD-less (simulates an
         # imported-image board or a shot created under the old reference-bake model).
-        (shot_dir / f"{shot.shot_id}.psd").unlink(missing_ok=True)
+        project_manager.resolve_shot_asset(project, shot.shot_id, "source_psd").unlink(missing_ok=True)
         shot.source_file_path = ""
 
         shot.camera_data = {"ref_segment_id": "seg_legacy", "ref_source_type": "image"}
@@ -620,7 +622,7 @@ class TestDeleteRefSegment(unittest.TestCase):
         shot_dir = project_manager.get_shot_dir(project, shot)
 
         # Remove the auto-created PSD so this shot is PSD-less (e.g. imported artwork).
-        (shot_dir / f"{shot.shot_id}.psd").unlink(missing_ok=True)
+        project_manager.resolve_shot_asset(project, shot.shot_id, "source_psd").unlink(missing_ok=True)
         shot.source_file_path = ""
 
         # No provenance → not legacy baked → preview should be preserved

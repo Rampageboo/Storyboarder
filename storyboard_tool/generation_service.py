@@ -24,7 +24,6 @@ from PIL import Image
 from . import shot_assets
 from .models import Project, Shot
 from .project_layout import (
-    LAYOUT_2,
     ProjectPathError,
     generation_metadata_path,
     project_relative_posix,
@@ -164,9 +163,7 @@ def _state_dir(project: Project) -> Path:
 
 
 def _candidates_dir(project: Project) -> Path:
-    if project.layout == LAYOUT_2:
-        return resolve_project_child(project, "Images", "Generated")
-    return resolve_project_child(project, "generation", "candidates")
+    return resolve_project_child(project, "Images", "Generated")
 
 
 def _validate_id(value: str, label: str) -> str:
@@ -887,11 +884,6 @@ def submit_result(
         raise ValueError(f"Provide between 1 and {MAX_ARTIFACTS} image artifacts.")
 
     result_id = _new_id("out")
-    candidate_dir = (
-        resolve_project_child(project, "generation", "candidates", request_id, result_id)
-        if project.layout != LAYOUT_2
-        else None
-    )
     artifacts: list[dict[str, Any]] = []
     created_targets: list[Path] = []
     try:
@@ -927,8 +919,6 @@ def submit_result(
     except BaseException:
         for target in created_targets:
             target.unlink(missing_ok=True)
-        if candidate_dir is not None:
-            shutil.rmtree(candidate_dir, ignore_errors=True)
         raise
     if bool(request.get("clear_queue_on_result", True)):
         clear_pending_queue_requests(project, str(request.get("shot_id") or ""))
@@ -1043,19 +1033,11 @@ def accept_candidate_as_codex_layer(
     if artifact is None:
         raise ValueError("Generation artifact not found in this result.")
     source = resolve_project_relative_path(project, cleaned_path)
-    if project.layout == LAYOUT_2:
-        output_id = _validate_id(str(artifact.get("output_id") or ""), "output id")
-        expected = resolve_generation_asset(
-            project, request_id, output_id, source.suffix.lower(), index=1
-        )
-        valid_location = source == expected
-    else:
-        candidate_root = resolve_project_child(
-            project, "generation", "candidates",
-            _validate_id(request_id, "request id"), result_id,
-        )
-        valid_location = candidate_root in source.parents
-    if not valid_location:
+    output_id = _validate_id(str(artifact.get("output_id") or ""), "output id")
+    expected = resolve_generation_asset(
+        project, request_id, output_id, source.suffix.lower(), index=1
+    )
+    if source != expected:
         raise ValueError("Generation artifact is outside its candidate folder.")
     destination = shot_assets.save_codex_layer_from_path(project, shot, source)
     now = _utc_now()

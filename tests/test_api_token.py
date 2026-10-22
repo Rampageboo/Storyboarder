@@ -51,13 +51,13 @@ def test_cors_only_reflects_localhost(monkeypatch, origin, allowed):
 def test_no_token_configured_leaves_api_open(monkeypatch):
     app, client, tmp = _app(monkeypatch, token=None)
     assert app.state.api_token == ""
-    resp = client.post("/api/project/new", json={"path": tmp})
+    resp = client.post("/api/project/new", json={"path": str(Path(tmp) / "Demo.sbd")})
     assert resp.status_code == 200
 
 
 def test_mutation_without_token_is_rejected(monkeypatch):
     _app_obj, client, tmp = _app(monkeypatch, token=_TOKEN)
-    resp = client.post("/api/project/new", json={"path": tmp})
+    resp = client.post("/api/project/new", json={"path": str(Path(tmp) / "Demo.sbd")})
     assert resp.status_code == 403
     assert resp.json().get("code") == "UNAUTHORIZED"
 
@@ -65,7 +65,7 @@ def test_mutation_without_token_is_rejected(monkeypatch):
 def test_mutation_with_wrong_token_is_rejected(monkeypatch):
     _app_obj, client, tmp = _app(monkeypatch, token=_TOKEN)
     resp = client.post(
-        "/api/project/new", json={"path": tmp}, headers={"X-Storyboarder-Token": "wrong"}
+        "/api/project/new", json={"path": str(Path(tmp) / "Demo.sbd")}, headers={"X-Storyboarder-Token": "wrong"}
     )
     assert resp.status_code == 403
 
@@ -73,7 +73,7 @@ def test_mutation_with_wrong_token_is_rejected(monkeypatch):
 def test_mutation_with_correct_token_succeeds(monkeypatch):
     _app_obj, client, tmp = _app(monkeypatch, token=_TOKEN)
     resp = client.post(
-        "/api/project/new", json={"path": tmp}, headers={"X-Storyboarder-Token": _TOKEN}
+        "/api/project/new", json={"path": str(Path(tmp) / "Demo.sbd")}, headers={"X-Storyboarder-Token": _TOKEN}
     )
     assert resp.status_code == 200
 
@@ -88,7 +88,7 @@ def test_get_requests_do_not_require_token(monkeypatch):
 def test_cross_origin_post_without_token_does_not_mutate(monkeypatch):
     app, client, tmp = _app(monkeypatch, token=_TOKEN)
     # Open a project (authenticated) and record the shot count.
-    client.post("/api/project/new", json={"path": tmp}, headers={"X-Storyboarder-Token": _TOKEN})
+    client.post("/api/project/new", json={"path": str(Path(tmp) / "Demo.sbd")}, headers={"X-Storyboarder-Token": _TOKEN})
     before = len(app.state.project.shots)
     # Simulate a hostile cross-origin page firing a preflight-exempt POST with no token.
     resp = client.post("/api/shots", headers={"Origin": "https://evil.example.com"})

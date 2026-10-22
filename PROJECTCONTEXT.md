@@ -12,7 +12,7 @@ Last updated: 2026-07-30
 Last verified branch: codex/local-updates-20260730
 Last verified commit: 29a07ac (implementation baseline; this context update is the next commit)
 Updated by: Codex (Owner-delegated; reconciled Codex Ultra + ChatGPT Pro architecture reviews)
-Context confidence: current for the Layout 2 decision and execution plan; historical working-state snapshots below remain reference-only
+Context confidence: storage facts current as of 2026-10-22 (single project format); the Layout 2 plan in §2 and the working-state snapshots below are historical, reference-only
 
 Git execution environments:
 - Windows 11 / Codex desktop | local shell | mode: codex-git | Last verified: 2026-07-30
@@ -27,8 +27,8 @@ Storyboarder is a **Windows desktop-only** storyboard planning app:
 - **Frontend**: React 19 + TypeScript, built with Vite from `frontend/src/` into `storyboard_tool/web/dist/`. The prebuilt bundle is **committed** (required for Node-less `pip install` + `python main.py`). It had briefly been gitignored; re-tracked 2026-07-22 (commit f48c99c). Rebuild with `cd frontend && npm run build` after editing `frontend/src/**`.
 - **3D**: Three.js (pinned vendor copy) + a separately compiled Scene3D workspace bundle
 - **Photoshop integration**: a UXP plugin in `photoshop_uxp_plugin/` talks to `/api/plugin/*` and `/api/bridge/*`
-- **Storage (current implementation)**: `.sbd` documents expand to a temporary working tree and are packed back into one archive. No database, no cloud, no network features.
-- **Storage (decided target, implementation pending)**: Layout 2 is a portable project folder containing a metadata-only `MyProject.sbd` plus external `Images/`, `PSD/`, `Blender/`, `Exports/`, and `.storyboarder/`. It avoids one directory per shot. The complete gated execution plan is in §2.
+- **Storage (2026-10-22)**: one format. A project is a folder: `MyProject.sbd` (small JSON handle with the project id), `Images/`, `PSD/`, `Blender/`, `Videos/`, `Exports/`, and `.storyboarder/data/` (the only copy of the metadata) plus `.storyboarder/{backups,cache,media,transactions}/`. Every accepted mutation is written in place before the request returns; nothing is extracted to `%TEMP%` or re-zipped. Older projects (Layout 1 `.sbd`, Layout 1 folders, Layout 2 zip handles) are not supported and fail to open. No database, no cloud, no network features. Plan and deviations: `docs/plans/2026-10-22-single-project-format.md`.
+- **Storage history**: Layout 1 (`.sbd` expanded to a temporary working tree and re-packed) and Layout 2 (folder plus a metadata-only zip `.sbd`) were both removed on 2026-10-22.
 
 Non-goals (do not add): browser mode, hosted server, cloud sync, audio, multi-window.
 
@@ -49,8 +49,13 @@ Current build/test status: full suite 726 passed, 1 skipped, 0 failed (the 2 pre
 
 ### Layout 2 storage migration — final execution decision (2026-07-30)
 
+> **SUPERSEDED (2026-10-22)** by `docs/plans/2026-10-22-single-project-format.md`.
+> Layout 2 shipped, then Layout 1 and Layout 2 were both replaced by one folder
+> format with a JSON handle `.sbd` and no backward compatibility. Kept below as
+> history only; do not execute these slices.
+
 ```text
-STATUS: DECIDED, NOT IMPLEMENTED, FEATURE-GATED.
+STATUS (historical): DECIDED, NOT IMPLEMENTED, FEATURE-GATED.
 
 Implementation baseline:
 - Branch: codex/local-updates-20260730
@@ -352,7 +357,7 @@ Workflow meaning:
 - `backend=codex`: Codex directly handles image generation.
 - `backend=stable_diffusion`: Codex MUST prepare prompt/reference/size/seed settings and operate Stable Diffusion to generate the image. The selected backend is an execution constraint, not a preference; prior conversation context must not override it and OpenAI imagegen/DALL-E/other generators are forbidden for that request.
 Status/detail strategy: generation precision should follow shot/status/mode. Draft should favor speed with proportional downscale, low resolution, possible upscale back to panel size, and rough/line-art storyboard output. Cleaner/final statuses can increase resolution, steps, refinement, and polish.
-Next fork: complete Layout 2 Slices 0–10 sequentially from the final execution decision in §2. Keep Layout 2 disabled through Slice 9 and preserve one commit plus one passing gate per slice.
+Next fork (SUPERSEDED 2026-10-22, see §2 note): complete Layout 2 Slices 0–10 sequentially from the final execution decision in §2.
 Owner input needed: no for the above semantics; yes only for later SD-specific runtime/configuration choices.
 
 Progress (2026-07-21):
@@ -362,10 +367,10 @@ Progress (2026-07-21):
 - DONE: `mode` field (draft/clean/final) + per-mode `generation_plan` block. Owner spec 2026-07-21. Default mode derives from shot.status (Draft->draft, In Progress/Review->clean, Approved/Final->final); explicit `mode` overrides. Chosen default profile numbers (tunable, in generation_service._MODE_PROFILES): draft = longest-edge 768, steps 12, cfg 5.0, upscale_to_panel, overwrite_final False; clean = longest-edge 1024, steps 22, cfg 6.5, use_prior_frame_as_reference; final = full panel size, steps 32, cfg 7.0, overwrite_final True. generation_plan carries target_width/height, panel_width/height, steps, cfg_scale, style_hint, use_prior_frame_as_reference, output_policy{preserve_aspect_ratio, upscale_to_panel, overwrite_final}. These are ADVISORY payload guidance — no engine executes them yet.
 - Field mapping (Owner payload -> existing snapshot): target->destination, backend->provider; new: mode, generation_plan, generation_plan.output_policy. Existing snake_case field names NOT renamed.
 - DONE: generation_plan.prior_frame — for clean/final (use_prior_frame_as_reference), the request now carries the shot's accepted Codex layer (_codex.png) as {source, project_relative_path, absolute_path, exists}; null in draft or when no layer exists. SD handoff prompt says to use prior_frame as the img2img base. Advisory: the actual img2img/upscale/overwrite-final execution is still Codex/SD-operator side, not built here.
-- PERF: `.sbd` save = full re-zip of the whole working root on EVERY autosave (add-board etc.) via project_document.pack_document → cost scales with project size ("long wait"). Measured: 48 MB incompressible artwork = 1244 ms at DEFLATE-6. Fix shipped: STORE already-compressed imports (png/jpg/mp4…) + DEFLATE level 1 for the rest (PSD canvases stay compressible → ~1 MB not 91 MB). ~2x faster, negligible size change, backward compatible. STRUCTURAL FIX SHIPPED (Owner-approved 2026-07-23): interactive `_autosave` now writes metadata to the working tree but DEFERS the .sbd pack (`save_project(flush_document=False)`); Add board dropped 200-1200 ms → ~8 ms. The pack now runs on periodic autosave (frontend useAutosave hook, interval `autosave_interval_minutes` setting = 3/5/10, default 5), manual save (Ctrl+S / menu, already existed), and save-on-close (shutdown_reference_cleanup save_if_dirty). Folder projects unchanged (metadata write is already durable; not left dirty). .sbd projects are left dirty after edits until a flush. `backups/` is now EXCLUDED from the .sbd pack (project_document._UNPACKED_DIRS) — it is a local, write-only recovery snapshot set the app never reads back, so embedding it only bloated the document and slowed saves; for .sbd it now lives only in the temp working tree (session-local).
+- PERF (historical; no longer applies since 2026-10-22, no pack/flush exists): `.sbd` save = full re-zip of the whole working root on EVERY autosave (add-board etc.) via project_document.pack_document → cost scales with project size ("long wait"). Measured: 48 MB incompressible artwork = 1244 ms at DEFLATE-6. Fix shipped: STORE already-compressed imports (png/jpg/mp4…) + DEFLATE level 1 for the rest (PSD canvases stay compressible → ~1 MB not 91 MB). ~2x faster, negligible size change, backward compatible. STRUCTURAL FIX SHIPPED (Owner-approved 2026-07-23): interactive `_autosave` now writes metadata to the working tree but DEFERS the .sbd pack (`save_project(flush_document=False)`); Add board dropped 200-1200 ms → ~8 ms. The pack now runs on periodic autosave (frontend useAutosave hook, interval `autosave_interval_minutes` setting = 3/5/10, default 5), manual save (Ctrl+S / menu, already existed), and save-on-close (shutdown_reference_cleanup save_if_dirty). Folder projects unchanged (metadata write is already durable; not left dirty). .sbd projects are left dirty after edits until a flush. `backups/` is now EXCLUDED from the .sbd pack (project_document._UNPACKED_DIRS) — it is a local, write-only recovery snapshot set the app never reads back, so embedding it only bloated the document and slowed saves; for .sbd it now lives only in the temp working tree (session-local).
 - DONE: dispatch does not immediately clear staged queue entries. The send popup records `clear_queue_on_result`; only successful result submission clears the matching staged queue entry when that option is enabled. If disabled, the queue remains available after results return.
 - DONE (UI, revised per Owner): Queue offers Current, Queued, and All send scopes through a shared popup. The popup selects Codex or Stable Diffusion, controls clear-after-result, and exposes Modify only as a disabled/coming-soon placeholder. Precision follows shot Status; frontend sends no explicit mode. Layers and Queue are separate floating islands. The far-right More rail auto-hides at the edge; Shot Inspector remains visible. PENDING: Owner GUI click-test.
-- NEXT FORK: complete §2 Slices 0–10 sequentially. The architecture review is complete; the execution task may continue autonomously after each passing gate, while Layout 2 remains disabled through Slice 9.
+- NEXT FORK (SUPERSEDED 2026-10-22): complete §2 Slices 0–10 sequentially.
 - Validation for the latest generation-backend constraint change: 42 focused tests passed. The broader staged feature set previously passed 803 tests with 1 skipped and 33 subtests; frontend TypeScript/Vite build passed. Lint remains at the known baseline (9 errors, 2 warnings). Owner GUI click-test remains pending.
 ```
 
@@ -383,8 +388,8 @@ Progress (2026-07-21):
 | `storyboard_tool/generation_service.py` | Immutable generation requests, queue status, Codex result deposits/reconciliation |
 | `storyboard_tool/mcp_server.py` | Local STDIO MCP tools for Codex generation handoffs |
 | `storyboard_tool/project_transaction.py` | `mutate_project()` — in-memory snapshot/rollback for mutating operations |
-| `storyboard_tool/app_state.py` | Transport-agnostic project/app-state helpers (`_require_project`, `_autosave`, bridge payloads) |
-| `storyboard_tool/recents.py` | Home-screen recent documents: describes a `.sbd` (name, boards, first-board thumbnail) without extracting it |
+| `storyboard_tool/app_state.py` | Transport-agnostic project/app-state helpers (`_require_project`, `persist_project_mutation`, bridge payloads) |
+| `storyboard_tool/recents.py` | Home-screen recent projects: reads `.storyboarder/data/shots.json` and the first board image next to the `.sbd` handle, without opening the project |
 | `storyboard_tool/live_bridge.py`, `psd_recovery.py`, `image_utils.py`, `export_service.py` | Photoshop bridge, PSD rebuild, media, exports |
 | `frontend/src/` | React/TS source. State: `state/ProjectContext.tsx` (project payload) + `state/LiveBridgeContext.tsx` (bridge polling) |
 | `frontend/src/scene3d/` | 3D workspace TS source; `workspace/` compiles to a separate runtime bundle |
@@ -437,11 +442,11 @@ There is no CI; all validation is local. Python 3.11+, deps in `requirements.txt
 
 7. **Deletion semantics**: `delete_shot` removes only the metadata record; shot files stay on disk (undo depends on this). Do not "clean up" shot folders.
 
-8. **A `.sbd` save is a full re-zip, and there is no incremental path.** The Owner's real document is 46.9 MB packed (139.6 MB expanded: 93.3 MB PSD + 45.6 MB PNG), so every flush rewrites the whole file. Two consequences: (a) never move a flush somewhere the user cannot see it finish; (b) their documents live in `C:\Users\JieYin\OneDrive\...`, so each flush also makes OneDrive re-upload the entire file and `pack_document`'s staging `.tmp` (written in the document's own folder) gets synced too. Not fixed — Owner said OneDrive is not the concern; revisit only if asked.
+8. **No longer applies (2026-10-22).** The `.sbd` is now a small JSON handle and metadata is written file by file, so there is no re-zip and OneDrive syncs per file. Historical note: **A `.sbd` save was a full re-zip, and there was no incremental path.** The Owner's real document is 46.9 MB packed (139.6 MB expanded: 93.3 MB PSD + 45.6 MB PNG), so every flush rewrites the whole file. Two consequences: (a) never move a flush somewhere the user cannot see it finish; (b) their documents live in `C:\Users\JieYin\OneDrive\...`, so each flush also makes OneDrive re-upload the entire file and `pack_document`'s staging `.tmp` (written in the document's own folder) gets synced too. Not fixed — Owner said OneDrive is not the concern; revisit only if asked.
 
 9. **Adding an export type or option means touching four layers**: `api.py` route → `service_exports.py` `method_export_*` → `export_service.py` → the exporter. A method missed in the middle layer only fails when the route is called; `tests/test_export_service.py::TestExportScopeIsWiredEverywhere` pins the whole set (added after `method_export_image_sequence` was in fact missed).
 
-10. **Anything that deletes a work tree must stop the background loops first.** Every open `.sbd` expands into `%TEMP%/storyboarder-*`, and `bridge_refresh_loop` writes `storyboard_live_bridge.json` into the project root every 1.5 s. Deleting the tree while that loop runs makes Windows leave a delete-pending ghost directory that nothing — not `rmtree`, not `icacls`, not Explorer — can reopen or remove; only a reboot clears it. That is where the ~35 empty `storyboarder-*` husks on the Owner's machine came from. `app_state.stop_background_loops(app)` now runs before every cleanup path (desktop `_finalize`, api lifespan). Work trees carry a `.storyboarder-session.json` marker (pid + document path, excluded from the pack) so `project_document.sweep_orphaned_working_roots()` can reclaim crashed sessions' trees at startup — conservatively: never a live owner's tree, and never one holding writes newer than its document, since that is a crashed session's only copy of unsaved work. `tests/conftest.py` reclaims what the suite creates (session-scoped on purpose: scanning TEMP per test cost the suite ~40 s).
+10. **No longer applies (2026-10-22).** Projects open in place; nothing is expanded into `%TEMP%`, there are no work trees or session markers, and no bridge file is written into the project folder. `app_state.stop_background_loops(app)` still runs before shutdown cleanup. Historical note: **Anything that deleted a work tree had to stop the background loops first.** Every open `.sbd` expands into `%TEMP%/storyboarder-*`, and `bridge_refresh_loop` writes `storyboard_live_bridge.json` into the project root every 1.5 s. Deleting the tree while that loop runs makes Windows leave a delete-pending ghost directory that nothing — not `rmtree`, not `icacls`, not Explorer — can reopen or remove; only a reboot clears it. That is where the ~35 empty `storyboarder-*` husks on the Owner's machine came from. `app_state.stop_background_loops(app)` now runs before every cleanup path (desktop `_finalize`, api lifespan). Work trees carry a `.storyboarder-session.json` marker (pid + document path, excluded from the pack) so `project_document.sweep_orphaned_working_roots()` can reclaim crashed sessions' trees at startup — conservatively: never a live owner's tree, and never one holding writes newer than its document, since that is a crashed session's only copy of unsaved work. `tests/conftest.py` reclaims what the suite creates (session-scoped on purpose: scanning TEMP per test cost the suite ~40 s).
 
 ## 6. Workflow notes
 
