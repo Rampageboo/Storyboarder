@@ -36,6 +36,7 @@ from .plugin_service import PluginBridgeService
 from .service_agent import AgentServiceMixin
 from .service_exports import ExportServiceMixin
 from .service_video import VideoServiceMixin
+from .service_images import ImageJobServiceMixin
 from .service_scene2d import Scene2DServiceMixin
 from .service_scene3d import Scene3DServiceMixin
 # Retain historical helper imports for bridge callers.
@@ -217,6 +218,7 @@ def _normalize_annotations(items: Any) -> list[dict[str, Any]]:
 
 class StoryboardBackendService(
     Scene2DServiceMixin, Scene3DServiceMixin, ExportServiceMixin, VideoServiceMixin, AgentServiceMixin,
+    ImageJobServiceMixin,
 ):
     """Business logic shared by every REST route and the desktop bridge."""
 

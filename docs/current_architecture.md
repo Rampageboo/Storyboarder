@@ -33,6 +33,7 @@
 21. [Scene and Character Prompt Bibles](#21-scene-and-character-prompt-bibles)
 22. [Comfy Cloud Video Takes](#22-comfy-cloud-video-takes)
 23. [Agent Views: Grid, Outline, Sequence](#23-agent-views-grid-outline-sequence)
+24. [Comfy Cloud Image Jobs](#24-comfy-cloud-image-jobs)
 
 ---
 
@@ -1067,3 +1068,23 @@ Changing linked Scene facts marks generated shots in that scene stale. A second 
 - **`GET /api/project/grid.png?route_id=&columns=&max_edge=`** — PNG contact sheet: each cell is the board composite (or a grey "No image" placeholder) with a `#NN` badge, a duration badge and the title. Columns default to about √n (2–6); the long edge is at most `max_edge` (default 1600, 256–4096).
 - **`GET /api/project/outline?route_id=`** — project name and canvas, all routes, and per board: number, ids, text fields, notes, non-empty shot design, prompt config, the compiled video prompt, `has_image`, `latest_video_take` and `latest_image_job` (filled from `comfy_images.list_jobs` once that module exists, otherwise `null`).
 - **`POST /api/project/sequence/render {route_id?, shot_ids?, takes?}`** — concatenates each board's chosen succeeded take (default: the newest) or, without one, the board still held for its duration. One ffmpeg pass scales/pads every source to the first take's size (else the canvas aspect at 832 long edge), 16 fps, H.264, and writes `Exports/sequence_<timestamp>.mp4` atomically. Like the other exports it is not a project mutation: the take choice and stills are snapshotted under `PROJECT_LOCK`, the encode runs outside it.
+
+---
+
+## 24. Comfy Cloud Image Jobs
+
+Boards get images from Comfy Cloud through `storyboard_tool/comfy_images.py` (service: `service_images.ImageJobServiceMixin`). It shares the key, status and template validation of §22 but has its own runner, so video takes are unaffected.
+
+- **Templates** (`assets/comfy_workflows/`, validated by `comfy_cloud.check_connection()`):
+  - No references → `z_image_turbo_t2i_api.json`: Z-Image Turbo, 8 steps, 1280 px long edge at the canvas aspect.
+  - 1–3 references → `qwen_image_edit_2511_api.json`: Qwen-Image-Edit 2511 + Lightning 4-step LoRA, 1024 px long edge. Unused reference slots are pruned from the graph.
+  - `negative_prompt` is recorded but has little or no effect (zeroed conditioning for t2i; cfg 1 for edit).
+- **References:** a board id (that board's current preview) or a `settings.reference_links` image id.
+- **Records:** `.storyboarder/data/generation/image/img_<16hex>.json`.
+  - Statuses go `queued → uploading → running → downloading → succeeded | failed`.
+  - The Comfy job id is `cloud_job_id`; `list_jobs()` resumes active jobs after a restart.
+  - Outputs land in `Images/Generated/<job_id>_<n>.png` and are candidates until applied.
+  - Records are read and written under a module lock, because Windows refuses an atomic replace while a poll is reading the file.
+- **Apply:** goes through `project_manager.import_image_for_shot` (the same path as a user import), then `persist_project_mutation`. With `apply: true` the worker applies output 0 when the job succeeds.
+- **Routes:** `POST/GET /api/shots/{id}/image-jobs`, `GET /api/image-jobs`, `GET /api/image-jobs/{job_id}/outputs/{index}`, `POST /api/image-jobs/{job_id}/apply {index}`, `DELETE /api/image-jobs/{job_id}`.
+- **Prompting note:** Z-Image takes the word "storyboard" literally and draws a contact sheet; describe the frame, not the medium.

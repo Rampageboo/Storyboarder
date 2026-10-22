@@ -171,7 +171,9 @@ def _http_error(response: httpx.Response) -> ComfyCloudError:
 
 
 def check_connection() -> dict[str, Any]:
-    """Authenticate and check the video template against the cloud's nodes and models."""
+    """Authenticate and check the video and image templates against the cloud's nodes and models."""
+    from . import comfy_images
+
     key = _require_key()
     try:
         response = httpx.get(f"{CLOUD_BASE_URL}/api/object_info", headers={"X-API-Key": key}, timeout=60.0)
@@ -181,13 +183,14 @@ def check_connection() -> dict[str, Any]:
         raise _http_error(response)
     object_info = response.json()
     report: dict[str, list[str]] = {"missing_nodes": [], "missing_models": [], "invalid_values": []}
-    for graph in (load_template(), _flf_graph(load_template())):
+    for graph in (load_template(), _flf_graph(load_template()), *comfy_images.validation_graphs()):
         for key, values in validate_template(graph, object_info).items():
             report[key].extend(value for value in values if value not in report[key])
     return {
         "ok": not any(report.values()),
         "template": TEMPLATE_NAME,
-        "node_count": len(response.json()),
+        "image_templates": [comfy_images.T2I_TEMPLATE_NAME, comfy_images.EDIT_TEMPLATE_NAME],
+        "node_count": len(object_info),
         **report,
     }
 

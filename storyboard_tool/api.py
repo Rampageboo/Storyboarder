@@ -44,6 +44,8 @@ from .schemas import (
     GenerationRequestCreateRequest,
     SequenceRenderRequest,
     VideoTakeCreateRequest,
+    ImageJobApplyRequest,
+    ImageJobCreateRequest,
     ImportImagePathRequest,
     LiveBridgeUpdateRequest,
     OpenProjectRequest,
@@ -1016,6 +1018,30 @@ def create_app(base_dir: Path, bridge_port: int = 8000) -> FastAPI:
     @app.get("/api/video-takes/{take_id}/video")
     def video_take_file(take_id: str) -> FileResponse:
         return _file_response_from_meta(_svc().method_video_take_file(take_id))
+
+    @app.get("/api/shots/{shot_id}/image-jobs")
+    def list_shot_image_jobs(shot_id: str) -> dict[str, Any]:
+        return _svc().method_list_image_jobs(shot_id)
+
+    @app.post("/api/shots/{shot_id}/image-jobs")
+    def create_image_job(shot_id: str, request: ImageJobCreateRequest) -> dict[str, Any]:
+        return _svc().method_create_image_job(shot_id, request.model_dump())
+
+    @app.get("/api/image-jobs")
+    def list_image_jobs() -> dict[str, Any]:
+        return _svc().method_list_image_jobs()
+
+    @app.get("/api/image-jobs/{job_id}/outputs/{index}")
+    def image_job_output(job_id: str, index: int) -> FileResponse:
+        return _file_response_from_meta(_svc().method_image_job_output_file(job_id, index))
+
+    @app.post("/api/image-jobs/{job_id}/apply")
+    def apply_image_job(job_id: str, request: ImageJobApplyRequest | None = None) -> dict[str, Any]:
+        return _svc().method_apply_image_job(job_id, request.index if request else 0)
+
+    @app.delete("/api/image-jobs/{job_id}")
+    def delete_image_job(job_id: str) -> dict[str, Any]:
+        return _svc().method_delete_image_job(job_id)
 
     @app.post("/api/shots/{shot_id}/generation-requests")
     def create_generation_request(shot_id: str, request: GenerationRequestCreateRequest) -> dict[str, Any]:
