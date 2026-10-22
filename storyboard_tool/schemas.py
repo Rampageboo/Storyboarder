@@ -161,6 +161,7 @@ class VideoTakeCreateRequest(BaseModel):
     prompt: str = Field(default="", max_length=8000)
     negative_prompt: str = Field(default="", max_length=4000)
     seconds: float | None = Field(default=None, ge=0.5, le=10)
+    end_shot_id: str = Field(default="", max_length=96)
 
 
 class GenerationRequestCreateRequest(BaseModel):

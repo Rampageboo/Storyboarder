@@ -52,6 +52,8 @@ class VideoServiceMixin:
     def method_create_video_take(self, shot_id: str, data: dict[str, Any]) -> dict[str, Any]:
         project = app_state._require_project(self.app)
         shot = app_state._find_shot(project, shot_id)
+        end_shot_id = str(data.get("end_shot_id") or "").strip()
+        end_shot = app_state._find_shot(project, end_shot_id) if end_shot_id else None
         try:
             take = comfy_cloud.create_take(
                 self.app,
@@ -60,6 +62,7 @@ class VideoServiceMixin:
                 prompt=str(data.get("prompt") or ""),
                 negative=str(data.get("negative_prompt") or ""),
                 seconds=float(data.get("seconds") or shot.duration_seconds or 3.0),
+                end_shot=end_shot,
             )
         except comfy_cloud.ComfyCloudError as exc:
             raise _user_error(exc) from exc

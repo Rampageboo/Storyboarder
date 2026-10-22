@@ -47,10 +47,12 @@ KEYRING_SERVICE = "Storyboarder Comfy Cloud"
 KEYRING_USER = "api_key"
 TEMPLATE_PATH = Path(__file__).resolve().parent / "assets" / "comfy_workflows" / "wan22_i2v_api.json"
 TEMPLATE_NAME = "Wan 2.2 image-to-video (14B, 4-step)"
+FLF_TEMPLATE_NAME = "Wan 2.2 first + last frame (14B, 4-step)"
 # Node ids inside the template that Storyboarder fills in.
 NODE_POSITIVE, NODE_NEGATIVE, NODE_IMAGE, NODE_I2V = "8", "9", "11", "12"
 NODE_SAMPLERS = ("13", "14")
 NODE_OUTPUT = "17"
+NODE_END_IMAGE = "18"  # added only when the take ends on a chosen frame
 FPS = 16
 MAX_EDGE = 832
 MIN_SECONDS, MAX_SECONDS = 1.0, 5.0
@@ -178,7 +180,11 @@ def check_connection() -> dict[str, Any]:
         raise ComfyCloudError(f"Could not reach Comfy Cloud: {type(exc).__name__}.") from exc
     if response.status_code != 200:
         raise _http_error(response)
-    report = validate_template(load_template(), response.json())
+    object_info = response.json()
+    report: dict[str, list[str]] = {"missing_nodes": [], "missing_models": [], "invalid_values": []}
+    for graph in (load_template(), _flf_graph(load_template())):
+        for key, values in validate_template(graph, object_info).items():
+            report[key].extend(value for value in values if value not in report[key])
     return {
         "ok": not any(report.values()),
         "template": TEMPLATE_NAME,
@@ -261,9 +267,21 @@ def board_frame_path(project: Project, shot: Shot) -> Path:
     raise ComfyCloudError("This board has no image yet. Draw it or upload one before generating video.")
 
 
-def create_take(app: Any, project: Project, shot: Shot, *, prompt: str, negative: str, seconds: float) -> dict[str, Any]:
+def create_take(
+    app: Any,
+    project: Project,
+    shot: Shot,
+    *,
+    prompt: str,
+    negative: str,
+    seconds: float,
+    end_shot: Shot | None = None,
+) -> dict[str, Any]:
     _require_key()
     frame = board_frame_path(project, shot)
+    if end_shot is not None and end_shot.shot_id == shot.shot_id:
+        raise ComfyCloudError("Pick a different board as the end frame.")
+    end_frame = board_frame_path(project, end_shot) if end_shot is not None else None
     width, height = frame_size(project.settings.get("canvas_width"), project.settings.get("canvas_height"))
     prompt = str(prompt or "").strip() or compile_video_prompt(shot)
     if not prompt:
@@ -274,7 +292,8 @@ def create_take(app: Any, project: Project, shot: Shot, *, prompt: str, negative
         "take_id": take_id,
         "shot_id": shot.shot_id,
         "provider": "comfy-cloud",
-        "template": TEMPLATE_NAME,
+        "template": FLF_TEMPLATE_NAME if end_frame else TEMPLATE_NAME,
+        "mode": "flf" if end_frame else "i2v",
         "status": "queued",
         "prompt": prompt,
         "negative_prompt": str(negative or "").strip() or DEFAULT_NEGATIVE,
@@ -285,6 +304,8 @@ def create_take(app: Any, project: Project, shot: Shot, *, prompt: str, negative
         "height": height,
         "seed": random.randint(0, 2**48),
         "source_frame": str(frame),
+        "end_shot_id": end_shot.shot_id if end_shot is not None else "",
+        "end_frame": str(end_frame) if end_frame else "",
         "job_id": "",
         "video_path": "",
         "error": "",
@@ -347,8 +368,19 @@ def _start(app: Any, project: Project, take_id: str) -> None:
     threading.Thread(target=_run, args=(app, project, take_id), name=f"comfy-take-{take_id}", daemon=True).start()
 
 
+def _flf_graph(graph: dict[str, Any]) -> dict[str, Any]:
+    """Switch the template to first + last frame: same models, an extra end image."""
+    graph = copy.deepcopy(graph)
+    graph[NODE_I2V]["class_type"] = "WanFirstLastFrameToVideo"
+    graph[NODE_I2V]["inputs"]["end_image"] = [NODE_END_IMAGE, 0]
+    graph[NODE_END_IMAGE] = {"class_type": "LoadImage", "_meta": {"title": "End frame"}, "inputs": {"image": ""}}
+    return graph
+
+
 def _build_workflow(record: dict[str, Any]) -> dict[str, Any]:
     graph = copy.deepcopy(load_template())
+    if record.get("end_frame"):
+        graph = _flf_graph(graph)
     graph[NODE_POSITIVE]["inputs"]["text"] = record["prompt"]
     graph[NODE_NEGATIVE]["inputs"]["text"] = record["negative_prompt"]
     graph[NODE_I2V]["inputs"].update(width=record["width"], height=record["height"], length=record["frames"])
@@ -370,6 +402,8 @@ def _run(app: Any, project: Project, take_id: str) -> None:
                 _write(project, record)
                 workflow = client.workflows.from_json(_build_workflow(record))
                 workflow.set_input(NODE_IMAGE, "image", client.assets.from_file(record["source_frame"]))
+                if record.get("end_frame"):
+                    workflow.set_input(NODE_END_IMAGE, "image", client.assets.from_file(record["end_frame"]))
                 job = client.submit(workflow)
                 record.update(status="running", job_id=job.id)
                 _write(project, record)

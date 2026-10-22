@@ -9,7 +9,9 @@ import {
   VIDEO_TAKE_ACTIVE,
   type VideoTake,
 } from '../api'
+import { useProject } from '../state/useProject'
 import type { Shot } from '../types'
+import { shotDisplayLabel } from '../utils/shotDisplay'
 
 const STATUS_LABEL: Record<string, string> = {
   queued: 'Queued',
@@ -37,6 +39,19 @@ export function VideoTakes({ shot, onError }: { shot: Shot; onError: (error: unk
   const [configured, setConfigured] = useState(true)
   const [submitting, setSubmitting] = useState(false)
   const [message, setMessage] = useState('')
+  const [endShotId, setEndShotId] = useState('')
+  const { activeRouteShots, project } = useProject()
+  const route = activeRouteShots.length ? activeRouteShots : project?.shots ?? []
+  const routeIndex = route.findIndex((item) => item.shot_id === shot.shot_id)
+  const nextShot = routeIndex >= 0 ? route[routeIndex + 1] : undefined
+  const hasImage = (item: Shot) => Boolean(item.preview_image_path || item.image_path)
+  const endChoices = route.filter((item) => item.shot_id !== shot.shot_id && hasImage(item))
+  const endShot = endChoices.find((item) => item.shot_id === endShotId)
+  const boardLabel = (item: Shot) => `${String(route.indexOf(item) + 1).padStart(2, '0')} · ${shotDisplayLabel(item)}`
+  const labelFor = (id: string) => {
+    const item = route.find((candidate) => candidate.shot_id === id) ?? project?.shots.find((candidate) => candidate.shot_id === id)
+    return item ? boardLabel(item) : 'another board'
+  }
 
   const refresh = useCallback(async () => {
     const result = await listVideoTakes(shot.shot_id)
@@ -75,7 +90,7 @@ export function VideoTakes({ shot, onError }: { shot: Shot; onError: (error: unk
     setSubmitting(true)
     setMessage('')
     try {
-      await createVideoTake(shot.shot_id, { prompt, negative_prompt: negative, seconds })
+      await createVideoTake(shot.shot_id, { prompt, negative_prompt: negative, seconds, end_shot_id: endShot?.shot_id ?? '' })
       await refresh()
     } catch (error) {
       setMessage(error instanceof Error ? error.message : String(error))
@@ -108,6 +123,27 @@ export function VideoTakes({ shot, onError }: { shot: Shot; onError: (error: unk
         <summary>Negative prompt</summary>
         <textarea rows={2} value={negative} onChange={(event) => setNegative(event.target.value)} aria-label="Negative prompt" />
       </details>
+      <div className="field">
+        <span className="field-label">End frame</span>
+        <div className="video-end-row">
+          <select value={endShot ? endShot.shot_id : ''} onChange={(event) => setEndShotId(event.target.value)} aria-label="End frame">
+            <option value="">None — free motion from this board</option>
+            {endChoices.map((item) => (
+              <option key={item.shot_id} value={item.shot_id}>
+                {boardLabel(item)}{item === nextShot ? '  (next board)' : ''}
+              </option>
+            ))}
+          </select>
+          {endShot ? (
+            <img className="video-end-thumb" alt="" src={`/api/shots/${encodeURIComponent(endShot.shot_id)}/image?t=${encodeURIComponent(String(endShot.preview_disk_mtime ?? ''))}`} />
+          ) : null}
+        </div>
+        <span className="inspector-intro">
+          {endShot
+            ? 'The video starts on this board and arrives exactly on the chosen board. Use it for continuous moves, not for cuts.'
+            : nextShot && !hasImage(nextShot) ? 'The next board has no image yet, so it cannot be an end frame.' : 'Optional: end on another board to connect a continuous move.'}
+        </span>
+      </div>
       <div className="video-takes-row">
         <label className="field">
           <span className="field-label">Length</span>
@@ -138,7 +174,7 @@ export function VideoTakes({ shot, onError }: { shot: Shot; onError: (error: unk
               </div>
             )}
             <div className="video-take-meta">
-              <span>{take.seconds}s · {take.width}×{take.height}{elapsed(take) ? ` · ${elapsed(take)}` : ''}</span>
+              <span>{take.seconds}s · {take.width}×{take.height}{take.end_shot_id ? ` · → ${labelFor(take.end_shot_id)}` : ''}{elapsed(take) ? ` · ${elapsed(take)}` : ''}</span>
               {!VIDEO_TAKE_ACTIVE.has(take.status) ? (
                 <button type="button" className="ghost icon-btn" aria-label="Delete take" title="Delete take" onClick={() => void remove(take)}>
                   <Trash size={14} />

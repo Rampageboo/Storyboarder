@@ -467,3 +467,31 @@
   -webkit-box-orient: vertical;
   overflow: hidden;
 }
+
+.video-end-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.video-end-row select {
+  flex: 1;
+  min-width: 0;
+}
+
+.video-end-thumb {
+  width: 64px;
+  height: 36px;
+  flex-shrink: 0;
+  object-fit: cover;
+  border-radius: var(--radius-xs);
+  box-shadow: 0 0 0 1px var(--line-2);
+  background: var(--paper);
+}
+
+.video-take-meta > span {
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}

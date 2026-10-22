@@ -248,3 +248,52 @@ def test_template_file_is_valid_api_format() -> None:
         for value in node["inputs"].values():
             if isinstance(value, list):
                 assert value[0] in template, f"node {node_id} links to missing node {value[0]}"
+
+
+def test_first_last_frame_take_switches_node_and_uploads_end_frame(tmp_path: Path, cloud) -> None:
+    cloud["key"] = "comfyui-test-key"
+    client, first = _project_client(tmp_path)
+    second = client.post("/api/shots", json={}).json()["shot"]
+    _with_board_image(client, first["shot_id"], tmp_path)
+    _with_board_image(client, second["shot_id"], tmp_path)
+
+    created = client.post(
+        f"/api/shots/{first['shot_id']}/video-takes",
+        json={"prompt": "Walk from A to B", "seconds": 3, "end_shot_id": second["shot_id"]},
+    )
+    assert created.status_code == 200, created.text
+    take = _wait_for(client, first["shot_id"], "succeeded")
+
+    graph = _FakeComfy.submitted[0]
+    assert graph["12"]["class_type"] == "WanFirstLastFrameToVideo"
+    assert graph["12"]["inputs"]["start_image"] == ["11", 0]
+    assert graph["12"]["inputs"]["end_image"] == ["18", 0]
+    assert graph["18"]["class_type"] == "LoadImage"
+    assert graph["18"]["inputs"]["image"]["asset_for"].endswith(".png")
+    assert take["mode"] == "flf"
+    assert take["end_shot_id"] == second["shot_id"]
+
+
+def test_end_frame_must_be_another_board_with_an_image(tmp_path: Path, cloud) -> None:
+    cloud["key"] = "comfyui-test-key"
+    client, first = _project_client(tmp_path)
+    blank = client.post("/api/shots", json={}).json()["shot"]
+    _with_board_image(client, first["shot_id"], tmp_path)
+    url = f"/api/shots/{first['shot_id']}/video-takes"
+
+    same = client.post(url, json={"prompt": "x", "end_shot_id": first["shot_id"]})
+    no_image = client.post(url, json={"prompt": "x", "end_shot_id": blank["shot_id"]})
+    unknown = client.post(url, json={"prompt": "x", "end_shot_id": "missing"})
+
+    assert same.status_code == 400 and "different board" in same.json()["detail"]
+    assert no_image.status_code == 400 and "no image" in no_image.json()["detail"]
+    assert unknown.status_code == 404
+    assert _FakeComfy.submitted == []
+
+
+def test_plain_take_keeps_image_to_video_graph(tmp_path: Path, cloud) -> None:
+    graph = comfy_cloud._build_workflow({
+        "prompt": "p", "negative_prompt": "n", "width": 832, "height": 464, "frames": 49, "seed": 3, "end_frame": "",
+    })
+    assert graph["12"]["class_type"] == "WanImageToVideo"
+    assert "18" not in graph and "end_image" not in graph["12"]["inputs"]

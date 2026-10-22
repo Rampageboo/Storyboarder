@@ -18,6 +18,8 @@ export type VideoTake = {
   shot_id: string
   status: VideoTakeStatus
   template: string
+  mode?: 'i2v' | 'flf'
+  end_shot_id?: string
   prompt: string
   negative_prompt: string
   seconds: number
@@ -61,7 +63,7 @@ export function listVideoTakes(shotId: string): Promise<{ takes: VideoTake[] } &
 
 export function createVideoTake(
   shotId: string,
-  body: { prompt: string; negative_prompt: string; seconds: number },
+  body: { prompt: string; negative_prompt: string; seconds: number; end_shot_id?: string },
 ): Promise<{ take: VideoTake }> {
   return requestJson(`/api/shots/${encodeURIComponent(shotId)}/video-takes`, { method: 'POST', body })
 }
