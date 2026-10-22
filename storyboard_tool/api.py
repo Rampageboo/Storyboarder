@@ -11,7 +11,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI, File, Form, HTTPException, Request, Response, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, Query, Request, Response, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
@@ -42,6 +42,7 @@ from .schemas import (
     GenerationBatchDispatchRequest,
     ComfyCloudKeyRequest,
     GenerationRequestCreateRequest,
+    SequenceRenderRequest,
     VideoTakeCreateRequest,
     ImportImagePathRequest,
     LiveBridgeUpdateRequest,
@@ -994,6 +995,23 @@ def create_app(base_dir: Path, bridge_port: int = 8000) -> FastAPI:
     @app.delete("/api/video-takes/{take_id}")
     def delete_video_take(take_id: str) -> dict[str, Any]:
         return _svc().method_delete_video_take(take_id)
+
+    @app.get("/api/project/grid.png")
+    def project_grid(
+        route_id: str = "",
+        columns: int | None = Query(default=None, ge=1, le=12),
+        max_edge: int = Query(default=1600, ge=256, le=4096),
+    ) -> Response:
+        content = _svc().method_project_grid(route_id, columns, max_edge)
+        return Response(content, media_type="image/png", headers={"Cache-Control": "no-store"})
+
+    @app.get("/api/project/outline")
+    def project_outline(route_id: str = "") -> dict[str, Any]:
+        return _svc().method_project_outline(route_id)
+
+    @app.post("/api/project/sequence/render")
+    def render_sequence(request: SequenceRenderRequest) -> dict[str, Any]:
+        return _svc().method_render_sequence(request.model_dump())
 
     @app.get("/api/video-takes/{take_id}/video")
     def video_take_file(take_id: str) -> FileResponse:

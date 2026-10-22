@@ -33,6 +33,7 @@ from .image_utils import normalize_hex_color
 from .linked_sync import sync_project
 from .mutation_executor import MutationPolicy, project_mutation
 from .plugin_service import PluginBridgeService
+from .service_agent import AgentServiceMixin
 from .service_exports import ExportServiceMixin
 from .service_video import VideoServiceMixin
 from .service_scene2d import Scene2DServiceMixin
@@ -214,7 +215,9 @@ def _normalize_annotations(items: Any) -> list[dict[str, Any]]:
     return result
 
 
-class StoryboardBackendService(Scene2DServiceMixin, Scene3DServiceMixin, ExportServiceMixin, VideoServiceMixin):
+class StoryboardBackendService(
+    Scene2DServiceMixin, Scene3DServiceMixin, ExportServiceMixin, VideoServiceMixin, AgentServiceMixin,
+):
     """Business logic shared by every REST route and the desktop bridge."""
 
     def __init__(self, app: FastAPI) -> None:
