@@ -19,6 +19,7 @@ import urllib.parse
 import urllib.request
 import uuid
 from dataclasses import dataclass, field
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable
 
@@ -28,6 +29,7 @@ SUPPORTED_PROTOCOLS = ("2025-06-18", "2025-03-26", "2024-11-05")
 
 TOKEN_HEADER = "x-storyboarder-token"
 NOT_RUNNING = "Open Storyboarder with a project first."
+NO_PROJECT = "No project is open: start one with storyboard_new_project or open one with storyboard_open_project (storyboard_recent_projects lists recent ones)."
 GRID_MAX_EDGE = 1600
 BOARD_MAX_EDGE = 1280
 MAX_GENERATION_ARTIFACTS = 8
@@ -55,6 +57,10 @@ ROUTES: dict[str, tuple[str, str]] = {
     "shot_video_takes": ("GET", "/api/shots/{shot_id}/video-takes"),
     "render_sequence": ("POST", "/api/project/sequence/render"),
     "generation_requests": ("GET", "/api/generation/requests"),
+    "new_project": ("POST", "/api/project/new"),
+    "open_project": ("POST", "/api/project/open"),
+    "recents": ("GET", "/api/app/recents"),
+    "close_project": ("POST", "/api/app/close-project"),
     # Not in the backend yet (see docs/plans/2026-10-23-agent-mcp-and-cloud-images.md).
     "submit_generation_result": ("POST", "/api/generation/requests/{request_id}/results"),
 }
@@ -211,7 +217,7 @@ def _error_text(method: str, path: str, response: HttpResponse) -> str:
     if response.status in {404, 405} and detail in {"Not Found", "Method Not Allowed"}:
         detail += " (this Storyboarder version may not have this endpoint yet)"
     if detail == "No project opened.":
-        detail += f" {NOT_RUNNING}"
+        detail += f" {NO_PROJECT}"
     return f"{method} {path} failed with HTTP {response.status}: {detail}"
 
 
@@ -335,7 +341,7 @@ def tool_status(client: StoryboarderClient, args: dict[str, Any]) -> Any:
     except ToolError as exc:
         if "not reachable" in str(exc):
             return {"app_running": False, "project_open": False, "message": str(exc)}
-        status["message"] = str(exc)
+        status["message"] = NO_PROJECT if "No project opened" in str(exc) else str(exc)
     try:
         comfy = client.json("comfy_status")
         status["comfy_cloud_configured"] = bool(comfy.get("configured"))
@@ -343,6 +349,51 @@ def tool_status(client: StoryboarderClient, args: dict[str, Any]) -> Any:
         status["comfy_cloud_configured"] = None
         status.setdefault("message", str(exc))
     return status
+
+
+def _opened(project: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "name": project.get("name", ""),
+        "project_path": project.get("document_path") or project.get("project_json_path", ""),
+        "board_count": len(project.get("shots") or []),
+    }
+
+
+def tool_new_project(client: StoryboarderClient, args: dict[str, Any]) -> Any:
+    path = _require(args, "path")
+    project_type = str(args.get("project_type") or "video")
+    if project_type not in {"video", "comic"}:
+        raise ToolError("project_type must be 'video' or 'comic'.")
+    body: dict[str, Any] = {"path": path, "project_type": project_type}
+    for key in ("canvas_width", "canvas_height"):
+        if args.get(key) is not None:
+            body[key] = int(args[key])
+    return _opened(client.json("new_project", json_body=body))
+
+
+def tool_open_project(client: StoryboarderClient, args: dict[str, Any]) -> Any:
+    return _opened(client.json("open_project", json_body={"project_json_path": _require(args, "path")}))
+
+
+def tool_recent_projects(client: StoryboarderClient, args: dict[str, Any]) -> Any:
+    rows = client.json("recents").get("recents") or []
+    return {"recents": [
+        {
+            "name": row.get("name", ""),
+            "path": row.get("open_path") or row.get("path", ""),
+            "boards": int(row.get("shot_count") or 0),
+            "modified": (
+                datetime.fromtimestamp(float(row["modified_ms"]) / 1000.0).isoformat(timespec="seconds")
+                if row.get("modified_ms") else ""
+            ),
+            "exists": bool(row.get("exists")),
+        }
+        for row in rows
+    ]}
+
+
+def tool_close_project(client: StoryboarderClient, args: dict[str, Any]) -> Any:
+    return {"closed": bool(client.json("close_project").get("closed"))}
 
 
 def tool_outline(client: StoryboarderClient, args: dict[str, Any]) -> Any:
@@ -573,6 +624,23 @@ class Tool:
 TOOL_LIST: list[Tool] = [
     Tool("storyboard_status", "Is Storyboarder running, which project is open, how many boards, and is Comfy Cloud configured. Free.",
          _schema(), _READ, tool_status),
+    Tool("storyboard_new_project",
+         "Create a new project and open it in the user's Storyboarder window, replacing the project shown there (the current one is saved first). "
+         "path is the requested <parent>/<Name>.sbd; <parent> must exist; the app creates the folder <parent>/<Name>/ holding <Name>.sbd. Returns name, project_path and board_count. Free.",
+         _schema({
+             "path": {"type": "string", "description": "Requested document path, e.g. D:/Boards/MyFilm.sbd (creates D:/Boards/MyFilm/MyFilm.sbd)."},
+             "project_type": {"type": "string", "enum": ["video", "comic"], "default": "video"},
+             "canvas_width": {"type": "integer", "minimum": 1, "description": "Board canvas width in px (default 1920)."},
+             "canvas_height": {"type": "integer", "minimum": 1, "description": "Board canvas height in px (default 1080)."},
+         }, ["path"]), {**_WRITE, "idempotentHint": False}, tool_new_project),
+    Tool("storyboard_open_project",
+         "Open an existing project in the user's Storyboarder window, replacing the project shown there (the current one is saved first). Returns name, project_path and board_count. Free.",
+         _schema({"path": {"type": "string", "description": "A .sbd document or a project folder."}}, ["path"]),
+         _WRITE, tool_open_project),
+    Tool("storyboard_recent_projects", "Recently opened projects (name, path to pass to storyboard_open_project, board count, last modified, whether it still exists). Free.",
+         _schema(), _READ, tool_recent_projects),
+    Tool("storyboard_close_project", "Close the open project (saving it) and return the user's Storyboarder window to its Home screen. Free.",
+         _schema(), _WRITE, tool_close_project),
     Tool("storyboard_outline", "Project outline as JSON: per board in route order its id, number, title, description, dialogue, duration, prompt fields, has_image, latest image job and video take status. Free.",
          _schema({"route_id": _ROUTE_ID}), _READ, tool_outline),
     Tool("storyboard_grid", "Numbered contact-sheet image of the boards (long edge <= 1600 px) plus a text legend. Free.",
@@ -651,7 +719,8 @@ TOOLS_BY_NAME = {tool.name: tool for tool in TOOL_LIST}
 TOOLS: list[dict[str, Any]] = [tool.spec() for tool in TOOL_LIST]
 
 INSTRUCTIONS = (
-    "Storyboarder must be running with a project open; check with storyboard_status. "
+    "Storyboarder must be running; check with storyboard_status. If no project is open, start one with storyboard_new_project "
+    "or open one with storyboard_open_project (these switch the project shown in the user's app window). "
     "Read the board with storyboard_outline and storyboard_grid, edit boards with the add/update/delete/reorder tools, "
     "put your own images on boards with storyboard_set_board_image, generate images and video takes on Comfy Cloud "
     "(these spend the Owner's credits), poll jobs, and assemble a cut with storyboard_render_sequence. "

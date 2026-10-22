@@ -2,7 +2,7 @@
 
 `storyboard_tool/mcp_server.py` is a stdio MCP server that lets an agent use the **running** Storyboarder app. It is an HTTP client of the app's backend: it reads the live-bridge file (`%LOCALAPPDATA%\StoryboardTool\storyboard_live_bridge.json`) for the base URL and per-launch API token, then calls the same endpoints as the UI. Agent edits get the app's mutation transactions and undo, and appear live in the UI. It never opens project files itself.
 
-Start Storyboarder and open a project first. Otherwise every tool returns "Open Storyboarder with a project first", and `storyboard_status` reports `app_running: false`.
+Start Storyboarder first. Otherwise every tool returns "Open Storyboarder with a project first", and `storyboard_status` reports `app_running: false`. When the app is running with no project open, `storyboard_status` reports `project_open: false` and points to `storyboard_new_project` / `storyboard_open_project`; the project tools then switch the project shown in the user's app window.
 
 ## Registration
 
@@ -17,6 +17,10 @@ The tools that spend the Owner's Comfy Cloud credits are `storyboard_generate_im
 | Tool | Arguments | Effect |
 |---|---|---|
 | `storyboard_status` | none | Reports whether the app is running, whether a project is open, the project name, the board count, and whether Comfy Cloud is configured. |
+| `storyboard_new_project` | `path`, `project_type?` (`video` default, or `comic`), `canvas_width?`, `canvas_height?` | Creates a project and shows it in the app window, replacing the current one (saved first). `path` is the requested `<parent>/<Name>.sbd`; `<parent>` must exist, and the app creates `<parent>/<Name>/<Name>.sbd`. Returns `name`, `project_path`, `board_count`. |
+| `storyboard_open_project` | `path` (a `.sbd` or project folder) | Opens that project in the app window, replacing the current one (saved first). Returns `name`, `project_path`, `board_count`. |
+| `storyboard_recent_projects` | none | Lists recent projects: `name`, `path` (for `storyboard_open_project`), `boards`, `modified`, `exists`. |
+| `storyboard_close_project` | none | Saves and closes the open project; the app returns to Home. Returns `closed`. |
 | `storyboard_outline` | `route_id?` | Returns the project outline as JSON. |
 | `storyboard_grid` | `route_id?`, `columns?`, `max_edge?` (≤ 1600) | Returns a numbered contact-sheet image and a text legend. |
 | `storyboard_board_image` | `shot_id` | Returns one board's image (≤ 1280 px). |

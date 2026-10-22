@@ -111,11 +111,15 @@ def test_initialize_and_tool_catalog() -> None:
         "storyboard_generate_video", "storyboard_video_takes", "storyboard_render_sequence",
         "storyboard_list_generation_requests", "storyboard_get_generation_request",
         "storyboard_submit_generation_result",
+        "storyboard_new_project", "storyboard_open_project", "storyboard_recent_projects",
+        "storyboard_close_project",
     }
     for tool in tools:
         assert tool["inputSchema"]["type"] == "object" and tool["description"]
         if tool["name"] in {"storyboard_generate_image", "storyboard_generate_video"}:
             assert "Comfy Cloud credits" in tool["description"]
+        if tool["name"] in {"storyboard_new_project", "storyboard_open_project"}:
+            assert "user's Storyboarder window" in tool["description"]
     unknown = _rpc(client, "tools/call", {"name": "storyboard_nope", "arguments": {}})
     assert unknown["isError"] is True
 
@@ -154,6 +158,46 @@ def test_status_reports_project_and_comfy(backend) -> None:
         "board_count": 0,
         "comfy_cloud_configured": False,
     }
+
+
+def test_project_lifecycle_switches_the_app_project(backend, tmp_path) -> None:
+    _http, client = backend
+    (tmp_path / "work").mkdir()
+
+    created = _value(_call(client, "storyboard_new_project", path=str(tmp_path / "work" / "Film.sbd"),
+                           project_type="video", canvas_width=1280, canvas_height=720))
+    assert created["name"] == "Film" and created["board_count"] == 0
+    film_path = Path(created["project_path"])
+    assert film_path.is_file() and film_path == tmp_path / "work" / "Film" / "Film.sbd"
+    status = _value(_call(client, "storyboard_status"))
+    assert status["project_open"] is True and status["project_name"] == "Film"
+
+    _value(_call(client, "storyboard_add_board", title="Opening"))
+    assert _value(_call(client, "storyboard_status"))["board_count"] == 1
+
+    demo = _value(_call(client, "storyboard_open_project", path=str(tmp_path / "Demo")))
+    assert demo["name"] == "Demo" and demo["board_count"] == 0
+    assert _value(_call(client, "storyboard_status"))["project_name"] == "Demo"
+
+    recents = _value(_call(client, "storyboard_recent_projects"))["recents"]
+    by_name = {row["name"]: row for row in recents}
+    assert {"Film", "Demo"} <= set(by_name)
+    assert by_name["Film"]["boards"] == 1 and by_name["Film"]["exists"] is True
+    assert Path(by_name["Film"]["path"]) == film_path and by_name["Film"]["modified"]
+    assert "thumbnail" not in by_name["Film"]
+
+    reopened = _value(_call(client, "storyboard_open_project", path=by_name["Film"]["path"]))
+    assert reopened["name"] == "Film" and reopened["board_count"] == 1
+
+    assert _value(_call(client, "storyboard_close_project")) == {"closed": True}
+    status = _value(_call(client, "storyboard_status"))
+    assert status["project_open"] is False
+    assert "storyboard_new_project" in status["message"] and "storyboard_open_project" in status["message"]
+    assert "storyboard_open_project" in _error(_call(client, "storyboard_outline"))
+    assert _value(_call(client, "storyboard_close_project")) == {"closed": False}
+
+    assert "project_type" in _error(_call(client, "storyboard_new_project", path=str(tmp_path / "x.sbd"), project_type="film"))
+    assert "HTTP 400" in _error(_call(client, "storyboard_open_project", path=str(tmp_path / "missing.sbd")))
 
 
 def test_token_is_sent_and_a_wrong_token_surfaces_the_backend_detail(backend, bridge_file) -> None:
