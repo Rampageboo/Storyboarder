@@ -1,8 +1,8 @@
 """The MCP server is an HTTP client of the running app (plan 2026-10-23, decision 1).
 
 Existing endpoints are exercised against a real ``create_app`` backend through a
-TestClient-backed transport; endpoints still being built are checked for the HTTP
-request the server sends, through a recording transport.
+TestClient-backed transport; the rest are checked for the HTTP request the server
+sends, through a recording transport.
 """
 from __future__ import annotations
 
@@ -285,7 +285,100 @@ def test_generation_handoff_tools_work_over_http(backend) -> None:
     assert len(rows) == 1 and rows[0]["shot_id"] == board["shot_id"]
     fetched = _value(_call(client, "storyboard_get_generation_request", request_id=rows[0]["request_id"]))
     assert fetched["request_id"] == rows[0]["request_id"]
-    assert "not found" in _error(_call(client, "storyboard_get_generation_request", request_id="gen_missing"))
+    assert fetched["prompt"]["compiled_prompt"] == rows[0]["prompt"]["compiled_prompt"]
+    assert fetched["output_contract"]["kind"] == "storyboard-image" and fetched["results"] == []
+    missing = _error(_call(client, "storyboard_get_generation_request", request_id="gen_missing"))
+    assert "HTTP 404" in missing and "not found" in missing
+
+
+def _codex_request(http, client) -> tuple[str, str]:
+    board = _value(_call(client, "storyboard_add_board", description="Rain on the harbour"))["board"]
+    created = http.post(
+        f"/api/shots/{board['shot_id']}/generation-requests",
+        json={"destination": "codex"},
+        headers={"x-storyboarder-token": TOKEN},
+    )
+    assert created.status_code == 200, created.text
+    return board["shot_id"], _value(_call(client, "storyboard_list_generation_requests"))["requests"][0]["request_id"]
+
+
+def test_submit_generation_result_over_http_imports_the_candidate(backend, tmp_path) -> None:
+    http, client = backend
+    shot_id, request_id = _codex_request(http, client)
+    first = _png(tmp_path / "take one.png")
+    second = _png(tmp_path / "take two.jpg", color=(10, 200, 90))
+
+    submitted = _value(_call(client, "storyboard_submit_generation_result", request_id=request_id,
+                             artifact_paths=[str(first), str(second)], summary="two candidates"))
+
+    result = submitted["result"]
+    assert result["request_id"] == request_id and result["shot_id"] == shot_id
+    assert result["summary"] == "two candidates"
+    assert [item["media_type"] for item in result["artifacts"]] == ["png", "jpg"]
+    for artifact in result["artifacts"]:
+        stored = Path(artifact["absolute_path"])
+        assert stored.is_file() and artifact["project_relative_path"].startswith("Images/Generated/")
+    assert Path(result["artifacts"][0]["absolute_path"]).read_bytes() == first.read_bytes()
+    assert submitted["request"]["latest_result"]["result_id"] == result["result_id"]
+    fetched = _value(_call(client, "storyboard_get_generation_request", request_id=request_id))
+    assert [row["result_id"] for row in fetched["results"]] == [result["result_id"]]
+
+    # The result-inbox watcher's pull puts the candidate on the board for review.
+    pulled = http.post("/api/generation/pull", headers={"x-storyboarder-token": TOKEN})
+    assert pulled.status_code == 200 and request_id in pulled.json()["accepted_request_ids"]
+
+
+def test_submit_generation_result_validates_like_a_deposit(backend, tmp_path) -> None:
+    http, client = backend
+    _shot_id, request_id = _codex_request(http, client)
+    fake = tmp_path / "fake.png"
+    fake.write_bytes(b"not an image")
+    text = tmp_path / "notes.txt"
+    text.write_text("hello", encoding="utf-8")
+
+    assert "HTTP 400" in _error(_call(client, "storyboard_submit_generation_result",
+                                      request_id=request_id, artifact_paths=[str(fake)]))
+    assert "Unsupported artifact format" in _error(_call(client, "storyboard_submit_generation_result",
+                                                         request_id=request_id, artifact_paths=[str(text)]))
+    missing = _error(_call(client, "storyboard_submit_generation_result",
+                           request_id="gen_missing", artifact_paths=[str(_png(tmp_path / "a.png"))]))
+    assert "HTTP 404" in missing
+    # Nothing was deposited by the rejected uploads.
+    assert _value(_call(client, "storyboard_get_generation_request", request_id=request_id))["results"] == []
+
+    nine = [("files", (f"{index}.png", _png(tmp_path / f"{index}.png").read_bytes(), "image/png")) for index in range(9)]
+    too_many = http.post(f"/api/generation/requests/{request_id}/results", files=nine,
+                         headers={"x-storyboarder-token": TOKEN})
+    assert too_many.status_code == 400
+    none = http.post(f"/api/generation/requests/{request_id}/results", data={"summary": "x"},
+                     headers={"x-storyboarder-token": TOKEN})
+    assert none.status_code in {400, 422}
+
+    deleted = http.delete(f"/api/generation/requests/{request_id}", headers={"x-storyboarder-token": TOKEN})
+    assert deleted.status_code == 200, deleted.text
+    late = _error(_call(client, "storyboard_submit_generation_result",
+                        request_id=request_id, artifact_paths=[str(tmp_path / "a.png")]))
+    # Deleted requests are gone (or, if Windows held the file, cancelled): no late result either way.
+    assert "HTTP 404" in late or "no longer accepting" in late
+
+
+def test_mcp_call_prints_non_ascii_on_a_cp1252_console(tmp_path) -> None:
+    """scripts/mcp_call.py must not crash printing text a cp1252 console cannot encode."""
+    import os
+    import subprocess
+    import sys
+
+    root = Path(__file__).resolve().parents[1]
+    # A missing bridge under a non-ASCII folder: storyboard_status echoes the path back.
+    bridge = tmp_path / "Bühne 分镜" / "bridge.json"
+    env = {**os.environ, "PYTHONIOENCODING": "cp1252", "PYTHONUTF8": "0"}
+    completed = subprocess.run(
+        [sys.executable, str(root / "scripts" / "mcp_call.py"), "storyboard_status", "--bridge-file", str(bridge)],
+        cwd=root, env=env, capture_output=True, timeout=60, check=False,
+    )
+    assert completed.returncode == 0, completed.stderr.decode("utf-8", "replace")
+    text = completed.stdout.decode("utf-8")
+    assert '"app_running": false' in text and "Bühne 分镜" in text
 
 
 # ── endpoints being built in parallel: check the request shape ───────────────
@@ -371,10 +464,12 @@ def test_render_sequence_and_video_take_requests(recorder) -> None:
 
     rendered = _value(_call(client, "storyboard_render_sequence", route_id="main", takes={"s1": "vid_1"}))
     _value(_call(client, "storyboard_generate_video", shot_id="s1", seconds=3, end_shot_id="s2"))
+    _value(_call(client, "storyboard_render_sequence", trim_to_board=False))
 
-    render, video = rec.calls
+    render, video, untrimmed = rec.calls
     assert (render["method"], render["path"]) == ("POST", "/api/project/sequence/render")
-    assert json.loads(render["body"]) == {"route_id": "main", "takes": {"s1": "vid_1"}}
+    assert json.loads(render["body"]) == {"route_id": "main", "takes": {"s1": "vid_1"}, "trim_to_board": True}
+    assert json.loads(untrimmed["body"]) == {"trim_to_board": False}
     assert rendered["duration_seconds"] == 9.5
     assert (video["method"], video["path"]) == ("POST", "/api/shots/s1/video-takes")
     assert json.loads(video["body"]) == {"end_shot_id": "s2", "seconds": 3.0}

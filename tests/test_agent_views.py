@@ -221,17 +221,43 @@ def test_sequence_honours_chosen_take_and_validates_it(tmp_path: Path) -> None:
     _fake_take(client, ids[0], 1.0, created_at="2026-10-23T10:00:00Z")
     failed = _fake_take(client, ids[1], 1.0, status="failed")
 
-    chosen = client.post("/api/project/sequence/render", json={"takes": {ids[0]: older}})
+    # Untrimmed: the 2 s take plays in full on its 1 s board.
+    chosen = client.post("/api/project/sequence/render", json={"takes": {ids[0]: older}, "trim_to_board": False})
     bad_status = client.post("/api/project/sequence/render", json={"takes": {ids[1]: failed}})
     wrong_board = client.post("/api/project/sequence/render", json={"takes": {ids[1]: older}})
     both = client.post("/api/project/sequence/render", json={"route_id": "main", "shot_ids": [ids[0]]})
 
     assert chosen.status_code == 200, chosen.text
-    assert chosen.json()["boards"][0]["take_id"] == older
+    assert chosen.json()["trim_to_board"] is False
+    first = chosen.json()["boards"][0]
+    assert first["take_id"] == older and first["seconds"] == first["take_seconds"] == 2.0
     assert abs(_probe(Path(chosen.json()["path"]))["duration"] - 3.5) < 0.15
     assert bad_status.status_code == 400 and "not succeeded" in bad_status.json()["detail"]
     assert wrong_board.status_code == 400
     assert both.status_code == 400
+
+
+@needs_ffmpeg
+def test_sequence_trims_takes_to_board_duration_by_default(tmp_path: Path) -> None:
+    client, ids = _client(tmp_path, boards=3)  # durations 1.0, 1.5, 2.0
+    _fake_take(client, ids[0], 2.0)  # longer than its board: cut to 16 frames
+    _fake_take(client, ids[1], 1.5625)  # a Wan-style 25-frame take on a 24-frame board
+    _fake_take(client, ids[2], 1.0)  # shorter than its board: never extended
+
+    response = client.post("/api/project/sequence/render", json={})
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["trim_to_board"] is True
+    assert [(b["source"], b["seconds"]) for b in body["boards"]] == [("take", 1.0), ("take", 1.5), ("take", 1.0)]
+    assert [b["take_seconds"] for b in body["boards"]] == pytest.approx([2.0, 1.5625, 1.0], abs=0.01)
+    output = Path(body["path"])
+    assert abs(_probe(output)["duration"] - 3.5) < 0.1
+    frames = subprocess.run([
+        FFPROBE, "-v", "error", "-select_streams", "v:0", "-count_frames",
+        "-show_entries", "stream=nb_read_frames", "-of", "default=nw=1:nk=1", str(output),
+    ], capture_output=True, text=True, check=True).stdout.strip()
+    assert int(frames) == 16 + 24 + 16
 
 
 def test_sequence_without_ffmpeg_fails_cleanly(tmp_path: Path, monkeypatch) -> None:

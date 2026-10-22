@@ -1075,6 +1075,22 @@ def create_app(base_dir: Path, bridge_port: int = 8000) -> FastAPI:
             status=status,
         )
 
+    @app.get("/api/generation/requests/{request_id}")
+    def get_generation_request(request_id: str) -> dict[str, Any]:
+        return _svc().method_get_generation_request(request_id)
+
+    @app.post("/api/generation/requests/{request_id}/results")
+    async def submit_generation_result(
+        request_id: str,
+        files: list[UploadFile] = File(...),
+        summary: str = Form(""),
+    ) -> dict[str, Any]:
+        if len(files) > generation_service.MAX_ARTIFACTS:
+            # Refuse before reading the bodies; the service repeats the 1..8 check.
+            raise HTTPException(status_code=400, detail=f"Provide between 1 and {generation_service.MAX_ARTIFACTS} image artifacts.")
+        uploads = [await _read_upload(file, f"artifact_{index}.png") for index, file in enumerate(files, start=1)]
+        return _svc().method_submit_generation_result(request_id, uploads, summary)
+
     @app.delete("/api/generation/requests/{request_id}")
     def delete_generation_request(request_id: str) -> dict[str, Any]:
         return _svc().method_delete_generation_request(request_id)

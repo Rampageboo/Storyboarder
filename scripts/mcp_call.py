@@ -26,6 +26,14 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 
 
+def utf8_console() -> None:
+    """Print board titles etc. on any console: a cp1252 Windows console cannot encode them."""
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is not None:
+            reconfigure(encoding="utf-8", errors="replace")
+
+
 def _rpc(proc: subprocess.Popen, message: dict) -> dict | None:
     assert proc.stdin and proc.stdout
     proc.stdin.write(json.dumps(message) + "\n")
@@ -39,7 +47,8 @@ def _rpc(proc: subprocess.Popen, message: dict) -> dict | None:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    utf8_console()
+    parser =argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("tool", nargs="?", help="Tool name, e.g. storyboard_outline.")
     parser.add_argument("--args", default="{}", help="Tool arguments as a JSON object, or @file.json.")
     parser.add_argument("--list", action="store_true", help="List the tools and their input schemas.")

@@ -61,7 +61,7 @@ ROUTES: dict[str, tuple[str, str]] = {
     "open_project": ("POST", "/api/project/open"),
     "recents": ("GET", "/api/app/recents"),
     "close_project": ("POST", "/api/app/close-project"),
-    # Not in the backend yet (see docs/plans/2026-10-23-agent-mcp-and-cloud-images.md).
+    "generation_request": ("GET", "/api/generation/requests/{request_id}"),
     "submit_generation_result": ("POST", "/api/generation/requests/{request_id}/results"),
 }
 
@@ -527,6 +527,7 @@ def tool_video_takes(client: StoryboarderClient, args: dict[str, Any]) -> Any:
 
 def tool_render_sequence(client: StoryboarderClient, args: dict[str, Any]) -> Any:
     body = {key: args[key] for key in ("route_id", "shot_ids", "takes") if args.get(key)}
+    body["trim_to_board"] = bool(args.get("trim_to_board", True))
     return client.json("render_sequence", json_body=body)
 
 
@@ -541,12 +542,7 @@ def tool_list_generation_requests(client: StoryboarderClient, args: dict[str, An
 
 def tool_get_generation_request(client: StoryboarderClient, args: dict[str, Any]) -> Any:
     request_id = _require(args, "request_id")
-    # No single-request endpoint yet: the list rows carry the full immutable package.
-    for status in ("", "cancelled"):
-        for row in client.json("generation_requests", query={"status": status}).get("requests", []):
-            if row.get("request_id") == request_id:
-                return row
-    raise ToolError(f"Generation request not found: {request_id}")
+    return client.json("generation_request", params={"request_id": request_id})
 
 
 def tool_submit_generation_result(client: StoryboarderClient, args: dict[str, Any]) -> Any:
@@ -560,9 +556,9 @@ def tool_submit_generation_result(client: StoryboarderClient, args: dict[str, An
         if not path.is_file():
             raise ToolError(f"Artifact not found: {path}")
         upload.files.append(("files", path.name, path.read_bytes()))
-    result = client.json("submit_generation_result", params={"request_id": request_id}, multipart=upload)
+    response = client.json("submit_generation_result", params={"request_id": request_id}, multipart=upload)
     return {
-        "result": result,
+        **response,
         "next_step": "Storyboarder imports this candidate into the matching board for review.",
     }
 
@@ -692,12 +688,14 @@ TOOL_LIST: list[Tool] = [
     Tool("storyboard_video_takes", "Poll video takes for one board, or every board when shot_id is omitted. Free.",
          _schema({"shot_id": _SHOT_ID}), _READ, tool_video_takes),
     Tool("storyboard_render_sequence",
-         "Render one MP4 from each board's chosen succeeded video take, in board order (boards without a take become stills for their duration), into the project's Exports folder. Returns the path, duration and per-board list. Local ffmpeg, free.",
+         "Render one MP4 from each board's chosen succeeded video take, in board order (boards without a take become stills for their duration), into the project's Exports folder. Takes are cut to their board's duration unless trim_to_board is false. Returns the path, duration and per-board list (seconds used, take_seconds of the original take). Local ffmpeg, free.",
          _schema({
              "route_id": _ROUTE_ID,
              "shot_ids": {"type": "array", "items": {"type": "string"}, "description": "Limit to these boards."},
              "takes": {"type": "object", "additionalProperties": {"type": "string"},
                        "description": "shot_id -> take_id overrides; default is each board's newest succeeded take."},
+             "trim_to_board": {"type": "boolean", "default": True,
+                               "description": "Cut each take to its board's duration_seconds (whole frames at 16 fps; a shorter take is never extended). False plays every take in full."},
          }), {**_WRITE, "idempotentHint": False}, tool_render_sequence),
     Tool("storyboard_list_generation_requests", "List Storyboarder generation requests, normally Codex handoffs waiting for work. Free.",
          _schema({

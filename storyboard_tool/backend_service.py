@@ -1047,6 +1047,53 @@ class StoryboardBackendService(
             raise app_error(AppErrorCode.INVALID_REQUEST, str(exc)) from exc
         return {"requests": requests}
 
+    def method_get_generation_request(self, request_id: str) -> dict[str, Any]:
+        project = app_state._require_project(self.app)
+        try:
+            return generation_service.get_request(project, request_id)
+        except ValueError as exc:
+            raise app_error(AppErrorCode.GENERATION_REQUEST_FAILED, str(exc), status=404) from exc
+
+    @project_mutation(MutationPolicy.SERIALIZED)
+    def method_submit_generation_result(
+        self,
+        request_id: str,
+        uploads: list[tuple[str, bytes]],
+        summary: str = "",
+    ) -> dict[str, Any]:
+        """Deposit uploaded image bytes as a handoff result (the MCP's HTTP path).
+
+        The bytes are staged in a temp dir under neutral names (only the suffix of
+        the client's filename is kept) and go through ``submit_result``, so they get
+        the same validation as a deposited file. The result-inbox watcher then pulls
+        the candidate onto its board, exactly as for a file deposit.
+        """
+        project = app_state._require_project(self.app)
+        try:
+            generation_service.get_request(project, request_id)
+        except ValueError as exc:
+            raise app_error(AppErrorCode.GENERATION_REQUEST_FAILED, str(exc), status=404) from exc
+        if not 1 <= len(uploads) <= generation_service.MAX_ARTIFACTS:
+            raise app_error(
+                AppErrorCode.GENERATION_REQUEST_FAILED,
+                f"Provide between 1 and {generation_service.MAX_ARTIFACTS} image artifacts.",
+            )
+        try:
+            with tempfile.TemporaryDirectory(prefix="generation-upload-") as staging:
+                paths: list[str] = []
+                for index, (filename, data) in enumerate(uploads, start=1):
+                    suffix = Path(str(filename or "")).suffix.lower()
+                    if len(data) > generation_service.MAX_ARTIFACT_BYTES:
+                        raise ValueError("Artifact must be a non-empty image no larger than 64 MB.")
+                    target = Path(staging) / f"artifact_{index:03d}{suffix}"
+                    target.write_bytes(data)
+                    paths.append(str(target))
+                result = generation_service.submit_result(project, request_id, paths, summary=summary)
+        except (OSError, ValueError, SyntaxError) as exc:
+            # Pillow reports an unreadable or corrupt image as OSError/SyntaxError: the caller's fault.
+            raise app_error(AppErrorCode.GENERATION_REQUEST_FAILED, str(exc)) from exc
+        return {"result": result, "request": generation_service.get_request(project, request_id)}
+
     @project_mutation(MutationPolicy.SERIALIZED)
     def method_delete_generation_request(self, request_id: str) -> dict[str, Any]:
         project = app_state._require_project(self.app)
