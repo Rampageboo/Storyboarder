@@ -169,6 +169,8 @@ class SequenceRenderRequest(BaseModel):
     shot_ids: list[str] = Field(default_factory=list, max_length=500)
     # {shot_id: take_id}; boards left out use their newest succeeded take.
     takes: dict[str, str] = Field(default_factory=dict)
+    # Cut each take to its board's duration (whole frames at 16 fps); a shorter take is never extended.
+    trim_to_board: bool = True
 
 
 class ImageJobCreateRequest(BaseModel):

@@ -1027,10 +1027,12 @@ The desktop API exposes:
 |---|---|
 | `POST /api/shots/{shot_id}/generation-requests` | Create a queue request or Codex handoff and update the shot's generation state. |
 | `GET /api/generation/requests` | List requests, optionally filtered by shot, destination, or status. |
+| `GET /api/generation/requests/{request_id}` | One full request package (including cancelled ones) with its `results`. |
+| `POST /api/generation/requests/{request_id}/results` | Multipart: one `files` part per image (1–8) and a `summary` field. The bytes are staged in a temp dir and deposited through `submit_result` (same format, size and decode checks); the result-inbox watcher then pulls the candidate onto the board. |
 | `POST /api/generation/reconcile` | Import deposited result state into canonical shot generation metadata and mark candidates `needs-review`. |
 | `POST /api/shots/{shot_id}/codex-layer/accept` | Copy one reviewed candidate into the independent fixed Codex layer and mark it accepted. |
 
-`storyboard_tool/mcp_server.py` is a local STDIO MCP server configured by `.codex/config.toml` and `.mcp.json`. It is an HTTP client of the running app: it discovers the base URL and API token from the live-bridge file and calls backend endpoints, never project files. Besides the board, image, video, and sequence tools (see `docs/agent_mcp.md`), it keeps the handoff tools: list/get read `GET /api/generation/requests`, and `storyboard_submit_generation_result` uploads image bytes to `POST /api/generation/requests/{request_id}/results`. Storyboarder remains the owner of retries, stale propagation, review, and approval.
+`storyboard_tool/mcp_server.py` is a local STDIO MCP server configured by `.codex/config.toml` and `.mcp.json`. It is an HTTP client of the running app: it discovers the base URL and API token from the live-bridge file and calls backend endpoints, never project files. Besides the board, image, video, and sequence tools (see `docs/agent_mcp.md`), it keeps the handoff tools: list reads `GET /api/generation/requests`, get reads `GET /api/generation/requests/{request_id}`, and `storyboard_submit_generation_result` uploads image bytes to `POST /api/generation/requests/{request_id}/results`. Storyboarder remains the owner of retries, stale propagation, review, and approval.
 
 ---
 
@@ -1067,7 +1069,7 @@ Changing linked Scene facts marks generated shots in that scene stale. A second 
 
 - **`GET /api/project/grid.png?route_id=&columns=&max_edge=`** — PNG contact sheet: each cell is the board composite (or a grey "No image" placeholder) with a `#NN` badge, a duration badge and the title. Columns default to about √n (2–6); the long edge is at most `max_edge` (default 1600, 256–4096).
 - **`GET /api/project/outline?route_id=`** — project name and canvas, all routes, and per board: number, ids, text fields, notes, non-empty shot design, prompt config, the compiled video prompt, `has_image`, `latest_video_take` and `latest_image_job` (filled from `comfy_images.list_jobs` once that module exists, otherwise `null`).
-- **`POST /api/project/sequence/render {route_id?, shot_ids?, takes?}`** — concatenates each board's chosen succeeded take (default: the newest) or, without one, the board still held for its duration. One ffmpeg pass scales/pads every source to the first take's size (else the canvas aspect at 832 long edge), 16 fps, H.264, and writes `Exports/sequence_<timestamp>.mp4` atomically. Like the other exports it is not a project mutation: the take choice and stills are snapshotted under `PROJECT_LOCK`, the encode runs outside it.
+- **`POST /api/project/sequence/render {route_id?, shot_ids?, takes?, trim_to_board = true}`** — concatenates each board's chosen succeeded take (default: the newest) or, without one, the board still held for its duration. With `trim_to_board`, a take longer than its board is cut to the board's `duration_seconds` in whole frames at 16 fps (Wan's 4n+1 frame counts otherwise add up to ~0.2 s per board); a shorter take is never extended. `boards[].seconds` is the length used and `take_seconds` the take's own length. One ffmpeg pass scales/pads every source to the first take's size (else the canvas aspect at 832 long edge), 16 fps, H.264, and writes `Exports/sequence_<timestamp>.mp4` atomically. Like the other exports it is not a project mutation: the take choice and stills are snapshotted under `PROJECT_LOCK`, the encode runs outside it.
 
 ---
 

@@ -255,8 +255,10 @@ class _Segment:
     number: int
     source: str  # "take" | "still"
     path: Path
-    seconds: float
+    seconds: float  # length used in the cut
     take_id: str = ""
+    take_seconds: float = 0.0  # the take's own length (takes only)
+    trim_frames: int = 0  # > 0: cut the take to this many frames at SEQUENCE_FPS
 
 
 def _even(value: int) -> int:
@@ -269,8 +271,14 @@ def plan_sequence(
     boards: list[tuple[int, Shot]],
     takes: dict[str, str],
     still_dir: Path,
+    *,
+    trim_to_board: bool = True,
 ) -> tuple[list[_Segment], tuple[int, int]]:
-    """Choose each board's source and snapshot stills; call under PROJECT_LOCK."""
+    """Choose each board's source and snapshot stills; call under PROJECT_LOCK.
+
+    With ``trim_to_board`` a take longer than its board is cut to the board's
+    duration in whole frames at ``SEQUENCE_FPS``; a shorter take is never extended.
+    """
     unknown = set(takes) - {shot.shot_id for _, shot in boards}
     if unknown:
         raise AgentViewError(f"Takes were chosen for boards outside this sequence: {', '.join(sorted(unknown))}.")
@@ -295,8 +303,16 @@ def plan_sequence(
         if video is not None and record is not None:
             if size is None:
                 size = (_even(int(record.get("width") or 0) or 832), _even(int(record.get("height") or 0) or 464))
-            seconds = _probe_seconds(video) or float(record.get("seconds") or _safe_duration(shot))
-            segments.append(_Segment(shot.shot_id, number, "take", video, seconds, str(record["take_id"])))
+            take_seconds = _probe_seconds(video) or float(record.get("seconds") or _safe_duration(shot))
+            seconds, trim_frames = take_seconds, 0
+            if trim_to_board:
+                board_frames = duration_frames(_safe_duration(shot), SEQUENCE_FPS)
+                take_frames = max(1, round(take_seconds * SEQUENCE_FPS))
+                if board_frames < take_frames:
+                    trim_frames = board_frames
+                seconds = min(board_frames, take_frames) / SEQUENCE_FPS
+            segments.append(_Segment(shot.shot_id, number, "take", video, seconds, str(record["take_id"]),
+                                     take_seconds=take_seconds, trim_frames=trim_frames))
             continue
         still = still_dir / f"still_{number:04d}.png"
         _normalize_frame(render_shot_composite_image(project, shot), canvas_w, canvas_h).save(still, "PNG")
@@ -348,7 +364,9 @@ def encode_sequence(segments: list[_Segment], size: tuple[int, int], output: Pat
         filters.append(
             f"[{index}:v]scale={width}:{height}:force_original_aspect_ratio=decrease,"
             f"pad={width}:{height}:(ow-iw)/2:(oh-ih)/2:color=0x111318,setsar=1,"
-            f"fps={SEQUENCE_FPS},format=yuv420p[v{index}]"
+            f"fps={SEQUENCE_FPS},"
+            + (f"trim=end_frame={segment.trim_frames},setpts=PTS-STARTPTS," if segment.trim_frames else "")
+            + f"format=yuv420p[v{index}]"
         )
     joined = "".join(f"[v{index}]" for index in range(len(segments)))
     filters.append(f"{joined}concat=n={len(segments)}:v=1:a=0[out]")

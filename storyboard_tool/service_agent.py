@@ -43,13 +43,16 @@ class AgentServiceMixin:
         route_id = str(data.get("route_id") or "")
         shot_ids = [str(item) for item in (data.get("shot_ids") or [])]
         takes = {str(key): str(value) for key, value in (data.get("takes") or {}).items()}
+        trim_to_board = bool(data.get("trim_to_board", True))
         with agent_views.new_still_dir() as still_dir:
             try:
                 with project_manager.PROJECT_LOCK:
                     boards = self._sequence_boards(project, route_id, shot_ids)
                     if not boards:
                         raise agent_views.AgentViewError("There are no boards to render.")
-                    segments, size = agent_views.plan_sequence(self.app, project, boards, takes, Path(still_dir))
+                    segments, size = agent_views.plan_sequence(
+                        self.app, project, boards, takes, Path(still_dir), trim_to_board=trim_to_board,
+                    )
                     output_path = agent_views.sequence_output_path(project)
             except agent_views.AgentViewError as exc:
                 raise app_error(AppErrorCode.INVALID_REQUEST, str(exc)) from exc
@@ -67,6 +70,7 @@ class AgentServiceMixin:
             "width": size[0],
             "height": size[1],
             "fps": agent_views.SEQUENCE_FPS,
+            "trim_to_board": trim_to_board,
             "bytes": os.path.getsize(output_path),
             "boards": [
                 {
@@ -75,6 +79,7 @@ class AgentServiceMixin:
                     "source": item.source,
                     **({"take_id": item.take_id} if item.take_id else {}),
                     "seconds": round(item.seconds, 3),
+                    **({"take_seconds": round(item.take_seconds, 3)} if item.source == "take" else {}),
                 }
                 for item in segments
             ],

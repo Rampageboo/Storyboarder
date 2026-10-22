@@ -31,10 +31,10 @@ The tools that spend the Owner's Comfy Cloud credits are `storyboard_generate_im
 | `storyboard_apply_image` | `job_id`, `index?` | Makes that output the board image. |
 | `storyboard_generate_video` | `shot_id`, `prompt?`, `negative_prompt?`, `seconds?`, `end_shot_id?` | **Comfy Cloud credits.** Starts a Wan 2.2 i2v take, or a first+last-frame take when `end_shot_id` is given. |
 | `storyboard_video_takes` | `shot_id?` | Polls video takes; without `shot_id`, polls every board. |
-| `storyboard_render_sequence` | `route_id?`, `shot_ids?`, `takes?` (`{shot_id: take_id}`) | Renders the chosen takes, in board order, into one MP4 under `Exports/`. |
+| `storyboard_render_sequence` | `route_id?`, `shot_ids?`, `takes?` (`{shot_id: take_id}`), `trim_to_board?` (default `true`) | Renders the chosen takes, in board order, into one MP4 under `Exports/`. With `trim_to_board`, each take is cut to its board's `duration_seconds` in whole frames at 16 fps; a shorter take is never extended. Each `boards[]` row reports `seconds` (used) and `take_seconds` (the original take). |
 | `storyboard_list_generation_requests` | `shot_id?`, `destination?`, `status?` | Lists the generation-handoff queue (Codex). |
-| `storyboard_get_generation_request` | `request_id` | Returns one handoff package. |
-| `storyboard_submit_generation_result` | `request_id`, `artifact_paths`, `summary?` | Uploads generated images as the result of a handoff. |
+| `storyboard_get_generation_request` | `request_id` | Returns one full handoff package (`GET /api/generation/requests/{id}`), including its results. |
+| `storyboard_submit_generation_result` | `request_id`, `artifact_paths` (1–8), `summary?` | Uploads generated images (PNG/JPEG/WebP, ≤ 64 MB each) as the result of a handoff (`POST /api/generation/requests/{id}/results`, multipart `files` + `summary`). The app then pulls the candidate onto the board for review. |
 
 Board fields:
 
@@ -44,3 +44,14 @@ Board fields:
 - `shot_design`: a partial object that is merged into the board's shot design. For example, `camera_movement` and `subject_movement` feed the video prompt.
 
 The tool-to-endpoint mapping is the `ROUTES` table at the top of `mcp_server.py`.
+
+## Agent notes
+
+Lessons from agents that made shorts through this server.
+
+- **The app must be running with a project open.** Start Storyboarder, then create or open a project with `storyboard_new_project` / `storyboard_open_project` (or in the app) before any board tool; `storyboard_status` tells you whether one is open.
+- **Describe the frame, not the medium.** Z-Image takes the word "storyboard" literally and draws a contact sheet of panels. Write what the camera sees ("low-angle wide shot of a lighthouse at dusk"), not "storyboard of a lighthouse".
+- **Quote sign text.** To get legible lettering, spell the exact words in quotes: `a shop sign that reads "OPEN 24 HOURS"`.
+- **Consistent characters.** Generate the first keyframe with text-to-image, then generate later boards with reference-to-image, passing board 1 as a reference (`references: ["<board 1 shot_id>"]`).
+- **Video take lengths.** Image-to-video takes are 1–5 s, and Wan rounds the frame count to 4n+1 at 16 fps, so a take runs slightly longer than asked (3.4 s → 3.56 s). `storyboard_render_sequence` trims takes back to their board durations by default.
+- **Calling from scripts on Windows.** From a Python subprocess, run the venv interpreter on `scripts/mcp_call.py` directly (`D:/Projects/Storyboarder/.venv/Scripts/python.exe scripts/mcp_call.py ...`), not through `bash`, which may resolve to WSL. `mcp_call.py` writes UTF-8, so non-ASCII titles print on a cp1252 console.
