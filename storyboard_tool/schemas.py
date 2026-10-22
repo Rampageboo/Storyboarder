@@ -164,6 +164,18 @@ class VideoTakeCreateRequest(BaseModel):
     end_shot_id: str = Field(default="", max_length=96)
 
 
+class ImageJobCreateRequest(BaseModel):
+    prompt: str = Field(default="", max_length=8000)
+    negative_prompt: str = Field(default="", max_length=4000)
+    references: list[str] = Field(default_factory=list, max_length=3)
+    seed: int | None = Field(default=None, ge=0, le=2**63 - 1)
+    apply: bool = False
+
+
+class ImageJobApplyRequest(BaseModel):
+    index: int = Field(default=0, ge=0, le=64)
+
+
 class GenerationRequestCreateRequest(BaseModel):
     destination: str = "queue"
     provider: str = "codex"

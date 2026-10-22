@@ -32,6 +32,7 @@
 20. [Generation Queue and Codex MCP Handoffs](#20-generation-queue-and-codex-mcp-handoffs)
 21. [Scene and Character Prompt Bibles](#21-scene-and-character-prompt-bibles)
 22. [Comfy Cloud Video Takes](#22-comfy-cloud-video-takes)
+23. [Comfy Cloud Image Jobs](#23-comfy-cloud-image-jobs)
 
 ---
 
