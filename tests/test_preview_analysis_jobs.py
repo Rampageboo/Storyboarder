@@ -159,5 +159,54 @@ class PreviewAnalysisStatusTests(unittest.TestCase):
                                  "Shot with no preview file must have state=missing")
 
 
+class BridgeStatusPreviewAnalysisTests(unittest.TestCase):
+    """The UI refreshes preview fields from the bridge status, without project paths."""
+
+    def test_bridge_status_omits_preview_analysis_without_a_job(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            client = _make_client(tmp)
+            _open_project(client, tmp)
+            with contextlib.redirect_stderr(io.StringIO()):
+                body = client.get("/api/bridge/status").json()
+            self.assertNotIn("preview_analysis", body)
+
+    def test_bridge_status_reports_open_project_job_without_paths(self) -> None:
+        from storyboard_tool import runtime_state
+
+        with tempfile.TemporaryDirectory() as tmp:
+            client = _make_client(tmp)
+            _open_project(client, tmp)
+            app = client.app
+            root = str(app.state.project.project_root.resolve())
+            runtime_state.set_preview_analysis_job(app, {
+                "task_id": "t1",
+                "project_root": root,
+                "state": "complete",
+                "decoded_count": 3,
+                "revision": 2,
+            })
+            with contextlib.redirect_stderr(io.StringIO()):
+                body = client.get("/api/bridge/status").json()
+            self.assertEqual(body["preview_analysis"], {"state": "complete", "decoded_count": 3, "revision": 2})
+            self.assertNotIn(Path(tmp).name, str(body["preview_analysis"]))
+
+    def test_bridge_status_ignores_jobs_of_other_projects(self) -> None:
+        from storyboard_tool import runtime_state
+
+        with tempfile.TemporaryDirectory() as tmp, tempfile.TemporaryDirectory() as other:
+            client = _make_client(tmp)
+            _open_project(client, tmp)
+            runtime_state.set_preview_analysis_job(client.app, {
+                "task_id": "t2",
+                "project_root": other,
+                "state": "complete",
+                "decoded_count": 1,
+                "revision": 1,
+            })
+            with contextlib.redirect_stderr(io.StringIO()):
+                body = client.get("/api/bridge/status").json()
+            self.assertNotIn("preview_analysis", body)
+
+
 if __name__ == "__main__":
     unittest.main()

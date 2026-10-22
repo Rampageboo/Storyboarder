@@ -237,7 +237,6 @@ function normalizeShotFromBackend(raw = {}) {
 
 function projectDataFromPluginContext(context) {
   return {
-    version: 4,
     name: String(context?.project_name || ""),
     settings: {},
     shots: Array.isArray(context?.shots)
@@ -395,26 +394,6 @@ async function requestPsdRecovery(shotId, preserveLayers = true) {
       if (response.ok) {
         const payload = await response.json();
         return payload?.result || payload;
-      }
-    } catch {
-      // Try the next candidate origin.
-    }
-  }
-  return null;
-}
-
-async function requestShotSync(shotId, force = true) {
-  const query = force ? "?force=true" : "";
-  const token = await storyboardApiToken();
-  for (const origin of await storyboardApiOrigins()) {
-    try {
-      const response = await fetch(`${origin}/api/shots/${encodeURIComponent(shotId)}/sync${query}`, {
-        method: "POST",
-        cache: "no-store",
-        headers: withStoryboardToken({}, token),
-      });
-      if (response.ok) {
-        return await response.json();
       }
     } catch {
       // Try the next candidate origin.

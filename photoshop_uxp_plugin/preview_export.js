@@ -3,8 +3,8 @@
 //
 // Depends on: layer_roles.js, layer_sync.js, backend_client.js (loaded first).
 // Runtime deps on panel.js globals: activeShotId, ensureShotStructure,
-//   getShotPsdEntry, runModal, setStatus, saveProjectJson, currentShotId,
-//   fileUnixMtime, writeEntryText, linkedFromStoryboard, projectData,
+//   getShotPsdEntry, runModal, setStatus, currentShotId,
+//   writeEntryText, linkedFromStoryboard, projectData,
 //   canvasColor, canvasWidth, canvasHeight, projectRoot.
 
 const _pendingPreviewIntents = new Map();
@@ -175,9 +175,6 @@ async function updateProjectAfterSave(shotId = currentShotId(), folder = null) {
   } catch {
     previewFile = null;
   }
-  if (psdFile) {
-    await writeBridgeFiles(shotId, `shots/${shotId}/${shotId}.psd`, resolvedFolder);
-  }
   if (linkedFromStoryboard) {
     const payload = await requestStoryboardApi(`/api/plugin/shots/${encodeURIComponent(shotId)}/export-preview`, {
       method: "POST",
@@ -193,28 +190,7 @@ async function updateProjectAfterSave(shotId = currentShotId(), folder = null) {
     }
     return;
   }
-  let mtime = 0;
-  if (previewFile) {
-    mtime = Math.max(mtime, await fileUnixMtime(previewFile));
-  }
-  if (psdFile) {
-    mtime = Math.max(mtime, await fileUnixMtime(psdFile));
-  }
-  if (!mtime) {
-    mtime = Date.now() / 1000;
-  }
-  if (projectData) {
-    const shot = (projectData.shots || []).find((item) => item.shot_id === shotId);
-    if (shot) {
-      const previous = Number(shot.source_sync_mtime || 0);
-      if (mtime <= previous) {
-        mtime = previous + 0.001;
-      }
-      applySavedPaths(shot, shotId, mtime, Boolean(psdFile));
-      await saveProjectJson();
-    }
-  }
-  await requestShotSync(shotId, true);
+  throw new Error("Reconnect to Storyboarder before exporting: the plugin no longer writes project metadata.");
 }
 
 // ── Scene 2D export (Part 9) ──────────────────────────────────────────────
@@ -404,46 +380,3 @@ async function exportAndGoNextScene2D() {
   setStatus(`Moved to next perspective: ${next.title || next.id}`);
 }
 
-function applySavedPaths(shot, shotId, mtime, hasPsd = true) {
-  if (hasPsd) {
-    shot.source_file_path = `shots/${shotId}/${shotId}.psd`;
-  }
-  shot.preview_image_path = `shots/${shotId}/${shotId}_preview.png`;
-  shot.image_path = shot.preview_image_path;
-  shot.thumbnail_path = `shots/${shotId}/${shotId}_thumb.png`;
-  shot.source_sync_mtime = mtime;
-}
-
-async function writeBridgeFiles(shotId, sourcePath, folder = null) {
-  if (isExplicitAssetContext(lastPluginContext)) {
-    if (!linkedFromStoryboard) {
-      requireOfflineWriteAllowed(lastPluginContext, "write plugin bridge files");
-    }
-    return;
-  }
-  requireOfflineWriteAllowed(lastPluginContext, "write plugin bridge files");
-  const resolvedFolder = folder || (await ensureShotStructure(shotId));
-  const payload = {
-    canvas_background_color: canvasColor,
-    canvas_width: canvasWidth,
-    canvas_height: canvasHeight,
-    shot_id: shotId,
-    source_file_path: sourcePath,
-    last_saved_at: new Date().toISOString(),
-  };
-  await writeEntryText(
-    await resolvedFolder.createFile("storyboard_bridge.json", { overwrite: true }),
-    JSON.stringify(payload, null, 2),
-  );
-  await writeEntryText(await resolvedFolder.createFile("canvas_color.txt", { overwrite: true }), `${canvasColor}\n`);
-  if (projectRoot) {
-    await writeEntryText(
-      await projectRoot.createFile("storyboard_bridge.json", { overwrite: true }),
-      JSON.stringify(payload, null, 2),
-    );
-    await writeEntryText(
-      await projectRoot.createFile("canvas_color.txt", { overwrite: true }),
-      `${canvasColor}\n`,
-    );
-  }
-}

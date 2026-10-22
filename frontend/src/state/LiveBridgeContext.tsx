@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, type PropsWithChildren } from 'react'
 import { getBridgeStatus, publishLiveBridge, type BridgeStatusPayload } from '../api'
 import { apiBase } from '../api/base'
 import { useProject } from './useProject'
-import { BridgeStatusContext } from './liveBridgeUtils'
+import { BridgeStatusContext, shouldRefreshPreviews } from './liveBridgeUtils'
 
 const HEARTBEAT_MS = 1500
 const STATUS_POLL_MS = 2500
@@ -64,18 +64,10 @@ export function LiveBridgeProvider({ children }: PropsWithChildren) {
           await refreshProjectFromGeneration()
         }
 
-        const pa = status.preview_analysis
-        if (
-          pa &&
-          pa.state === 'complete' &&
-          pa.decoded_count > 0 &&
-          pa.project_path === project.project_path
-        ) {
-          const lastRev = lastPreviewRevisionByProjectRef.current.get(project.project_path)
-          if (lastRev === undefined || pa.revision > lastRev) {
-            lastPreviewRevisionByProjectRef.current.set(project.project_path, pa.revision)
-            await refreshPreviewFields()
-          }
+        // The status describes the backend's open project, which is this one.
+        if (status.project_open && shouldRefreshPreviews(status.preview_analysis, lastPreviewRevisionByProjectRef.current.get(projectPath))) {
+          lastPreviewRevisionByProjectRef.current.set(projectPath, Number(status.preview_analysis?.revision ?? 0))
+          await refreshPreviewFields()
         }
       } catch {
         if (!cancelled) setBridgeStatus(null)

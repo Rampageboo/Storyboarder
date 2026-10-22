@@ -24,9 +24,8 @@ export interface WorkContext {
   next_key?: string
 }
 
+/** Preview-analysis job of the project that is open in the backend (no paths: the status endpoint is unauthenticated). */
 export interface PreviewAnalysisEvent {
-  task_id: string
-  project_path: string
   state: 'running' | 'complete' | 'failed'
   decoded_count: number
   revision: number

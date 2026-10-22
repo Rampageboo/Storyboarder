@@ -86,7 +86,7 @@ Optional UXP workflow:
 
 1. Keep Storyboard Tool running with the project open, then open Storyboard Bridge in Photoshop.
 2. Open or activate a linked shot PSD from Storyboard Tool or the plugin.
-3. Click `Export preview` or `Export + next`; asset paths come from the linked backend context. The plugin must be 0.7.0 (protocol v2) and works only while Storyboard Tool is running.
+3. Click `Export preview` or `Export + next`; asset paths come from the linked backend context. The plugin must be 0.7.1 (protocol v2, backend-only) and works only while Storyboard Tool is running.
 
 ## Project Structure
 

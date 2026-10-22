@@ -12,17 +12,18 @@ Photoshop panel for drawing storyboards without switching back to Storyboard Too
 
 ## Protocol v2 (required)
 
-Storyboarder accepts only protocol v2. Install plugin **0.7.0** from this folder;
-older plugins such as 0.6.7 are rejected with HTTP 426. Plugin 0.7.0 negotiates
+Storyboarder accepts only protocol v2. Install plugin **0.7.1** from this folder;
+older plugins such as 0.6.7 are rejected with HTTP 426. Plugin 0.7.x negotiates
 protocol v2 with `explicit_asset_paths_v2`: every asset is opened or written
 through the exact role path supplied by Storyboarder; the plugin does not derive
 a shot folder or write project metadata itself.
 
 The plugin works only while Storyboard Tool is running with the project open.
-Its offline file mode no longer works: project metadata lives only under the
-project's `.storyboarder/data` folder, and the backend always reports
-`offline_write_allowed: false`, so the plugin refuses to write while
-disconnected. Preview exports use a short-lived backend write
+It is backend-only: 0.7.1 removed the offline file mode (the **Choose project
+folder** / **Choose shot folder** buttons and the plugin's own `project.json`,
+`shots.json` and `shots.csv` readers and writers). Project metadata lives only
+under the project's `.storyboarder/data` folder and is written by Storyboarder;
+while disconnected the plugin refuses to export. Preview exports use a short-lived backend write
 intent and transaction inbox. Native Photoshop saves remain available for an
 already-open canonical PSD; after Ctrl+S, the plugin reconnects the save to its
 work key and source role so Storyboarder can validate the canonical file.
@@ -46,7 +47,6 @@ Storyboard Tool polls for file changes in the background, so previews and new sh
 
 | Button | Action |
 |--------|--------|
-| **Choose project folder** | Offline file mode; no longer works (see Protocol v2) |
 | **Open / create canvas** | Open existing PSD or create a new canvas at the project size |
 | **Save** | Export transparent drawing preview to Storyboard Tool (`shot_XXX_preview.png`). **Does not overwrite the PSD** — press **Ctrl+S** in Photoshop to save layers. |
 | **Save & next shot** | Export preview, native-save the open document (Ctrl+S equivalent), then move to the next shot |

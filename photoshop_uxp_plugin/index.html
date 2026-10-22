@@ -45,7 +45,7 @@
 
       <!-- Shot export actions (mode=shot AND linked) -->
       <div id="linkedPanel" class="export-section" hidden>
-        <button id="saveAndNext" type="button" class="btn-primary">Export + next</button>
+        <button id="saveAndNext" type="button" class="btn-primary">Export &amp; next</button>
         <button id="saveAndStay" type="button" class="btn-secondary">Export preview</button>
         <label class="check-row">
           <input type="checkbox" id="autoAddShot" checked> Auto-add at end
@@ -79,7 +79,7 @@
         <!-- Scene 2D export actions -->
         <div id="scene2dExportPanel" class="export-section" hidden>
           <div class="export-hint">Save the PSD with Ctrl+S first.</div>
-          <button id="scene2dSaveAndNext" type="button" class="btn-primary">Export + next</button>
+          <button id="scene2dSaveAndNext" type="button" class="btn-primary">Export &amp; next</button>
           <button id="scene2dSaveAndStay" type="button" class="btn-secondary">Export preview</button>
           <label class="check-row">
             <input type="checkbox" id="scene2dFocusStoryboardAfterExport"> Focus Storyboarder after export
@@ -110,8 +110,6 @@
         <div class="adv-group">
           <div class="adv-label">Project files</div>
           <button id="recoverPsd" type="button" class="btn-minor">Recover broken PSD</button>
-          <button id="chooseProject" type="button" class="btn-minor">Choose project folder</button>
-          <button id="chooseFolder" type="button" class="btn-minor">Choose shot folder</button>
         </div>
 
         <div id="colorSection" class="adv-group" hidden>
@@ -127,8 +125,6 @@
       <!-- Hidden utility elements -->
       <input id="shotId" type="text" value="shot_001" hidden>
       <span id="currentShot" hidden></span>
-      <span id="projectLabel" hidden></span>
-      <span id="folderLabel" hidden></span>
     </div><!-- /#bridge-panel -->
 
     <!-- ── Work panel ─────────────────────────────────────────────────── -->
@@ -200,6 +196,5 @@
     <script src="backend_client.js"></script>
     <script src="preview_export.js"></script>
     <script src="panel.js"></script>
-    <script src="panel_storage_adapter.js"></script>
   </body>
 </html>
