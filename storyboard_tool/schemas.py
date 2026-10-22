@@ -164,6 +164,13 @@ class VideoTakeCreateRequest(BaseModel):
     end_shot_id: str = Field(default="", max_length=96)
 
 
+class SequenceRenderRequest(BaseModel):
+    route_id: str = Field(default="", max_length=96)
+    shot_ids: list[str] = Field(default_factory=list, max_length=500)
+    # {shot_id: take_id}; boards left out use their newest succeeded take.
+    takes: dict[str, str] = Field(default_factory=dict)
+
+
 class GenerationRequestCreateRequest(BaseModel):
     destination: str = "queue"
     provider: str = "codex"

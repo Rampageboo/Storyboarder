@@ -32,6 +32,7 @@
 20. [Generation Queue and Codex MCP Handoffs](#20-generation-queue-and-codex-mcp-handoffs)
 21. [Scene and Character Prompt Bibles](#21-scene-and-character-prompt-bibles)
 22. [Comfy Cloud Video Takes](#22-comfy-cloud-video-takes)
+23. [Agent Views: Grid, Outline, Sequence](#23-agent-views-grid-outline-sequence)
 
 ---
 
@@ -1058,3 +1059,11 @@ Changing linked Scene facts marks generated shots in that scene stale. A second 
 - **Takes:** each request is a record `generation/video/vid_<hex>.json` in generation metadata; the MP4 is stored at `Videos/Generated/<take>.mp4`. A daemon thread uploads, submits, polls and downloads, writing the record at each step; a take that was running when the app stopped resumes from its job id the next time the board's takes are listed. Takes never change the board itself.
 - **Routes:** `GET /api/comfy-cloud`, `PUT|DELETE /api/comfy-cloud/key`, `POST /api/comfy-cloud/check`, `GET /api/shots/{id}/video-prompt`, `GET|POST /api/shots/{id}/video-takes`, `DELETE /api/video-takes/{take}`, `GET /api/video-takes/{take}/video`.
 - **UI:** inspector → *Video* tab (prompt, end frame — none by default, any board on the route, next board marked — length, generate, play, delete).
+
+## 23. Agent Views: Grid, Outline, Sequence
+
+`agent_views.py` (pure helpers) and `service_agent.py` (`AgentServiceMixin`) give an agent, through the MCP server, a way to see a project and assemble a cut. Boards follow route order — the active route unless `route_id` names another, as the story view's `activeRouteShots` does — and a board's `number` is its 1-based position in that route.
+
+- **`GET /api/project/grid.png?route_id=&columns=&max_edge=`** — PNG contact sheet: each cell is the board composite (or a grey "No image" placeholder) with a `#NN` badge, a duration badge and the title. Columns default to about √n (2–6); the long edge is at most `max_edge` (default 1600, 256–4096).
+- **`GET /api/project/outline?route_id=`** — project name and canvas, all routes, and per board: number, ids, text fields, notes, non-empty shot design, prompt config, the compiled video prompt, `has_image`, `latest_video_take` and `latest_image_job` (filled from `comfy_images.list_jobs` once that module exists, otherwise `null`).
+- **`POST /api/project/sequence/render {route_id?, shot_ids?, takes?}`** — concatenates each board's chosen succeeded take (default: the newest) or, without one, the board still held for its duration. One ffmpeg pass scales/pads every source to the first take's size (else the canvas aspect at 832 long edge), 16 fps, H.264, and writes `Exports/sequence_<timestamp>.mp4` atomically. Like the other exports it is not a project mutation: the take choice and stills are snapshotted under `PROJECT_LOCK`, the encode runs outside it.
