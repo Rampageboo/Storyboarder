@@ -50,7 +50,7 @@ export function ImageJobs({ shot, onError }: { shot: Shot; onError: (error: unkn
   }
   const referenceChoices = route.filter((item) => item.shot_id !== shot.shot_id && hasImage(item))
   const chosen = references.filter((id) => referenceChoices.some((item) => item.shot_id === id))
-  const mode = chosen.length ? 'ref' : 't2i'
+  const mode = chosen.length ? 'edit' : 't2i'
 
   const refresh = useCallback(async () => {
     const result = await listImageJobs(shot.shot_id)
@@ -149,7 +149,7 @@ export function ImageJobs({ shot, onError }: { shot: Shot; onError: (error: unkn
       <label className="field">
         <span className="field-label-row"><span className="field-label">Image prompt</span><span className="field-flag">{IMAGE_MODEL_LABEL[mode]}</span></span>
         <textarea rows={5} value={prompt} onChange={(event) => setPrompt(event.target.value)}
-          placeholder={mode === 'ref' ? 'What to make from the references: “this character, sitting at the window, night”.' : 'Subject, setting, framing, light, style.'} />
+          placeholder={mode === 'edit' ? 'What to make from the references: “this character, sitting at the window, night”.' : 'Subject, setting, framing, light, style.'} />
       </label>
       <details className="video-takes-negative">
         <summary>Negative prompt</summary>
@@ -202,9 +202,9 @@ export function ImageJobs({ shot, onError }: { shot: Shot; onError: (error: unkn
       <ul className="video-take-list">
         {jobs.map((job) => (
           <li key={job.job_id} className={'video-take is-' + job.status}>
-            {job.status === 'succeeded' && job.outputs > 0 ? (
+            {job.status === 'succeeded' && job.outputs.length > 0 ? (
               <div className="image-job-outputs">
-                {Array.from({ length: job.outputs }, (_, index) => {
+                {job.outputs.map(({ index }) => {
                   const applied = job.applied_index === index
                   const busy = applying === `${job.job_id}:${index}`
                   return (
@@ -228,8 +228,8 @@ export function ImageJobs({ shot, onError }: { shot: Shot; onError: (error: unkn
             )}
             <div className="video-take-meta">
               <span>
-                {job.mode === 'ref' ? 'Ref' : 'Text'} · {job.width}×{job.height}{job.seed != null ? ` · seed ${job.seed}` : ''}
-                {job.references.length ? ` · from ${job.references.map(labelFor).join(', ')}` : ''}
+                {job.mode === 'edit' ? 'Ref' : 'Text'} · {job.width}×{job.height}{job.seed != null ? ` · seed ${job.seed}` : ''}
+                {job.references.length ? ` · from ${job.references.map((ref) => labelFor(ref.id)).join(', ')}` : ''}
               </span>
               {!IMAGE_JOB_ACTIVE.has(job.status) ? (
                 <button type="button" className="ghost icon-btn" aria-label="Delete image job" title="Delete image job" onClick={() => void remove(job)}>

@@ -7,8 +7,12 @@ import type { ComfyCloudStatus } from './video'
 
 export type ImageJobStatus = 'queued' | 'uploading' | 'running' | 'downloading' | 'succeeded' | 'failed'
 
-/** 't2i' = text → image (Z-Image Turbo), 'ref' = reference(s) → image (Qwen-Image-Edit-2511). */
-export type ImageJobMode = 't2i' | 'ref'
+/** 't2i' = text → image (Z-Image Turbo), 'edit' = reference(s) → image (Qwen-Image-Edit-2511). */
+export type ImageJobMode = 't2i' | 'edit'
+
+export type ImageJobReference = { id: string; kind: 'board' | 'reference'; path: string }
+
+export type ImageJobOutput = { index: number; path: string; width: number; height: number; bytes: number }
 
 export type ImageJob = {
   job_id: string
@@ -17,13 +21,13 @@ export type ImageJob = {
   mode: ImageJobMode
   prompt: string
   negative_prompt: string
-  /** Board ids (or project reference ids) whose images were used as references. */
-  references: string[]
+  /** Boards (or project reference images) used as references. */
+  references: ImageJobReference[]
   seed: number | null
   width: number
   height: number
-  /** Number of output images; each is served by `imageJobOutputUrl(job, index)`. */
-  outputs: number
+  /** Output images; each is served by `imageJobOutputUrl(job, index)`. */
+  outputs: ImageJobOutput[]
   applied_index: number | null
   error: string
   created_at: string
@@ -45,7 +49,7 @@ export const IMAGE_JOB_MAX_REFERENCES = 3
 
 export const IMAGE_MODEL_LABEL: Record<ImageJobMode, string> = {
   t2i: 'Z-Image Turbo · text to image',
-  ref: 'Qwen Image Edit · reference to image',
+  edit: 'Qwen Image Edit · reference to image',
 }
 
 export function listImageJobs(shotId: string): Promise<{ jobs: ImageJob[] } & ComfyCloudStatus> {
@@ -57,8 +61,8 @@ export function createImageJob(shotId: string, body: CreateImageJobRequest): Pro
 }
 
 /** Puts output `index` on the board through the normal import path; returns the updated project. */
-export function applyImageJob(jobId: string, index: number): Promise<ProjectPayload> {
-  return requestJson<ProjectPayload>(`/api/image-jobs/${encodeURIComponent(jobId)}/apply`, { method: 'POST', body: { index } })
+export function applyImageJob(jobId: string, index: number): Promise<ProjectPayload & { job: ImageJob }> {
+  return requestJson<ProjectPayload & { job: ImageJob }>(`/api/image-jobs/${encodeURIComponent(jobId)}/apply`, { method: 'POST', body: { index } })
 }
 
 export function deleteImageJob(jobId: string): Promise<{ deleted: string }> {
