@@ -15,6 +15,7 @@ from __future__ import annotations
 import json
 import os
 import tempfile
+import time
 from pathlib import Path
 from typing import Any
 
@@ -68,13 +69,33 @@ def atomic_write_text(path: Path, text: str) -> None:
     try:
         with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as file:
             file.write(text)
-        os.replace(tmp_name, path)
+        _replace_with_retry(tmp_name, path)
     except BaseException:
         try:
             os.unlink(tmp_name)
         except OSError:
             pass
         raise
+
+
+_REPLACE_ATTEMPTS = 10
+
+
+def _replace_with_retry(source: str, destination: Path) -> None:
+    """``os.replace`` that waits out a reader briefly holding *destination*.
+
+    Windows refuses to replace a file another thread or process has open (a UI
+    poll reading a job record, a mutation snapshot copying the data folder).
+    Those reads take milliseconds, so retry for up to about half a second.
+    """
+    for attempt in range(_REPLACE_ATTEMPTS):
+        try:
+            os.replace(source, destination)
+            return
+        except PermissionError:
+            if attempt == _REPLACE_ATTEMPTS - 1:
+                raise
+            time.sleep(0.01 * (attempt + 1))
 
 
 def atomic_write_json(path: Path, data: Any) -> None:

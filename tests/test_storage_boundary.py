@@ -446,3 +446,23 @@ class TestBackgroundAssetGuardrail(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def test_atomic_write_retries_a_replace_blocked_by_a_reader(tmp_path, monkeypatch) -> None:
+    from storyboard_tool import project_storage
+
+    real_replace = project_storage.os.replace
+    calls = {"n": 0}
+
+    def flaky_replace(source, destination):
+        calls["n"] += 1
+        if calls["n"] < 3:
+            raise PermissionError(5, "Access is denied")
+        return real_replace(source, destination)
+
+    monkeypatch.setattr(project_storage.os, "replace", flaky_replace)
+    target = tmp_path / "record.json"
+    project_storage.atomic_write_json(target, {"ok": True})
+    assert calls["n"] == 3
+    assert target.read_text(encoding="utf-8").strip().endswith("}")
+    assert not list(tmp_path.glob("*.tmp"))
