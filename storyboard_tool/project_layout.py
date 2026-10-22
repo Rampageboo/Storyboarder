@@ -721,6 +721,17 @@ def resolve_generation_asset(
     )
 
 
+def generation_video_relative(project: ProjectPathContext, take_id: str) -> str:
+    """Return the canonical path for a generated video take."""
+    take_id = _validated_component(take_id, "video take id")
+    layout = getattr(project, "layout", LAYOUT_1)
+    if layout == LAYOUT_2:
+        return f"Videos/Generated/{take_id}.mp4"
+    if layout == LAYOUT_1:
+        return f"generation/video/{take_id}.mp4"
+    raise ProjectSchemaError(f"Unsupported project layout: {layout!r}.")
+
+
 def metadata_path_for(project: ProjectPathContext, role: str) -> Path:
     """Return a canonical layout-owned metadata path for a static role."""
     try:

@@ -26,7 +26,7 @@
     },
     {
       "name": "backend-dev",
-      "runtimeExecutable": "python",
+      "runtimeExecutable": ".venv/Scripts/python.exe",
       "runtimeArgs": [
         "-c",
         "from pathlib import Path;import uvicorn;from storyboard_tool.api import create_app;uvicorn.run(create_app(Path.cwd()),host='127.0.0.1',port=8000)"

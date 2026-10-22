@@ -1,6 +1,7 @@
 import { useCallback, useState } from 'react'
 import { updateSettings } from '../api'
 import { useProject } from '../state/useProject'
+import { ComfyCloudSettings } from './ComfyCloudSettings'
 import './SettingsModal.css'
 
 interface SettingsModalProps {
@@ -111,6 +112,8 @@ export function SettingsModal({ open, onClose }: SettingsModalProps) {
             </select>
             <small>Edits are kept in memory; the document is written on this interval, on manual Save (Ctrl+S), and on close.</small>
           </label>
+
+          <ComfyCloudSettings />
 
         </div>
 

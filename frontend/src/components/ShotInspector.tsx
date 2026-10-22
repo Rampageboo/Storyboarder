@@ -13,6 +13,7 @@ import { useProject } from '../state/useProject'
 import type { ProjectPayload, Scene2D, Scene3DRecord, Shot, ShotComment, ShotContinuity, ShotDesign } from '../types'
 import { statusStyle } from '../utils/status'
 import { KeywordTextarea, type KeywordAssetHint } from './KeywordTextarea'
+import { VideoTakes } from './VideoTakes'
 import './ShotInspector.css'
 
 const CONTINUITY_MODES: { value: ShotContinuity['mode']; label: string }[] = [
@@ -31,7 +32,7 @@ const CAMERA_HEIGHTS = ['Ground', 'Knee', 'Waist', 'Shoulder', 'Eye', 'Overhead'
 const CAMERA_MOVES = ['Static', 'Pan', 'Tilt', 'Push in', 'Pull out', 'Dolly', 'Truck', 'Crane', 'Handheld', 'Zoom']
 const LENSES = ['Wide 18–24mm', 'Normal 35mm', 'Normal 50mm', 'Portrait 85mm', 'Telephoto 135mm+']
 
-type InspectorTab = 'shot' | 'camera' | 'continuity' | 'prompt' | 'notes' | 'advanced'
+type InspectorTab = 'shot' | 'camera' | 'continuity' | 'prompt' | 'notes' | 'video' | 'advanced'
 
 function toCommaList(values: string[] | undefined) {
   return (values || []).join(', ')
@@ -87,7 +88,7 @@ function Datalist({ id, options }: { id: string; options: string[] }) {
 }
 
 export function ShotInspector({ advanced }: { advanced?: ReactNode }) {
-  const { project, selectedShotId } = useProject()
+  const { project, selectedShotId, reportError } = useProject()
   const [tab, setTab] = useState<InspectorTab>('shot')
 
   const shot = useMemo(() => {
@@ -104,6 +105,7 @@ export function ShotInspector({ advanced }: { advanced?: ReactNode }) {
     { id: 'continuity', label: 'Continuity' },
     { id: 'prompt', label: 'Prompt' },
     { id: 'notes', label: openNotes ? `Notes · ${openNotes}` : 'Notes' },
+    { id: 'video', label: 'Video' },
   ]
 
   return (
@@ -123,6 +125,8 @@ export function ShotInspector({ advanced }: { advanced?: ReactNode }) {
           </div>
           {advanced}
         </div>
+      ) : shot && tab === 'video' ? (
+        <VideoTakes key={shot.shot_id} shot={shot} onError={reportError} />
       ) : shot ? (
         <ShotInspectorEditor key={shot.shot_id} shot={shot} statuses={project.statuses || []} tab={tab} />
       ) : (

@@ -153,6 +153,16 @@ class ShotUpdateRequest(BaseModel):
     continuity: dict[str, Any] | None = None
 
 
+class ComfyCloudKeyRequest(BaseModel):
+    api_key: str = Field(min_length=1, max_length=512)
+
+
+class VideoTakeCreateRequest(BaseModel):
+    prompt: str = Field(default="", max_length=8000)
+    negative_prompt: str = Field(default="", max_length=4000)
+    seconds: float | None = Field(default=None, ge=0.5, le=10)
+
+
 class GenerationRequestCreateRequest(BaseModel):
     destination: str = "queue"
     provider: str = "codex"

@@ -135,3 +135,52 @@
   background: var(--color-accent);
   color: #fff;
 }
+
+.settings-modal-body {
+  max-height: min(70vh, 640px);
+  overflow-y: auto;
+}
+
+.settings-section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 4px 0 0;
+  padding: 14px 0 0;
+  border: 0;
+  border-top: 1px solid var(--line);
+}
+
+.settings-section legend {
+  padding: 0 0 6px;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.settings-hint {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-3);
+}
+
+.settings-key-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.settings-key-row input {
+  flex: 1;
+  min-width: 0;
+}
+
+.settings-key-state {
+  margin-right: auto;
+  font-size: 12px;
+  color: var(--text-3);
+}
+
+.settings-key-state.is-set {
+  color: var(--ok);
+}

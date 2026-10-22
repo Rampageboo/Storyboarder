@@ -40,7 +40,9 @@ from .schemas import (
     GenerationCandidateAcceptRequest,
     GenerationBatchQueueRequest,
     GenerationBatchDispatchRequest,
+    ComfyCloudKeyRequest,
     GenerationRequestCreateRequest,
+    VideoTakeCreateRequest,
     ImportImagePathRequest,
     LiveBridgeUpdateRequest,
     OpenProjectRequest,
@@ -968,6 +970,42 @@ def create_app(base_dir: Path, bridge_port: int = 8000) -> FastAPI:
     @app.patch("/api/shots/{shot_id}")
     def update_shot(shot_id: str, request: ShotUpdateRequest) -> dict[str, Any]:
         return _svc().method_update_shot(shot_id, request.model_dump())
+
+    @app.get("/api/comfy-cloud")
+    def comfy_cloud_status() -> dict[str, Any]:
+        return _svc().method_comfy_cloud_status()
+
+    @app.put("/api/comfy-cloud/key")
+    def set_comfy_cloud_key(request: ComfyCloudKeyRequest) -> dict[str, Any]:
+        return _svc().method_set_comfy_cloud_key(request.api_key)
+
+    @app.delete("/api/comfy-cloud/key")
+    def clear_comfy_cloud_key() -> dict[str, Any]:
+        return _svc().method_clear_comfy_cloud_key()
+
+    @app.post("/api/comfy-cloud/check")
+    def check_comfy_cloud() -> dict[str, Any]:
+        return _svc().method_check_comfy_cloud()
+
+    @app.get("/api/shots/{shot_id}/video-prompt")
+    def video_prompt_draft(shot_id: str) -> dict[str, Any]:
+        return _svc().method_video_prompt_draft(shot_id)
+
+    @app.get("/api/shots/{shot_id}/video-takes")
+    def list_video_takes(shot_id: str) -> dict[str, Any]:
+        return _svc().method_list_video_takes(shot_id)
+
+    @app.post("/api/shots/{shot_id}/video-takes")
+    def create_video_take(shot_id: str, request: VideoTakeCreateRequest) -> dict[str, Any]:
+        return _svc().method_create_video_take(shot_id, request.model_dump(exclude_none=True))
+
+    @app.delete("/api/video-takes/{take_id}")
+    def delete_video_take(take_id: str) -> dict[str, Any]:
+        return _svc().method_delete_video_take(take_id)
+
+    @app.get("/api/video-takes/{take_id}/video")
+    def video_take_file(take_id: str) -> FileResponse:
+        return _file_response_from_meta(_svc().method_video_take_file(take_id))
 
     @app.post("/api/shots/{shot_id}/generation-requests")
     def create_generation_request(shot_id: str, request: GenerationRequestCreateRequest) -> dict[str, Any]:

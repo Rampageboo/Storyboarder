@@ -30,6 +30,7 @@
 19. [Asset Lifecycle Boundaries](#19-asset-lifecycle-boundaries)
 20. [Generation Queue and Codex MCP Handoffs](#20-generation-queue-and-codex-mcp-handoffs)
 21. [Scene and Character Prompt Bibles](#21-scene-and-character-prompt-bibles)
+22. [Comfy Cloud Video Takes](#22-comfy-cloud-video-takes)
 
 ---
 
@@ -1017,3 +1018,15 @@ Scene 3D records may own an attached `.blend` source, a GLB/GLTF preview, and ex
 Shots store both a backward-compatible free-text `scene` label and a stable `scene_id` link. New UI flows select/create a Scene by ID. Generation requests freeze the resolved ordinary Scene data as `scene_context`, keep the retired `scene_bible` field null for compatibility, and include overall `input_revision` and `consistency_revision` hashes.
 
 Changing linked Scene facts marks generated shots in that scene stale. A second **queued** request for the same shot and queue destination replaces that pending request in place; completed and review history is preserved.
+
+## 22. Comfy Cloud Video Takes
+
+`comfy_cloud.py` turns one board into a short video on Comfy Cloud (paid plan; API v2 through the official `comfy-sdk`).
+
+- **Key:** stored in the OS credential store via `keyring` (service `Storyboarder Comfy Cloud`); never in a project, the app folder, a response body or a log. Settings → *Comfy Cloud video* saves, removes and tests it.
+- **Test connection** (`POST /api/comfy-cloud/check`) reads the cloud's `object_info` and names any node class, model file or combo value in the workflow template that the server lacks. It spends no credits.
+- **Template:** `storyboard_tool/assets/comfy_workflows/wan22_i2v_api.json`, Wan 2.2 image-to-video 14B fp8 with the lightx2v 4-step LoRA (API format). Storyboarder fills the prompts (nodes 8/9), board frame (11), size and length (12, longest edge 832, 16 fps, 4n+1 frames, 1–5 s) and seed (13/14); node 17 saves the video.
+- **Prompt:** a motion prompt compiled from story, action, subject/camera movement, shot size, lens, lighting, characters and dialogue — not the image prompt — editable before submission.
+- **Takes:** each request is a record `generation/video/vid_<hex>.json` in generation metadata; the MP4 is stored at `generation/video/<take>.mp4` (Layout 1) or `Videos/Generated/<take>.mp4` (Layout 2). A daemon thread uploads, submits, polls and downloads, writing the record at each step; a take that was running when the app stopped resumes from its job id the next time the board's takes are listed. Takes never change the board itself.
+- **Routes:** `GET /api/comfy-cloud`, `PUT|DELETE /api/comfy-cloud/key`, `POST /api/comfy-cloud/check`, `GET /api/shots/{id}/video-prompt`, `GET|POST /api/shots/{id}/video-takes`, `DELETE /api/video-takes/{take}`, `GET /api/video-takes/{take}/video`.
+- **UI:** inspector → *Video* tab (prompt, length, generate, play, delete).
