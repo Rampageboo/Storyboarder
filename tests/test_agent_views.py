@@ -245,3 +245,12 @@ def test_sequence_without_ffmpeg_fails_cleanly(tmp_path: Path, monkeypatch) -> N
     assert response.status_code == 500 and "ffmpeg" in response.json()["detail"]
     exports = tmp_path / "Demo" / "Exports"
     assert not exports.exists() or not list(exports.iterdir())
+
+
+def test_shot_patch_only_changes_the_fields_sent(tmp_path: Path) -> None:
+    client, ids = _client(tmp_path, boards=1)
+    shot_id = ids[0]
+    assert client.patch(f"/api/shots/{shot_id}", json={"title": "Opening", "dialogue": "Hello"}).status_code == 200
+    assert client.patch(f"/api/shots/{shot_id}", json={"duration_seconds": 4.5}).status_code == 200
+    shot = next(item for item in client.get("/api/project").json()["shots"] if item["shot_id"] == shot_id)
+    assert (shot["title"], shot["dialogue"], shot["duration_seconds"]) == ("Opening", "Hello", 4.5)

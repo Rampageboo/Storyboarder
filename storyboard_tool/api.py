@@ -962,7 +962,7 @@ def create_app(base_dir: Path, bridge_port: int = 8000) -> FastAPI:
 
     @app.patch("/api/shots/{shot_id}")
     def update_shot(shot_id: str, request: ShotUpdateRequest) -> dict[str, Any]:
-        return _svc().method_update_shot(shot_id, request.model_dump())
+        return _svc().method_update_shot(shot_id, request.model_dump(exclude_unset=True))
 
     @app.get("/api/comfy-cloud")
     def comfy_cloud_status() -> dict[str, Any]:
