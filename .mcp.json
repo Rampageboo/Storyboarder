@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "storyboarder": {
+      "type": "stdio",
+      "command": "D:/Projects/Storyboarder/.venv/Scripts/python.exe",
+      "args": ["-m", "storyboard_tool.mcp_server"],
+      "env": {
+        "PYTHONPATH": "D:/Projects/Storyboarder"
+      }
+    }
+  }
+}

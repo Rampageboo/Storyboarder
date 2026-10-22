@@ -1028,7 +1028,7 @@ The desktop API exposes:
 | `POST /api/generation/reconcile` | Import deposited result state into canonical shot generation metadata and mark candidates `needs-review`. |
 | `POST /api/shots/{shot_id}/codex-layer/accept` | Copy one reviewed candidate into the independent fixed Codex layer and mark it accepted. |
 
-`storyboard_tool/mcp_server.py` is a local STDIO MCP server configured by `.codex/config.toml`. It exposes read-only list/get tools plus `storyboard_submit_generation_result`, which validates and copies image artifacts into the project. The MCP server never edits `shots.json`, approves outputs, or mutates queue state. Storyboarder remains the owner of retries, stale propagation, review, and approval.
+`storyboard_tool/mcp_server.py` is a local STDIO MCP server configured by `.codex/config.toml` and `.mcp.json`. It is an HTTP client of the running app: it discovers the base URL and API token from the live-bridge file and calls backend endpoints, never project files. Besides the board, image, video, and sequence tools (see `docs/agent_mcp.md`), it keeps the handoff tools: list/get read `GET /api/generation/requests`, and `storyboard_submit_generation_result` uploads image bytes to `POST /api/generation/requests/{request_id}/results`. Storyboarder remains the owner of retries, stale propagation, review, and approval.
 
 ---
 
