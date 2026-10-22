@@ -13,6 +13,7 @@ import { useProject } from '../state/useProject'
 import type { ProjectPayload, Scene2D, Scene3DRecord, Shot, ShotComment, ShotContinuity, ShotDesign } from '../types'
 import { statusStyle } from '../utils/status'
 import { KeywordTextarea, type KeywordAssetHint } from './KeywordTextarea'
+import { ImageJobs } from './ImageJobs'
 import { VideoTakes } from './VideoTakes'
 import './ShotInspector.css'
 
@@ -32,7 +33,7 @@ const CAMERA_HEIGHTS = ['Ground', 'Knee', 'Waist', 'Shoulder', 'Eye', 'Overhead'
 const CAMERA_MOVES = ['Static', 'Pan', 'Tilt', 'Push in', 'Pull out', 'Dolly', 'Truck', 'Crane', 'Handheld', 'Zoom']
 const LENSES = ['Wide 18–24mm', 'Normal 35mm', 'Normal 50mm', 'Portrait 85mm', 'Telephoto 135mm+']
 
-type InspectorTab = 'shot' | 'camera' | 'continuity' | 'prompt' | 'notes' | 'video' | 'advanced'
+type InspectorTab = 'shot' | 'camera' | 'continuity' | 'prompt' | 'notes' | 'image' | 'video' | 'advanced'
 
 function toCommaList(values: string[] | undefined) {
   return (values || []).join(', ')
@@ -105,6 +106,7 @@ export function ShotInspector({ advanced }: { advanced?: ReactNode }) {
     { id: 'continuity', label: 'Continuity' },
     { id: 'prompt', label: 'Prompt' },
     { id: 'notes', label: openNotes ? `Notes · ${openNotes}` : 'Notes' },
+    { id: 'image', label: 'Image' },
     { id: 'video', label: 'Video' },
   ]
 
@@ -125,6 +127,8 @@ export function ShotInspector({ advanced }: { advanced?: ReactNode }) {
           </div>
           {advanced}
         </div>
+      ) : shot && tab === 'image' ? (
+        <ImageJobs key={shot.shot_id} shot={shot} onError={reportError} />
       ) : shot && tab === 'video' ? (
         <VideoTakes key={shot.shot_id} shot={shot} onError={reportError} />
       ) : shot ? (

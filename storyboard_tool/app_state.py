@@ -771,6 +771,15 @@ def _bridge_status_payload(app: FastAPI) -> dict[str, Any]:
         "server_port": int(app.state.bridge_port),
         "live": live,
     }
+    if project is not None:
+        # Path-free: the UI matches this to the project it has open.
+        job = runtime_state.get_preview_analysis_job(app, str(project.project_root))
+        if job is not None:
+            result["preview_analysis"] = {
+                "state": job["state"],
+                "decoded_count": int(job.get("decoded_count", 0) or 0),
+                "revision": int(job.get("revision", 0) or 0),
+            }
     return result
 
 

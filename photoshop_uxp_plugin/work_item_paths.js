@@ -156,10 +156,6 @@
       }));
   }
 
-  function shouldPreserveManualMode(mode) {
-    return mode === "manual-project" || mode === "manual-folder";
-  }
-
   // ── Work-item list cache & shot label formatting (Part 2) ────────────────────
 
   let _workItems = [];
@@ -260,7 +256,6 @@
     filterKnownOpenWorkKeys,
     displayPerspectiveIndex,
     scene2DPerspectiveOptions,
-    shouldPreserveManualMode,
     getWorkItems,
     setWorkItems,
     formatShotDisplayLabel,

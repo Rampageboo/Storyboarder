@@ -10,33 +10,6 @@ const BRIDGE_CACHE_FILE = "storyboard_bridge_cache.json";
 const PLUGIN_SETTINGS_FILE = "storyboard_plugin_settings.json";
 const BRIDGE_STALE_MS = 8000;
 const QUICK_STATUS_OPTIONS = ["Draft", "In Progress", "Review", "Approved"];
-const SHOT_CSV_COLUMNS = [
-  "order",
-  "shot_id",
-  "title",
-  "scene",
-  "sequence",
-  "description",
-  "action_note",
-  "camera_note",
-  "character_note",
-  "dialogue",
-  "lighting_note",
-  "transition_note",
-  "duration_seconds",
-  "status",
-  "image_path",
-  "preview_image_path",
-  "thumbnail_path",
-  "source_file_path",
-  "source_sync_mtime",
-  "annotation_path",
-  "camera_data",
-  "tags",
-  "comments",
-  "reference_image_paths",
-];
-const JSON_CSV_COLUMNS = new Set(["camera_data", "tags", "comments", "reference_image_paths"]);
 
 let projectRoot = null;
 let projectData = null;
@@ -73,8 +46,6 @@ function init() {
   $("openAdvancedView")?.addEventListener("click", () => setPluginView("advanced"));
   $("settingsBack")?.addEventListener("click", () => setPluginView("main"));
   $("advancedBack")?.addEventListener("click", () => setPluginView("main"));
-  $("chooseProject")?.addEventListener("click", () => runPanelAction(chooseProjectFolder));
-  $("chooseFolder")?.addEventListener("click", () => runPanelAction(chooseShotFolder));
   $("shotSelect")?.addEventListener("change", () => runPanelAction(switchToSelectedShot));
   $("openShot")?.addEventListener("click", () => runPanelAction(switchToSelectedShot));
   $("focusCurrentTab")?.addEventListener("click", () => runPanelAction(focusCurrentShotTab));
@@ -243,7 +214,7 @@ function renderFolderAccessErrorState(message = "Folder access failed") {
   renderDisconnectedState(message);
   connectionMode = "folder-error";
   setLinkStatus("Folder access failed", true);
-  setStatus("Use Advanced to choose the project folder or reconnect.");
+  setStatus("Reconnect to Storyboarder (Advanced → Reconnect) with the project open.");
 }
 
 function setPluginView(view) {
@@ -262,68 +233,6 @@ async function runPanelAction(action) {
   } catch (error) {
     setStatus(error.message || String(error));
   }
-}
-
-async function chooseProjectFolder() {
-  requireOfflineWriteAllowed(lastPluginContext, "switch this project to manual mode");
-  const folder = await fs.getFolder();
-  try {
-    await folder.getEntry("project.json");
-  } catch {
-    throw new Error("Choose the Storyboard_Project folder that contains project.json.");
-  }
-  projectRoot = folder;
-  projectData = await loadProjectJson();
-  const projectLabelEl = $("projectLabel");
-  if (projectLabelEl) projectLabelEl.textContent = `Project: ${folder.nativePath || folder.name}`;
-  canvasColor = await readProjectCanvasColor(folder);
-  updateColorSwatch();
-  populateShotSelect();
-  const detected = detectShotFromDocument();
-  if (detected) {
-    setSelectedShotId(detected);
-  } else if (projectData.shots.length) {
-    setSelectedShotId(projectData.shots[0].shot_id);
-  }
-  linkedFromStoryboard = false;
-  connectionMode = "manual-project";
-  setLinkedUi(false);
-  setLinkStatus("Manual project", true);
-  setStatus(`Project loaded (${projectData.shots.length} shots).`);
-  if (app.activeDocument) {
-    scheduleBackgroundSyncForActiveDocument();
-  }
-  updateCurrentShotIndicator();
-}
-
-async function chooseShotFolder() {
-  requireOfflineWriteAllowed(lastPluginContext, "switch this project to manual mode");
-  shotFolder = await fs.getFolder();
-  const folderLabelEl = $("folderLabel");
-  if (folderLabelEl) folderLabelEl.textContent = `Folder: ${shotFolder.nativePath || shotFolder.name}`;
-  const folderName = shotFolder.name || "";
-  if (isValidShotId(folderName)) {
-    setSelectedShotId(folderName);
-  }
-  const root = await findProjectRoot(shotFolder);
-  if (root) {
-    projectRoot = root;
-    projectData = await loadProjectJson();
-    const rootLabelEl = $("projectLabel");
-    if (rootLabelEl) rootLabelEl.textContent = `Project: ${root.nativePath || root.name}`;
-    populateShotSelect();
-  }
-  canvasColor = await readProjectCanvasColor(shotFolder);
-  updateColorSwatch();
-  linkedFromStoryboard = false;
-  connectionMode = "manual-folder";
-  setLinkedUi(false);
-  setLinkStatus("Manual folder", true);
-  setStatus(`Shot folder selected.`);
-  if (app.activeDocument) {
-    scheduleBackgroundSyncForActiveDocument();
-  }
-  updateCurrentShotIndicator();
 }
 
 function startStoryboardBridgePolling() {
@@ -666,27 +575,15 @@ async function pollStoryboardBridge() {
   }
 
   if (!live) {
-    if (shouldPreserveManualMode(connectionMode)) {
-      setLinkStatus("Storyboarder unavailable", true);
-      return;
-    }
     renderDisconnectedState("Not connected");
     return;
   }
 
   if (!live.app_running) {
-    if (shouldPreserveManualMode(connectionMode)) {
-      setLinkStatus("Storyboard not running", true);
-      return;
-    }
     renderDisconnectedState("Storyboard not running");
     return;
   }
   if (!live.connected) {
-    if (shouldPreserveManualMode(connectionMode)) {
-      setLinkStatus("Open a project in Storyboard", true);
-      return;
-    }
     renderDisconnectedState("Open a project in Storyboard");
     return;
   }
@@ -733,9 +630,6 @@ async function applyLiveBridge(live) {
     projectRoot = root;
     if (context) {
       applyPluginContext(context);
-    } else {
-      projectData = await loadProjectJson();
-      populateShotSelect();
     }
   } else if (context) {
     applyPluginContext(context);
@@ -864,189 +758,6 @@ async function maybeHandleFocusRequest(live) {
 function isAutoApplyColorEnabled() {
   const checkbox = $("autoApplyColor");
   return !checkbox || checkbox.checked !== false;
-}
-
-async function loadProjectJson() {
-  requireProjectRoot();
-  const entry = await projectRoot.getEntry("project.json");
-  const text = await readEntryText(entry);
-  const data = JSON.parse(text);
-  const csvShots = await loadShotsCsv();
-  if (csvShots) {
-    data.shots = csvShots;
-    data.version = data.version || 4;
-    return data;
-  }
-  if (!Array.isArray(data.shots)) {
-    throw new Error("Invalid project: missing shots.csv and shots list in project.json.");
-  }
-  return data;
-}
-
-async function loadShotsCsv() {
-  requireProjectRoot();
-  try {
-    const entry = await projectRoot.getEntry("shots.csv");
-    const text = await readEntryText(entry);
-    return parseShotsCsv(text);
-  } catch {
-    return null;
-  }
-}
-
-async function saveProjectJson() {
-  requireProjectRoot();
-  const entry = await projectRoot.getEntry("project.json");
-  const payload = {
-    version: projectData.version || 4,
-  };
-  await writeEntryText(entry, JSON.stringify(payload, null, 2));
-  await saveShotsCsv(projectData.shots || []);
-}
-
-async function saveShotsCsv(shots) {
-  requireProjectRoot();
-  let entry;
-  try {
-    entry = await projectRoot.getEntry("shots.csv");
-  } catch {
-    entry = await projectRoot.createFile("shots.csv", { overwrite: true });
-  }
-  await writeEntryText(entry, shotsToCsv(shots));
-}
-
-function parseShotsCsv(text) {
-  const lines = String(text || "")
-    .replace(/\r\n/g, "\n")
-    .split("\n")
-    .filter((line) => line.trim());
-  if (!lines.length) {
-    return [];
-  }
-  const headers = parseCsvRow(lines[0]);
-  const shots = [];
-  for (let lineIndex = 1; lineIndex < lines.length; lineIndex += 1) {
-    const values = parseCsvRow(lines[lineIndex]);
-    const row = {};
-    headers.forEach((header, index) => {
-      row[header] = values[index] || "";
-    });
-    const shot = shotFromCsvRow(row, lineIndex);
-    if (shot.shot_id) {
-      const { _order, _row, ...record } = shot;
-      shots.push(record);
-    }
-  }
-  return shots;
-}
-
-function shotsToCsv(shots) {
-  const lines = [SHOT_CSV_COLUMNS.join(",")];
-  shots.forEach((shot, index) => {
-    const row = shotToCsvRow(shot, index + 1);
-    lines.push(SHOT_CSV_COLUMNS.map((column) => escapeCsvCell(row[column] ?? "")).join(","));
-  });
-  return `${lines.join("\n")}\n`;
-}
-
-function shotFromCsvRow(row, rowIndex) {
-  const order = Number.parseInt(String(row.order || ""), 10);
-  return {
-    _order: Number.isFinite(order) && order > 0 ? order : rowIndex,
-    _row: rowIndex,
-    shot_id: String(row.shot_id || "").trim(),
-    title: row.title || "",
-    scene: row.scene || "",
-    sequence: row.sequence || "",
-    description: row.description || "",
-    action_note: row.action_note || "",
-    camera_note: row.camera_note || "",
-    character_note: row.character_note || "",
-    dialogue: row.dialogue || "",
-    lighting_note: row.lighting_note || "",
-    transition_note: row.transition_note || "",
-    duration_seconds: Number.parseFloat(row.duration_seconds || "3") || 3,
-    camera_data: readJsonCsvCell(row.camera_data, {}),
-    tags: readJsonCsvCell(row.tags, []),
-    comments: readJsonCsvCell(row.comments, []),
-    status: row.status || "Draft",
-    image_path: row.image_path || "",
-    preview_image_path: row.preview_image_path || "",
-    thumbnail_path: row.thumbnail_path || "",
-    source_file_path: row.source_file_path || "",
-    source_sync_mtime: Number.parseFloat(row.source_sync_mtime || "0") || 0,
-    annotation_path: row.annotation_path || "",
-    reference_image_paths: readJsonCsvCell(row.reference_image_paths, []),
-  };
-}
-
-function shotToCsvRow(shot, order) {
-  const row = { order: String(order) };
-  for (const column of SHOT_CSV_COLUMNS) {
-    if (column === "order") {
-      continue;
-    }
-    const value = shot[column];
-    if (JSON_CSV_COLUMNS.has(column)) {
-      row[column] = JSON.stringify(value ?? (column === "camera_data" ? {} : []));
-    } else {
-      row[column] = value == null ? "" : String(value);
-    }
-  }
-  return row;
-}
-
-function readJsonCsvCell(raw, fallback) {
-  const text = String(raw || "").trim();
-  if (!text) {
-    return fallback;
-  }
-  try {
-    return JSON.parse(text);
-  } catch {
-    if (Array.isArray(fallback) && text) {
-      return text.split(",").map((item) => item.trim()).filter(Boolean);
-    }
-    return fallback;
-  }
-}
-
-function parseCsvRow(line) {
-  const values = [];
-  let current = "";
-  let inQuotes = false;
-  for (let index = 0; index < line.length; index += 1) {
-    const char = line[index];
-    if (inQuotes) {
-      if (char === '"') {
-        if (line[index + 1] === '"') {
-          current += '"';
-          index += 1;
-        } else {
-          inQuotes = false;
-        }
-      } else {
-        current += char;
-      }
-    } else if (char === '"') {
-      inQuotes = true;
-    } else if (char === ",") {
-      values.push(current);
-      current = "";
-    } else {
-      current += char;
-    }
-  }
-  values.push(current);
-  return values;
-}
-
-function escapeCsvCell(value) {
-  const text = value == null ? "" : String(value);
-  if (/[",\n\r]/.test(text)) {
-    return `"${text.replace(/"/g, '""')}"`;
-  }
-  return text;
 }
 
 function shotOptionLabel(shot, index) {
@@ -1658,7 +1369,7 @@ async function getShotFolderEntry(shotId) {
   if (shotFolder && (shotFolder.name || "") === shotId) {
     return shotFolder;
   }
-  throw new Error("Choose a project or shot folder first.");
+  throw new Error("Reconnect to Storyboarder to open this shot.");
 }
 
 async function ensureShotStructure(shotId) {
@@ -1718,27 +1429,6 @@ function createEmptyShot(shotId) {
   };
 }
 
-function nextShotId() {
-  if (typeof crypto !== "undefined" && crypto.randomUUID) {
-    return crypto.randomUUID().replace(/-/g, "");
-  }
-  const bytes = new Uint8Array(16);
-  for (let index = 0; index < bytes.length; index += 1) {
-    bytes[index] = Math.floor(Math.random() * 256);
-  }
-  return Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
-}
-
-async function addShotToProject() {
-  requireProjectRoot();
-  const shot = createEmptyShot(nextShotId());
-  projectData.shots.push(shot);
-  await ensureShotStructure(shot.shot_id);
-  await saveProjectJson();
-  populateShotSelect();
-  return shot;
-}
-
 async function resolveNextShot(shotId) {
   if (linkedFromStoryboard) {
     const payload = await requestStoryboardApi("/api/plugin/shots/next", {
@@ -1763,15 +1453,7 @@ async function resolveNextShot(shotId) {
     }
     return null;
   }
-  const shots = projectData?.shots || [];
-  const index = shots.findIndex((shot) => shot.shot_id === shotId);
-  if (index >= 0 && index < shots.length - 1) {
-    return shots[index + 1];
-  }
-  if (isAutoAddShotEnabled()) {
-    return addShotToProject();
-  }
-  return null;
+  throw new Error("Reconnect to Storyboarder to move to the next shot.");
 }
 
 function isAutoAddShotEnabled() {
@@ -2807,12 +2489,6 @@ async function switchToShot(shotId) {
 
   setSelectedShotId(shotId);
   shotFolder = isExplicitAssetContext(lastPluginContext) ? null : folder;
-  const switchFolderLabel = $("folderLabel");
-  if (switchFolderLabel) {
-    switchFolderLabel.textContent = shotFolder
-      ? `Folder: ${shotFolder.nativePath || shotFolder.name}`
-      : "Paths managed by Storyboarder";
-  }
   canvasColor = nextColor;
   updateColorSwatch();
   await notifyBackendShotFocus(shotId);
@@ -2907,41 +2583,12 @@ function activeShotId() {
   return shotId;
 }
 
-function requireProjectRoot() {
-  if (!projectRoot) {
-    throw new Error("Open a project in Storyboard Tool, or use Manual folder below.");
-  }
-}
-
-async function fileUnixMtime(entry) {
-  try {
-    const metadata = await entry.getMetadata();
-    if (metadata?.modificationDate) {
-      return metadata.modificationDate.getTime() / 1000;
-    }
-  } catch {
-    // Fall back to the current time.
-  }
-  return Date.now() / 1000;
-}
-
 async function writeEntryText(entry, text) {
   await entry.write(text);
 }
 
 async function resolveActiveCanvasColor() {
-  if (linkedFromStoryboard && canvasColor) {
-    return normalizeHexColor(canvasColor);
-  }
-  if (projectRoot) {
-    const fromRoot = await readCanvasColorTxt(projectRoot);
-    if (fromRoot) return fromRoot;
-    const fromSettings = await readJsonField(projectRoot, "settings.json", "canvas_background_color");
-    if (fromSettings) return normalizeHexColor(fromSettings);
-  }
-  if (shotFolder) {
-    return readProjectCanvasColor(shotFolder);
-  }
+  // The canvas color comes from the backend context; the plugin reads no project files.
   return normalizeHexColor(canvasColor);
 }
 
@@ -2989,142 +2636,24 @@ async function readEntryText(entry) {
   return String(contents || "");
 }
 
-async function readCanvasColorTxt(folder) {
-  try {
-    const entry = await folder.getEntry("canvas_color.txt");
-    const text = await readEntryText(entry);
-    const candidate = text.trim().split(/\s+/)[0];
-    if (/^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/.test(candidate)) {
-      return normalizeHexColor(candidate);
-    }
-  } catch {
-    // Try the next source.
-  }
-  return "";
-}
-
-async function findProjectRoot(folder) {
-  let current = folder;
-  for (let depth = 0; depth < 6 && current; depth += 1) {
-    if (await hasProjectMarker(current)) {
-      return current;
-    }
-    try {
-      current = await current.getParent();
-    } catch {
-      break;
-    }
-  }
-  return null;
-}
-
-async function hasProjectMarker(folder) {
-  for (const fileName of ["settings.json", "project.json", "shots.csv", "storyboard_bridge.json", "canvas_color.txt"]) {
-    try {
-      await folder.getEntry(fileName);
-      return true;
-    } catch {
-      // Try the next marker file.
-    }
-  }
-  return false;
-}
-
 async function readProjectCanvasColor(folder) {
-  const settings = await readProjectCanvasSettings(folder);
+  const settings = await readProjectCanvasSettings();
   canvasWidth = settings.width;
   canvasHeight = settings.height;
   return settings.color;
 }
 
-async function readProjectCanvasSettings(folder) {
-  if (isExplicitAssetContext(lastPluginContext)) {
-    const size = normalizeCanvasSize(
-      lastPluginContext?.canvas?.width || canvasWidth,
-      lastPluginContext?.canvas?.height || canvasHeight,
-    );
-    return {
-      color: normalizeHexColor(
-        lastPluginContext?.canvas?.background_color || canvasColor,
-      ),
-      width: size.width,
-      height: size.height,
-    };
-  }
-  let color = DEFAULT_CANVAS_COLOR;
-  let width = DEFAULT_CANVAS_WIDTH;
-  let height = DEFAULT_CANVAS_HEIGHT;
-  try {
-    const root = projectRoot || (await findProjectRoot(folder));
-    if (root) {
-      const projectSettings = await readJsonObject(root, "settings.json");
-      if (projectSettings) {
-        if (projectSettings.canvas_background_color) {
-          color = normalizeHexColor(projectSettings.canvas_background_color);
-        }
-        if (projectSettings.canvas_width) {
-          width = Number(projectSettings.canvas_width);
-        }
-        if (projectSettings.canvas_height) {
-          height = Number(projectSettings.canvas_height);
-        }
-      }
-
-      const rootTxt = await readCanvasColorTxt(root);
-      if (rootTxt) {
-        color = rootTxt;
-      }
-
-      for (const fileName of ["storyboard_live_bridge.json", "storyboard_bridge.json"]) {
-        const bridge = await readJsonObject(root, fileName);
-        if (!bridge) {
-          continue;
-        }
-        if (bridge.canvas_background_color) {
-          color = normalizeHexColor(bridge.canvas_background_color);
-        }
-        if (bridge.canvas_width) {
-          width = Number(bridge.canvas_width);
-        }
-        if (bridge.canvas_height) {
-          height = Number(bridge.canvas_height);
-        }
-      }
-    }
-
-    const localTxt = await readCanvasColorTxt(folder);
-    if (localTxt) {
-      color = localTxt;
-    }
-
-    const localBridge = await readJsonObject(folder, "storyboard_bridge.json");
-    if (localBridge) {
-      if (localBridge.canvas_background_color) {
-        color = normalizeHexColor(localBridge.canvas_background_color);
-      }
-      if (localBridge.canvas_width) {
-        width = Number(localBridge.canvas_width);
-      }
-      if (localBridge.canvas_height) {
-        height = Number(localBridge.canvas_height);
-      }
-    }
-  } catch (error) {
-    setStatus(`Canvas settings read failed: ${error.message || error}`);
-  }
-  const size = normalizeCanvasSize(width, height);
-  return { color, width: size.width, height: size.height };
-}
-
-async function readJsonObject(folder, fileName) {
-  try {
-    const entry = await folder.getEntry(fileName);
-    const text = await readEntryText(entry);
-    const data = JSON.parse(text);
-    return data && typeof data === "object" ? data : null;
-  } catch {
-    return null;
-  }
+// Canvas settings come only from the backend plugin context.
+async function readProjectCanvasSettings() {
+  const size = normalizeCanvasSize(
+    lastPluginContext?.canvas?.width || canvasWidth,
+    lastPluginContext?.canvas?.height || canvasHeight,
+  );
+  return {
+    color: normalizeHexColor(lastPluginContext?.canvas?.background_color || canvasColor),
+    width: size.width,
+    height: size.height,
+  };
 }
 
 function normalizeCanvasSize(width, height) {
@@ -3135,17 +2664,6 @@ function normalizeCanvasSize(width, height) {
 
 function currentCanvasSize() {
   return normalizeCanvasSize(canvasWidth, canvasHeight);
-}
-
-async function readJsonField(folder, fileName, fieldName) {
-  try {
-    const entry = await folder.getEntry(fileName);
-    const text = await readEntryText(entry);
-    const data = JSON.parse(text);
-    return data[fieldName] || "";
-  } catch {
-    return "";
-  }
 }
 
 function normalizeHexColor(value) {
@@ -3183,7 +2701,9 @@ async function runModal(commandName, fn) {
 
 function setStatus(message) {
   const node = $("status");
-  if (node) node.textContent = message;
+  if (!node) return;
+  node.textContent = message || "";
+  node.hidden = !message;
 }
 
 // ── UXP multi-panel entrypoints ───────────────────────────────────────────

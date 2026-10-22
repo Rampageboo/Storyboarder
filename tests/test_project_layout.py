@@ -104,23 +104,27 @@ def test_new_manifest_is_exactly_version_id_and_revision(tmp_path: Path) -> None
     assert PROJECT_JSON_VERSION == 5
 
 
-@pytest.mark.xfail(
-    reason=(
-        "SOURCE BUG: the Photoshop plugin's offline manifest writers still write "
-        "project.json version 4 (photoshop_uxp_plugin/panel_storage_adapter.js:9, "
-        "backend_client.js:240, panel.js:877/901) while the backend only accepts "
-        "version 5 under .storyboarder/data; the plan leaves offline mode undecided."
-    ),
-    strict=True,
-)
-def test_uxp_offline_manifest_writers_mirror_current_schema() -> None:
+def test_uxp_plugin_has_no_offline_project_metadata_io() -> None:
+    """The Photoshop plugin is backend-only: it must not read or write project metadata files."""
     plugin_root = Path(__file__).resolve().parents[1] / "photoshop_uxp_plugin"
 
-    assert f"version: {PROJECT_JSON_VERSION}" in (plugin_root / "backend_client.js").read_text(encoding="utf-8")
-    panel = (plugin_root / "panel.js").read_text(encoding="utf-8")
-    assert panel.count(f"version || {PROJECT_JSON_VERSION}") == 2
-    adapter = (plugin_root / "panel_storage_adapter.js").read_text(encoding="utf-8")
-    assert f"const PROJECT_JSON_VERSION = {PROJECT_JSON_VERSION};" in adapter
+    assert not (plugin_root / "panel_storage_adapter.js").exists()
+    sources = {path.name: path.read_text(encoding="utf-8") for path in plugin_root.glob("*.js")}
+    sources["index.html"] = (plugin_root / "index.html").read_text(encoding="utf-8")
+    forbidden = (
+        '"project.json"',
+        '"shots.json"',
+        '"shots.csv"',
+        "saveProjectJson",
+        "loadProjectJson",
+        "saveShotsCsv",
+        "chooseProject",
+        "chooseFolder",
+        "panel_storage_adapter",
+    )
+    for name, text in sources.items():
+        for token in forbidden:
+            assert token not in text, f"{name} still contains {token}"
 
 
 @pytest.mark.parametrize(

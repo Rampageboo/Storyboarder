@@ -582,15 +582,15 @@ The Photoshop bridge has two related surfaces:
 
 ### UXP linked mode
 
-The plugin must speak protocol v2 (repo plugin 0.7.0). Older plugins, such as
+The plugin must speak protocol v2 (repo plugin 0.7.1). Older plugins, such as
 0.6.7, get HTTP 426. When the plugin can reach the backend, it is in backend-linked mode:
 
 - it reads `/api/plugin/context` for project, canvas, selected shot and bridge status (the payload never exposes filesystem paths: `project_root` and `project_json_path` are empty);
 - it sends `/api/plugin/heartbeat` with selected/open shot ids;
 - it reports preview and PSD metadata through plugin endpoints;
-- `panel_storage_adapter.js` avoids writing canonical project metadata files directly and refreshes from the backend instead.
+- it never reads or writes project metadata files (`project.json`, `shots.json`, `shots.csv`); it refreshes from the backend instead.
 
-The plugin's offline file mode no longer works: the backend always reports `offline_write_allowed: false`, and project metadata lives only under `.storyboarder/data`. Do not casually change the linked-mode endpoints, field names or heartbeat file names.
+The plugin is backend-only: 0.7.1 removed the offline file mode and its folder pickers. The backend always reports `offline_write_allowed: false`, and project metadata lives only under `.storyboarder/data`. Do not casually change the linked-mode endpoints, field names or heartbeat file names.
 
 **Plugin link detection**
 

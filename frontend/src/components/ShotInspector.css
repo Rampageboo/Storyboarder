@@ -495,3 +495,77 @@
   white-space: nowrap;
   text-overflow: ellipsis;
 }
+
+/* Image jobs (reuse the video take list; these add references and outputs) */
+.image-ref-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(64px, 1fr));
+  gap: 6px;
+}
+
+.image-ref {
+  position: relative;
+  min-height: unset;
+  height: auto;
+  padding: 0;
+  aspect-ratio: 16 / 9;
+  overflow: hidden;
+  border-radius: var(--radius-xs);
+  border: 0;
+  box-shadow: 0 0 0 1px var(--line-2);
+  background: var(--paper);
+}
+
+.image-ref img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.image-ref[aria-pressed='true'] {
+  box-shadow: 0 0 0 2px var(--accent);
+}
+
+.image-ref:disabled {
+  opacity: 0.4;
+}
+
+.image-ref-number {
+  position: absolute;
+  left: 3px;
+  bottom: 3px;
+  padding: 0 4px;
+  border-radius: var(--radius-xs);
+  font: 500 10px/14px var(--font-mono);
+  color: var(--text-1);
+  background: color-mix(in srgb, var(--bg-1) 80%, transparent);
+}
+
+.image-job-outputs {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+  gap: 8px;
+}
+
+.image-job-output {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0;
+}
+
+.image-job-output img {
+  display: block;
+  width: 100%;
+  border-radius: var(--radius-sm);
+  background: var(--bg-well);
+}
+
+.image-job-output.is-applied img {
+  box-shadow: 0 0 0 2px var(--accent);
+}
+
+.image-job-output button {
+  width: 100%;
+}
